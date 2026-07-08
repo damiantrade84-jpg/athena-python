@@ -31,6 +31,18 @@ from athena_ase.inference.monitor import apply_watch_max_cap, evaluate_monitor
 from athena_ase.instruments import Instrument
 from athena_ase.levels.brackets import compute_brackets
 from athena_ase.registry.promotion import is_watch_max, set_watch_max
+from athena_ase.settings import (
+    monitor_max_live_rows,
+    payoff_realized_cap,
+    payoff_realized_cap_enabled,
+    payoff_use_realized_exit_r,
+    payoff_win_quantile,
+    arbitration_strength_floor,
+)
+from athena_ase.inference.realized_payoff import (
+    journal_calibration_snapshot,
+    realized_exit_payoff,
+)
 from athena_ase.signals.arbitrate import Candidate
 from athena_ase.signals.common import live_bars_stale, load_bar_series
 
@@ -112,10 +124,50 @@ def _decision_status(
     )
 
 
-def _expected_net_r(p_cal: float, mfe_q: dict[str, float], mae_q: dict[str, float]) -> float:
-    e_win = min(_q(mfe_q, "q50", 0.5), K_TP)
+def _expected_net_r(
+    p_cal: float,
+    mfe_q: dict[str, float],
+    mae_q: dict[str, float],
+    *,
+    family: str | None = None,
+    horizon: Horizon | None = None,
+    realized_expectancy: float | None = None,
+) -> float:
+    if payoff_use_realized_exit_r() and family and horizon:
+        rp = realized_exit_payoff(family, horizon)
+        if rp is not None:
+            modeled = p_cal * rp.e_win + (1.0 - p_cal) * rp.e_loss
+            if payoff_realized_cap_enabled() and realized_expectancy is not None:
+                try:
+                    cap = float(realized_expectancy) * payoff_realized_cap()
+                    return min(modeled, cap)
+                except (TypeError, ValueError):
+                    return modeled
+            return modeled
+
+    win_q = payoff_win_quantile()
+    e_win = min(_q(mfe_q, win_q, _q(mfe_q, "q50", 0.5)), K_TP)
     e_loss = -max(_q(mae_q, "q50", 0.25), 0.25)
-    return p_cal * e_win + (1.0 - p_cal) * e_loss
+    modeled = p_cal * e_win + (1.0 - p_cal) * e_loss
+    if payoff_realized_cap_enabled() and realized_expectancy is not None:
+        try:
+            cap = float(realized_expectancy) * payoff_realized_cap()
+            return min(modeled, cap)
+        except (TypeError, ValueError):
+            return modeled
+    return modeled
+
+
+def _layer1_confluence(signals: list[dict[str, Any]], direction: int) -> int:
+    floor = arbitration_strength_floor()
+    secondary = frozenset({"carry", "xsec", "meanrev"})
+    return sum(
+        1
+        for s in signals
+        if str(s.get("name")) in secondary
+        and int(s.get("direction") or 0) == direction
+        and float(s.get("rawStrength") or 0) >= floor
+    )
 
 
 def _q(quantiles: dict[str, float], key: str, default: float) -> float:
@@ -160,6 +212,9 @@ def _build_context(candidate: Candidate, instrument: Instrument) -> FeatureBuild
         sig_carry=_sig_value(candidate.signals, "carry"),
         sig_xsec=_sig_value(candidate.signals, "xsec"),
         sig_mr=_sig_value(candidate.signals, "meanrev"),
+        sig_aggregate=float(candidate.aggregate_strength) * float(candidate.direction),
+        conflict_score=float(candidate.conflict_score),
+        layer1_confluence=_layer1_confluence(candidate.signals, candidate.direction),
         benchmark_symbol=instrument.benchmark,
         cot_asset=cot_asset_for_symbol(instrument.symbol),
     )
@@ -277,7 +332,14 @@ def predict_one(
     mfe_q = _predict_quantiles(quantile_bundle, features, "MFE_R")
     hold_q = _predict_quantiles(quantile_bundle, features, "hold_bars")
 
-    expected_r = _expected_net_r(p_cal, mfe_q, mae_q)
+    expected_r = _expected_net_r(
+        p_cal,
+        mfe_q,
+        mae_q,
+        family=family,
+        horizon=horizon,
+        realized_expectancy=(bundle.manifest.eval_summary or {}).get("expectancy"),
+    )
     status = _decision_status(
         expected_net_r=expected_r,
         p_cal=p_cal,
@@ -313,11 +375,23 @@ def predict_one(
     if status == "TRADE" and not brackets.rr_ok:
         status = "WATCH"
 
-    monitor_rows = list(live_feature_rows or [])
-    monitor_rows.append({k: float(v) for k, v in row.items() if isinstance(v, (int, float))})
+    feat_row = {k: float(v) for k, v in row.items() if isinstance(v, (int, float))}
+    if live_feature_rows is not None:
+        live_feature_rows.append(feat_row)
+        monitor_rows = live_feature_rows
+    else:
+        monitor_rows = [feat_row]
+
+    ref = monitor_reference
+    if ref is None and bundle.monitor_reference:
+        ref = bundle.monitor_reference
+
+    cal_snap = journal_calibration_snapshot(family, horizon)
     monitor = evaluate_monitor(
-        reference_features=monitor_reference,
+        reference_features=ref,
         live_feature_rows=monitor_rows,
+        realized_win_rate=cal_snap.realized_win_rate if cal_snap else None,
+        mean_p_cal=cal_snap.mean_p_cal if cal_snap else None,
     )
     if monitor.watch_max:
         set_watch_max(family, True)
@@ -386,7 +460,8 @@ def predict_batch(
 ) -> list[ASESignal]:
     """Single inference path for scan, shadow, backtest parity, and chart review."""
     bundle_cache: dict[tuple[str, Horizon], ArtifactBundle | None] = {}
-    live_rows: list[dict[str, float]] = []
+    live_buffers: dict[tuple[str, Horizon], list[dict[str, float]]] = {}
+    max_live = monitor_max_live_rows()
     out: list[ASESignal] = []
 
     for cand in candidates:
@@ -404,15 +479,20 @@ def predict_batch(
         key = (inst.family, cand.horizon)
         if key not in bundle_cache:
             bundle_cache[key] = load_artifact_bundle(inst.family, cand.horizon)
+        bundle = bundle_cache[key]
+        live_buf = live_buffers.setdefault(key, [])
+        ref = monitor_reference or (bundle.monitor_reference if bundle else None)
         sig = predict_one(
             cand,
             store,
             inst,
-            bundle=bundle_cache[key],
-            monitor_reference=monitor_reference,
-            live_feature_rows=live_rows,
+            bundle=bundle,
+            monitor_reference=ref,
+            live_feature_rows=live_buf,
             skip_demo_gate=skip_demo_gate,
         )
+        if len(live_buf) > max_live:
+            del live_buf[: len(live_buf) - max_live]
         out.append(sig)
     return out
 

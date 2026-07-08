@@ -86,7 +86,7 @@ def resolve_ai_review_min_rr(signal: Dict[str, Any], resolved_style: str) -> flo
 
 
 def derive_engine_b_score_pct(engine_b: Dict[str, Any] | None) -> float:
-    """Return Engine B score percent, deriving from score/max when stored pct is stale."""
+    """Return Engine B gate-completion percent when available; else score/max."""
 
     def _num(value: Any) -> float | None:
         try:
@@ -97,6 +97,9 @@ def derive_engine_b_score_pct(engine_b: Dict[str, Any] | None) -> float:
             return None
 
     data = engine_b if isinstance(engine_b, dict) else {}
+    gate_pct = _num(data.get("gate_pct"))
+    if gate_pct is not None:
+        return gate_pct
     score = _num(data.get("score"))
     max_score = _num(data.get("max_possible")) or _num(data.get("maxScore"))
     provided_pct = _num(data.get("score_pct"))

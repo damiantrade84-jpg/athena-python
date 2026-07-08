@@ -1188,32 +1188,40 @@ def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst():
 
     assert out["entry_ok"] is True
     assert out["passed"] is True
-    assert out["score"] == pytest.approx(5.0)
-    # RANGING multiplier is 0.90, so 5.0 * 0.90 = 4.5.
-    assert min_score_scaled == 4.5
+    assert out["gate_score"] == pytest.approx(5.0)
+    # Regime no longer scales min_score floor by default; capped at gate_max (5).
+    assert min_score_scaled == 5.0
     assert gate_ok is True
 
 
 def test_engine_b_confidence_passes_enforces_min_score_floor():
     style_profile = {"min_score": 5.0}
     gate_ok, min_score_scaled = engine_b_confidence_passes(
-        {"passed": True, "score": 3.0}, style_profile, regime_label="RANGING"
+        {
+            "passed": True,
+            "gate_score": 3.0,
+            "gate_max_possible": 5.0,
+            "score": 3.0,
+        },
+        style_profile,
+        regime_label="RANGING",
     )
 
-    assert min_score_scaled == 4.5
+    assert min_score_scaled == 5.0
     assert gate_ok is False
 
 
 def test_engine_b_regime_multiplier_enabled_scales_min_score(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE", True)
     style_profile = {"min_score": 4.0}
 
-    assert engine_b_min_score_threshold(style_profile, "TRENDING", "forex") == 3.6
+    assert engine_b_min_score_threshold(style_profile, "TRENDING", "forex") == 3.8
     diag = engine_b_min_score_diagnostics(style_profile, "TRENDING", "forex")
     assert diag == {
         "base_min_score": 4.0,
-        "regime_multiplier": 0.9,
-        "scaled_min_score": 3.6,
+        "regime_multiplier": 0.95,
+        "scaled_min_score": 3.8,
         "multipliers_enabled": True,
     }
 
@@ -1256,16 +1264,32 @@ def test_engine_b_confidence_gate_still_requires_checklist_pass_and_score_floor(
     style_profile = {"min_score": 4.0}
 
     gate_ok, scaled = engine_b_confidence_passes(
-        {"passed": False, "score": 10.0}, style_profile, regime_label="TRENDING"
+        {"passed": False, "gate_score": 10.0, "gate_max_possible": 5.0, "score": 10.0},
+        style_profile,
+        regime_label="TRENDING",
     )
-    assert scaled == 3.6
+    assert scaled == 4.0
     assert gate_ok is False
 
     gate_ok, scaled = engine_b_confidence_passes(
-        {"passed": True, "score": 3.6}, style_profile, regime_label="TRENDING"
+        {"passed": True, "gate_score": 4.0, "gate_max_possible": 5.0, "score": 3.6},
+        style_profile,
+        regime_label="TRENDING",
     )
-    assert scaled == 3.6
+    assert scaled == 4.0
     assert gate_ok is True
+
+
+def test_engine_b_score_floor_uses_regime_multiplier_not_min_rr(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE", True)
+    profile = {"min_score": 4.0, "min_rr": 9.9}
+
+    trending_floor = engine_b_min_score_threshold(profile, "TRENDING", "forex")
+    high_vol_floor = engine_b_min_score_threshold(profile, "HIGH_VOLATILITY", "forex")
+
+    assert trending_floor == pytest.approx(3.8)
+    assert high_vol_floor == pytest.approx(4.4)
+    assert trending_floor != profile["min_rr"]
 
 
 def test_calculate_confidence_emits_no_trigger_pattern_when_missing():
@@ -1886,6 +1910,11 @@ def test_engine_b_bos_volume_confirmed_adds_bonus_point():
 
 
 def test_engine_b_follow_through_denominator_uses_configured_capacity(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_WEIGHTED_SCORING",
+        {**config.CONFIG.get("ENGINE_B_WEIGHTED_SCORING", {}), "ENABLED": False},
+    )
     res = _base_res_long()
     ft_cfg = {
         "ENABLED": True,
@@ -1913,17 +1942,6 @@ def test_engine_b_follow_through_denominator_uses_configured_capacity(monkeypatc
     assert out["follow_through"]["score"] == pytest.approx(0.0)
     # gates 5 + bonuses 3 (bos_mtf, ob_at_zone, volume_ok) + follow-through 1.5
     assert out["max_possible"] == pytest.approx(9.5)
-
-
-def test_engine_b_score_floor_uses_regime_multiplier_not_min_rr():
-    profile = {"min_score": 4.0, "min_rr": 9.9}
-
-    trending_floor = engine_b_min_score_threshold(profile, "TRENDING", "forex")
-    high_vol_floor = engine_b_min_score_threshold(profile, "HIGH_VOLATILITY", "forex")
-
-    assert trending_floor == pytest.approx(3.6)
-    assert high_vol_floor == pytest.approx(3.4)
-    assert trending_floor != profile["min_rr"]
 
 
 def test_resolve_engine_b_execution_levels_structural_fallback_when_atr_config_missing():
@@ -2186,6 +2204,11 @@ def test_follow_through_evaluates_bars_after_breakout_bar(monkeypatch):
 
 
 def test_follow_through_bonus_applies_when_enabled(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_WEIGHTED_SCORING",
+        {**config.CONFIG.get("ENGINE_B_WEIGHTED_SCORING", {}), "ENABLED": False},
+    )
     monkeypatch.setitem(
         config.CONFIG,
         "ENGINE_B_FOLLOW_THROUGH",

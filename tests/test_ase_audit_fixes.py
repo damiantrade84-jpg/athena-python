@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from athena_ase.contracts import ASESignal
 from athena_ase.execution.bridge import (
@@ -341,3 +342,116 @@ def test_reconcile_skips_still_open_trades():
         path=journal_path, store=store, now_ms=decision + 2 * _HOUR
     )
     assert updated == 0  # trade still live — nothing to reconcile yet
+
+
+# ── drift monitor (F2) ────────────────────────────────────────────────────────
+
+
+def test_evaluate_monitor_detects_shifted_distribution():
+    import numpy as np
+
+    from athena_ase.inference.monitor import evaluate_monitor
+
+    ref = {"ret_z_1": np.linspace(-2, 2, 50)}
+    live_rows = [{"ret_z_1": float(x)} for x in np.linspace(1.0, 3.0, 8)]
+    result = evaluate_monitor(reference_features=ref, live_feature_rows=live_rows)
+    assert result.drift_score > 0.0
+    assert result.watch_max is True
+
+
+def test_predict_one_appends_live_feature_buffer(monkeypatch):
+    import numpy as np
+    from unittest.mock import MagicMock
+
+    from athena_ase.artifacts.loader import ArtifactBundle
+    from athena_ase.gates.demo_only import GateResult
+    from athena_ase.inference.predict import predict_one
+    from athena_ase.registry.artifacts import ArtifactManifest
+    from athena_ase.signals.arbitrate import Candidate
+    import athena_ase.inference.predict as pred_mod
+
+    manifest = ArtifactManifest(
+        family="forex",
+        horizon="intraday",
+        version="v-test",
+        feature_schema_hash="x",
+        feature_schema=["ret_z_1"],
+        thr_family=0.1,
+        eval_summary={"expectancy": 0.2},
+    )
+    bundle = ArtifactBundle(
+        family="forex",
+        horizon="intraday",
+        version="v-test",
+        root=MagicMock(),
+        manifest=manifest,
+        model_core=MagicMock(),
+        model_enriched=None,
+        calibrator=None,
+        calibrator_enriched=None,
+        quantile_heads={"MAE_R": {}, "MFE_R": {}, "net_R": {}, "hold_bars": {}},
+        quantile_heads_enriched=None,
+        thr_family=0.1,
+        feature_names=("ret_z_1",),
+        monitor_reference={"ret_z_1": np.linspace(-1, 1, 20)},
+    )
+    bundle.model_core.predict_proba.return_value = np.array([[0.4, 0.6]])
+
+    inst = MagicMock()
+    inst.family = "forex"
+    inst.symbol = "EURUSD"
+    inst.subclass = "major"
+    inst.benchmark = "USDX"
+
+    cand = Candidate(
+        instrument="EURUSD",
+        family="forex",
+        horizon="intraday",
+        decision_time_ms=1_700_000_000_000,
+        bar_index=10,
+        direction=1,
+        sigma_bar=0.01,
+        entry_log=0.0,
+    )
+
+    brackets = MagicMock(
+        rr_ok=True,
+        entry_reference=1.0,
+        entry_zone=(1.0, 1.0),
+        sl=0.9,
+        tp1=1.1,
+        tp2=1.2,
+        max_hold_bars=16,
+    )
+
+    monkeypatch.setattr(pred_mod, "verify_manifest_hashes", lambda *_a, **_k: [])
+    monkeypatch.setattr(pred_mod, "build_features_for_candidate", lambda *_a, **_k: {"ret_z_1": 0.5})
+    monkeypatch.setattr(pred_mod, "compute_brackets", lambda **_k: brackets)
+    monkeypatch.setattr(pred_mod, "assert_demo", lambda **_k: GateResult(ok=True, reason="ok", checks={}))
+    monkeypatch.setattr(pred_mod, "is_watch_max", lambda *_a, **_k: False)
+    monkeypatch.setattr(pred_mod, "set_watch_max", lambda *_a, **_k: None)
+
+    live_buf: list[dict[str, float]] = []
+    predict_one(
+        cand,
+        MagicMock(),
+        inst,
+        bundle=bundle,
+        live_feature_rows=live_buf,
+        skip_demo_gate=True,
+    )
+    assert len(live_buf) == 1
+    assert "ret_z_1" in live_buf[0]
+
+
+# ── demo execution deps gate (F5) ─────────────────────────────────────────────
+
+
+def test_default_execution_deps_rejects_live_mode(monkeypatch):
+    from athena_ase.execution.bridge import default_execution_deps
+
+    import config
+
+    monkeypatch.setitem(config.CONFIG, "EXECUTOR_MODE", "live")
+    with pytest.raises(RuntimeError, match="blocked"):
+        default_execution_deps()

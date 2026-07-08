@@ -1668,6 +1668,35 @@ CONFIG: dict = {
     "ASE_BT_ENABLED": True,
     "ASE_BT_LOOKBACK_DAYS": 365,
     "ASE_BT_HORIZONS": ["intraday", "swing"],
+    "ASE_ARBITRATION": {
+        "MODE": "weighted",
+        "STRENGTH_FLOOR": 0.3,
+    },
+    "ASE_MONITOR": {
+        "MIN_SAMPLES": 5,
+        "MAX_LIVE_ROWS": 200,
+    },
+    "ASE_PAYOFF": {
+        "WIN_QUANTILE": "q50",
+        "REALIZED_CAP_ENABLED": False,
+        "REALIZED_CAP": 1.0,
+        "USE_REALIZED_EXIT_R": True,
+        "REALIZED_MIN_TRADES": 5,
+    },
+    "ASE_CARRY": {
+        "CVR_SCALE": {"forex": 10.0, "crypto": 6.0, "default": 10.0},
+        "SLOPE_ENABLED": False,
+    },
+    "ASE_INTRADAY_FAMILIES": ["forex", "crypto", "commodity"],
+    "ASE_LAYER1_VOL_REGIME_FILTER": {
+        "ENABLED": False,
+        "EXTREME_ORDINAL": 2,
+        "MIN_STRENGTH": 0.5,
+    },
+    "ASE_XSEC_CONTINUOUS": False,
+    "ASE_XSEC": {"Z_CAP": 2.0},
+    "ASE_FEATURES_V2_ENABLED": False,
+    "ASE_MICROSTRUCTURE": {"ENABLED": False},
     # PHASE 3: Engine C Backtest Exit Controls - explicit config for MAX_HOLD and BE parameters
     "ENGINE_C_BT_EXIT": {
         "forex": {
@@ -2378,11 +2407,67 @@ CONFIG: dict = {
     # True: regime adjusts Engine B min_score via ENGINE_B_REGIME_MULTIPLIERS.
     # False: min_score stays at style profile base (multiplier forced to 1.0).
     "ENGINE_B_REGIME_MULTIPLIERS_ENABLED": True,
+    # False (default): regime multipliers do not raise/lower the mandatory gate floor.
+    "ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE": False,
+    # True (default): regime multipliers scale discretionary bonus points only.
+    "ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_BONUSES": True,
     "ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED": True,
     "ENGINE_B_STYLE_MIN_SCORE_BY_STYLE": {
         "scalp": 4.0,
         "intraday": 4.5,
         "swing": 5.0,
+    },
+    "ENGINE_B_WEIGHTED_SCORING": {
+        "ENABLED": True,
+        "COMPONENT_MAX": {
+            "structure_alignment": 1.0,
+            "ob_confluence": 1.0,
+            "fvg_confluence": 1.0,
+            "liquidity_proximity": 0.75,
+            "bos_followthrough": 1.5,
+            "volume_confirmation": 1.0,
+            "profile_reaction": 1.0,
+            "session_context": 0.5,
+            "orderflow": 1.0,
+        },
+        "COMPONENT_WEIGHTS": {
+            "structure_alignment": 0.22,
+            "ob_confluence": 0.14,
+            "fvg_confluence": 0.12,
+            "liquidity_proximity": 0.08,
+            "bos_followthrough": 0.16,
+            "volume_confirmation": 0.08,
+            "profile_reaction": 0.10,
+            "session_context": 0.05,
+            "orderflow": 0.05,
+        },
+        "REGIME_COMPONENT_MULT": {
+            "RANGING": {
+                "fvg_confluence": 1.15,
+                "ob_confluence": 1.10,
+                "bos_followthrough": 0.95,
+            },
+            "TRENDING": {
+                "bos_followthrough": 1.15,
+                "volume_confirmation": 1.10,
+                "fvg_confluence": 0.95,
+            },
+            "HIGH_VOLATILITY": {
+                "liquidity_proximity": 1.10,
+                "ob_confluence": 1.05,
+            },
+            "LOW_VOLATILITY": {
+                "bos_followthrough": 0.90,
+            },
+        },
+    },
+    "ENGINE_B_SUBSYSTEMS": {
+        "ENABLED": True,
+        "WEIGHTS_BY_FAMILY": {
+            "forex": {"carry": 0.6, "sentiment": 0.4},
+            "commodity": {"carry": 0.7, "sentiment": 0.3},
+            "crypto": {},
+        },
     },
     "FOREX_ENGINE": {
         "hurst_gate_enabled": True,

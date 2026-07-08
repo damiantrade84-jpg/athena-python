@@ -36,7 +36,7 @@ def test_binance_ws_emit_uses_ratio_from_accumulators():
     assert abs(r - (1.0 / 3.0)) < 1e-9
 
 
-def test_binance_ws_trade_stream_stores_price_bucket(monkeypatch):
+def test_binance_ws_trade_stream_does_not_persist_only_aggtrade_does(monkeypatch):
     from athena.datafeeds import binance_ws
 
     stored = []
@@ -45,6 +45,11 @@ def test_binance_ws_trade_stream_stores_price_bucket(monkeypatch):
 
     ws._handle_trade({"p": "65000.5", "q": "0.25", "m": False, "T": 1710000000000})
 
+    assert stored == []
+    assert ws.buy_taker_volume == 0.25
+    assert ws.orderflow_delta == 0.25
+
+    ws._handle_agg_trade({"p": "65000.5", "q": "0.25", "m": False, "T": 1710000000000})
     assert stored == [
         {
             "exchange": "binance",
@@ -370,6 +375,31 @@ def test_binance_micro_multi_ws_per_symbol_state_isolation():
     assert eth.sell_taker_volume == 0.0
     assert btc.last_msg_ts > 0
     assert eth.last_msg_ts == 0.0
+
+
+def test_binance_micro_multi_ws_trade_does_not_persist_only_aggtrade_does(monkeypatch):
+    """A @trade envelope must update accumulators only; aggTrade is the sole persister."""
+    import asyncio
+
+    from athena.datafeeds import binance_ws
+
+    stored: list[dict] = []
+    monkeypatch.setattr(binance_ws, "store_trade", lambda **kwargs: stored.append(kwargs))
+    multi = binance_ws.BinanceMicroMultiWS(symbols=["btcusdt"])
+
+    async def _drive():
+        await multi._handle_message(
+            {
+                "stream": "btcusdt@trade",
+                "data": {"p": "65000.0", "q": "2.0", "m": False, "T": 1710000000000},
+            }
+        )
+
+    asyncio.run(_drive())
+
+    assert stored == []
+    assert multi._state["BTCUSDT"].buy_taker_volume == 2.0
+    assert multi._state["BTCUSDT"].orderflow_delta == 2.0
 
 
 def test_binance_micro_multi_ws_stale_symbol_watchdog_detects_silent_stream():

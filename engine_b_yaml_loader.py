@@ -89,6 +89,12 @@ def translate_engine_b_config(doc: dict[str, Any]) -> dict[str, Any]:
             "min_rr": _float(item.get("min_rr"), f"base_thresholds.{style}.min_rr", min_value=0.0),
             "fallback_rr": _float(item.get("fallback_rr"), f"base_thresholds.{style}.fallback_rr", min_value=0.0),
         }
+        if "min_room_atr" in item:
+            profile["min_room_atr"] = _float(
+                item.get("min_room_atr"),
+                f"base_thresholds.{style}.min_room_atr",
+                min_value=0.0,
+            )
         profiles[style] = profile
         style_min_scores[style] = profile["min_score"]
 

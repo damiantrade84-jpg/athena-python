@@ -1170,7 +1170,11 @@ def engine_b_min_score_diagnostics(
         base_min = _group_override if _group_override is not None else style_floor
     multipliers_enabled = bool(config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True))
     regime_multiplier = _engine_b_regime_gate(regime_label, asset_type)
-    scaled = base_min * regime_multiplier
+    apply_to_min = bool(
+        config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE", False)
+    )
+    floor_multiplier = regime_multiplier if (multipliers_enabled and apply_to_min) else 1.0
+    scaled = base_min * floor_multiplier
     if scaled <= 0:
         scaled_min = 0.0
     else:
@@ -1391,6 +1395,26 @@ def _breakout_follow_through(
     }
 
 
+def engine_b_effective_min_score_floor(
+    min_score_scaled: float,
+    gate_max_possible: float,
+) -> float:
+    """Cap the score floor at achievable mandatory-gate count."""
+    try:
+        scaled = float(min_score_scaled or 0.0)
+    except (TypeError, ValueError):
+        scaled = 0.0
+    try:
+        gate_max = float(gate_max_possible or 0.0)
+    except (TypeError, ValueError):
+        gate_max = 0.0
+    if scaled <= 0:
+        return 0.0
+    if gate_max > 0:
+        return min(scaled, gate_max)
+    return scaled
+
+
 def engine_b_confidence_passes(
     conf_data: dict | None,
     style_profile: dict | None,
@@ -1404,10 +1428,17 @@ def engine_b_confidence_passes(
     )
     conf = conf_data if isinstance(conf_data, dict) else {}
     try:
-        score = float(conf.get("score", 0.0) or 0.0)
+        gate_score = float(conf.get("gate_score", conf.get("score", 0.0)) or 0.0)
     except (TypeError, ValueError):
-        score = 0.0
-    score_floor_ok = min_score_scaled <= 0 or score >= min_score_scaled
+        gate_score = 0.0
+    try:
+        gate_max_possible = float(conf.get("gate_max_possible", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        gate_max_possible = 0.0
+    effective_min = engine_b_effective_min_score_floor(
+        min_score_scaled, gate_max_possible
+    )
+    score_floor_ok = effective_min <= 0 or gate_score >= effective_min
     passed = bool(conf.get("passed", False)) and score_floor_ok
     try:
         from calibration_diagnostics import (
@@ -1421,14 +1452,14 @@ def engine_b_confidence_passes(
                 style_profile=style_profile,
                 regime_label=regime_label,
                 asset_type=asset_type,
-                scaled_min_score=min_score_scaled,
+                scaled_min_score=effective_min,
                 passed=passed,
                 diagnostics_context=diagnostics_context,
             )
         )
     except Exception as exc:
         log.debug("[CALIBRATION-DIAG] Engine B diagnostic skipped: %s", exc)
-    return passed, min_score_scaled
+    return passed, effective_min
 
 
 def _normalise_research_candles(candles: list | None) -> list:
@@ -5018,16 +5049,16 @@ class NakedEngine:
             gate_confirmations.append(macro_ok)
         confirmations = list(gate_confirmations)
         bonus_points = 0.0
-        # Bonus confirmations — these add to the score but don't block if missing
-        if bos_mtf:
-            bonus_points += 1.0  # MTF BOS alignment = extra point
-        if volume_ok:
-            bonus_points += 1.0  # Volume confirmation = extra point
-        if ob_at_zone:
-            # Strong order block at the active zone = SMC confluence. Counted in
-            # max_possible (FIX 4) and expected by Engine C ("may already count
-            # these as extra checklist rows"), but the award itself was missing.
-            bonus_points += 1.0
+        _quality_score = 0.0
+        _quality_max_possible = 0.0
+        _quality_components: dict[str, float] = {}
+        _use_weighted_scoring = False
+        try:
+            from engine_b_quality import weighted_scoring_enabled
+
+            _use_weighted_scoring = weighted_scoring_enabled()
+        except Exception:
+            _use_weighted_scoring = False
 
         # ── Breakout Follow-Through Bonus (config-gated) ────────────────────────
         _ft_cfg = config.CONFIG.get("ENGINE_B_FOLLOW_THROUGH", {}) or {}
@@ -5065,17 +5096,26 @@ class NakedEngine:
             _ft_max = abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
             _ft_min = -abs(float(_ft_cfg.get("MIN_PENALTY", -0.5)))
             _ft_bonus = max(_ft_min, min(_ft_max, _ft_result.get("score", 0.0)))
-            if _ft_enabled:
-                bonus_points += _ft_bonus
-            else:
+            if not _ft_enabled:
                 _ft_bonus = 0.0
             _ft_detail["bonus_applied"] = round(_ft_bonus, 2)
+
+        if not _use_weighted_scoring:
+            # Legacy binary bonus confirmations — add to score but don't block if missing.
+            if bos_mtf:
+                bonus_points += 1.0
+            if volume_ok:
+                bonus_points += 1.0
+            if ob_at_zone:
+                bonus_points += 1.0
+            if _ft_enabled:
+                bonus_points += _ft_bonus
 
         # FIX 1: gate_score is COUNT of true booleans — never modify it
         gate_score = float(sum(1 for passed in gate_confirmations if passed))
         gate_max_possible = float(len(gate_confirmations)) if gate_confirmations else 1.0
         total_score = gate_score + bonus_points
-        # FIX 4: Dynamic max_possible
+        # FIX 4: Dynamic max_possible / weighted quality headroom
         _profile_vp_context = build_engine_b_profile_vp_context(
             asset_type_lower,
             score_group=profile.get("score_group"),
@@ -5096,10 +5136,65 @@ class NakedEngine:
         _aggtrade_cvd_bonus_max = max(0.0, _aggtrade_cvd_bonus_max)
         if not _aggtrade_cvd_bonus_enabled:
             _aggtrade_cvd_bonus_max = 0.0
-        bonus_count = 3 + _profile_points_max + _aggtrade_cvd_bonus_max  # bos_mtf, ob_at_zone, volume_ok + profile + aggTrade CVD
-        if _ft_enabled:
-            bonus_count += abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
-        max_possible = gate_max_possible + bonus_count
+
+        if _use_weighted_scoring:
+            try:
+                from engine_b_quality import (
+                    aggregate_quality_score,
+                    apply_regime_component_weights,
+                    compute_confluence_subscores,
+                    normalize_followthrough_bonus,
+                    weighted_scoring_config,
+                )
+
+                _ft_max_for_norm = (
+                    abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
+                    if (_ft_enabled or _ft_diagnostics_enabled)
+                    else 0.0
+                )
+                _ft_norm = normalize_followthrough_bonus(_ft_bonus, _ft_max_for_norm)
+                _subscores = compute_confluence_subscores(
+                    res,
+                    direction,
+                    atr_val,
+                    bos_followthrough_norm=_ft_norm,
+                    volume_ok=volume_ok,
+                    aggtrade_available=_aggtrade_available,
+                    aggtrade_cvd_aligned=_aggtrade_cvd_aligned,
+                    aggtrade_cvd_opposed=_aggtrade_cvd_opposed,
+                    aggtrade_cvd_direction=_aggtrade_cvd_direction,
+                    asset_type=asset_type_lower,
+                    pair_display=res.get("pair_display"),
+                )
+                _regime_label = str(res.get("_adx_derived_regime") or "").upper()
+                _weighted_subscores = apply_regime_component_weights(
+                    _subscores, _regime_label, asset_type_lower
+                )
+                _quality_score, _quality_max_possible, _quality_components = aggregate_quality_score(
+                    _weighted_subscores, weighted_scoring_config()
+                )
+                bonus_points = _quality_score
+                max_possible = gate_max_possible + _quality_max_possible
+            except Exception as exc:
+                log.debug("[ENGINE_B] weighted scoring fallback to legacy bonuses: %s", exc)
+                _use_weighted_scoring = False
+                bonus_points = 0.0
+                if bos_mtf:
+                    bonus_points += 1.0
+                if volume_ok:
+                    bonus_points += 1.0
+                if ob_at_zone:
+                    bonus_points += 1.0
+                if _ft_enabled:
+                    bonus_points += _ft_bonus
+                max_possible = gate_max_possible + 3 + _profile_points_max + _aggtrade_cvd_bonus_max
+                if _ft_enabled:
+                    max_possible += abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
+        else:
+            bonus_count = 3 + _profile_points_max + _aggtrade_cvd_bonus_max
+            if _ft_enabled:
+                bonus_count += abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
+            max_possible = gate_max_possible + bonus_count
         _profile_points = 0.0
         _profile_ok = False
         _profile_alignment = "none"
@@ -5129,9 +5224,16 @@ class NakedEngine:
                     _profile_alignment = "moderate"
                 else:
                     _profile_alignment = "weak"
-                bonus_points += _profile_points
-                total_score += _profile_points
-        if _aggtrade_cvd_bonus_enabled:
+                if not _use_weighted_scoring:
+                    bonus_points += _profile_points
+                    total_score += _profile_points
+            elif _use_weighted_scoring:
+                _profile_points = round(
+                    float(_quality_components.get("profile_reaction", 0.0) or 0.0), 2
+                )
+                _profile_ok = _profile_points > 0
+                _profile_alignment = "weighted"
+        if not _use_weighted_scoring and _aggtrade_cvd_bonus_enabled:
             if _aggtrade_available and _aggtrade_cvd_aligned:
                 _aggtrade_orderflow_points = _aggtrade_cvd_bonus_max
                 _aggtrade_cvd_alignment = "aligned"
@@ -5141,6 +5243,28 @@ class NakedEngine:
                 _aggtrade_cvd_alignment = "opposed"
             elif _aggtrade_available and _aggtrade_cvd_direction:
                 _aggtrade_cvd_alignment = "neutral"
+        elif _use_weighted_scoring and asset_type_lower == "crypto":
+            _aggtrade_orderflow_points = round(
+                float(_quality_components.get("orderflow", 0.0) or 0.0), 2
+            )
+            if _aggtrade_available and _aggtrade_cvd_aligned:
+                _aggtrade_cvd_alignment = "aligned"
+            elif _aggtrade_available and _aggtrade_cvd_opposed:
+                _aggtrade_cvd_alignment = "opposed"
+            elif _aggtrade_available and _aggtrade_cvd_direction:
+                _aggtrade_cvd_alignment = "neutral"
+        # Regime modulates discretionary bonuses, not mandatory gate floors.
+        if (
+            not _use_weighted_scoring
+            and bool(config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True))
+            and bool(config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_BONUSES", True))
+        ):
+            _regime_label = str(res.get("_adx_derived_regime") or "").upper()
+            _regime_bonus_mult = _engine_b_regime_gate(_regime_label, asset_type_lower)
+            if bonus_points > 0 and _regime_bonus_mult != 1.0:
+                bonus_points = round(bonus_points * _regime_bonus_mult, 4)
+        total_score = gate_score + bonus_points
+
         try:
             _aggtrade_missing_penalty = float(
                 config.CONFIG.get("ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY", 0.5)
@@ -5306,6 +5430,10 @@ class NakedEngine:
             "max_possible": round(max_possible, 2),
             "gate_max_possible": round(gate_max_possible, 2),
             "bonus_points": round(bonus_points, 2),
+            "quality_score": round(_quality_score, 2),
+            "quality_max_possible": round(_quality_max_possible, 2),
+            "quality_components": _quality_components,
+            "weighted_scoring_enabled": bool(_use_weighted_scoring),
             "struct_points": 1.0 if structure_ok else 0.0,
             "rr_points": 1.0 if rr_ok else 0.0,
             "room_points": 1.0 if room_ok else 0.0,

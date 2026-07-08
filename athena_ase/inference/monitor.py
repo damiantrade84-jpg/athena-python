@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+
+from athena_ase.settings import monitor_min_samples
+
+log = logging.getLogger("ase.monitor")
 
 
 def population_stability_index(expected: np.ndarray, actual: np.ndarray, *, bins: int = 10) -> float:
@@ -57,6 +62,7 @@ class MonitorResult:
     watch_max: bool = False
     psi: dict[str, float] = field(default_factory=dict)
     calibration_drift: bool = False
+    insufficient_samples: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +70,7 @@ class MonitorResult:
             "watchMax": self.watch_max,
             "psi": self.psi,
             "calibrationDrift": self.calibration_drift,
+            "insufficientSamples": self.insufficient_samples,
         }
 
 
@@ -73,10 +80,13 @@ def evaluate_monitor(
     live_feature_rows: list[dict[str, float]] | None = None,
     realized_win_rate: float | None = None,
     mean_p_cal: float | None = None,
+    min_samples: int | None = None,
 ) -> MonitorResult:
     psi: dict[str, float] = {}
+    insufficient: list[str] = []
     reference_features = reference_features or {}
     live_feature_rows = live_feature_rows or []
+    min_n = monitor_min_samples() if min_samples is None else max(1, int(min_samples))
     if live_feature_rows and reference_features:
         live_df = {k: [] for k in reference_features}
         for row in live_feature_rows:
@@ -86,7 +96,15 @@ def evaluate_monitor(
                     live_df[key].append(float(val))
         for key, ref in reference_features.items():
             live_vals = live_df.get(key) or []
-            if len(live_vals) < 5 or len(ref) < 5:
+            if len(live_vals) < min_n or len(ref) < min_n:
+                insufficient.append(key)
+                log.debug(
+                    "ASE monitor skip PSI %s: live=%d ref=%d need>=%d",
+                    key,
+                    len(live_vals),
+                    len(ref),
+                    min_n,
+                )
                 continue
             psi[key] = population_stability_index(ref, np.asarray(live_vals, dtype=float))
 
@@ -97,7 +115,13 @@ def evaluate_monitor(
         cal_drift = calibration_gap(realized_win_rate, mean_p_cal)
         if cal_drift:
             watch = True
-    return MonitorResult(drift_score=score, watch_max=watch, psi=psi, calibration_drift=cal_drift)
+    return MonitorResult(
+        drift_score=score,
+        watch_max=watch,
+        psi=psi,
+        calibration_drift=cal_drift,
+        insufficient_samples=insufficient,
+    )
 
 
 def apply_watch_max_cap(status: str, watch_max: bool) -> str:

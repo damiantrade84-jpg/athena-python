@@ -6,8 +6,15 @@ import logging
 from typing import Iterator
 
 from athena_ase.data.ptis import PTISStore
+from athena_ase.features.build import vol_regime_ordinal
 from athena_ase.horizon import Horizon, HORIZONS
 from athena_ase.instruments import DEFAULT_INSTRUMENTS, Instrument, instruments_for_family
+from athena_ase.settings import (
+    intraday_families,
+    layer1_vol_regime_extreme_ordinal,
+    layer1_vol_regime_filter_enabled,
+    layer1_vol_regime_min_strength,
+)
 from athena_ase.signals.arbitrate import Candidate, EventSpacingFilter, FiredSignal, arbitrate
 from athena_ase.signals.carry import compute_carry
 from athena_ase.signals.common import BarSeries, bar_index_at_decision, load_bar_series
@@ -16,6 +23,8 @@ from athena_ase.signals.tsmom import compute_tsmom
 from athena_ase.signals.xsec import compute_xsec
 
 log = logging.getLogger("ase.signals.engine")
+
+_INTRADAY_ALLOWED = intraday_families()
 
 
 def _family_bar_cache(
@@ -31,6 +40,21 @@ def _family_bar_cache(
         if series is not None:
             out[inst.symbol] = series
     return out
+
+
+def _vol_regime_pass(series: BarSeries, idx: int, fired: list[FiredSignal]) -> bool:
+    if not layer1_vol_regime_filter_enabled():
+        return True
+    sig = float(series.sigma_bar[idx])
+    sig_l = float(series.sigma_long[idx])
+    if sig != sig or sig_l != sig_l or sig_l <= 0:
+        return True
+    regime = vol_regime_ordinal(sig / sig_l)
+    extreme = layer1_vol_regime_extreme_ordinal()
+    if regime != extreme:
+        return True
+    max_strength = max((s.raw_strength for s in fired if s.direction != 0), default=0.0)
+    return max_strength >= layer1_vol_regime_min_strength()
 
 
 def iter_candidates(
@@ -49,9 +73,10 @@ def iter_candidates(
     for inst in universe:
         if inst.swing_only and horizon == "intraday":
             continue
-        if horizon == "intraday" and inst.family not in ("forex", "crypto", "commodity"):
-            if inst.family in ("equity",) and inst.subclass == "jse":
-                continue
+        # Intraday Layer-1 is limited to configured families (default forex/crypto/commodity).
+        # Equity and index_etf use swing path (carry + xsec).
+        if horizon == "intraday" and inst.family not in _INTRADAY_ALLOWED:
+            continue
         series = load_bar_series(store, inst.symbol, horizon, start_ms, end_ms)
         if series is None or len(series.value_time) < max(cfg.tsmom_lookbacks) + 5:
             continue
@@ -91,6 +116,9 @@ def iter_candidates(
             if horizon == "intraday" and inst.family == "forex":
                 mr = compute_meanrev(inst, series.close_log, idx, tsm.blend)
                 fired.append(FiredSignal("meanrev", mr.direction, mr.raw_strength))
+
+            if not _vol_regime_pass(series, idx, fired):
+                continue
 
             cand = arbitrate(
                 inst,

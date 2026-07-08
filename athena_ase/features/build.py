@@ -13,6 +13,7 @@ import numpy as np
 
 from athena_ase.data.ptis import asof
 from athena_ase.horizon import HORIZONS, Horizon
+from athena_ase.settings import features_v2_enabled, microstructure_enabled
 
 # Instruments with < COT_MIN_WEEKS of COT history route to core model only.
 # cot_pct percentile window = min(156, available_weeks).
@@ -35,11 +36,15 @@ _SIGNAL_BLOCK = (
     "agreement_count",
     "conflict_flag",
     "candidate_dir",
+    "sig_aggregate",
+    "conflict_score",
+    "layer1_confluence",
 )
 _CALENDAR_BLOCK = ("hour_sin", "hour_cos", "dow_sin", "dow_cos", "session")
 _INSTRUMENT_BLOCK = ("instrument_id", "subclass")
 _VOL_BLOCK = ("vol_level", "vol_of_vol", "vol_regime")
 _ENRICHED_BLOCK = ("cot_pct", "cot_delta_4w", "funding_z", "oi_delta_z")
+_FEATURE_V2_BLOCK = ("trade_imbalance_z", "bucket_delta_z")
 
 FEATURE_SCHEMA_CORE: tuple[str, ...] = (
     *_RET_ALL,
@@ -54,13 +59,29 @@ FEATURE_SCHEMA_CORE: tuple[str, ...] = (
 )
 
 FEATURE_SCHEMA_ENRICHED: tuple[str, ...] = FEATURE_SCHEMA_CORE + _ENRICHED_BLOCK
+FEATURE_SCHEMA_V2: tuple[str, ...] = FEATURE_SCHEMA_CORE + _FEATURE_V2_BLOCK
+FEATURE_SCHEMA_ENRICHED_V2: tuple[str, ...] = FEATURE_SCHEMA_ENRICHED + _FEATURE_V2_BLOCK
 
 CATEGORICAL_FEATURES = frozenset({"instrument_id", "subclass", "session", "vol_regime"})
+
+
+def active_feature_schema(*, enriched: bool = False) -> tuple[str, ...]:
+    if features_v2_enabled():
+        return FEATURE_SCHEMA_ENRICHED_V2 if enriched else FEATURE_SCHEMA_V2
+    return FEATURE_SCHEMA_ENRICHED if enriched else FEATURE_SCHEMA_CORE
+
+
+def vol_regime_ordinal(vol_level: float) -> int:
+    return _vol_regime_ordinal(vol_level)
 
 __all__ = [
     "COT_MIN_WEEKS",
     "FEATURE_SCHEMA_CORE",
     "FEATURE_SCHEMA_ENRICHED",
+    "FEATURE_SCHEMA_V2",
+    "FEATURE_SCHEMA_ENRICHED_V2",
+    "active_feature_schema",
+    "vol_regime_ordinal",
     "CATEGORICAL_FEATURES",
     "FeatureBuildContext",
     "build_features_for_candidate",
@@ -301,6 +322,9 @@ class FeatureBuildContext:
     sig_carry: float = 0.0
     sig_xsec: float = 0.0
     sig_mr: float = 0.0
+    sig_aggregate: float = 0.0
+    conflict_score: float = 0.0
+    layer1_confluence: int = 0
     xsec_pct: float = float("nan")
     family_dispersion: float = float("nan")
     benchmark_symbol: str = "SPY"
@@ -327,6 +351,9 @@ def build_features_for_candidate(
         out["candidate_dir"] = float(ctx.direction)
         out["agreement_count"] = float(ctx.agreement_count)
         out["conflict_flag"] = float(1.0 if ctx.conflict_flag else 0.0)
+        out["sig_aggregate"] = float(ctx.sig_aggregate)
+        out["conflict_score"] = float(ctx.conflict_score)
+        out["layer1_confluence"] = float(ctx.layer1_confluence)
         return _select_schema(out, enriched)
 
     logret = np.full(len(close_log), np.nan)
@@ -387,6 +414,9 @@ def build_features_for_candidate(
     out["sig_carry"] = float(ctx.sig_carry)
     out["sig_xsec"] = float(ctx.sig_xsec)
     out["sig_mr"] = float(ctx.sig_mr)
+    out["sig_aggregate"] = float(ctx.sig_aggregate)
+    out["conflict_score"] = float(ctx.conflict_score)
+    out["layer1_confluence"] = float(ctx.layer1_confluence)
     out["agreement_count"] = float(ctx.agreement_count)
     out["conflict_flag"] = float(1.0 if ctx.conflict_flag else 0.0)
     out["candidate_dir"] = float(ctx.direction)
@@ -431,12 +461,24 @@ def build_features_for_candidate(
         else:
             ctx.missing_feeds.append("open_interest")
 
+    if microstructure_enabled() and ctx.family == "crypto":
+        imb = _asof_values(_bybit_series_id(ctx.symbol, "trade_imbalance_z"), ctx.decision_time_ms, 1)
+        delta = _asof_values(_bybit_series_id(ctx.symbol, "bucket_delta_z"), ctx.decision_time_ms, 1)
+        if len(imb) >= 1:
+            out["trade_imbalance_z"] = float(imb[-1])
+        else:
+            ctx.missing_feeds.append("trade_imbalance")
+        if len(delta) >= 1:
+            out["bucket_delta_z"] = float(delta[-1])
+        else:
+            ctx.missing_feeds.append("bucket_delta")
+
     return _select_schema(out, enriched)
 
 
 def _select_schema(row: dict[str, Any], enriched: bool) -> dict[str, Any]:
-    schema = FEATURE_SCHEMA_ENRICHED if enriched else FEATURE_SCHEMA_CORE
-    return {k: row[k] for k in schema}
+    schema = active_feature_schema(enriched=enriched)
+    return {k: row.get(k, float("nan")) for k in schema}
 
 
 def build_feature_matrix(
@@ -445,7 +487,7 @@ def build_feature_matrix(
     enriched: bool = False,
 ) -> tuple[np.ndarray, list[str], list[dict[str, Any]]]:
     """Build feature matrix aligned to schema column order."""
-    schema = FEATURE_SCHEMA_ENRICHED if enriched else FEATURE_SCHEMA_CORE
+    schema = active_feature_schema(enriched=enriched)
     rows: list[dict[str, Any]] = []
     for ctx in contexts:
         rows.append(build_features_for_candidate(ctx, enriched=enriched))

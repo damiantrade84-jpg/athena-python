@@ -103,16 +103,19 @@ def freeze_artifact_bundle(
     eval_summary: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
     adapters: list[str] | None = None,
+    monitor_reference: dict[str, Any] | None = None,
     root: Path | None = None,
 ) -> Path:
     """Persist model bundle + manifest with content hashes."""
     out_dir = artifact_dir(family, horizon, version, root=root)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    schema = FEATURE_SCHEMA_ENRICHED if route == "enriched" else FEATURE_SCHEMA_CORE
-    feature_schemas = {"core": list(FEATURE_SCHEMA_CORE)}
+    from athena_ase.features.build import active_feature_schema
+
+    schema = active_feature_schema(enriched=(route == "enriched"))
+    feature_schemas = {"core": list(active_feature_schema(enriched=False))}
     if "model_enriched.pkl" in models:
-        feature_schemas["enriched"] = list(FEATURE_SCHEMA_ENRICHED)
+        feature_schemas["enriched"] = list(active_feature_schema(enriched=True))
     feature_schema_hashes = {
         name: schema_hash(names)
         for name, names in feature_schemas.items()
@@ -128,6 +131,12 @@ def freeze_artifact_bundle(
         with fpath.open("wb") as fh:
             pickle.dump(obj, fh, protocol=pickle.HIGHEST_PROTOCOL)
         file_hashes[name] = _sha256_file(fpath)
+
+    from athena_ase.artifacts.monitor_ref import MONITOR_REFERENCE_FILE, save_monitor_reference
+
+    if monitor_reference is not None:
+        ref_path = out_dir / MONITOR_REFERENCE_FILE
+        file_hashes[MONITOR_REFERENCE_FILE] = save_monitor_reference(ref_path, monitor_reference)
 
     manifest = ArtifactManifest(
         family=family,
@@ -164,7 +173,8 @@ def verify_manifest(manifest: ArtifactManifest, artifact_root: Path) -> list[str
     if not manifest.dataset_hash:
         errors.append("missing dataset_hash")
     persisted_model_files = {path.name for path in artifact_root.glob("*.pkl")}
-    if set(manifest.file_hashes) != persisted_model_files:
+    model_hashes = {k: v for k, v in manifest.file_hashes.items() if k.endswith(".pkl")}
+    if set(model_hashes) != persisted_model_files:
         errors.append("file_hashes do not cover all model files")
     for fname, expected in manifest.file_hashes.items():
         fpath = artifact_root / fname

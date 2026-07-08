@@ -9,6 +9,7 @@ import numpy as np
 
 from athena_ase.horizon import HORIZONS
 from athena_ase.instruments import Instrument
+from athena_ase.settings import xsec_continuous_enabled, xsec_z_cap
 from athena_ase.signals.common import BarSeries, bar_index_at_decision
 
 log = logging.getLogger("ase.signals.xsec")
@@ -35,6 +36,14 @@ def _r63(close_log: np.ndarray, sigma_bar: np.ndarray, idx: int, lookback: int =
     return ret / (sig * np.sqrt(lookback))
 
 
+def _percentile_direction(pct: float) -> int:
+    if pct >= 0.8:
+        return 1
+    if pct <= 0.2:
+        return -1
+    return 0
+
+
 def compute_xsec(
     instrument: Instrument,
     family_series: dict[str, BarSeries],
@@ -44,22 +53,23 @@ def compute_xsec(
     if instrument.family not in ("equity", "crypto", "index_etf"):
         return XSecResult(0, 0.0, 0.5)
     lookback = HORIZONS["swing"].xsec_lookback
-    scores: list[float] = []
-    for sym, series in family_series.items():
-        idx = bar_index_at_decision(series, decision_time_ms)
-        if idx is None:
+    all_scores: list[float] = []
+    for series in family_series.values():
+        i = bar_index_at_decision(series, decision_time_ms)
+        if i is None:
             continue
-        r = _r63(series.close_log, series.sigma_bar, idx, lookback)
+        r = _r63(series.close_log, series.sigma_bar, i, lookback)
         if r is not None:
-            scores.append(r)
-    if len(scores) < _MIN_UNIVERSE:
+            all_scores.append(r)
+
+    if len(all_scores) < _MIN_UNIVERSE:
         day_key = f"{instrument.family}:{decision_time_ms // 86_400_000}"
         if day_key not in _xsec_disable_logged:
             _xsec_disable_logged.add(day_key)
             log.info(
                 "xsec disabled: family=%s universe=%d<%d at %s",
                 instrument.family,
-                len(scores),
+                len(all_scores),
                 _MIN_UNIVERSE,
                 decision_time_ms,
             )
@@ -71,16 +81,6 @@ def compute_xsec(
     idx = bar_index_at_decision(target, decision_time_ms)
     if idx is None:
         return XSecResult(0, 0.0, 0.5)
-    all_scores: list[float] = []
-    for series in family_series.values():
-        i = bar_index_at_decision(series, decision_time_ms)
-        if i is None:
-            continue
-        r = _r63(series.close_log, series.sigma_bar, i, lookback)
-        if r is not None:
-            all_scores.append(r)
-    if len(all_scores) < _MIN_UNIVERSE:
-        return XSecResult(0, 0.0, 0.5, disabled=True)
 
     own = _r63(target.close_log, target.sigma_bar, idx, lookback)
     if own is None:
@@ -89,11 +89,21 @@ def compute_xsec(
     less = sum(1 for s in all_scores if s < own)
     pct = less / (len(all_scores) - 1) if len(all_scores) > 1 else 0.5
 
-    if pct >= 0.8:
-        direction = 1
-    elif pct <= 0.2:
-        direction = -1
-    else:
-        direction = 0
+    if xsec_continuous_enabled():
+        arr = np.asarray(all_scores, dtype=float)
+        mu = float(np.mean(arr))
+        sd = float(np.std(arr))
+        if sd <= 1e-12:
+            return XSecResult(0, 0.0, pct)
+        z = (own - mu) / sd
+        direction = 1 if z > 0 else -1 if z < 0 else 0
+        cap = max(xsec_z_cap(), 1e-6)
+        raw_strength = min(abs(z) / cap, 1.0)
+        if abs(z) < 0.25:
+            direction = 0
+            raw_strength = 0.0
+        return XSecResult(direction, raw_strength, pct)
+
+    direction = _percentile_direction(pct)
     raw_strength = abs(pct - 0.5) * 2.0
     return XSecResult(direction, raw_strength, pct)

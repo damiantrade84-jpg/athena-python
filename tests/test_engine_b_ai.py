@@ -18,6 +18,46 @@ from engine_b_ai import (
 import engine_b_ai
 
 
+def test_build_engine_b_signal_message_uses_gate_pct_for_confidence():
+    message = build_engine_b_signal_message(
+        pair="EUR/USD",
+        direction="LONG",
+        current_price=1.1,
+        structure_result={"structural_verdict": "CLEAR"},
+        confidence_result={
+            "score": 5.75,
+            "gate_score": 5.0,
+            "gate_max_possible": 5.0,
+            "gate_pct": 100,
+            "max_possible": 11.5,
+            "passed": True,
+        },
+    )
+
+    assert "Confidence: 5.00 / 5 (100% gates)" in message
+    assert "Quality score (bonuses/penalties): 5.75 / 11.5" in message
+
+
+def test_get_engine_b_ai_verdict_empty_payload_returns_error(monkeypatch):
+    monkeypatch.setattr(engine_b_ai, "create_ai_client", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        engine_b_ai,
+        "_call_ai_with_retry",
+        lambda *_args, **_kwargs: ({}, "{}"),
+    )
+
+    result = get_engine_b_ai_verdict(
+        pair="EUR/USD",
+        direction="LONG",
+        current_price=1.1,
+        structure_result={},
+        confidence_result={"score": 4.0, "max_possible": 5.0, "passed": True},
+        xai_api_key="key",
+    )
+
+    assert result.get("error") == "empty AI response"
+
+
 def test_build_engine_b_signal_message_preserves_explicit_zero_engine_a_values():
     message = build_engine_b_signal_message(
         pair="EUR/USD",

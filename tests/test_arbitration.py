@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from athena_ase.horizon import HORIZONS
 from athena_ase.instruments import Instrument
 from athena_ase.signals.arbitrate import Candidate, EventSpacingFilter, FiredSignal, arbitrate
 
 
 def _inst():
-    return Instrument("EURUSD", "EUR/USD", "forex", "major")
+    return Instrument("EURUSD", "EUR/USD", "forex", "major", "EURUSD.FOREX", "USDX")
 
 
 def test_arbitrate_agree():
@@ -30,6 +32,19 @@ def test_arbitrate_conflict_none():
     assert arbitrate(_inst(), "swing", 1000, 10, 0.0, 0.01, fired) is None
 
 
+def test_arbitrate_max_mode_2x_conflict(monkeypatch):
+    monkeypatch.setitem(
+        __import__("config").CONFIG,
+        "ASE_ARBITRATION",
+        {"MODE": "max", "STRENGTH_FLOOR": 0.3},
+    )
+    fired = [
+        FiredSignal("a", 1, 0.5),
+        FiredSignal("b", -1, 0.5),
+    ]
+    assert arbitrate(_inst(), "swing", 1000, 10, 0.0, 0.01, fired) is None
+
+
 def test_arbitrate_dominance():
     fired = [
         FiredSignal("a", 1, 0.8),
@@ -39,6 +54,34 @@ def test_arbitrate_dominance():
     assert c is not None
     assert c.direction == 1
     assert c.conflict_flag is True
+
+
+def test_arbitrate_dominant_short_weak_long_not_none():
+    """F1: weak counter-signal below floor must not suppress dominant side."""
+    fired = [
+        FiredSignal("tsmom", 1, 0.1),
+        FiredSignal("meanrev", -1, 0.8),
+    ]
+    c = arbitrate(_inst(), "intraday", 1000, 10, 0.0, 0.01, fired)
+    assert c is not None
+    assert c.direction == -1
+    assert c.conflict_flag is True
+
+
+def test_arbitrate_weighted_mode_aggregate(monkeypatch):
+    monkeypatch.setitem(
+        __import__("config").CONFIG,
+        "ASE_ARBITRATION",
+        {"MODE": "weighted", "STRENGTH_FLOOR": 0.3},
+    )
+    fired = [
+        FiredSignal("tsmom", 1, 0.6),
+        FiredSignal("carry", 1, 0.5),
+    ]
+    c = arbitrate(_inst(), "swing", 1000, 10, 0.0, 0.01, fired)
+    assert c is not None
+    assert c.direction == 1
+    assert c.aggregate_strength == pytest.approx(1.1)
 
 
 def test_event_spacing_and_flip():

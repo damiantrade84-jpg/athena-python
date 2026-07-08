@@ -156,6 +156,8 @@ def build_engine_b_verdict_comparison(
     ai_upgraded = _to_bool(model.get("aiUpgradedEngineB"))
     if ai_upgraded is None:
         ai_upgraded = bool(not passed and final_decision == "trade" and chart_confirms is True)
+    if not passed:
+        ai_upgraded = False
 
     comparison = str(model.get("comparisonVerdict") or "").strip()
     if comparison not in _VALID_VERDICTS:

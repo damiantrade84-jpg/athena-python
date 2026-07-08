@@ -11,9 +11,9 @@ from engine_b_yaml_loader import translate_engine_b_config
 def _sample_doc():
     return {
         "base_thresholds": {
-            "scalp": {"min_score": 4.0, "min_rr": 1.5, "fallback_rr": 2.0},
-            "intraday": {"min_score": 4.5, "min_rr": 1.5, "fallback_rr": 2.0},
-            "swing": {"min_score": 5.0, "min_rr": 2.0, "fallback_rr": 3.0},
+            "scalp": {"min_score": 4.0, "min_rr": 1.5, "fallback_rr": 2.0, "min_room_atr": 0.35},
+            "intraday": {"min_score": 4.5, "min_rr": 1.5, "fallback_rr": 2.0, "min_room_atr": 0.7},
+            "swing": {"min_score": 5.0, "min_rr": 2.0, "fallback_rr": 3.0, "min_room_atr": 1.0},
         },
         "regime_multipliers": {
             "TRENDING": 0.95,
@@ -77,6 +77,9 @@ def test_translate_engine_b_yaml_maps_schema_to_runtime_config():
     profiles = out["NAKED_ENGINE"]["style_profiles"]
     assert profiles["intraday"]["min_score"] == pytest.approx(4.5)
     assert profiles["swing"]["fallback_rr"] == pytest.approx(3.0)
+    assert profiles["scalp"]["min_room_atr"] == pytest.approx(0.35)
+    assert profiles["intraday"]["min_room_atr"] == pytest.approx(0.7)
+    assert profiles["swing"]["min_room_atr"] == pytest.approx(1.0)
     assert out["ENGINE_B_STYLE_MIN_SCORE_BY_STYLE"] == {
         "scalp": 4.0,
         "intraday": 4.5,

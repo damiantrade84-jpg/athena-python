@@ -17,6 +17,7 @@ from athena_ase.features.build import (
     FEATURE_SCHEMA_CORE,
     FEATURE_SCHEMA_ENRICHED,
     FeatureBuildContext,
+    active_feature_schema,
     build_features_for_candidate,
     cot_asset_for_symbol,
 )
@@ -36,6 +37,7 @@ from athena_ase.models.quantile_heads import (
     train_quantile_heads,
 )
 from athena_ase.registry.artifacts import freeze_artifact_bundle
+from athena_ase.artifacts.monitor_ref import build_monitor_reference
 from athena_ase.signals.arbitrate import Candidate
 from athena_research.ase.bootstrap import block_bootstrap_expectancy
 from athena_research.ase.dsr_pbo import deflated_sharpe_ratio
@@ -83,6 +85,15 @@ def _feature_row(cand: Candidate, inst, store: PTISStore) -> dict[str, Any]:
         sig_carry=next((s["rawStrength"] * s["direction"] for s in cand.signals if s.get("name") == "carry"), 0.0),
         sig_xsec=next((s["rawStrength"] * s["direction"] for s in cand.signals if s.get("name") == "xsec"), 0.0),
         sig_mr=next((s["rawStrength"] * s["direction"] for s in cand.signals if s.get("name") == "meanrev"), 0.0),
+        sig_aggregate=float(cand.aggregate_strength) * float(cand.direction),
+        conflict_score=float(cand.conflict_score),
+        layer1_confluence=sum(
+            1
+            for s in cand.signals
+            if str(s.get("name")) in {"carry", "xsec", "meanrev"}
+            and int(s.get("direction") or 0) == cand.direction
+            and float(s.get("rawStrength") or 0) >= 0.3
+        ),
     )
     feats = build_features_for_candidate(ctx, enriched=True)
     feats["decision_time_ms"] = cand.decision_time_ms
@@ -325,9 +336,12 @@ def train_family_horizon(
     labeled.to_parquet(ds_path, index=False)
     ds_hash = hashlib.sha256(ds_path.read_bytes()).hexdigest()
 
+    core_schema = active_feature_schema(enriched=False)
+    enriched_schema = active_feature_schema(enriched=True)
+
     core_result, core_calibrator, calibration_summary = _fit_calibrated_classifier(
         train_frame,
-        feature_names=FEATURE_SCHEMA_CORE,
+        feature_names=core_schema,
         family=family,
         horizon=horizon,
         log_trials=True,
@@ -336,11 +350,11 @@ def train_family_horizon(
         train_frame.to_dict(orient="records"),
         {target: train_frame[target].to_numpy(dtype=float) for target in TARGETS},
         sample_weight=train_frame["sample_weight"].to_numpy(dtype=float),
-        feature_names=FEATURE_SCHEMA_CORE,
+        feature_names=core_schema,
     )
     eval_matrix = _prepare_matrix(
         eval_frame.to_dict(orient="records"),
-        FEATURE_SCHEMA_CORE,
+        core_schema,
     )
     eval_raw_probability = _positive_probability(core_result.model, eval_matrix)
     eval_probability = core_calibrator.predict(eval_raw_probability)
@@ -413,7 +427,7 @@ def train_family_horizon(
             continue
         fold_matrix = _prepare_matrix(
             fold_df.to_dict(orient="records"),
-            FEATURE_SCHEMA_CORE,
+            core_schema,
         )
         fold_raw_p = _positive_probability(core_result.model, fold_matrix)
         fold_p = core_calibrator.predict(fold_raw_p)
@@ -470,7 +484,7 @@ def train_family_horizon(
     if len(enriched_rows) >= MIN_ENRICHED_CANDIDATES:
         enriched_result, enriched_calibrator, enriched_calibration = _fit_calibrated_classifier(
             enriched_rows,
-            feature_names=FEATURE_SCHEMA_ENRICHED,
+            feature_names=enriched_schema,
             family=family,
             horizon=horizon,
             log_trials=False,
@@ -479,7 +493,7 @@ def train_family_horizon(
             enriched_rows.to_dict(orient="records"),
             {target: enriched_rows[target].to_numpy(dtype=float) for target in TARGETS},
             sample_weight=enriched_rows["sample_weight"].to_numpy(dtype=float),
-            feature_names=FEATURE_SCHEMA_ENRICHED,
+            feature_names=enriched_schema,
         )
         models.update(
             {
@@ -534,6 +548,7 @@ def train_family_horizon(
             "calibration": calibration_summary,
             "enriched": enriched_summary,
         },
+        monitor_reference=build_monitor_reference(eval_frame, core_schema),
     )
     TRAIN_STATE.write_text(
         json.dumps({"family": family, "horizon": horizon, "version": version, "artifact_path": str(artifact_path)}),

@@ -158,17 +158,16 @@ class BinanceWS:
         self.last_update_id = data.get("lastUpdateId")
 
     def _handle_trade(self, data: Dict) -> None:
-        """Accumulate taker volume from trade stream (taker side from ``m``)."""
-        size = float(data.get("q", 0))
-        is_buyer_maker = data.get("m")  # true if buyer is maker (seller is taker)
+        """Accumulate taker volume from the @trade stream (taker side from ``m``).
+
+        Persistence to the price-bucket store is handled by ``_handle_agg_trade``;
+        aggTrade is the canonical bucket source so the same fill is not counted twice.
+        """
         try:
-            price = float(data.get("p", 0))
-            event_ts = float(data.get("T") or data.get("E") or 0) / 1000.0
-            if event_ts <= 0:
-                event_ts = time.time()
+            size = float(data.get("q", 0))
         except (TypeError, ValueError):
-            price = 0.0
-            event_ts = time.time()
+            return
+        is_buyer_maker = data.get("m")  # true if buyer is maker (seller is taker)
         # Binance: m True → seller taker (sell aggressor); m False → buyer taker
         if not is_buyer_maker:
             self.buy_taker_volume += size
@@ -176,15 +175,6 @@ class BinanceWS:
         else:
             self.sell_taker_volume += size
             self.orderflow_delta -= size
-        if size > 0 and price > 0:
-            store_trade(
-                exchange="binance",
-                symbol=self.symbol.upper(),
-                price=price,
-                quantity=size,
-                is_buyer_maker=bool(is_buyer_maker),
-                ts=event_ts,
-            )
 
     def _handle_agg_trade(self, data: Dict) -> None:
         """Persist aggregate-trade volume by price bucket for Engine D orderflow."""
@@ -535,10 +525,6 @@ class BinanceMicroMultiWS:
     def _handle_trade(self, sym_u: str, st: _SymbolState, data: Dict) -> None:
         try:
             size = float(data.get("q", 0))
-            price = float(data.get("p", 0))
-            event_ts = float(data.get("T") or data.get("E") or 0) / 1000.0
-            if event_ts <= 0:
-                event_ts = time.time()
         except (TypeError, ValueError):
             return
         is_buyer_maker = data.get("m")
@@ -548,15 +534,6 @@ class BinanceMicroMultiWS:
         else:
             st.sell_taker_volume += size
             st.orderflow_delta -= size
-        if size > 0 and price > 0:
-            store_trade(
-                exchange="binance",
-                symbol=sym_u,
-                price=price,
-                quantity=size,
-                is_buyer_maker=bool(is_buyer_maker),
-                ts=event_ts,
-            )
 
     def _handle_agg_trade(self, sym_u: str, data: Dict) -> None:
         try:

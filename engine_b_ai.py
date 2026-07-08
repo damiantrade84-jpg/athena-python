@@ -296,12 +296,32 @@ def build_engine_b_signal_message(
 
     # === SIGNAL ===
     conf_score = confidence_result.get("score", 0)
-    max_score = confidence_result.get("max_possible", 5.0)
-    score_pct = round((conf_score / max_score * 100)) if max_score else 0
-
-    lines.append("=== ENGINE B SIGNAL (NAKED STRUCTURE) ===")
-    lines.append(f"Pair: {pair} | Direction: {direction} | Price: {current_price}")
-    lines.append(f"Confidence: {conf_score:.2f} / {max_score} ({score_pct}%)")
+    gate_score = confidence_result.get("gate_score", conf_score)
+    gate_max = confidence_result.get("gate_max_possible")
+    gate_pct = confidence_result.get("gate_pct")
+    if gate_max is not None and gate_pct is not None:
+        try:
+            gate_max_f = float(gate_max)
+            gate_score_f = float(gate_score)
+            score_pct = int(gate_pct)
+            lines.append("=== ENGINE B SIGNAL (NAKED STRUCTURE) ===")
+            lines.append(f"Pair: {pair} | Direction: {direction} | Price: {current_price}")
+            lines.append(
+                f"Confidence: {gate_score_f:.2f} / {gate_max_f:g} ({score_pct}% gates)"
+            )
+            max_score = confidence_result.get("max_possible")
+            if max_score and float(conf_score) != gate_score_f:
+                lines.append(
+                    f"Quality score (bonuses/penalties): {float(conf_score):.2f} / {float(max_score):g}"
+                )
+        except (TypeError, ValueError):
+            gate_max = None
+    if gate_max is None or gate_pct is None:
+        max_score = confidence_result.get("max_possible", 5.0)
+        score_pct = round((conf_score / max_score * 100)) if max_score else 0
+        lines.append("=== ENGINE B SIGNAL (NAKED STRUCTURE) ===")
+        lines.append(f"Pair: {pair} | Direction: {direction} | Price: {current_price}")
+        lines.append(f"Confidence: {conf_score:.2f} / {max_score} ({score_pct}%)")
     lines.append(f"Verdict: {structure_result.get('structural_verdict', 'UNCLEAR')}")
     lines.append(f"Actionable: {'YES' if confidence_result.get('passed', False) else 'NO'}")
 
@@ -604,6 +624,9 @@ def get_engine_b_ai_verdict(
         # Validate required keys
         required = {"grade", "edgeProbability", "riskLevel", "verdict", "reviewSource"}
         missing = required - set(parsed.keys())
+        if missing == required:
+            log.error(f"[ENGINE_B_AI] {pair}: Empty AI response (all required keys missing)")
+            return {"error": "empty AI response"}
         if missing:
             log.warning(f"[ENGINE_B_AI] {pair}: Missing keys {missing} in AI response")
             parsed.setdefault("grade", "C")

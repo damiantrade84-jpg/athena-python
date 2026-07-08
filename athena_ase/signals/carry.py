@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from athena_ase.data.ingest.common import bybit_series_id, fred_series_id
 from athena_ase.data.ptis import PTISStore
 from athena_ase.instruments import Instrument, compact_symbol
+from athena_ase.settings import carry_cvr_scale, carry_slope_enabled
 
 # Copied from carry_feed.py — FRED short-rate series per currency (no legacy import).
 FRED_CURRENCY_SERIES: dict[str, str] = {
@@ -40,6 +41,9 @@ FOREX_CARRY_LEGS: dict[str, list[tuple[float, str]]] = {
     "USDZAR": [(1.0, "USD"), (-1.0, "ZAR")],
     "USDSGD": [(1.0, "USD"), (-1.0, "SGD")],
 }
+
+_CARRY_FLOOR = 0.4
+_MS_PER_WEEK = 7 * 86_400_000
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,27 @@ def _crypto_funding_annual(store: PTISStore, symbol: str, decision_time_ms: int)
     return rate * 3.0 * 365.0
 
 
+def _carry_slope_boost(
+    store: PTISStore,
+    instrument: Instrument,
+    decision_time_ms: int,
+    carry_now: float,
+) -> float:
+    """Term-structure slope proxy: carry change vs ~4 weeks ago (forex FRED only)."""
+    if not carry_slope_enabled() or instrument.family != "forex":
+        return 0.0
+    prior = _forex_carry_annual(store, instrument, decision_time_ms - 4 * _MS_PER_WEEK)
+    if prior is None:
+        return 0.0
+    delta = carry_now - prior
+    return max(-0.25, min(0.25, delta / 2.0))
+
+
+def _raw_strength_from_cvr(cvr: float, family: str) -> float:
+    scale = max(carry_cvr_scale(family), 1e-6)
+    return min(abs(cvr) / scale, 1.0)
+
+
 def compute_carry(
     store: PTISStore,
     instrument: Instrument,
@@ -112,8 +137,13 @@ def compute_carry(
 
     cvr = carry / (sigma_1bar * math.sqrt(252.0))
     cvr = max(-2.0, min(2.0, cvr))
-    if abs(cvr) < 0.4:
+    if abs(cvr) < _CARRY_FLOOR:
         return CarryResult(0, 0.0, carry, cvr)
     direction = 1 if carry > 0 else -1
-    raw_strength = min(abs(cvr) / 2.0, 1.0)
+    raw_strength = _raw_strength_from_cvr(cvr, instrument.family)
+    slope_boost = _carry_slope_boost(store, instrument, decision_time_ms, carry)
+    if slope_boost:
+        aligned = (slope_boost > 0 and direction > 0) or (slope_boost < 0 and direction < 0)
+        raw_strength = min(1.0, raw_strength + (abs(slope_boost) if aligned else -abs(slope_boost) * 0.5))
+        raw_strength = max(0.0, raw_strength)
     return CarryResult(direction, raw_strength, carry, cvr)

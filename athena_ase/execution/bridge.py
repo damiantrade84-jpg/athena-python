@@ -439,8 +439,12 @@ def enforce_time_stops(
 
 
 def default_execution_deps() -> ASEExecutionDeps:
-    """Production deps wired to repo risk/executor/guardian modules."""
+    """Production deps wired to repo risk/executor/guardian modules (demo-only)."""
     from config import CONFIG
+
+    gate = assert_demo(config=CONFIG)
+    if not gate.ok:
+        raise RuntimeError(f"ASE default_execution_deps blocked: {gate.reason}")
 
     def _mode() -> str:
         return str(CONFIG.get("EXECUTOR_MODE", "paper")).lower()

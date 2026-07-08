@@ -2568,6 +2568,54 @@ ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY: 0.5
 ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS: true
 ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED: true
 
+ENGINE_B_WEIGHTED_SCORING:
+  ENABLED: true
+  COMPONENT_MAX:
+    structure_alignment: 1.0
+    ob_confluence: 1.0
+    fvg_confluence: 1.0
+    liquidity_proximity: 0.75
+    bos_followthrough: 1.5
+    volume_confirmation: 1.0
+    profile_reaction: 1.0
+    session_context: 0.5
+    orderflow: 1.0
+  COMPONENT_WEIGHTS:
+    structure_alignment: 0.22
+    ob_confluence: 0.14
+    fvg_confluence: 0.12
+    liquidity_proximity: 0.08
+    bos_followthrough: 0.16
+    volume_confirmation: 0.08
+    profile_reaction: 0.10
+    session_context: 0.05
+    orderflow: 0.05
+  REGIME_COMPONENT_MULT:
+    RANGING:
+      fvg_confluence: 1.15
+      ob_confluence: 1.10
+      bos_followthrough: 0.95
+    TRENDING:
+      bos_followthrough: 1.15
+      volume_confirmation: 1.10
+      fvg_confluence: 0.95
+    HIGH_VOLATILITY:
+      liquidity_proximity: 1.10
+      ob_confluence: 1.05
+    LOW_VOLATILITY:
+      bos_followthrough: 0.90
+
+ENGINE_B_SUBSYSTEMS:
+  ENABLED: true
+  WEIGHTS_BY_FAMILY:
+    forex:
+      carry: 0.6
+      sentiment: 0.4
+    commodity:
+      carry: 0.7
+      sentiment: 0.3
+    crypto: {}
+
 # Engine contextual room gate. When true, room_ok requires distance_to_opposing_zone >= min_room_atr
 # EXCEPT when no opposing zone exists (room_dist is None) AND trend+BOS confirmed — then room passes
 # (trend has room to run). Rename would be ENGINE_B_ROOM_GATE_ALLOW_NONE_WITH_TREND_BOS; kept for BT parity.
@@ -3805,6 +3853,37 @@ ENGINE_C_EXEC_MIN_RR: 1.0
 # win-rate-driven). Applies ONLY to execution_context=ase_bridge + aseExecution signals;
 # every other engine keeps ENGINE_C_EXEC_MIN_RR. User-approved 2026-06-12.
 ASE_EXEC_MIN_RR: 0.6
+
+# ASE signal / inference tuning (default-safe; all gates off or legacy-compatible)
+ASE_ARBITRATION:
+  MODE: weighted      # max | weighted — signed aggregate Σ dirᵢ·strengthᵢ
+  STRENGTH_FLOOR: 0.3
+ASE_MONITOR:
+  MIN_SAMPLES: 5
+  MAX_LIVE_ROWS: 200
+ASE_PAYOFF:
+  WIN_QUANTILE: q50  # q50 | q25 | q10
+  REALIZED_CAP_ENABLED: false
+  REALIZED_CAP: 1.0
+  USE_REALIZED_EXIT_R: true   # journal reconciled exit R replaces MFE/MAE model
+  REALIZED_MIN_TRADES: 5
+ASE_CARRY:
+  CVR_SCALE:
+    forex: 10.0
+    crypto: 6.0
+    default: 10.0
+  SLOPE_ENABLED: false
+ASE_INTRADAY_FAMILIES: [forex, crypto, commodity]
+ASE_LAYER1_VOL_REGIME_FILTER:
+  ENABLED: false
+  EXTREME_ORDINAL: 2
+  MIN_STRENGTH: 0.5
+ASE_XSEC_CONTINUOUS: false
+ASE_XSEC:
+  Z_CAP: 2.0
+ASE_FEATURES_V2_ENABLED: false
+ASE_MICROSTRUCTURE:
+  ENABLED: false
 
 # When Engine A omits maxScore, use this default (see ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE).
 ENGINE_C_A_DEFAULT_MAX_SCORE: 3.0

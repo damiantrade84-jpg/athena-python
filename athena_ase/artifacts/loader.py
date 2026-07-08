@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from athena_ase.horizon import Horizon
+from athena_ase.artifacts.monitor_ref import MONITOR_REFERENCE_FILE, load_monitor_reference
 from athena_ase.registry.artifacts import (
     ArtifactManifest,
     default_artifacts_root,
@@ -34,6 +37,7 @@ class ArtifactBundle:
     quantile_heads_enriched: dict[str, Any] | None
     thr_family: float
     feature_names: tuple[str, ...]
+    monitor_reference: dict[str, np.ndarray] | None = None
 
     @property
     def artifact_hash(self) -> str:
@@ -80,6 +84,7 @@ def load_artifact_bundle(
         quantile_heads_enriched=models.get("quantile_heads_enriched.pkl"),
         thr_family=float(manifest.thr_family),
         feature_names=tuple(manifest.feature_schema),
+        monitor_reference=load_monitor_reference(root / MONITOR_REFERENCE_FILE) or None,
     )
 
 

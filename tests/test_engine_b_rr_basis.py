@@ -12,6 +12,7 @@ from indicators import calc_atr
 from market_structure import (
     NakedEngine,
     aggregate_engine_b_level_cohorts,
+    engine_b_confidence_passes,
     engine_b_level_cohort,
     resolve_engine_b_execution_levels,
 )
@@ -957,3 +958,76 @@ def test_synthetic_fallback_recovers_wrong_side_structural_tp():
     assert out["execution_levels_valid"] is True
     assert out["execution_tp"] is not None
     assert out["execution_tp"] > 100.0  # LONG TP must be above entry
+
+
+def _fully_gated_swing_res():
+    return {
+        "atr": 1.0,
+        "asset_type": "forex",
+        "current_swing_sequence": "HH_HL",
+        "macro_swing_sequence": "HH_HL",
+        "bos_confirmed": True,
+        "liquidity_sweep": False,
+        "zone_touched": True,
+        "trigger_ok": True,
+        "bos_volume_confirmed": True,
+        "distance_to_res": 3.0,
+        "recommended_stop_loss": 99.0,
+        "recommended_take_profit": 105.0,
+        "structural_verdict": "CLEAR",
+        "d1_pd_array_conflict": True,
+    }
+
+
+def test_engine_b_confidence_passes_fully_gated_swing_ranging(monkeypatch):
+    """All mandatory gates pass in RANGING; score floor must not require bonus headroom."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED", True)
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_STYLE_MIN_SCORE_BY_STYLE",
+        {"scalp": 4.0, "intraday": 4.5, "swing": 5.0},
+    )
+
+    engine = NakedEngine()
+    style_profile = {
+        "style": "swing",
+        "min_score": 5.0,
+        "min_room_atr": 0.35,
+        "min_rr": 1.5,
+        "require_macro_align": False,
+        "checklist_mode": "flexible",
+    }
+    out = engine.calculate_confidence(
+        _fully_gated_swing_res(),
+        current_price=100.0,
+        direction="LONG",
+        style_profile=style_profile,
+    )
+
+    assert out["passed"] is True
+    assert out["gate_score"] == pytest.approx(5.0)
+    assert out["gate_pct"] == 100
+
+    gate_ok, effective_min = engine_b_confidence_passes(
+        out, style_profile, regime_label="RANGING", asset_type="forex"
+    )
+    assert effective_min == pytest.approx(5.0)
+    assert gate_ok is True
+
+
+def test_engine_b_confidence_passes_blocks_when_gate_score_below_floor():
+    style_profile = {"min_score": 5.0, "style": "swing"}
+    gate_ok, effective_min = engine_b_confidence_passes(
+        {
+            "passed": True,
+            "gate_score": 4.0,
+            "gate_max_possible": 5.0,
+            "score": 3.75,
+        },
+        style_profile,
+        regime_label="RANGING",
+    )
+
+    assert effective_min == pytest.approx(5.0)
+    assert gate_ok is False

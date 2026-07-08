@@ -190,6 +190,51 @@ def ingest_symbol(
     return counts
 
 
+def ingest_microstructure_snapshot(
+    store: PTISStore,
+    symbol: str,
+    *,
+    now_ms: int | None = None,
+) -> dict[str, int]:
+    """Snapshot trade-bucket CVD metrics into PTIS for ASE microstructure features."""
+    from config import CONFIG
+
+    from athena.microstructure.aggtrade_volume import check_trade_bucket_cvd
+    from athena_ase.settings import microstructure_enabled
+
+    if not microstructure_enabled():
+        return {}
+
+    now_ms = now_ms or int(time.time() * 1000)
+    cvd = check_trade_bucket_cvd(
+        symbol,
+        CONFIG,
+        reference_ts=now_ms,
+        require_fresh=False,
+    )
+    counts: dict[str, int] = {}
+    slope = float(cvd.get("cvd_slope") or 0.0)
+    cvd_val = float(cvd.get("cvd_value") or 0.0)
+    bucket_n = float(cvd.get("bucket_count") or 0.0)
+    imbalance_z = slope
+    bucket_delta_z = cvd_val / max(bucket_n, 1.0)
+
+    for field, value in (
+        ("trade_imbalance_z", imbalance_z),
+        ("bucket_delta_z", bucket_delta_z),
+    ):
+        sid = bybit_series_id(symbol, field)
+        row = row_from_rule(
+            sid,
+            now_ms,
+            now_ms,
+            value,
+            rule_id=AvailabilityRuleId.BYBIT_DERIVATIVE,
+        )
+        counts[sid] = append_ptis_rows(store, sid, "BYBIT", [row])
+    return counts
+
+
 def ingest_all(
     store: PTISStore,
     *,
@@ -209,5 +254,9 @@ def ingest_all(
             totals.update(ingest_symbol(store, sym, lookback_days=lookback_days))
         except Exception as exc:
             log.warning("Bybit ingest failed %s: %s", sym, exc)
+        try:
+            totals.update(ingest_microstructure_snapshot(store, sym))
+        except Exception as exc:
+            log.warning("Bybit microstructure ingest failed %s: %s", sym, exc)
     log.info("Bybit ingest complete: %d series", len(totals))
     return totals
