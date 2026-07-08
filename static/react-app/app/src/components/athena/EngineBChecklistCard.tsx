@@ -51,6 +51,15 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
 
   const hardFails =
     (conf.hard_fail_reasons as string[] | undefined) || (data.hard_fail_reasons as string[] | undefined) || [];
+  const canonicalStatus =
+    (conf.engine_b_canonical_status as string | undefined)
+    || (data.engine_b_canonical_status as string | undefined);
+  const canonicalActionable =
+    conf.engine_b_canonical_actionable ?? data.engine_b_canonical_actionable;
+  const canonicalReasons =
+    (conf.engine_b_rejection_reasons as string[] | undefined)
+    || (data.engine_b_rejection_reasons as string[] | undefined)
+    || [];
   const softWarns =
     (conf.soft_warnings as string[] | undefined) || (data.soft_warnings as string[] | undefined) || [];
   const diagNotes =
@@ -83,6 +92,17 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
             {profileActive && profileOk && typeof profilePoints === 'number' && profilePoints > 0 && (
               <Badge variant="outline" className="text-[10px] bg-long/10 text-long border-long/30">
                 Profile +{fmtNum(profilePoints, 2)}
+              </Badge>
+            )}
+            {canonicalStatus && (
+              <Badge
+                variant="outline"
+                className={cn(
+                  'text-[10px]',
+                  canonicalActionable ? 'bg-long/10 text-long border-long/30' : 'bg-short/10 text-short border-short/30',
+                )}
+              >
+                {canonicalStatus}
               </Badge>
             )}
           </div>
@@ -165,6 +185,14 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
         )}
 
         {/* Hard fail / soft warn / diagnostic */}
+        {canonicalReasons.length > 0 && (
+          <ReasonRow
+            icon={<X className="w-3 h-3" />}
+            className="text-short bg-short/10"
+            label="Canonical rejection"
+            items={canonicalReasons}
+          />
+        )}
         {hardFails.length > 0 && (
           <ReasonRow icon={<X className="w-3 h-3" />} className="text-short bg-short/10" label="Hard fail" items={hardFails} />
         )}

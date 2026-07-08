@@ -349,7 +349,11 @@ def test_calibration_context_string_injects_engine_b_native_diagnostics():
             "macro_swing_sequence": "HH_HL",
             "score": 6.0,
             "max_possible": 8.0,
+            "engine_b_canonical_actionable": False,
+            "engine_b_canonical_status": "REJECT_NO_ROOM",
+            "engine_b_rejection_reasons": ["ROOM_OK_FALSE"],
             "is_actionable": False,
+            "passed": True,
             "rr_used_for_gate": 3.37,
             "room_ok": False,
             "d1_adx": 22.4,
@@ -375,9 +379,33 @@ def test_calibration_context_string_injects_engine_b_native_diagnostics():
     assert "Engine B swing sequence: HH_HL | Macro: HH_HL" in text
     assert "Engine B score: 6.0 / 8.0 (75.0%)" in text
     assert "Engine B actionable: False | RR gate: 3.37 | room_ok: False" in text
-    assert "Engine B ADX: D1=22.4 H4=28.7 regime=NORMAL" in text
-    assert "Engine B reason codes: bos_without_volume, resistance_too_close, structural_tp_too_close" in text
-    assert "Engine B primary note: Engine A factor diagnostics are optional child context, not missing Engine B evidence." in text
+    assert "Engine B canonical status: REJECT_NO_ROOM" in text
+
+
+def test_calibration_context_uses_canonical_not_passed_fallback():
+    signal = {
+        "pair": "EUR/JPY",
+        "symbol": "EURJPY",
+        "type": "forex",
+        "style": "intraday",
+        "engine_source": "engine_b",
+        "is_naked": True,
+        "naked_data": {
+            "passed": True,
+            "checklist_passed": True,
+            "engine_b_canonical_actionable": False,
+            "engine_b_canonical_status": "REJECT_CONFLICT",
+            "engine_b_rejection_reasons": ["ACTIONABILITY_CONFLICT_ENGINE_B_NO_AI_TRUE"],
+            "ai_calibration_actionable_raw": True,
+            "rr_used_for_gate": 1.8,
+            "room_ok": False,
+        },
+    }
+    ctx = build_ai_calibration_context(signal, "Engine B naked market structure", "intraday")
+    assert ctx["engine_b"]["is_actionable"] is False
+    text = build_ai_calibration_context_string(signal, "Engine B naked market structure", "intraday")
+    assert "Engine B actionable: False" in text
+    assert "ACTIONABILITY_CONFLICT_ENGINE_B_NO_AI_TRUE" in text
 
 
 def test_resolve_ai_review_min_rr_prefers_signal_min_rr():

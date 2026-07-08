@@ -131,7 +131,9 @@ def extract_engine_b_snapshot(signal: dict[str, Any]) -> dict[str, Any]:
         else None,
     )
 
-    passed = eb.get("confidence_passed")
+    passed = eb.get("engine_b_canonical_actionable")
+    if passed is None:
+        passed = eb.get("confidence_passed")
     if passed is None:
         passed = eb.get("passed")
     if passed is None:

@@ -220,7 +220,12 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "confidence_score": _first_not_none(engine_b_data.get("confidence_score"), engine_b_data.get("confidence"), signal.get("engine_b_score")),
         "max_possible": _first_not_none(engine_b_data.get("max_possible"), signal.get("engine_b_max")),
         "score_pct": _first_not_none(engine_b_data.get("score_pct"), engine_b_data.get("pct")),
-        "is_actionable": _first_not_none(engine_b_data.get("is_actionable"), engine_b_data.get("passed"), engine_b_data.get("checklist_passed")),
+        "is_actionable": engine_b_data.get("engine_b_canonical_actionable"),
+        "engine_b_canonical_actionable": engine_b_data.get("engine_b_canonical_actionable"),
+        "engine_b_canonical_status": engine_b_data.get("engine_b_canonical_status"),
+        "engine_b_rejection_reasons": engine_b_data.get("engine_b_rejection_reasons") or [],
+        "ai_calibration_actionable_raw": engine_b_data.get("ai_calibration_actionable_raw"),
+        "engine_b_actionable_raw": engine_b_data.get("engine_b_actionable_raw"),
         "zone_quality": _first_not_none(engine_b_data.get("zone_quality"), engine_b_data.get("zone_ok")),
         "trigger_quality": _first_not_none(engine_b_data.get("trigger_quality"), engine_b_data.get("trigger_ok")),
         "room_to_resistance": _first_not_none(engine_b_data.get("room_to_resistance"), engine_b_data.get("distance_to_res")),
@@ -385,6 +390,15 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
             f"{engine_b.get('is_actionable')} | RR gate: {engine_b.get('rr_used_for_gate')} "
             f"| room_ok: {engine_b.get('room_ok')}"
         )
+        if engine_b.get("engine_b_canonical_status"):
+            lines.append(f"Engine B canonical status: {engine_b.get('engine_b_canonical_status')}")
+        rej = engine_b.get("engine_b_rejection_reasons") or []
+        if rej:
+            lines.append(f"Engine B rejection reasons: {', '.join(str(x) for x in rej)}")
+        if engine_b.get("ai_calibration_actionable_raw") is not None:
+            lines.append(
+                f"Engine B legacy AI actionable (audit): {engine_b.get('ai_calibration_actionable_raw')}"
+            )
         if (
             engine_b.get("d1_adx") is not None
             or engine_b.get("h4_adx") is not None

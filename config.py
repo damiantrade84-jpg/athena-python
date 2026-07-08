@@ -1478,6 +1478,15 @@ CONFIG: dict = {
     },
     # When True, Engine B room gate requires structural distance; unknown distance fails closed.
     "ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE": True,
+    "ENGINE_B_CANONICAL_ACTIONABILITY": {
+        "ENABLED": True,
+        "ENFORCE_ROUTING": False,
+        "ALLOW_WARN_IN_RESEARCH": False,
+        "ALLOW_RR1_BELOW_MIN_IN_RESEARCH": False,
+        "INCLUDE_REJECT_IN_AI_REVIEW": False,
+        "STRUCTURE_AUDIT_CSV": "reports/engine_b_structure_gate_audit.csv",
+        "RECONCILIATION_AUDIT_CSV": "reports/engine_b_actionability_reconciliation.csv",
+    },
     "BINANCE_KLINE_WS_INTERVALS": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "MIN_CONFLUENCE": 1.0,
     "RISK_MULT": {

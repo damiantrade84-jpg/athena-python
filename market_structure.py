@@ -5463,7 +5463,7 @@ class NakedEngine:
                 _hard_fail_reasons.append("engine_b_aggtrade_required_false")
             _hard_fail_reasons = sorted(set(_hard_fail_reasons))
 
-        return {
+        _conf_result = {
             "score": total_score,
             "gate_score": gate_score,
             "pct": pct,
@@ -5596,6 +5596,21 @@ class NakedEngine:
             "engine_b_diagnostics": _engine_b_diag_payload,
             "_adx_derived_regime": res.get("_adx_derived_regime"),
         }
+        try:
+            from engine_b_canonical_actionability import attach_canonical_actionability
+
+            attach_canonical_actionability(
+                _conf_result,
+                res,
+                direction=direction,
+                current_price=current_price,
+                learning_ctx=learning_ctx,
+                style_profile=style_profile,
+                pair=res.get("display") or res.get("pair"),
+            )
+        except Exception:
+            pass
+        return _conf_result
 
     def check_macro_correlation_detail(
         self, asset_close_series: list, dxy_close_series: list, direction: str

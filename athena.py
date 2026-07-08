@@ -4538,8 +4538,13 @@ def _build_signal_message(
             f"  Engine B Final Score: {_num(eng_b.get('score')):.2f} / {_num(eng_b.get('max_possible'), 3.0):.2f} ({derive_engine_b_score_pct(eng_b):.1f}%)"
         )
         lines.append(
-            f"  Engine B Actionable: {'YES' if eng_b.get('is_actionable') else 'NO'}"
+            f"  Engine B Actionable: {'YES' if eng_b.get('engine_b_canonical_actionable', eng_b.get('is_actionable')) else 'NO'}"
         )
+        if eng_b.get("engine_b_canonical_status"):
+            lines.append(f"  Engine B Canonical Status: {eng_b.get('engine_b_canonical_status')}")
+        _rej = eng_b.get("engine_b_rejection_reasons") or []
+        if _rej:
+            lines.append(f"  Engine B Rejection Reasons: {', '.join(str(x) for x in _rej)}")
         lines.append(f"  Engine B Rec SL: {eng_b.get('recommended_stop_loss')}")
         lines.append(f"  Engine B Rec TP: {eng_b.get('recommended_take_profit')}")
 
@@ -4771,7 +4776,9 @@ def _build_signal_message(
         lines.append(f"  Room-to-move bonus: {_naked.get('room_to_move_bonus', 0)}")
         lines.append(f"  Catalyst bonus: {_naked.get('catalyst_bonus', 0)}")
         lines.append(f"  AI stats adjustment: {_naked.get('ai_adjustment', 0)}")
-        lines.append(f"  Actionable: {'YES' if _naked.get('is_actionable') else 'NO'}")
+        lines.append(
+            f"  Actionable: {'YES' if _naked.get('engine_b_canonical_actionable', _naked.get('is_actionable')) else 'NO'}"
+        )
         _reason_codes = (
             _naked.get("reason_codes")
             or (_naked.get("engine_b_diagnostics") or {}).get("reason_codes")
@@ -7179,49 +7186,68 @@ def _compute_naked_analysis(
 
             try:
                 from engine_b_ai import get_engine_b_ai_verdict
+                from engine_b_canonical_actionability import should_include_in_ai_review
 
-                _engine_b_ai_runtime = resolve_ai_review_runtime(CONFIG)
-                _engine_b_ai_provider = str(
-                    _engine_b_ai_runtime.get("provider")
-                    or _engine_b_ai_runtime.get("selectedProvider")
-                    or "grok"
-                )
-                ai_verdict = get_engine_b_ai_verdict(
-                    pair=pair_obj.get("display"),
-                    direction=direction,
-                    current_price=current_price,
-                    structure_result=res,
-                    confidence_result=conf,
-                    learning_ctx=learning_ctx,
-                    xai_api_key=str(_engine_b_ai_runtime.get("api_key") or ""),
-                    xai_model=get_ai_model(
-                        CONFIG,
-                        "AI_MODEL",
-                        "grok-4.3",
-                        provider=_engine_b_ai_provider,
-                    ),
-                    engine_a_ctx=engine_a_ctx,
-                    news_ctx=_news_ctx,
-                    freshness_ctx=engine_a_ctx if isinstance(engine_a_ctx, dict) else None,
-                    asset_type=pair_obj.get("type"),
-                )
-                if "error" not in ai_verdict:
-                    res["ai_analysis"] = _enrich_engine_b_ai_payload(ai_verdict)
-                    log.info(
-                        f"[NAKED-AI] {pair_obj.get('display')}: AI grade={ai_verdict.get('grade')}"
+                _canonical_status = conf.get("engine_b_canonical_status")
+                if _canonical_status and not should_include_in_ai_review(str(_canonical_status)):
+                    log.debug(
+                        "[NAKED-AI] %s: skipping AI review for canonical status %s",
+                        pair_obj.get("display"),
+                        _canonical_status,
+                    )
+                    res["ai_analysis"] = _enrich_engine_b_ai_payload(
+                        {
+                            "grade": "N/A",
+                            "edgeProbability": 50.0,
+                            "riskLevel": "UNKNOWN",
+                            "verdict": f"AI review skipped: { _canonical_status }",
+                            "engine_b_canonical_status": _canonical_status,
+                            "engine_b_rejection_reasons": conf.get("engine_b_rejection_reasons"),
+                        }
                     )
                 else:
-                    err_msg = ai_verdict.get("error", "AI unavailable")
-                    log.warning(
-                        f"[NAKED-AI] {pair_obj.get('display')}: AI analysis failed - {err_msg}"
+                    _engine_b_ai_runtime = resolve_ai_review_runtime(CONFIG)
+                    _engine_b_ai_provider = str(
+                        _engine_b_ai_runtime.get("provider")
+                        or _engine_b_ai_runtime.get("selectedProvider")
+                        or "grok"
                     )
-                    res["ai_analysis"] = {
-                        "grade": "N/A",
-                        "edgeProbability": 50.0,
-                        "riskLevel": "UNKNOWN",
-                        "verdict": f"AI review unavailable: {err_msg}",
-                    }
-                    res["ai_analysis"] = _enrich_engine_b_ai_payload(res["ai_analysis"])
+                    ai_verdict = get_engine_b_ai_verdict(
+                        pair=pair_obj.get("display"),
+                        direction=direction,
+                        current_price=current_price,
+                        structure_result=res,
+                        confidence_result=conf,
+                        learning_ctx=learning_ctx,
+                        xai_api_key=str(_engine_b_ai_runtime.get("api_key") or ""),
+                        xai_model=get_ai_model(
+                            CONFIG,
+                            "AI_MODEL",
+                            "grok-4.3",
+                            provider=_engine_b_ai_provider,
+                        ),
+                        engine_a_ctx=engine_a_ctx,
+                        news_ctx=_news_ctx,
+                        freshness_ctx=engine_a_ctx if isinstance(engine_a_ctx, dict) else None,
+                        asset_type=pair_obj.get("type"),
+                    )
+                    if "error" not in ai_verdict:
+                        res["ai_analysis"] = _enrich_engine_b_ai_payload(ai_verdict)
+                        log.info(
+                            f"[NAKED-AI] {pair_obj.get('display')}: AI grade={ai_verdict.get('grade')}"
+                        )
+                    else:
+                        err_msg = ai_verdict.get("error", "AI unavailable")
+                        log.warning(
+                            f"[NAKED-AI] {pair_obj.get('display')}: AI analysis failed - {err_msg}"
+                        )
+                        res["ai_analysis"] = {
+                            "grade": "N/A",
+                            "edgeProbability": 50.0,
+                            "riskLevel": "UNKNOWN",
+                            "verdict": f"AI review unavailable: {err_msg}",
+                        }
+                        res["ai_analysis"] = _enrich_engine_b_ai_payload(res["ai_analysis"])
             except Exception as e:
                 log.warning(f"[NAKED-AI] Failed to get AI verdict: {e}")
                 res["ai_analysis"] = {
@@ -7567,6 +7593,18 @@ def api_scan_naked():
             debug_row["entry_tf"] = _entry_tf
             debug_row["atr_tf"] = _atr_tf
 
+            _learning_ctx_pair = None
+            try:
+                from ai_learning import get_ai_learning_context
+
+                _learning_ctx_pair = get_ai_learning_context(
+                    pair.get("display", ""),
+                    pair.get("type", ""),
+                    _AUDIT_DB,
+                )
+            except Exception:
+                _learning_ctx_pair = None
+
             # Fetch all needed timeframes
             _tf_map = {}
             _tf_trigger_map = {}
@@ -7867,6 +7905,7 @@ def api_scan_naked():
                     res,
                     current_price,
                     direction,
+                    learning_ctx=_learning_ctx_pair,
                     entry_candles=entry_candles,
                     style_profile=style_profile,
                 )
@@ -8250,7 +8289,26 @@ def api_scan_naked():
                     debug_row["final_reject_reason"] = "unknown"
 
             if _best_signal is not None:
-                local_results.append(_best_signal)
+                try:
+                    from engine_b_canonical_actionability import apply_to_naked_signal
+
+                    _best_signal, _canonical_blocked = apply_to_naked_signal(
+                        _best_signal,
+                        learning_ctx=_learning_ctx_pair,
+                    )
+                    if _canonical_blocked:
+                        debug_row["canonical_routing_blocked"] = True
+                        debug_row["engine_b_canonical_status"] = _best_signal.get(
+                            "engine_b_canonical_status"
+                        )
+                        debug_row["engine_b_rejection_reasons"] = _best_signal.get(
+                            "engine_b_rejection_reasons"
+                        )
+                        local_results.append({"rejectedDiagnostic": _best_signal, "debug": debug_row})
+                    else:
+                        local_results.append(_best_signal)
+                except Exception:
+                    local_results.append(_best_signal)
 
             if debug_mode:
                 local_results.append({"debug": debug_row})
@@ -8276,6 +8334,7 @@ def api_scan_naked():
         conservative=True
     )
     debug_rows = []
+    rejected_diagnostics = []
 
     log.info(f"[DEBUG] Starting scan with {len(candidate_pairs)} candidate pairs, debug_mode={debug_mode}")
     from athena_app.services.naked_scan_service import iter_naked_scan_rows
@@ -8286,6 +8345,11 @@ def api_scan_naked():
             result = future.result()
             log.debug(f"[DEBUG] Future result type: {type(result)}, length: {len(result) if isinstance(result, list) else 'N/A'}")
             for row in iter_naked_scan_rows(result):
+                if row.get("rejectedDiagnostic"):
+                    rejected_diagnostics.append(row["rejectedDiagnostic"])
+                    if debug_mode and row.get("debug"):
+                        debug_rows.append(row["debug"])
+                    continue
                 if debug_mode and row.get("debug"):
                     debug_rows.append(row["debug"])
                     log.debug(f"[DEBUG] Added debug row for {row['debug'].get('pair')}")
@@ -8388,17 +8452,23 @@ def api_scan_naked():
             "success": True,
             "signals": results,
             "debugRows": debug_rows,
+            "rejectedDiagnostics": rejected_diagnostics,
             "scanFunnel": engine_b_funnel,
             "totalPairs": len(candidate_pairs),
             "activePairs": len(candidate_pairs),
         }))
 
     global _last_engine_b_scan_results
-    _last_engine_b_scan_results = {"signals": results, "scanFunnel": engine_b_funnel}
+    _last_engine_b_scan_results = {
+        "signals": results,
+        "scanFunnel": engine_b_funnel,
+        "rejectedDiagnostics": rejected_diagnostics,
+    }
 
     return jsonify(_json_safe({
         "success": True,
         "signals": results,
+        "rejectedDiagnostics": rejected_diagnostics,
         "scanFunnel": engine_b_funnel,
         "totalPairs": len(candidate_pairs),
         "activePairs": len(candidate_pairs),
