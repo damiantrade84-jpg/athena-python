@@ -55,6 +55,7 @@ import AITradingAgentPanel from '@/components/ai/AITradingAgentPanel';
 import type {
   EngineASignal,
   EngineBNakedResult,
+  Direction,
   ScanResponse,
   NakedScanResponse,
   ChartAnalysisResponse,
@@ -369,6 +370,74 @@ function intentSourceForRow(row: UnifiedRow): 'signals' | 'engine_a' | 'engine_b
   return 'engine_a';
 }
 
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function numberValue(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function zoneContains(zone: unknown, price: number | null): boolean {
+  if (price == null) return false;
+  const z = recordValue(zone);
+  if (!z) return false;
+  const low = numberValue(z.lower ?? z.low ?? z.bottom);
+  const high = numberValue(z.upper ?? z.high ?? z.top);
+  if (low == null || high == null) return false;
+  const lo = Math.min(low, high);
+  const hi = Math.max(low, high);
+  return price >= lo && price <= hi;
+}
+
+function engineBStructureDirection(engineB: Record<string, unknown> | null): Direction | null {
+  const direct = String(
+    engineB?.direction
+    ?? engineB?.independent_direction
+    ?? engineB?.engine_b_independent_direction
+    ?? '',
+  ).toUpperCase();
+  if (direct === 'LONG' || direct === 'SHORT') return direct as Direction;
+  const seq = String(
+    engineB?.current_swing_sequence
+    ?? engineB?.swing_sequence
+    ?? engineB?.macro_swing_sequence
+    ?? '',
+  ).toUpperCase();
+  if (seq.includes('HH_HL')) return 'LONG';
+  if (seq.includes('LH_LL')) return 'SHORT';
+  return null;
+}
+
+function crossEngineContextNotes(row: UnifiedRow): string[] {
+  const primary = row.signal;
+  const bSignal = engineBPresentationSignal(row);
+  const engineB = recordValue(bSignal.naked_data || bSignal.engine_b || primary.engine_b || primary.naked_data);
+  const notes: string[] = [];
+  const aDirection = String(primary.direction || '').toUpperCase();
+  const bDirection = engineBStructureDirection(engineB);
+  const aEntry = numberValue(primary.entry ?? primary.price);
+
+  if (aDirection === 'SHORT' && zoneContains(engineB?.nearest_support_zone, aEntry)) {
+    notes.push('Warning: Engine B context says Engine A SHORT entry is inside Engine B support zone.');
+  }
+  if (aDirection === 'LONG' && zoneContains(engineB?.nearest_resistance_zone, aEntry)) {
+    notes.push('Warning: Engine B context says Engine A LONG entry is inside Engine B resistance zone.');
+  }
+  if ((aDirection === 'LONG' || aDirection === 'SHORT') && bDirection && aDirection !== bDirection) {
+    notes.push('Conflict: Engine direction conflict.');
+  }
+  const rr1 = numberValue(primary.rr1 ?? primary.rr);
+  const minRr = numberValue(primary.min_rr ?? (primary as Record<string, unknown>).style_min_rr);
+  if (rr1 != null && minRr != null && rr1 < minRr) {
+    notes.push('Risk note: Engine A RR1 below configured style minimum.');
+  }
+  return notes;
+}
+
 export default function SignalsPanel() {
   const {
     showToast, isTestMode,
@@ -624,6 +693,10 @@ export default function SignalsPanel() {
       : isPaper
         ? 'PAPER MODE'
         : 'Execute';
+  const crossEngineNotes = useMemo(
+    () => (selectedRow ? crossEngineContextNotes(selectedRow) : []),
+    [selectedRow],
+  );
 
   const runAiReview = useCallback(
     async (sig: EngineASignal | null) => {
@@ -1073,6 +1146,7 @@ export default function SignalsPanel() {
                 <ScrollArea className="h-[620px] pr-2 mt-3">
                   {/* ── OVERVIEW TAB ── */}
                   <TabsContent value="overview" className="space-y-3 mt-0">
+                    <p className="text-[10px] uppercase text-muted-foreground">Native Engine Signal</p>
                     {feedEngine === 'B' && hasEngineBFeedRow(selectedRow) ? (
                       <EngineBChecklistCard
                         data={
@@ -1106,6 +1180,23 @@ export default function SignalsPanel() {
                       executeLabel={executeLabel}
                     />
                     )}
+
+                    <Card className="border-border/60 bg-card/50">
+                      <CardContent className="p-3 space-y-2">
+                        <p className="text-[10px] uppercase text-muted-foreground">Cross-engine Context</p>
+                        {crossEngineNotes.length > 0 ? (
+                          <div className="space-y-1 text-[11px] text-muted-foreground">
+                            {crossEngineNotes.map((note) => (
+                              <div key={note} className="font-mono">{note}</div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-muted-foreground">
+                            No cross-engine warnings for this card.
+                          </p>
+                        )}
+                      </CardContent>
+                    </Card>
 
                     <Button
                       size="sm"
@@ -1185,7 +1276,7 @@ export default function SignalsPanel() {
                     {/* Levels detail */}
                     <Card className="border-border/60 bg-card/50">
                       <CardContent className="p-3 space-y-2">
-                        <p className="text-[10px] uppercase text-muted-foreground">All Levels</p>
+                        <p className="text-[10px] uppercase text-muted-foreground">Native Engine Levels</p>
                         <div className="grid grid-cols-2 gap-2 text-xs">
                           <DetailRow
                             label="Live"
@@ -1218,6 +1309,7 @@ export default function SignalsPanel() {
 
                   {/* ── AI REVIEW TAB ── */}
                   <TabsContent value="ai" className="space-y-3 mt-0">
+                    <p className="text-[10px] uppercase text-muted-foreground">AI Review Notes</p>
                     <div className="flex items-center gap-2 flex-wrap">
                       <Button
                         size="sm"
@@ -1438,6 +1530,7 @@ export default function SignalsPanel() {
 
                   {/* ── DIAGNOSTICS TAB ── */}
                   <TabsContent value="diag" className="space-y-3 mt-0">
+                    <p className="text-[10px] uppercase text-muted-foreground">Native Engine Diagnostics</p>
                     {selectedRow.signal.confidenceDetail && (
                       <Card className="border-border/60 bg-card/50">
                         <CardContent className="p-3 space-y-2">

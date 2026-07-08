@@ -680,23 +680,23 @@ def build_engine_d_context(signal: Dict[str, Any]) -> Dict[str, Any]:
 
 def _build_engine_a_context(signal: Dict[str, Any]) -> Dict[str, Any]:
     engine_a = _engine_dict(signal, "engine_a", "engineA")
-    score = _to_float(_pick_engine_nested(engine_a, "score", "confluenceScore", "final_score"))
-    max_score = _to_float(_pick_engine_nested(engine_a, "max_score", "maxScore"))
-    score_pct = _to_float(_pick_engine_nested(engine_a, "score_pct", "rawScorePct", "confluencePct"))
+    score = _to_float(_pick_nested(signal, engine_a, "score", "confluenceScore", "final_score"))
+    max_score = _to_float(_pick_nested(signal, engine_a, "max_score", "maxScore"))
+    score_pct = _to_float(_pick_nested(signal, engine_a, "score_pct", "rawScorePct", "confluencePct"))
     if score_pct is None and score is not None and max_score:
         score_pct = score / max_score * 100.0
     data = {
         "score": score,
         "max_score": max_score,
         "score_pct": score_pct,
-        "direction": _pick_engine_nested(engine_a, "direction"),
-        "regime": _pick_engine_nested(engine_a, "regime", "trendState", "regimeName"),
-        "trend_score": _pick_engine_nested(engine_a, "trend_score", "trendScore"),
-        "momentum_score": _pick_engine_nested(engine_a, "momentum_score", "mom_quality", "momentumScore"),
-        "adx": _pick_engine_nested(engine_a, "adx"),
-        "volatility_state": _pick_engine_nested(engine_a, "volatility_state", "volatilityState"),
-        "factor_diagnostics": _pick_engine_nested(engine_a, "factor_diagnostics", "factorDiagnostics"),
-        "threshold_progress": _pick_engine_nested(engine_a, "threshold_progress", "thresholdProgressPct"),
+        "direction": _pick_nested(signal, engine_a, "direction"),
+        "regime": _pick_nested(signal, engine_a, "regime", "trendState", "regimeName"),
+        "trend_score": _pick_nested(signal, engine_a, "trend_score", "trendScore"),
+        "momentum_score": _pick_nested(signal, engine_a, "momentum_score", "mom_quality", "momentumScore"),
+        "adx": _pick_nested(signal, engine_a, "adx"),
+        "volatility_state": _pick_nested(signal, engine_a, "volatility_state", "volatilityState"),
+        "factor_diagnostics": _pick_nested(signal, engine_a, "factor_diagnostics", "factorDiagnostics"),
+        "threshold_progress": _pick_nested(signal, engine_a, "threshold_progress", "thresholdProgressPct"),
     }
     for key, value in list(data.items()):
         if value is _MISSING:
@@ -911,6 +911,18 @@ def build_ai_review_packet(
     risk = _build_risk_context(signal)
     data_quality = _build_data_quality_context(signal)
     deterministic_gates = _build_deterministic_gate_context(signal)
+    try:
+        from cross_engine_context import build_cross_engine_context
+
+        cross_engine_payload = build_cross_engine_context(signal)
+    except Exception:
+        cross_engine_payload = {
+            "engine_a_native_context": {},
+            "engine_b_native_context": {},
+            "cross_engine_context": {},
+            "risk_context": risk,
+            "learning_context": {},
+        }
     similar = _as_dict(signal.get("similar_outcomes")) or {
         "examples": [],
         "aggregate_sample_size": 0,
@@ -973,6 +985,11 @@ def build_ai_review_packet(
         "market_intelligence": market_intelligence,
         "engine_a": engine_a,
         "engine_b": engine_b,
+        "engine_a_native_context": cross_engine_payload.get("engine_a_native_context") or {},
+        "engine_b_native_context": cross_engine_payload.get("engine_b_native_context") or {},
+        "cross_engine_context": cross_engine_payload.get("cross_engine_context") or {},
+        "risk_context": cross_engine_payload.get("risk_context") or risk,
+        "learning_context": cross_engine_payload.get("learning_context") or {},
         "engine_c": engine_c,
         "engine_d": engine_d,
         "vision": vision_ctx,

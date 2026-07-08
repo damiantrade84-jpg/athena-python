@@ -136,6 +136,25 @@ class AIRiskContext(_ContextModel):
     data_freshness_status: str | None = None
 
 
+class AICrossEngineContext(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    cross_engine_alignment: str | None = None
+    cross_engine_conflict: str | None = None
+    cross_engine_warnings: list[str] = Field(default_factory=list)
+    cross_engine_risk_notes: list[str] = Field(default_factory=list)
+    cross_engine_location_warning: str | None = None
+    cross_engine_rr_warning: str | None = None
+    cross_engine_structure_warning: str | None = None
+    cross_engine_learning_warning: str | None = None
+    native_score_changed_by_cross_engine: bool = False
+    native_actionable_changed_by_cross_engine: bool = False
+    card_hidden_by_cross_engine: bool = False
+    levels_removed_by_cross_engine: bool = False
+    consistency_pass: bool = True
+    inconsistency_reasons: list[str] = Field(default_factory=list)
+
+
 class AIDataQualityContext(_ContextModel):
     candle_source: str | None = None
     volume_source: str | None = None
@@ -208,6 +227,11 @@ class AIReviewPacket(BaseModel):
     market_intelligence: AIMarketIntelligenceContext | dict[str, Any] = Field(default_factory=AIMarketIntelligenceContext)
     engine_a: AIEngineAContext = Field(default_factory=AIEngineAContext)
     engine_b: AIEngineBContext = Field(default_factory=AIEngineBContext)
+    engine_a_native_context: dict[str, Any] = Field(default_factory=dict)
+    engine_b_native_context: dict[str, Any] = Field(default_factory=dict)
+    cross_engine_context: AICrossEngineContext | dict[str, Any] = Field(default_factory=AICrossEngineContext)
+    risk_context: dict[str, Any] = Field(default_factory=dict)
+    learning_context: dict[str, Any] = Field(default_factory=dict)
     engine_c: AIEngineCContext = Field(default_factory=AIEngineCContext)
     engine_d: AIEngineDContext = Field(default_factory=AIEngineDContext)
     vision: AIVisionContext = Field(default_factory=AIVisionContext)
