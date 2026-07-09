@@ -93,6 +93,40 @@ def test_v3_backtest_keeps_standard_validation_mode(monkeypatch):
     }
 
 
+def test_v3_promotion_validation_uses_resolved_entry_timeframe(monkeypatch):
+    observed_primary_lengths: list[int] = []
+    candles = {
+        "D1": _backtest_bars("D1", count=150),
+        "H4": _backtest_bars("H4", count=150),
+        "H1": _backtest_bars("H1", count=600),
+    }
+
+    def _windows(total_bars, **_kwargs):
+        observed_primary_lengths.append(total_bars)
+        return (), validation.ValidationWindow("holdout", 0, 0, 0)
+
+    monkeypatch.setattr(validation, "build_validation_windows", _windows)
+
+    folds, holdout = validation._validation_results(
+        {
+            "display": "USD/MXN",
+            "symbol": "USDMXN",
+            "type": "forex",
+            "score_group": "forex_exotics",
+        },
+        candles,
+        horizon="intraday",
+        spread_bps=1.0,
+        commission_bps=1.0,
+        slippage_bps=1.0,
+        swap_bps_per_day=0.0,
+    )
+
+    assert observed_primary_lengths == [150]
+    assert folds == []
+    assert holdout == []
+
+
 def test_validation_uses_four_purged_folds_and_untouched_20_percent_holdout():
     folds, holdout = build_validation_windows(1_000, purge_bars=25)
 

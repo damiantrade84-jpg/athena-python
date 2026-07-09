@@ -27,6 +27,12 @@ def handle_backtest_request(
     """Run pair or full backtest with unchanged output semantics."""
     bt_style = normalize_style(payload.get("style", "auto"))
     _vm = str(payload.get("validation_mode") or "standard").strip().lower()
+    if _vm not in {"", "standard"}:
+        return {
+            "error": "ENGINE_A_V3_VALIDATION_MODE_UNSUPPORTED",
+            "status": 422,
+            "validation_mode": _vm,
+        }
     try:
         _pg = int(payload.get("purge_gap", 200))
     except (TypeError, ValueError):

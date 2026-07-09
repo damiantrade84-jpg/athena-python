@@ -55,7 +55,7 @@ def test_backtest_unknown_pair_returns_404():
     assert "Unknown pair" in out["error"]
 
 
-def test_backtest_full_run_forwards_validation_controls():
+def test_backtest_full_v3_rejects_unsupported_validation_controls():
     seen = []
 
     def full_bt(**kwargs):
@@ -79,16 +79,12 @@ def test_backtest_full_run_forwards_validation_controls():
         allow_auto_toggle=False,
     )
 
-    assert out["status"] == 200
-    assert seen == [
-        {
-            "style": "swing",
-            "asset_class": "crypto",
-            "validation_mode": "walk_forward",
-            "purge_gap": 321,
-            "folds": 5,
-        }
-    ]
+    assert out == {
+        "error": "ENGINE_A_V3_VALIDATION_MODE_UNSUPPORTED",
+        "status": 422,
+        "validation_mode": "walk_forward",
+    }
+    assert seen == []
 
 
 def test_backtest_service_propagates_v3_validation_rejection():
