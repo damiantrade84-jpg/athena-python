@@ -2313,6 +2313,8 @@ AI_REVIEW_FALLBACK_PROVIDERS: "claude,grok"
 AI_CHART_REVIEW:
   PRIMARY_ENGINE: "A"
 
+AI_CHART_REVIEW_XAI_MODEL: "grok-4.5"  # Grok model for /api/ai/chart-review (vision)
+
 # Grok chart review (env overrides; defaults in config.py AI_CHART_REVIEW):
 # AI_CHART_REVIEW_XAI_MAX_TOKENS: 8000   # Grok-only output budget (Claude uses MAX_TOKENS)
 # AI_CHART_REVIEW_TIMEOUT_SEC: 120       # Grok chart review timeout seconds
@@ -2358,7 +2360,8 @@ NEWS_SENTIMENT_MODEL: "grok-4.3"  # News AI text; defaults to AI_MODEL if empty 
 AI_REQUEST_TIMEOUT_SEC: 30
 # Bull/Bear/Judge debate uses this (falls back to AI_REQUEST_TIMEOUT_SEC if unset).
 DEBATE_AI_TIMEOUT_SEC: 30
-MARCUS_AI_PROVIDER: "openai"  # Marcus Reid text review (/api/analyze); independent of AI_REVIEW_PROVIDER. openai resolves model via OPENAI_REVIEW_MODEL (gpt-5.5).
+MARCUS_AI_PROVIDER: "grok"  # Marcus Reid text review (/api/analyze); independent of AI_REVIEW_PROVIDER.
+MARCUS_MODEL: "grok-4.5"  # Marcus Reid model; falls back to AI_MODEL if unset.
 
 MARCUS_AI_TIMEOUT_SEC: 90
 # Marcus output budget. On OpenAI Responses, reasoning tokens share this budget;

@@ -29,7 +29,7 @@ from ai_review.context_diagnostics import build_context_diagnostics, sanitize_ai
 from ai_review.timestamp_contract import evaluate_timestamp_mismatch
 from ai_review.validation import validate_request
 from athena_app.api.routes_ai_chart_review import register_ai_chart_review_routes
-from config import CONFIG
+from config import CONFIG, get_ai_model
 
 _PNG_1X1 = base64.b64encode(
     bytes.fromhex(
@@ -826,7 +826,12 @@ def test_xai_provider_posts_png_data_url_as_image_url(monkeypatch):
     content = kwargs["messages"][0]["content"]
     assert content[0] == {"type": "text", "text": "review this chart"}
     assert content[1] == {"type": "image_url", "image_url": {"url": payload.screenshot_base64}}
-    assert kwargs["model"] == "grok-4.3"
+    assert kwargs["model"] == get_ai_model(
+        CONFIG,
+        preferred_key="AI_CHART_REVIEW_XAI_MODEL",
+        fallback="grok-4.3",
+        provider="grok",
+    )
     assert kwargs["max_tokens"] == CONFIG["AI_CHART_REVIEW"]["XAI_MAX_TOKENS"]
     assert "response_format" not in kwargs
     assert out["provider"] == "grok"

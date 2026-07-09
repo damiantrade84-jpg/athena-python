@@ -5329,7 +5329,7 @@ def run_ai(
     _selected_provider = str(_ai_runtime.get("selectedProvider") or "")
     _active_provider = str(_ai_runtime.get("provider") or _selected_provider or "grok")
     _provider = get_ai_provider_label(CONFIG, provider=_active_provider)
-    _model = get_ai_model(CONFIG, "AI_MODEL", "grok-4.3", provider=_active_provider)
+    _model = get_ai_model(CONFIG, preferred_key="MARCUS_MODEL", provider=_active_provider)
     if not _ai_runtime.get("api_key"):
         log.error("[AI] AI API key is not configured")
         return {

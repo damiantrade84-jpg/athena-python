@@ -339,6 +339,7 @@ def test_bulk_route_has_no_execution_calls_and_respects_kill_switch():
     route_end = src.index("\n@app.route", route_start + 1)
     route_src = src[route_start:route_end]
     assert "_kill_switch" in route_src
+    assert "run_ai_fn=run_ai" in route_src
     for token in (
         "execute_trade",
         "mt5_send_order",
@@ -348,3 +349,30 @@ def test_bulk_route_has_no_execution_calls_and_respects_kill_switch():
         "close_position",
     ):
         assert token not in route_src
+
+
+def test_bulk_propagates_provider_and_model_from_marcus_review():
+    def ai(_signal):
+        return {
+            "grade": "A",
+            "edgeProbability": 82,
+            "provider": "grok",
+            "model": "grok-4.5",
+        }
+
+    result = bar.run_bulk_ai_review(
+        run_cascade_scan_fn=_cascade_fn([_candidate("EURUSD")]),
+        run_ai_fn=ai,
+    )
+    row = result["results"][0]
+    assert row["provider"] == "grok"
+    assert row["model"] == "grok-4.5"
+
+
+def test_run_ai_resolves_marcus_model_from_config():
+    src = ATHENA_PATH.read_text(encoding="utf-8")
+    start = src.index("def run_ai(")
+    end = src.index("\ndef ", start + 1)
+    run_ai_body = src[start:end]
+    assert 'preferred_key="MARCUS_MODEL"' in run_ai_body
+    assert 'CONFIG.get("MARCUS_AI_PROVIDER")' in run_ai_body
