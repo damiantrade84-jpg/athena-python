@@ -5211,9 +5211,18 @@ def _normalize_ai_analyze_signal(sig: dict) -> dict:
         if max_score is not None:
             sig["maxScore"] = max_score
         if sig.get("confluencePct") is None:
-            sig["confluencePct"] = _first_present(naked.get("pct"), naked.get("score_pct"))
+            try:
+                from ai_context import derive_engine_b_score_pct
+
+                sig["confluencePct"] = derive_engine_b_score_pct(naked) if naked else None
+            except Exception:
+                sig["confluencePct"] = _first_present(
+                    naked.get("gate_pct"), naked.get("pct"), naked.get("score_pct")
+                )
         if sig.get("score_pct") is None:
-            sig["score_pct"] = _first_present(naked.get("score_pct"), naked.get("pct"), sig.get("confluencePct"))
+            sig["score_pct"] = sig.get("confluencePct")
+        if sig.get("quality_pct") is None and naked.get("pct") is not None:
+            sig["quality_pct"] = naked.get("pct")
         if sig.get("price") is None:
             sig["price"] = _first_present(sig.get("entry"), naked.get("current_price"))
         if sig.get("sl") is None:
@@ -8159,7 +8168,11 @@ def api_scan_naked():
                     "direction": direction,
                     "price": current_price,
                     "confluenceScore": conf_data["score"],
-                    "confluencePct": conf_data["pct"],
+                    "confluencePct": (
+                        conf_data.get("gate_pct")
+                        if conf_data.get("gate_pct") is not None
+                        else conf_data["pct"]
+                    ),
                     "maxScore": conf_data.get("max_possible"),
                     "threshold": _min_score_scaled,
                     "volRatio": 1.0,
@@ -8169,9 +8182,19 @@ def api_scan_naked():
                     "session": {"name": "Global"},
                     "grade": "Naked Structure",
                     "trendState": seq,
-                    "edgeProbability": conf_data["pct"],
+                    "edgeProbability": (
+                        conf_data.get("gate_pct")
+                        if conf_data.get("gate_pct") is not None
+                        else conf_data["pct"]
+                    ),
                     "riskLevel": "Low",
-                    "score_pct": conf_data["pct"],
+                    "score_pct": (
+                        conf_data.get("gate_pct")
+                        if conf_data.get("gate_pct") is not None
+                        else conf_data["pct"]
+                    ),
+                    "gate_pct": conf_data.get("gate_pct"),
+                    "quality_pct": conf_data.get("pct"),
                     "is_naked": True,
                     "isForming": _engine_b_is_forming,
                     "requestedStyle": requested_style,

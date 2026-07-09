@@ -241,3 +241,31 @@ def test_scanner_watchlist_prefers_gate_pct_for_score_floor(monkeypatch):
 
 def test_weighted_scoring_enabled_reads_config():
     assert isinstance(weighted_scoring_enabled(), bool)
+
+
+def test_derive_engine_b_score_pct_prefers_gate_over_quality_total():
+  from ai_context import derive_engine_b_score_pct
+
+  conf = {
+      "gate_pct": 75.0,
+      "pct": 88.0,
+      "score": 5.28,
+      "max_possible": 6.04,
+  }
+  assert derive_engine_b_score_pct(conf) == 75.0
+
+
+def test_quick_audit_engine_b_score_pct_prefers_gate():
+    from execution import _quick_audit_context
+
+    ctx = _quick_audit_context(
+        {"is_naked": True},
+        {
+            "gate_pct": 74.0,
+            "pct": 88.0,
+            "score": 5.3,
+            "max_possible": 6.04,
+            "structural_verdict": "CLEAR",
+        },
+    )
+    assert ctx["score_pct"] == 74.0

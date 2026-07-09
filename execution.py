@@ -330,7 +330,12 @@ def _quick_audit_context(sig: dict, engine_b: dict | None) -> dict:
     if audit_engine == "engine_b":
         score = engine_b.get("score", sig.get("confluenceScore", sig.get("score", 0)))
         max_score = engine_b.get("max_possible")
-        score_pct = engine_b.get("pct")
+        try:
+            from ai_context import derive_engine_b_score_pct
+
+            score_pct = derive_engine_b_score_pct(engine_b)
+        except Exception:
+            score_pct = engine_b.get("gate_pct", engine_b.get("pct"))
         trend = engine_b.get("current_swing_sequence", sig.get("trendState", "RANGING"))
         regime = engine_b.get("regime", sig.get("regimeName", "RANGING"))
         edge_prob = (
@@ -1152,6 +1157,14 @@ def _refresh_engine_b_execution_context(
     refreshed.setdefault("current_price", current_price)
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    if sig.get("signalPriceRef") is None:
+        try:
+            _orig = float(sig.get("price") or sig.get("entry") or 0)
+            if _orig > 0:
+                sig["signalPriceRef"] = _orig
+        except (TypeError, ValueError):
+            pass
+
     sig["is_naked"] = True
     sig["naked_data"] = refreshed
     sig["engine_b"] = refreshed
@@ -1166,6 +1179,21 @@ def _refresh_engine_b_execution_context(
     sig["tp1"] = tp
     sig["tp2"] = tp
     return refreshed, None
+
+
+def _should_refresh_engine_b_before_execute(
+    sig: dict,
+    *,
+    sig_age: float,
+    max_age: float,
+    missing_price: bool,
+) -> bool:
+    """Refresh Engine B before execute when stale, missing price, or crypto (Bybit drift parity)."""
+    if missing_price:
+        return True
+    if sig_age > max_age / 2:
+        return True
+    return str(sig.get("type") or "").lower() == "crypto"
 
 
 def _refresh_engine_a_v3_execution_context(
@@ -1299,7 +1327,9 @@ def api_quick_execute():
     except (TypeError, ValueError):
         _missing_price = True
 
-    if (_sig_age > _max_age / 2 or _missing_price) and _has_engine_b_context:
+    if _should_refresh_engine_b_before_execute(
+        sig, sig_age=_sig_age, max_age=_max_age, missing_price=_missing_price
+    ) and _has_engine_b_context:
         refreshed_engine_b, refresh_err = _refresh_engine_b_execution_context(
             sig, engine_b, _r, pip_mode
         )
@@ -2365,19 +2395,29 @@ def api_execute():
         else _signal_has_engine_b_context(sig, d.get("engine_b") or {})
     )
 
-    if (not _is_engine_a_v3) and _sig_age > _max_age / 2:
-        _pair_obj = None
-        if _has_engine_b_context:
+    _missing_price = False
+    try:
+        if not sig.get("price") or float(sig.get("price")) <= 0:
+            _missing_price = True
+    except (TypeError, ValueError):
+        _missing_price = True
+
+    if (not _is_engine_a_v3) and _has_engine_b_context:
+        if _should_refresh_engine_b_before_execute(
+            sig, sig_age=_sig_age, max_age=_max_age, missing_price=_missing_price
+        ):
             refreshed_engine_b, refresh_err = _refresh_engine_b_execution_context(
                 sig, d.get("engine_b") or {}, _r, normalize_pip_mode(sig.get("style"))
             )
             if refresh_err:
                 return jsonify({"error": refresh_err, "pair": pair}), 409
             d["engine_b"] = refreshed_engine_b or d.get("engine_b") or {}
-        else:
-            _pair_obj = next((p for p in _r.ALL_PAIRS if p["display"] == pair), None)
+            _sig_age = 0
+            _missing_price = False
+    elif (not _is_engine_a_v3) and _sig_age > _max_age / 2:
+        _pair_obj = next((p for p in _r.ALL_PAIRS if p["display"] == pair), None)
 
-        if (not _has_engine_b_context) and _pair_obj:
+        if _pair_obj:
             try:
                 _btc_bias = "neutral"
 
@@ -2432,7 +2472,7 @@ def api_execute():
                     }
                 ), 409
 
-        elif not _has_engine_b_context:
+        else:
             _r.log.warning(
                 f"[EXEC] {pair}: pair not found in universe — rejecting stale signal"
             )

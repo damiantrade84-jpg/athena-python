@@ -83,18 +83,28 @@ export default function EngineASignalCard({
   const bBreakdown = isNakedScan
     ? engineBScoreBreakdown((signal.naked_data || signal.engine_b || signal) as Record<string, unknown>)
     : null;
-  // Engine B percent must come from the quality total, not gateScore/minScore:
-  // gate score is a fixed gate count, so that ratio is identical on every
-  // passing card of a style.
-  const nakedPct = isNakedScan
-    ? toNum(raw.confluencePct ?? raw.score_pct ?? raw.edgeProbability, NaN)
+  // Headline % reflects gate completion (gate_pct), not weighted quality total.
+  const nakedGatePct = isNakedScan
+    ? toNum(
+        raw.gate_pct ?? raw.engine_b_pct ?? (
+          bBreakdown?.gateScore != null && bBreakdown?.gateMax
+            ? (bBreakdown.gateScore / bBreakdown.gateMax) * 100
+            : NaN
+        ),
+        NaN,
+      )
+    : NaN;
+  const nakedQualityPct = isNakedScan
+    ? toNum(raw.quality_pct ?? raw.confluencePct ?? raw.score_pct ?? raw.edgeProbability, NaN)
     : NaN;
   const conf = isNakedScan
-    ? (Number.isFinite(nakedPct)
-        ? Math.max(0, Math.min(100, Math.round(nakedPct)))
-        : bBreakdown?.totalScore != null && bBreakdown.totalMax
-          ? Math.max(0, Math.min(100, Math.round((bBreakdown.totalScore / bBreakdown.totalMax) * 100)))
-          : null)
+    ? (Number.isFinite(nakedGatePct)
+        ? Math.max(0, Math.min(100, Math.round(nakedGatePct)))
+        : Number.isFinite(nakedQualityPct)
+          ? Math.max(0, Math.min(100, Math.round(nakedQualityPct)))
+          : bBreakdown?.totalScore != null && bBreakdown.totalMax
+            ? Math.max(0, Math.min(100, Math.round((bBreakdown.totalScore / bBreakdown.totalMax) * 100)))
+            : null)
     : confluencePct(signal);
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
