@@ -380,6 +380,45 @@ def mt5_fetch_scalp_candles(
                 "vol":   _rv if _rv > 0 else float(_rate_value(r, "tick_volume", 0)),
             })
 
+        # MT5 copy_rates stamps bars on the broker/server clock (see
+        # MT5_BROKER_UTC_OFFSET). Normalize to UTC like fetch_mt5 does, otherwise
+        # bars appear up to broker-offset hours in the FUTURE and the freshness
+        # gate misreads every series as missing_current_bucket.
+        if candles:
+            try:
+                from athena_app.services.mt5_time_alignment import (
+                    infer_mt5_rates_time_shift_seconds,
+                )
+                from config import get_mt5_fetch_stale_unshifted_age_sec
+
+                _utc_now = _time.time()
+                tick = mt5.symbol_info_tick(mt5_symbol)
+                tick_epoch = (
+                    float(tick.time)
+                    if tick and getattr(tick, "time", 0) and tick.time > 0
+                    else None
+                )
+                offset_seconds, _shift_tag = infer_mt5_rates_time_shift_seconds(
+                    timeframe_str.upper(),
+                    _utc_now,
+                    float(candles[-1]["time"]),
+                    int(CONFIG.get("MT5_BROKER_UTC_OFFSET", 3)),
+                    tick_epoch,
+                    stale_unshifted_age_sec=get_mt5_fetch_stale_unshifted_age_sec(),
+                )
+                if offset_seconds:
+                    for c in candles:
+                        c["time"] = int(c["time"]) - int(offset_seconds)
+            except Exception:
+                # Leave raw stamps on failure: downstream freshness gates stay
+                # fail-closed on the unshifted (future-looking) series.
+                log.debug(
+                    "[SCALP] %s %s MT5 time normalization failed",
+                    mt5_symbol,
+                    timeframe_str,
+                    exc_info=True,
+                )
+
         if not include_forming and len(candles) > 1:
             candles = candles[:-1]
 
@@ -485,8 +524,16 @@ def _attach_engine_d_data_freshness_to_signal(
     pair_dict: dict,
     candles_by_tf: dict[str, list],
     time_now: float | None = None,
+    confirmed_only_tfs: set[str] | None = None,
 ) -> None:
-    """Populate candleFetchMeta + dataFreshness for parity with analyze_pair / risk_engine."""
+    """Populate candleFetchMeta + dataFreshness for parity with analyze_pair / risk_engine.
+
+    ``confirmed_only_tfs`` declares timeframes whose series drop the forming bar
+    at fetch by policy (USE_FORMING_FOR_* flags). For those, a one-bucket lag is
+    intentional — declared via candleConsistency CONFIRMED_ONLY_OK so the
+    execution gate treats stale_1_bucket as policy lag while still blocking
+    missing_current_bucket / stale_multi_bucket.
+    """
     try:
         from athena_app.services.data_freshness import (
             build_live_feed_diagnostic,
@@ -511,6 +558,15 @@ def _attach_engine_d_data_freshness_to_signal(
                 source=pair_dict.get("source"),
             )
         signal["candleFetchMeta"] = meta
+        _co_tfs = {str(t).upper() for t in (confirmed_only_tfs or set())}
+        if _co_tfs:
+            consistency = signal.setdefault("candleConsistency", {})
+            for tf_key in _co_tfs:
+                if tf_key in meta and tf_key not in consistency:
+                    consistency[tf_key] = {
+                        "status": "CONFIRMED_ONLY_OK",
+                        "reason": "scalp fetch drops forming bar by policy (USE_FORMING_FOR_*)",
+                    }
         fe = evaluate_execution_data_freshness(signal, CONFIG)
         signal["dataFreshness"] = fe
         if (
@@ -5473,7 +5529,29 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
             }
             if use_bias and candles_bias:
                 _scalp_cf_by_tf[str(bias_tf).upper()] = candles_bias
-            _attach_engine_d_data_freshness_to_signal(signal, pair_dict=pair_dict, candles_by_tf=_scalp_cf_by_tf)
+            # MT5 series drop the forming bar per USE_FORMING_FOR_* policy, so a
+            # one-bucket lag on those TFs is intentional, not stale data. Crypto
+            # (Bybit/Binance klines) includes the forming bar — no declaration.
+            _confirmed_only_tfs: set[str] = set()
+            if str(pair_dict.get("source") or "").lower() == "mt5":
+                _structure_forming = bool(cfg.get("USE_FORMING_FOR_STRUCTURE", False))
+                if not _structure_forming:
+                    _confirmed_only_tfs.add("M15")
+                if not bool(cfg.get("USE_FORMING_FOR_TRIGGER", True)):
+                    _confirmed_only_tfs.add("M5")
+                    _confirmed_only_tfs.add(str(execution_tf).upper())
+                if (
+                    use_bias
+                    and candles_bias
+                    and not bool(cfg.get("USE_FORMING_FOR_BIAS", _structure_forming))
+                ):
+                    _confirmed_only_tfs.add(str(bias_tf).upper())
+            _attach_engine_d_data_freshness_to_signal(
+                signal,
+                pair_dict=pair_dict,
+                candles_by_tf=_scalp_cf_by_tf,
+                confirmed_only_tfs=_confirmed_only_tfs,
+            )
 
             # Apply consecutive-loss halving and +2R size cap. The +2R rule caps
             # size at 0.5x; it does not increase smaller grade-based sizes.

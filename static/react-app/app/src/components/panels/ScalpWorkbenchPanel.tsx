@@ -1527,14 +1527,19 @@ export default function ScalpWorkbenchPanel() {
       return;
     }
     let cancelled = false;
-    const url = `/api/scalp-orderflow?symbol=${encodeURIComponent(chartSymbol)}&timeframe=${encodeURIComponent(timeframe)}`;
+    // Window the query to the loaded candle range so the backend's per-type
+    // event caps select events the chart can actually place, instead of the
+    // oldest/biggest events of the whole session (off-chart => invisible).
+    const firstCandleTime = candleRows.length > 0 ? candleRows[0].time : null;
+    const fromParam = typeof firstCandleTime === 'number' ? `&from=${firstCandleTime}` : '';
+    const url = `/api/scalp-orderflow?symbol=${encodeURIComponent(chartSymbol)}&timeframe=${encodeURIComponent(timeframe)}${fromParam}`;
     apiClient.getJson(url).then((res) => {
       if (!cancelled) setOrderFlowPayload(res as OrderFlowPayloadLike);
     }).catch(() => {
       if (!cancelled) setOrderFlowPayload(null);
     });
     return () => { cancelled = true; };
-  }, [chartSymbol, timeframe]);
+  }, [chartSymbol, timeframe, candleRows]);
 
   useEffect(() => {
     const container = containerRef.current;

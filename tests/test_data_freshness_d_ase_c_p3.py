@@ -52,6 +52,116 @@ def test_engine_d_marks_non_executable_when_freshness_blocks(monkeypatch):
     assert any("STALE" in str(r) for r in signal["fail_reasons"])
 
 
+def _forex_gate_config(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG, "SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS", True
+    )
+    monkeypatch.setitem(
+        config.CONFIG,
+        "DATA_FRESHNESS_GATES",
+        {
+            "BLOCK_EXECUTION_ON_STALE": True,
+            "BLOCK_TIMEFRAMES": ["M5", "M15", "H1", "H4", "D1"],
+            "BLOCK_SEVERITIES": [
+                "missing_current_bucket",
+                "stale_1_bucket",
+                "stale_multi_bucket",
+            ],
+        },
+    )
+
+
+def test_engine_d_confirmed_only_one_bucket_lag_not_blocked(monkeypatch):
+    """Forming bar dropped by fetch policy => stale_1_bucket is policy lag, not a block."""
+    _forex_gate_config(monkeypatch)
+
+    now = 1_700_000_000.0  # Tuesday 22:13 UTC — forex open
+    bucket = int(now // 900) * 900
+    confirmed_only_m15 = [
+        {"time": bucket - 1800, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "vol": 1},
+        {"time": bucket - 900, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "vol": 1},
+    ]
+
+    signal = {"executable": True, "fail_reasons": []}
+    pair = {"display": "EUR/USD", "type": "forex", "source": "mt5"}
+    _attach_engine_d_data_freshness_to_signal(
+        signal,
+        pair_dict=pair,
+        candles_by_tf={"M15": confirmed_only_m15},
+        time_now=now,
+        confirmed_only_tfs={"M15"},
+    )
+
+    assert signal["candleConsistency"]["M15"]["status"] == "CONFIRMED_ONLY_OK"
+    assert signal["dataFreshness"]["allowed"] is True
+    assert signal["executable"] is True
+    assert signal["fail_reasons"] == []
+
+
+def test_engine_d_confirmed_only_multi_bucket_still_blocks(monkeypatch):
+    """Confirmed-only declaration must not mask genuinely stale (multi-bucket) feeds."""
+    _forex_gate_config(monkeypatch)
+
+    now = 1_700_000_000.0
+    bucket = int(now // 900) * 900
+    stale_m15 = [
+        {"time": bucket - 3600, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "vol": 1},
+        {"time": bucket - 2700, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "vol": 1},
+    ]
+
+    signal = {"executable": True, "fail_reasons": []}
+    pair = {"display": "EUR/USD", "type": "forex", "source": "mt5"}
+    _attach_engine_d_data_freshness_to_signal(
+        signal,
+        pair_dict=pair,
+        candles_by_tf={"M15": stale_m15},
+        time_now=now,
+        confirmed_only_tfs={"M15"},
+    )
+
+    assert signal["dataFreshness"]["allowed"] is False
+    assert signal["executable"] is False
+    assert any("STALE_DATA_BLOCK:M15" in str(r) for r in signal["fail_reasons"])
+
+
+def test_mt5_scalp_candles_broker_time_normalized_to_utc(monkeypatch):
+    """mt5_fetch_scalp_candles must shift broker-stamped bar times to UTC (fetch_mt5 parity)."""
+    import sys
+    import time as _t
+
+    from scalp_engine import mt5_fetch_scalp_candles
+
+    monkeypatch.setitem(config.CONFIG, "MT5_BROKER_UTC_OFFSET", 3)
+
+    now = _t.time()
+    bucket = int(now // 900) * 900
+    broker_shift = 3 * 3600
+    raw_bars = [
+        {"time": bucket - 900 + broker_shift, "open": 1.0, "high": 1.0, "low": 1.0,
+         "close": 1.0, "tick_volume": 5, "real_volume": 0},
+        {"time": bucket + broker_shift, "open": 1.0, "high": 1.0, "low": 1.0,
+         "close": 1.0, "tick_volume": 5, "real_volume": 0},
+    ]
+
+    fake_mt5 = SimpleNamespace(
+        TIMEFRAME_M1=1,
+        TIMEFRAME_M5=5,
+        TIMEFRAME_M15=15,
+        TIMEFRAME_H1=16385,
+        symbol_select=lambda *_a, **_k: True,
+        copy_rates_from_pos=lambda *_a, **_k: raw_bars,
+        symbol_info_tick=lambda *_a, **_k: SimpleNamespace(time=now + broker_shift),
+    )
+    monkeypatch.setitem(sys.modules, "MetaTrader5", fake_mt5)
+
+    with patch("mt5_executor.mt5_connect", return_value=True):
+        candles = mt5_fetch_scalp_candles("EURUSD", "M15", 2, include_forming=False)
+
+    # Forming bar dropped; remaining bar normalized from broker time to UTC.
+    assert len(candles) == 1
+    assert int(candles[-1]["time"]) == bucket - 900
+
+
 def test_ase_ptis_multi_bucket_stale_blocks_bridge():
     signal = SimpleNamespace(horizon="intraday", instrument="EURUSD")
     exec_dict = {

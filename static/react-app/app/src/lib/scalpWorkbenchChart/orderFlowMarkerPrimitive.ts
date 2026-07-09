@@ -34,7 +34,11 @@ const GLYPH_RADIUS = 5;
 const LABEL_PAD_X = 3;
 const LABEL_GAP = 8;
 
-function nearestBarTime(barTimes: UTCTimestamp[], target: UTCTimestamp): UTCTimestamp | null {
+function nearestBarTime(
+  barTimes: UTCTimestamp[],
+  target: UTCTimestamp,
+  maxDelta: number,
+): UTCTimestamp | null {
   if (barTimes.length === 0) return null;
   let best = barTimes[0];
   let bestDelta = Math.abs(best - target);
@@ -45,7 +49,19 @@ function nearestBarTime(barTimes: UTCTimestamp[], target: UTCTimestamp): UTCTime
       bestDelta = delta;
     }
   }
-  return best;
+  // Only snap sub-bar event times onto the grid. Events outside the loaded
+  // candle window must be skipped, not snapped: snapping them piles stale
+  // session events onto the edge bars as floating labels detached from price.
+  return bestDelta <= maxDelta ? best : null;
+}
+
+function barIntervalSeconds(barTimes: UTCTimestamp[]): number {
+  let interval = Number.POSITIVE_INFINITY;
+  for (let i = 1; i < barTimes.length; i += 1) {
+    const delta = barTimes[i] - barTimes[i - 1];
+    if (delta > 0 && delta < interval) interval = delta;
+  }
+  return Number.isFinite(interval) ? interval : 60;
 }
 
 class OrderFlowMarkerRenderer implements IPrimitivePaneRenderer {
@@ -68,11 +84,13 @@ class OrderFlowMarkerRenderer implements IPrimitivePaneRenderer {
       .map((d) => d.time)
       .filter((t): t is UTCTimestamp => typeof t === 'number');
 
+    const snapMaxDelta = barIntervalSeconds(barTimes);
+
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
       for (const marker of markers) {
         let x = timeScale.timeToCoordinate(marker.time);
         if (x == null && typeof marker.time === 'number') {
-          const snapped = nearestBarTime(barTimes, marker.time);
+          const snapped = nearestBarTime(barTimes, marker.time, snapMaxDelta);
           if (snapped != null) x = timeScale.timeToCoordinate(snapped);
         }
         const y = series.priceToCoordinate(marker.price);
