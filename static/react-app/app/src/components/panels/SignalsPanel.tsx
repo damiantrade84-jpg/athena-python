@@ -34,6 +34,7 @@ import apiClient from '@/lib/apiClient';
 import {
   aiLevelOverrideFromReview,
   buildQuickExecutePayload,
+  canExecuteEngineASignalTier,
   canExecuteEngineBSignal,
   computeLevelOverrideRR,
   engineBExecuteBlockReason,
@@ -302,7 +303,7 @@ function rowMatchesFeed(row: UnifiedRow, feed: EngineSource): boolean {
   return row.engines.has('A');
 }
 
-function canExecuteRow(row: UnifiedRow | null, feed: EngineSource = 'A'): boolean {
+export function canExecuteRow(row: UnifiedRow | null, feed: EngineSource = 'A'): boolean {
   if (!row) return false;
   const bPresentation = hasEngineBFeedRow(row) ? engineBPresentationSignal(row) : null;
   if (feed === 'B' && bPresentation) {
@@ -319,11 +320,7 @@ function canExecuteRow(row: UnifiedRow | null, feed: EngineSource = 'A'): boolea
   if (row.engines.has('B') && !row.engines.has('A')) {
     return canExecuteEngineBSignal(row.signal);
   }
-  const tier = String(
-    row.signal.signalTier || row.signal.scan_tier || row.signal.signalClass || '',
-  ).toLowerCase();
-  if (tier.includes('watch') || tier === 'skip' || tier === 'blocked') return false;
-  return tier === 'trade' || tier === 'criteria' || row.signal.trade === true;
+  return canExecuteEngineASignalTier(row.signal);
 }
 
 function executeBlockReasonForRow(row: UnifiedRow | null, feed: EngineSource = 'A'): string | null {
@@ -341,6 +338,9 @@ function executeBlockReasonForRow(row: UnifiedRow | null, feed: EngineSource = '
   }
   if (row.signal.executable === false) return 'Not executable';
   if (row.engines.has('A') && row.signal.engineATradeEnabled === false) return 'Research-only';
+  if (row.engines.has('A') && isEngineAV3Signal(row.signal) && !canExecuteEngineASignalTier(row.signal)) {
+    return 'Watchlist only';
+  }
   const tier = String(
     row.signal.signalTier || row.signal.scan_tier || row.signal.signalClass || '',
   ).toLowerCase();

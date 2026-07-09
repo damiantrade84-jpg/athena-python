@@ -175,4 +175,24 @@ describe('Engine A V3 scanner tier gating', () => {
     expect(typeof panel.preferredTvChartTf).toBe('function');
     expect(panel.preferredTvChartTf?.(signal)).toBe('H4');
   });
+
+  it('blocks a V3 Signals-panel row when its scanner tier is missing', async () => {
+    const panel = await import('../../components/panels/SignalsPanel') as {
+      canExecuteRow?: (row: unknown, feed?: 'A' | 'B') => boolean;
+    };
+    const row = {
+      engines: new Set(['A']),
+      signal: {
+        engine: 'ENGINE_A_V3',
+        contractVersion: '3.1.0',
+        decision: 'TRADE',
+        qualified: true,
+        engineATradeEnabled: true,
+        trade: true,
+      },
+    };
+
+    expect(typeof panel.canExecuteRow).toBe('function');
+    expect(panel.canExecuteRow?.(row)).toBe(false);
+  });
 });
