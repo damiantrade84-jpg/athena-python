@@ -750,19 +750,21 @@ def evaluate_live_quote_age(
 ) -> dict[str, Any]:
     """Compare a quote's age against the per-asset-type `LIVE_PRICE_MAX_AGE_SEC` config.
 
-    Pure observability — does not block scoring or execution. Default-disabled:
-    when no threshold is configured for the pair's asset type, returns
-    ``{"enabled": False, ...}``. Callers attach the result to signals so the UI
-    and audit log can flag stale-quote signals without changing behavior.
+    When no threshold is configured for the pair's asset type, returns
+    ``{"enabled": False, ...}``. ``would_block`` is True only when execution
+    blocking is enabled via ``LIVE_PRICE_BLOCK_EXECUTION`` and the quote is
+    stale (or age unknown when ``LIVE_PRICE_BLOCK_EXECUTION_ON_UNKNOWN_AGE``).
 
     Returns:
-        dict with keys: enabled, assetType, thresholdSec, ageSec, stale, reason.
+        dict with keys: enabled, assetType, thresholdSec, ageSec, stale,
+        reason, would_block.
     """
+    cfg = config or {}
     asset_type = ""
     if isinstance(pair, dict):
         asset_type = str(pair.get("type") or "").strip().lower()
 
-    cfg_root = (config or {}).get("LIVE_PRICE_MAX_AGE_SEC")
+    cfg_root = cfg.get("LIVE_PRICE_MAX_AGE_SEC")
     threshold: float | None = None
     if isinstance(cfg_root, dict) and asset_type:
         raw = cfg_root.get(asset_type)
@@ -773,6 +775,9 @@ def evaluate_live_quote_age(
     if isinstance(age_sec, (int, float)) and age_sec >= 0:
         age_val = float(age_sec)
 
+    block_exec = bool(cfg.get("LIVE_PRICE_BLOCK_EXECUTION", False))
+    block_unknown = bool(cfg.get("LIVE_PRICE_BLOCK_EXECUTION_ON_UNKNOWN_AGE", False))
+
     if threshold is None:
         return {
             "enabled": False,
@@ -781,6 +786,7 @@ def evaluate_live_quote_age(
             "ageSec": age_val,
             "stale": False,
             "reason": "DISABLED" if not asset_type else f"NO_THRESHOLD_FOR_{asset_type.upper()}",
+            "would_block": False,
         }
 
     if age_val is None:
@@ -791,6 +797,7 @@ def evaluate_live_quote_age(
             "ageSec": None,
             "stale": False,
             "reason": "AGE_UNKNOWN",
+            "would_block": bool(block_exec and block_unknown),
         }
 
     stale = age_val > threshold
@@ -801,4 +808,5 @@ def evaluate_live_quote_age(
         "ageSec": age_val,
         "stale": stale,
         "reason": "STALE" if stale else "FRESH",
+        "would_block": bool(block_exec and stale),
     }

@@ -61,6 +61,8 @@ def _make_signal(**overrides):
         "type": "crypto",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "confluenceScore": 5.0,
+        # Fresh live quote so LIVE_PRICE_BLOCK_EXECUTION paper defaults do not reject.
+        "quoteAgeSec": 1.0,
         "candleFetchMeta": {
             "D1": {"stalenessSeverity": "fresh"},
             "H4": {"stalenessSeverity": "fresh"},

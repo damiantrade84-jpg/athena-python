@@ -147,15 +147,24 @@ def _build_levels(
     direction: str,
     level_style: str,
     atr_pct: float | None = None,
+    atr_period: int = 14,
+    ema_period: int = 20,
 ) -> StructuralLevels | None:
     """Route to the correct level builder by style."""
     if direction not in {"LONG", "SHORT"}:
         return None
     if level_style == "mean_reversion":
-        return build_mean_reversion_levels(primary, direction=direction)
+        return build_mean_reversion_levels(
+            primary,
+            direction=direction,
+            atr_period=atr_period,
+            ema_period=ema_period,
+        )
     if level_style == "london_open":
         return build_london_open_breakout_levels(primary, direction=direction)
-    return build_structural_levels(primary, direction=direction, atr_pct=atr_pct)
+    return build_structural_levels(
+        primary, direction=direction, atr_pct=atr_pct, atr_period=atr_period
+    )
 
 
 def evaluate_engine_a_v3(
@@ -268,7 +277,13 @@ def evaluate_engine_a_v3(
     setup: SetupCandidate | None = None
     setup_diagnostics: dict[str, Any] = {}
     try:
-        setup = detect_setup(route, normalized_horizon, candles, display=display)
+        setup = detect_setup(
+            route,
+            normalized_horizon,
+            candles,
+            display=display,
+            indicator_periods=dict(profile.indicator_periods),
+        )
         setup_diagnostics = {
             "setupId": setup.setup_id,
             "setupDecision": setup.decision,
@@ -276,14 +291,18 @@ def evaluate_engine_a_v3(
             "setupLevelStyle": setup.level_style,
             "setupPredicateCount": len(setup.predicates),
         }
-    except Exception:
+    except Exception as setup_exc:
         setup = None
-        setup_diagnostics = {"setupError": True}
+        setup_diagnostics = {
+            "setupError": True,
+            "setupErrorDetail": type(setup_exc).__name__,
+        }
 
     use_setup = (
         setup is not None
         and setup.decision == "TRADE"
         and setup.direction in {"LONG", "SHORT"}
+        and not setup_diagnostics.get("setupError")
     )
 
     # Direction-conflict guard: the setup overlay may only UPGRADE the quant
@@ -307,6 +326,12 @@ def evaluate_engine_a_v3(
             setup_diagnostics["directionConflictBlocked"] = True
             setup_diagnostics["quantDirection"] = quant.direction
 
+    # Blocked trend states (legacy filter) also suppress setup upgrades.
+    legacy_pre = (quant.factor_diagnostics or {}).get("legacyFilters") or {}
+    if use_setup and legacy_pre.get("trendStateBlocked"):
+        use_setup = False
+        setup_diagnostics["trendStateBlockedUpgrade"] = True
+
     # Quality floor for setup upgrades: a structural setup may only promote
     # WATCH -> TRADE when quant confluence meets a minimum fraction of threshold.
     # Config-gated (default ON); disable via ENGINE_A_V3_SETUP_UPGRADE.ENABLED.
@@ -316,7 +341,7 @@ def evaluate_engine_a_v3(
 
             upgrade_cfg = CONFIG.get("ENGINE_A_V3_SETUP_UPGRADE") or {}
             if upgrade_cfg.get("ENABLED", True):
-                frac = float(upgrade_cfg.get("MIN_CONFLUENCE_FRAC", 0.5))
+                frac = float(upgrade_cfg.get("MIN_CONFLUENCE_FRAC", 0.75))
                 floor = frac * quant.threshold
                 if quant.confluence_score < floor:
                     use_setup = False
@@ -327,6 +352,7 @@ def evaluate_engine_a_v3(
 
     # Session scoring gate (config-gated, forex-only): a forex setup must also
     # pass the session context score when ENGINE_A_V3_SESSION_SCORING.ENABLED.
+    # Exceptions fail closed (block upgrade) — never silently allow the upgrade.
     if use_setup and route.family == "forex":
         try:
             from config import CONFIG
@@ -339,8 +365,10 @@ def evaluate_engine_a_v3(
                 ):
                     use_setup = False
                     setup_diagnostics["sessionGateBlocked"] = True
-        except Exception:
-            pass
+        except Exception as session_exc:
+            use_setup = False
+            setup_diagnostics["sessionGateBlocked"] = True
+            setup_diagnostics["sessionGateError"] = type(session_exc).__name__
 
     if use_setup:
         direction = setup.direction
@@ -359,15 +387,44 @@ def evaluate_engine_a_v3(
 
     levels = None
     atr_pct = quant.factor_diagnostics.get("atrPct") if quant.factor_diagnostics else None
+    period_map = dict(profile.indicator_periods)
+    atr_period = int(period_map.get("atr", 14) or 14)
+    ema_period = int(period_map.get("ema_trend", 20) or 20)
     if direction is not None:
         levels = _build_levels(
-            primary, direction=direction, level_style=level_style, atr_pct=atr_pct
+            primary,
+            direction=direction,
+            level_style=level_style,
+            atr_pct=atr_pct,
+            atr_period=atr_period,
+            ema_period=ema_period,
         )
 
     # The quant model never emits NO_SIGNAL. Missing levels or ineligible promotion
     # only cap TRADE -> WATCH so the pair stays visible; execution stays gated by
     # executionScope / engineATradeEnabled below.
     decision = "TRADE" if use_setup else quant.decision
+    quant_session_blocked = False
+    if (
+        not use_setup
+        and decision == "TRADE"
+        and route.family == "forex"
+        and direction in {"LONG", "SHORT"}
+    ):
+        try:
+            from config import CONFIG
+
+            q_sess = CONFIG.get("ENGINE_A_V3_QUANT_SESSION_GATE") or {}
+            if q_sess.get("ENABLED", True):
+                min_score = float(q_sess.get("MIN_SCORE", 0.40))
+                if not session_score_passes(
+                    primary, direction=direction, min_score=min_score
+                ):
+                    decision = "WATCH"
+                    quant_session_blocked = True
+        except Exception:
+            decision = "WATCH"
+            quant_session_blocked = True
     if decision == "TRADE" and (levels is None or not promotion.qualified):
         decision = "WATCH"
 
@@ -392,12 +449,42 @@ def evaluate_engine_a_v3(
     if setup_diagnostics.get("qualityFloorBlocked"):
         rejection_reasons.append("setup_upgrade_below_quant_quality_floor")
     if setup_diagnostics.get("sessionGateBlocked"):
-        rejection_reasons.append("session_context_score_below_min")
+        if setup_diagnostics.get("sessionGateError"):
+            rejection_reasons.append("session_gate_error_fail_closed")
+        else:
+            rejection_reasons.append("session_context_score_below_min")
+    if setup_diagnostics.get("setupError"):
+        rejection_reasons.append("setup_detection_error")
     if setup_direction_conflict:
         rejection_reasons.append("setup_direction_conflicts_quant")
+    if quant_session_blocked:
+        rejection_reasons.append("quant_session_gate_blocked")
+    if (quant.factor_diagnostics or {}).get("minDirectionalFailed"):
+        rejection_reasons.append("min_directional_failed")
+    legacy = (quant.factor_diagnostics or {}).get("legacyFilters") or {}
+    if legacy.get("trendStateBlocked") and decision == "TRADE":
+        decision = "WATCH"
+        rejection_reasons.append("blocked_trend_state")
+    elif legacy.get("trendStateBlocked"):
+        rejection_reasons.append("blocked_trend_state")
+    if (quant.factor_diagnostics or {}).get("equityVolumeBlocked") and decision == "TRADE":
+        decision = "WATCH"
+        rejection_reasons.append("equity_volume_quality_floor")
+    elif (quant.factor_diagnostics or {}).get("equityVolumeBlocked"):
+        rejection_reasons.append("equity_volume_quality_floor")
+    if (quant.factor_diagnostics or {}).get("cryptoDerivBlocked") and decision == "TRADE":
+        decision = "WATCH"
+        rejection_reasons.append("crypto_derivatives_conflict")
+    elif (quant.factor_diagnostics or {}).get("cryptoDerivBlocked"):
+        rejection_reasons.append("crypto_derivatives_conflict")
+
+    # Recompute after late demotions (blocked trend / equity volume / crypto deriv).
+    qualified = decision == "TRADE" and promotion.qualified and levels is not None
 
     factor_diagnostics = dict(quant.factor_diagnostics or {})
     factor_diagnostics["setupOverlay"] = setup_diagnostics
+    if quant_session_blocked:
+        factor_diagnostics["quantSessionGateBlocked"] = True
 
     signal_identity = {
         "contractVersion": CONTRACT_VERSION,

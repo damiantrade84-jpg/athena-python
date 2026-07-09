@@ -180,7 +180,7 @@ def test_setup_upgrade_respects_quality_floor(monkeypatch):
             components={},
         )
 
-    def _fake_detect_setup(route, horizon, candles, *, display=None):
+    def _fake_detect_setup(route, horizon, candles, *, display=None, indicator_periods=None):
         return SetupCandidate("fx_trend_pullback", "TRADE", "LONG", (), (), "trend")
 
     monkeypatch.setattr(evaluator_module, "score_pair", _fake_score_pair)

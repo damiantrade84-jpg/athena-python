@@ -141,7 +141,7 @@ def test_setup_direction_conflict_falls_back_to_quant_path(monkeypatch):
             factor_scores={}, factor_diagnostics={}, components={},
         )
 
-    def _fake_detect_setup(route, horizon, candles, *, display=None):
+    def _fake_detect_setup(route, horizon, candles, *, display=None, indicator_periods=None):
         return SetupCandidate("fx_trend_pullback", "TRADE", "SHORT", (), (), "trend")
 
     monkeypatch.setattr(evaluator_module, "score_pair", _fake_score_pair)

@@ -133,10 +133,23 @@ def _has_engine_b_context(signal: dict[str, Any]) -> bool:
 
 
 def build_marcus_playbook_block(signal: dict[str, Any]) -> str:
-    """Mirror chart-review playbook injection for Marcus text path."""
-    playbooks = [get_engine_a_playbook()]
-    if _has_engine_b_context(signal):
-        playbooks.append(get_engine_b_playbook())
+    """Inject engine-primary playbooks for Marcus text path.
+
+    A-primary → Engine A playbook (+ B only when real B overlay context exists).
+    B-primary → Engine B playbook only (do not push A confluence language).
+    C-primary → A + B when B child context exists, else A.
+    """
+    source = resolve_marcus_engine_source(signal)
+    if source == ENGINE_B_SOURCE:
+        playbooks = [get_engine_b_playbook()]
+    elif source == ENGINE_C_SOURCE:
+        playbooks = [get_engine_a_playbook()]
+        if _has_engine_b_context(signal):
+            playbooks.append(get_engine_b_playbook())
+    else:
+        playbooks = [get_engine_a_playbook()]
+        if _has_engine_b_context(signal):
+            playbooks.append(get_engine_b_playbook())
     return render_playbook_prompt_block(playbooks, compact=True)
 
 

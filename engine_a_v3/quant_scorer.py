@@ -683,20 +683,23 @@ def score_pair(
     weights = dict(profile.weights)
     combined_weights = dict(weights)
     if subsystems_enabled():
+        # Only AVAILABLE subsystems reserve budget / enter the denom. NA,
+        # unavailable, and neutral stubs must not shrink core weights unevenly
+        # across pairs with sparse carry/COT coverage.
         sub_budget = sum(
             resolve_subsystem_weights(family).get(name, 0.0)
             for name in SUBSYSTEM_FACTORS
-            if subsystem_states.get(name) not in {ST_NA, None}
+            if subsystem_states.get(name) == ST_AVAILABLE
         )
         sub_budget = min(0.35, sub_budget)
-        price_scale = max(0.65, 1.0 - sub_budget)
+        price_scale = max(0.65, 1.0 - sub_budget) if sub_budget > 0 else 1.0
         for name in CORE_COMPONENTS:
             combined_weights[name] = weights.get(name, 0.0) * price_scale
         for name in SUBSYSTEM_FACTORS:
-            if subsystem_states.get(name) == ST_NA:
-                combined_weights[name] = 0.0
-            else:
+            if subsystem_states.get(name) == ST_AVAILABLE:
                 combined_weights[name] = resolve_subsystem_weights(family).get(name, 0.0)
+            else:
+                combined_weights[name] = 0.0
 
     active = {
         name: comp
@@ -717,7 +720,7 @@ def score_pair(
 
     def _subsystem_contributes(name: str) -> bool:
         state = subsystem_states.get(name)
-        return state in (ST_AVAILABLE, ST_NEUTRAL) and max(0.0, combined_weights.get(name, 0.0)) > 0
+        return state == ST_AVAILABLE and max(0.0, combined_weights.get(name, 0.0)) > 0
 
     # Confluence uses the full configured weight budget so unavailable components
     # cannot inflate scores by shrinking the divisor (L-1).
@@ -741,15 +744,71 @@ def score_pair(
                 comp = components[n]
                 dir_terms.append((combined_weights.get(n, 0.0), comp.signal * comp.quality))
     dir_sum = sum(w * term for w, term in dir_terms) / weight_sum
+    mr_opposition_blocked = False
     if level_style == "mean_reversion" and location.signal != 0.0:
         direction = "LONG" if location.signal > 0 else "SHORT"
         dsign = 1.0 if location.signal > 0 else -1.0
+        # Soft guard: if trend+momentum both oppose the fade with high quality,
+        # fall back to consensus direction instead of forcing the fade.
+        try:
+            from config import CONFIG
+
+            mr_guard = CONFIG.get("ENGINE_A_V3_MR_OPPOSITION_GUARD") or {}
+            if mr_guard.get("ENABLED", True):
+                min_q = float(mr_guard.get("MIN_OPPOSE_QUALITY", 0.55))
+                loc_sign = 1.0 if location.signal > 0 else -1.0
+                trend_opp = (
+                    trend.available
+                    and trend.quality >= min_q
+                    and (trend.signal * loc_sign) < 0.0
+                )
+                mom_opp = (
+                    momentum.available
+                    and momentum.quality >= min_q
+                    and (momentum.signal * loc_sign) < 0.0
+                )
+                if trend_opp and mom_opp:
+                    mr_opposition_blocked = True
+                    if dir_sum > profile.direction_deadband:
+                        direction, dsign = "LONG", 1.0
+                    elif dir_sum < -profile.direction_deadband:
+                        direction, dsign = "SHORT", -1.0
+                    else:
+                        direction, dsign = "FLAT", 0.0
+                    level_style = "trend"
+        except Exception:
+            pass
     elif dir_sum > profile.direction_deadband:
         direction, dsign = "LONG", 1.0
     elif dir_sum < -profile.direction_deadband:
         direction, dsign = "SHORT", -1.0
     else:
         direction, dsign = "FLAT", 0.0
+
+    # Directional ramp (V2 port): abort weak |dir_sum|; soft-span multiplies confluence.
+    dir_ramp_mult = 1.0
+    min_directional_failed = False
+    try:
+        from config import CONFIG
+
+        ramp_cfg = CONFIG.get("ENGINE_A_V3_DIRECTIONAL_RAMP") or {}
+        if ramp_cfg.get("ENABLED", True) and direction in ("LONG", "SHORT"):
+            from factor_scoring import _resolve_directional_ramp
+
+            min_dir, soft_span = _resolve_directional_ramp(asset_type, group)
+            abs_dir = abs(dir_sum)
+            if abs_dir < min_dir:
+                min_directional_failed = True
+                direction, dsign = "FLAT", 0.0
+                dir_ramp_mult = 0.0
+            elif soft_span > 0 and abs_dir < min_dir + soft_span:
+                dir_ramp_mult = (abs_dir - min_dir) / soft_span
+            else:
+                dir_ramp_mult = 1.0
+            if not ramp_cfg.get("APPLY_TO_CONFLUENCE", True):
+                dir_ramp_mult = 1.0 if not min_directional_failed else 0.0
+    except Exception:
+        dir_ramp_mult = round(0.5 + 0.5 * abs(dir_sum), 4)
 
     # Confluence = weighted aligned quality. Components that disagree with the
     # chosen direction contribute nothing (continuous), but never veto.
@@ -776,10 +835,70 @@ def score_pair(
     score_frac /= confluence_denom
 
     vol_mult = _volatility_mult(entry_snap)
-    confluence = _clamp(MAX_SCORE * score_frac, 0.0, MAX_SCORE)
-    score_norm = confluence / MAX_SCORE
+    confluence = _clamp(MAX_SCORE * score_frac * max(0.0, dir_ramp_mult), 0.0, MAX_SCORE)
     threshold = profile.trade_threshold
     decision = "TRADE" if direction in ("LONG", "SHORT") and confluence >= threshold else "WATCH"
+
+    from engine_a_v3.legacy_filters import apply_legacy_filters
+
+    confluence, decision, legacy_diag = apply_legacy_filters(
+        asset_type=asset_type,
+        score_group=group,
+        family=family,
+        direction=direction,
+        confluence=confluence,
+        decision=decision,
+        snaps=snaps,
+        candles=candles,
+        coherence=coherence,
+        mom_diag=mom_diag,
+        entry_tf=entry_tf,
+    )
+    confluence = _clamp(float(confluence), 0.0, MAX_SCORE)
+    # After multiplier, re-tier if score fell below threshold (never upgrade).
+    if decision == "TRADE" and confluence < threshold:
+        decision = "WATCH"
+        legacy_diag = dict(legacy_diag)
+        legacy_diag["legacyMultDemotedTrade"] = True
+
+    equity_volume_blocked = False
+    if family == "equity_etf" and decision == "TRADE":
+        try:
+            from config import CONFIG
+
+            vol_cfg = CONFIG.get("ENGINE_A_V3_EQUITY_VOLUME_FLOOR") or {}
+            if vol_cfg.get("ENABLED", True):
+                min_q = float(vol_cfg.get("MIN_QUALITY", 0.15))
+                if (not volume.available) or volume.quality < min_q:
+                    decision = "WATCH"
+                    equity_volume_blocked = True
+        except Exception:
+            decision = "WATCH"
+            equity_volume_blocked = True
+
+    crypto_deriv_blocked = False
+    if family == "crypto" and decision == "TRADE":
+        try:
+            from config import CONFIG
+
+            deriv_cfg = CONFIG.get("ENGINE_A_V3_CRYPTO_DERIV_GUARD") or {}
+            if deriv_cfg.get("ENABLED", False):
+                ctx = context or {}
+                conflict = bool(ctx.get("funding_conflict") or ctx.get("oi_conflict"))
+                fresh = ctx.get("derivatives_fresh")
+                require_fresh = bool(deriv_cfg.get("REQUIRE_FRESH", True))
+                if conflict:
+                    decision = "WATCH"
+                    crypto_deriv_blocked = True
+                elif require_fresh and fresh is not True:
+                    # Fail closed when guard is on but freshness unknown/stale.
+                    decision = "WATCH"
+                    crypto_deriv_blocked = True
+        except Exception:
+            decision = "WATCH"
+            crypto_deriv_blocked = True
+
+    score_norm = confluence / MAX_SCORE
 
     factor_scores["ortho"] = ortho
     factor_scores["ortho_term"] = round(sum(ortho.values()), 4)
@@ -787,7 +906,9 @@ def score_pair(
         "adxValue": mom_diag.get("adxValue"),
         "adxMultiplier": mom_diag.get("adxMultiplier"),
         "diAlignMult": mom_diag.get("diAlignMult"),
-        "directionalRampMult": round(0.5 + 0.5 * abs(dir_sum), 4),
+        "directionalRampMult": round(dir_ramp_mult, 4),
+        "minDirectionalFailed": min_directional_failed,
+        "mrOppositionBlocked": mr_opposition_blocked,
         "mrAdxCeiling": round(_resolve_mr_adx_ceiling(asset_type, group), 4) if level_style == "mean_reversion" else None,
         "trendCoherence": coherence or {"error": "no_ema_data"},
         "volatilityMult": round(vol_mult, 4),
@@ -795,6 +916,10 @@ def score_pair(
         "atrPct": _f(entry_snap.get("atr_pct")),
         "subsystemsEnabled": subsystems_enabled(),
         "subsystemStates": subsystem_states or None,
+        "legacyFilters": legacy_diag,
+        "trendState": legacy_diag.get("trendState"),
+        "equityVolumeBlocked": equity_volume_blocked,
+        "cryptoDerivBlocked": crypto_deriv_blocked,
         "components": {
             name: {
                 "signal": round(comp.signal, 4), "quality": round(comp.quality, 4),

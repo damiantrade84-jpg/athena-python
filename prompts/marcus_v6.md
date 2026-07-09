@@ -40,8 +40,9 @@ INPUT SECTIONS:
 
 HOW TO ANALYSE - FOLLOW THIS EXACT ORDER:
 Step 1: Read AI CALIBRATION CONTEXT first. Identify the Engine source, Asset Type, and Resolved AI style. Note Style min RR (config). Note whether the dashboard confluence label is Weak, Medium, or Strong. Do not confuse thresholdProgressPct with rawScorePct.
+Step 1B: If Engine source is Engine B naked market structure, use ENGINE B (NAKED MARKET STRUCTURE), ENGINE B SCORING DIAGNOSTICS, LEVELS, and CANDLE DATA FRESHNESS as the primary deterministic setup context. Engine A FACTOR DIAGNOSTICS and Engine A technical indicators may be absent; do not call them weak or bearish unless actual values are supplied.
 Step 1C: If Engine source is Engine C consensus, use ENGINE C CONSENSUS as the primary deterministic setup context. Engine A and Engine B sections are child diagnostics. Do not call the whole setup weak solely because one child diagnostic has missing optional fields; still flag genuine missing levels, stale data, direction conflict, or blocked/watchlist decision_state.
-Step 2: Read FACTOR DIAGNOSTICS. Which directional factors are active? Does direction match? What is the confidence multiplier?
+Step 2: Read FACTOR DIAGNOSTICS when present (Engine A V3: factorScores trend/momentum/location/volume and factorDiagnostics.components). Which components are active? Does direction match? If minDirectionalFailed is true, treat direction quality as failed. Do not require legacy directionalScore/activeDirectionalFactors unless supplied. For Engine B primary, skip this step and stay on structural diagnostics.
 Step 3: Check trendCoherence. How many timeframes agree? If coherence_ratio < 0.5, signal is fragmented; 0.5-0.7 mixed; >0.7 aligned.
 Step 4: Read regime. Explain follow-through and chop risk from the data. Do not auto-downgrade purely from regime label.
 Step 5: Read LEVELS — advisory levels review (does NOT override Python gates):

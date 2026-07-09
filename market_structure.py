@@ -17,7 +17,7 @@ ENGINE_B_REGIME_GATE_DEFAULTS = {
     "TRENDING": 0.95,
     "RANGING": 1.10,
     "HIGH_VOLATILITY": 1.10,
-    "LOW_VOLATILITY": 0.90,
+    "LOW_VOLATILITY": 1.0,
 }
 
 
@@ -86,7 +86,9 @@ def engine_b_forex_asian_session_blocks_bar(
             return True
         return h >= 22 or h < 7
     except Exception:
-        return False
+        # Fail closed: when Asian skip is enabled, unparseable bar times are skipped
+        # rather than silently scoring thin-session structure.
+        return True
 
 
 def _parse_utc_candle_time(value):
@@ -1296,6 +1298,23 @@ def _find_breakout_bar_index(
     return None
 
 
+def _follow_through_candle_series(candles: list | None) -> list:
+    """Return candle series for follow-through/trap evaluation.
+
+    When ``ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY`` is true (default) and the
+    trigger series may include a forming bar, drop the newest bar so trap
+    scoring matches confirmed-only structure policy.
+    """
+    series = list(candles or [])
+    if not series:
+        return series
+    if not bool(config.CONFIG.get("ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY", True)):
+        return series
+    if len(series) < 2:
+        return series
+    return series[:-1]
+
+
 def _breakout_follow_through(
     candles: list,
     direction: str,
@@ -1307,6 +1326,10 @@ def _breakout_follow_through(
     SMC traders frequently get caught in false breakouts where price breaks a
     level but immediately reverses. This factor scores the *quality* of the
     breakout by measuring post-break continuation.
+
+    Callers should pass ``_follow_through_candle_series(entry_candles)`` when
+    ``ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY`` is enabled so trap scoring does
+    not use a forming bar.
 
     Scoring:
       +1.5  Strong follow-through — 3+ bars all aligned, close beyond breakout
@@ -2758,12 +2781,21 @@ class NakedEngine:
         recent_swing_low = last_troughs[-1] if last_troughs else np.min(lows)
 
         # Check for Double Tops / Bottoms indicating a liquidity sweep
+        try:
+            _eq_atr = float(
+                (config.CONFIG.get("NAKED_ENGINE") or {}).get(
+                    "equal_extrema_atr_mult", 0.15
+                )
+                or 0.15
+            )
+        except (TypeError, ValueError):
+            _eq_atr = 0.15
         equal_highs = (
-            len(last_peaks) >= 2 and abs(last_peaks[-1] - last_peaks[-2]) < atr * 0.3
+            len(last_peaks) >= 2 and abs(last_peaks[-1] - last_peaks[-2]) < atr * _eq_atr
         )
         equal_lows = (
             len(last_troughs) >= 2
-            and abs(last_troughs[-1] - last_troughs[-2]) < atr * 0.3
+            and abs(last_troughs[-1] - last_troughs[-2]) < atr * _eq_atr
         )
 
         has_equal_extrema = False
@@ -2964,18 +2996,54 @@ class NakedEngine:
                 choch_level = None
                 choch_bull = False
                 choch_bear = False
+                n_closes = len(closes) if closes is not None else 0
+                try:
+                    choch_lookback = int(
+                        config.CONFIG.get(
+                            "ENGINE_B_CHOCH_INVALIDATION_BARS",
+                            config.CONFIG.get("ENGINE_B_BOS_LOOKBACK_BARS", 5),
+                        )
+                        or 5
+                    )
+                except (TypeError, ValueError):
+                    choch_lookback = 5
+                choch_lookback = max(1, min(choch_lookback, n_closes)) if n_closes else 1
+
+                def _choch_still_valid(break_idx: int, level: float, *, bullish: bool) -> bool:
+                    """Fail closed if any subsequent close reclaims across the CHoCH level."""
+                    if closes is None or n_closes <= 0:
+                        return False
+                    for j in range(break_idx + 1, n_closes):
+                        cj = float(closes[j])
+                        if bullish and cj < level:
+                            return False
+                        if (not bullish) and cj > level:
+                            return False
+                    return True
+
                 if bos_data.get("bos_bear") and bos_data.get("bos_reference_high") is not None:
                     ref_high = float(bos_data["bos_reference_high"])
-                    choch_bull = bool(last_close > ref_high + min_break_abs)
-                    if choch_bull:
-                        choch_level = ref_high
-                        choch_events.append({"type": "bullish", "level": ref_high})
+                    # Scan lookback for a CHoCH print (parity with BOS invalidation).
+                    for k in range(1, choch_lookback + 1):
+                        idx = n_closes - k
+                        if float(closes[idx]) > ref_high + min_break_abs and _choch_still_valid(
+                            idx, ref_high, bullish=True
+                        ):
+                            choch_bull = True
+                            choch_level = ref_high
+                            choch_events.append({"type": "bullish", "level": ref_high})
+                            break
                 if bos_data.get("bos_bull") and bos_data.get("bos_reference_low") is not None:
                     ref_low = float(bos_data["bos_reference_low"])
-                    choch_bear = bool(last_close < ref_low - min_break_abs)
-                    if choch_bear:
-                        choch_level = ref_low
-                        choch_events.append({"type": "bearish", "level": ref_low})
+                    for k in range(1, choch_lookback + 1):
+                        idx = n_closes - k
+                        if float(closes[idx]) < ref_low - min_break_abs and _choch_still_valid(
+                            idx, ref_low, bullish=False
+                        ):
+                            choch_bear = True
+                            choch_level = ref_low
+                            choch_events.append({"type": "bearish", "level": ref_low})
+                            break
                 # Dual BOS in lookback can set both flags; keep CHoCH for the more recent BOS only.
                 if choch_bull and choch_bear:
                     def _bos_bar_idx(key: str) -> int:
@@ -3203,6 +3271,7 @@ class NakedEngine:
         _empty = {
             "bull_sweep": False,
             "bear_sweep": False,
+            "sweep_direction": None,
             "sweep_low": None,
             "sweep_high": None,
         }
@@ -3240,33 +3309,66 @@ class NakedEngine:
             bear_sweep = False
             sweep_low = None
             sweep_high = None
+            sweep_direction = None
+            try:
+                wick_atr_mult = float(
+                    (config.CONFIG.get("NAKED_ENGINE") or {}).get(
+                        "sweep_wick_atr_mult", 0.3
+                    )
+                    or 0.3
+                )
+            except (TypeError, ValueError):
+                wick_atr_mult = 0.3
+
+            # Track best (most recent, then largest wick) candidate per side.
+            best_bull: tuple[int, float, float] | None = None  # (bar_i, wick_depth, low)
+            best_bear: tuple[int, float, float] | None = None
 
             for i in range(sweep_lookback):
-                high = recent_highs[i]
-                low = recent_lows[i]
-                close = recent_closes[i]
+                high = float(recent_highs[i])
+                low = float(recent_lows[i])
+                close = float(recent_closes[i])
 
                 # Bullish sweep: wick below swing low, close above it (stop hunt below → reversal up)
-                if (
-                    low < ref_low - 0.3 * atr
-                    and close > ref_low
-                ):
-                    bull_sweep = True
-                    sweep_low = low
+                if low < ref_low - wick_atr_mult * atr and close > ref_low:
+                    depth = float(ref_low) - low
+                    if best_bull is None or i > best_bull[0] or (
+                        i == best_bull[0] and depth > best_bull[1]
+                    ):
+                        best_bull = (i, depth, low)
 
                 # Bearish sweep: wick above swing high, close below it (stop hunt above → reversal down)
-                if (
-                    high > ref_high + 0.3 * atr
-                    and close < ref_high
+                if high > ref_high + wick_atr_mult * atr and close < ref_high:
+                    depth = high - float(ref_high)
+                    if best_bear is None or i > best_bear[0] or (
+                        i == best_bear[0] and depth > best_bear[1]
+                    ):
+                        best_bear = (i, depth, high)
+
+            if best_bull is not None and best_bear is not None:
+                # Mutual exclusion: keep the more recent sweep; tie-break on wick depth.
+                if best_bull[0] > best_bear[0] or (
+                    best_bull[0] == best_bear[0] and best_bull[1] >= best_bear[1]
                 ):
-                    bear_sweep = True
-                    sweep_high = high
+                    best_bear = None
+                else:
+                    best_bull = None
+
+            if best_bull is not None:
+                bull_sweep = True
+                sweep_low = best_bull[2]
+                sweep_direction = "LONG"
+            if best_bear is not None:
+                bear_sweep = True
+                sweep_high = best_bear[2]
+                sweep_direction = "SHORT"
 
             return {
                 "bull_sweep": bull_sweep,
                 "bear_sweep": bear_sweep,
                 "sweep_low": sweep_low,
                 "sweep_high": sweep_high,
+                "sweep_direction": sweep_direction,
             }
 
         except Exception:
@@ -3745,14 +3847,25 @@ class NakedEngine:
         else:
             confidence = "LOW"
 
-        # Direction from weighted score
-        if score_ratio > 0.15:
+        # Direction from weighted score (threshold config-gated).
+        try:
+            _dir_vote_thr = abs(
+                float(
+                    config.CONFIG.get(
+                        "ENGINE_B_INDEPENDENT_DIRECTION_SCORE_THRESHOLD", 0.15
+                    )
+                    or 0.15
+                )
+            )
+        except (TypeError, ValueError):
+            _dir_vote_thr = 0.15
+        if score_ratio > _dir_vote_thr:
             direction = "LONG"
             reason = (
                 f"Structural evidence bullish: {positive}/{len(active_votes)} indicators agree "
                 f"(h4={h4_sequence}, choch={votes.get('choch', 0)}, sweep={votes.get('sweep', 0)})"
             )
-        elif score_ratio < -0.15:
+        elif score_ratio < -_dir_vote_thr:
             direction = "SHORT"
             reason = (
                 f"Structural evidence bearish: {negative}/{len(active_votes)} indicators agree "
@@ -3942,19 +4055,23 @@ class NakedEngine:
         )
         if registry_symbol:
             zone_registry = get_zone_registry()
+            # FVG cache must use zone TF (D1 on swing), not hardcoded H4.
+            fvg_registry_tf = str(_zone_tf or structure_tf or "H4").upper()
             zone_registry.upsert_zones(
                 registry_symbol, structure_tf, order_blocks, [], atr=struct_atr, asset_type=asset_type
             )
             zone_registry.upsert_zones(
-                registry_symbol, "H4", [], fvgs, atr=struct_atr, asset_type=asset_type
+                registry_symbol, fvg_registry_tf, [], fvgs, atr=zone_atr, asset_type=asset_type
             )
             zone_registry.mark_mitigated(registry_symbol, structure_tf, current_price, atr)
-            zone_registry.mark_mitigated(registry_symbol, "H4", current_price, atr)
+            zone_registry.mark_mitigated(registry_symbol, fvg_registry_tf, current_price, atr)
             zone_registry.prune_old_zones()
             if zone_registry.has_zones(registry_symbol, structure_tf):
                 order_blocks = self._registry_order_blocks(zone_registry.get_active_zones(registry_symbol, structure_tf))
-            if zone_registry.has_zones(registry_symbol, "H4"):
-                active_fvgs = self._registry_fvgs(zone_registry.get_active_zones(registry_symbol, "H4"))
+            if zone_registry.has_zones(registry_symbol, fvg_registry_tf):
+                active_fvgs = self._registry_fvgs(
+                    zone_registry.get_active_zones(registry_symbol, fvg_registry_tf)
+                )
 
         for zone in res_zones + sup_zones:
             overlapping_fvgs = [fvg for fvg in active_fvgs if not (zone["upper"] < fvg["bottom"] or zone["lower"] > fvg["top"])]
@@ -4312,12 +4429,22 @@ class NakedEngine:
         tp_structural_limited = False
         structural_target_candidates = []
 
+        try:
+            _tp_min_atr = float(
+                (config.CONFIG.get("NAKED_ENGINE") or {}).get(
+                    "structural_tp_min_distance_atr", 0.5
+                )
+                or 0.5
+            )
+        except (TypeError, ValueError):
+            _tp_min_atr = 0.5
+        _tp_min_dist = atr * _tp_min_atr
         if direction == "LONG" and valid_res:
             for zone in sorted(valid_res, key=lambda z: z["lower"]):
                 structural_tp = _engine_b_structural_target_price(zone, direction, atr, structural_tp_buffer_mult)
                 target_distance = structural_tp - current_price
-                structural_target_candidates.append({"target_type": "resistance_zone", "target_price": structural_tp, "zone": dict(zone), "correct_side": structural_tp > current_price, "distance_to_target": target_distance, "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None, "selected": False, "rejected_reason": "too_close_or_wrong_side" if structural_tp <= current_price + (atr * 0.5) else None})
-                if structural_tp <= current_price + (atr * 0.5):
+                structural_target_candidates.append({"target_type": "resistance_zone", "target_price": structural_tp, "zone": dict(zone), "correct_side": structural_tp > current_price, "distance_to_target": target_distance, "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None, "selected": False, "rejected_reason": "too_close_or_wrong_side" if structural_tp <= current_price + _tp_min_dist else None})
+                if structural_tp <= current_price + _tp_min_dist:
                     tp_structural_limited = True
                     continue
                 tp = structural_tp
@@ -4328,8 +4455,8 @@ class NakedEngine:
             for zone in sorted(valid_sup, key=lambda z: z["upper"], reverse=True):
                 structural_tp = _engine_b_structural_target_price(zone, direction, atr, structural_tp_buffer_mult)
                 target_distance = current_price - structural_tp
-                structural_target_candidates.append({"target_type": "support_zone", "target_price": structural_tp, "zone": dict(zone), "correct_side": structural_tp < current_price, "distance_to_target": target_distance, "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None, "selected": False, "rejected_reason": "too_close_or_wrong_side" if structural_tp >= current_price - (atr * 0.5) else None})
-                if structural_tp >= current_price - (atr * 0.5):
+                structural_target_candidates.append({"target_type": "support_zone", "target_price": structural_tp, "zone": dict(zone), "correct_side": structural_tp < current_price, "distance_to_target": target_distance, "atr_multiple_to_target": (target_distance / atr) if atr > 0 else None, "selected": False, "rejected_reason": "too_close_or_wrong_side" if structural_tp >= current_price - _tp_min_dist else None})
+                if structural_tp >= current_price - _tp_min_dist:
                     tp_structural_limited = True
                     continue
                 tp = structural_tp
@@ -4496,6 +4623,7 @@ class NakedEngine:
             "fvg_overlap": fvg_overlap,
             "active_fvgs": active_fvgs,
             "liquidity_sweep": is_sweep_event,
+            "sweep_direction": sweep_data.get("sweep_direction"),
             # Equal extrema relative to the scanned direction: equal lows are the
             # liquidity pool for LONG sweeps, equal highs for SHORT. The precompute
             # sequence pass runs direction-independent, so resolve per side here.
@@ -4714,12 +4842,26 @@ class NakedEngine:
             _hard_counter_penalty_cfg = 1.0
         _hard_counter_veto = hard_counter and _hard_counter_mode == "veto"
         bos_mtf = bool(res.get("bos_mtf_confirmed", False))
-        structure_ok = (not _hard_counter_veto) and (
-            micro_aligned
-            or macro_aligned
-            or res.get("bos_confirmed", False)
-            or res.get("liquidity_sweep", False)
+        # When both micro and macro oppose, a lone BOS/sweep is not enough unless
+        # MTF BOS confirms (config-gated; default ON).
+        _require_align_or_mtf = bool(
+            config.CONFIG.get("ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF", True)
         )
+        _both_oppose = (not micro_aligned) and (not macro_aligned)
+        # Sweep only counts for structure_ok when aligned with trade direction.
+        _sweep_dir = str(res.get("sweep_direction") or "").upper() or None
+        _sweep_aligned = bool(res.get("liquidity_sweep", False)) and (
+            _sweep_dir is None or _sweep_dir == direction
+        )
+        if _require_align_or_mtf and _both_oppose:
+            structure_ok = (not _hard_counter_veto) and bos_mtf
+        else:
+            structure_ok = (not _hard_counter_veto) and (
+                micro_aligned
+                or macro_aligned
+                or res.get("bos_confirmed", False)
+                or _sweep_aligned
+            )
         structure_gate_original_ok = bool(structure_ok)
         structure_gate_disabled = bool(profile.get("disable_structure_gate", False))
         if structure_gate_disabled:
@@ -4745,6 +4887,21 @@ class NakedEngine:
         ).lower()
         if _aggtrade_mode not in {"required", "preferred", "degraded"}:
             _aggtrade_mode = "required"
+        # Trusted VP/CVD crypto score groups hard-require aggTrade when configured.
+        _score_group_key = str(profile.get("score_group") or "").strip().lower()
+        _trusted_crypto_groups = engine_b_profile_trusted_score_groups()
+        _aggtrade_group_trusted = bool(
+            _score_group_key
+            and _score_group_key.startswith("crypto_")
+            and _score_group_key in _trusted_crypto_groups
+        )
+        if _aggtrade_group_trusted:
+            _trusted_mode = str(
+                config.CONFIG.get("ENGINE_B_CRYPTO_AGGTRADE_TRUSTED_MODE", "required")
+                or "required"
+            ).lower()
+            if _trusted_mode in {"required", "preferred", "degraded"}:
+                _aggtrade_mode = _trusted_mode
         _aggtrade_required_raw = res.get("aggtrade_required")
         _aggtrade_required = bool(
             _aggtrade_enabled
@@ -4926,8 +5083,8 @@ class NakedEngine:
         _effective_min_room_atr = _get_min_room_atr(rr, bool(res.get("bos_confirmed")), asset_type_lower, exec_style)
         if config.CONFIG.get("ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE", True):
             if room_dist is None:
-                # In strong trends with confirmed BOS, no opposing zone means
-                # the trend has room to run — pass the room gate.
+                # Open-air room: require BOS plus MTF trend alignment (default ON)
+                # to avoid passing with a single TF trend + BOS into invisible liquidity.
                 _h1_trend = (direction == "LONG" and h1_seq == "HH_HL") or (
                     direction == "SHORT" and h1_seq == "LH_LL"
                 )
@@ -4935,7 +5092,13 @@ class NakedEngine:
                     direction == "SHORT" and h4_seq == "LH_LL"
                 )
                 _bos_ok = bool(res.get("bos_confirmed"))
-                room_ok = (_h1_trend or _h4_trend) and _bos_ok
+                _require_mtf = bool(
+                    config.CONFIG.get("ENGINE_B_ROOM_NO_WALL_REQUIRE_MTF", True)
+                )
+                if _require_mtf:
+                    room_ok = _h1_trend and _h4_trend and _bos_ok
+                else:
+                    room_ok = (_h1_trend or _h4_trend) and _bos_ok
             else:
                 room_ok = room_dist >= atr_val * _effective_min_room_atr
         else:
@@ -4979,6 +5142,33 @@ class NakedEngine:
             or (bool(res.get("liquidity_sweep")) and zone_ok)
             or (bool(res.get("choch_confirmed")) and zone_ok)
         )
+        # Follow-through trap: when ENABLED, a suspected liquidity trap blocks entry_ok.
+        _ft_cfg_early = config.CONFIG.get("ENGINE_B_FOLLOW_THROUGH", {}) or {}
+        _ft_block_entry = bool(_ft_cfg_early.get("ENABLED", False)) and bool(
+            _ft_cfg_early.get("BLOCK_ENTRY_ON_TRAP", True)
+        )
+        _ft_trap_blocked = False
+        if _ft_block_entry and entry_ok:
+            _ft_bos_early = res.get("bos_data") or {}
+            _ft_level_early = (
+                _ft_bos_early.get("last_broken_high")
+                if direction == "LONG"
+                else _ft_bos_early.get("last_broken_low")
+            )
+            _ft_series_early = _follow_through_candle_series(entry_candles)
+            _ft_idx_early = _find_breakout_bar_index(
+                _ft_series_early, direction, _ft_level_early
+            )
+            if _ft_idx_early is not None:
+                _ft_early = _breakout_follow_through(
+                    _ft_series_early,
+                    direction,
+                    atr_val,
+                    breakout_bar_index=_ft_idx_early,
+                )
+                if float(_ft_early.get("score") or 0.0) < 0.0:
+                    entry_ok = False
+                    _ft_trap_blocked = True
 
         # Accept both structural TPs and synthetic-fallback TPs as a "meaningful"
         # target that can substitute for room. Raw ATR TPs do not qualify
@@ -5122,10 +5312,11 @@ class NakedEngine:
                 if direction == "LONG"
                 else _ft_bos.get("last_broken_low")
             )
-            _ft_idx = _find_breakout_bar_index(entry_candles or [], direction, _ft_level)
+            _ft_series = _follow_through_candle_series(entry_candles)
+            _ft_idx = _find_breakout_bar_index(_ft_series, direction, _ft_level)
             if _ft_idx is not None:
                 _ft_result = _breakout_follow_through(
-                    entry_candles or [], direction, atr_val, breakout_bar_index=_ft_idx
+                    _ft_series, direction, atr_val, breakout_bar_index=_ft_idx
                 )
                 _ft_result["breakout_bar_index"] = _ft_idx
             else:
@@ -5136,6 +5327,9 @@ class NakedEngine:
                     "breakout_bar_index": None,
                 }
             _ft_detail.update(_ft_result)
+            _ft_detail["confirmed_only"] = bool(
+                config.CONFIG.get("ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY", True)
+            )
             _ft_max = abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
             _ft_min = -abs(float(_ft_cfg.get("MIN_PENALTY", -0.5)))
             _ft_bonus = max(_ft_min, min(_ft_max, _ft_result.get("score", 0.0)))
@@ -5595,6 +5789,7 @@ class NakedEngine:
             "follow_through_bonus": round(_ft_bonus, 2),
             "follow_through_detail": _ft_detail,
             "follow_through": _ft_detail,
+            "follow_through_trap_blocked": _ft_trap_blocked,
             "engine_b_diagnostics": _engine_b_diag_payload,
             "_adx_derived_regime": res.get("_adx_derived_regime"),
         }
@@ -5610,16 +5805,30 @@ class NakedEngine:
                 style_profile=style_profile,
                 pair=res.get("display") or res.get("pair"),
             )
-        except Exception:
-            pass
+        except Exception as _canon_exc:
+            # Fail closed for canonical routing fields — do not silently leave
+            # passed=True without canonical_* diagnostics for UI/consumers.
+            _conf_result["canonical_attach_error"] = type(_canon_exc).__name__
+            _conf_result["canonical_trade_ok"] = False
+            log.warning(
+                "[ENGINE_B] attach_canonical_actionability failed: %s",
+                _canon_exc,
+            )
         return _conf_result
 
     def check_macro_correlation_detail(
-        self, asset_close_series: list, dxy_close_series: list, direction: str
+        self, asset_close_series: list, dxy_close_series: list, direction: str,
+        *,
+        macro_required: bool = False,
     ) -> tuple[bool, str | None]:
         """Same gate as check_macro_correlation; returns optional block reason code when False."""
         _corr_window = int(config.CONFIG.get("ENGINE_B_MACRO_CORRELATION_WINDOW", 60))
         if len(asset_close_series) < _corr_window or len(dxy_close_series) < _corr_window:
+            # Fail closed when macro is required for the group; otherwise allow.
+            if macro_required and bool(
+                config.CONFIG.get("ENGINE_B_MACRO_SHORT_HISTORY_FAIL_CLOSED", True)
+            ):
+                return False, "macro_history_insufficient"
             return True, None
 
         min_len = min(len(asset_close_series), len(dxy_close_series), _corr_window)
@@ -5641,14 +5850,23 @@ class NakedEngine:
         return True, None
 
     def check_macro_correlation(
-        self, asset_close_series: list, dxy_close_series: list, direction: str
+        self,
+        asset_close_series: list,
+        dxy_close_series: list,
+        direction: str,
+        *,
+        macro_required: bool = False,
     ) -> bool:
         """
         Calculates 30-period rolling Pearson correlation.
         Returns False (Block) if dynamically inversely correlated AND DXY moving against the trade.
+        When macro_required and history is short, fails closed (config-gated).
         """
         ok, _reason = self.check_macro_correlation_detail(
-            asset_close_series, dxy_close_series, direction
+            asset_close_series,
+            dxy_close_series,
+            direction,
+            macro_required=macro_required,
         )
         return ok
 

@@ -110,15 +110,52 @@ ENGINE_A_V3_FOREX_SETUP: trend
 ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD: true
 ENGINE_A_V3_SETUP_UPGRADE:
   ENABLED: true
-  MIN_CONFLUENCE_FRAC: 0.5
+  MIN_CONFLUENCE_FRAC: 0.75
 ENGINE_A_V3_SESSION_SCORING:
   ENABLED: true
-  MIN_SCORE: 0.35
+  MIN_SCORE: 0.40  # raised with quant session gate (was 0.35)
 ENGINE_A_V3_MEAN_REVERSION:
   Z_ENTRY: 1.5
   EFF_MAX: 0.35
   LOOKBACK: 20
-
+# V3 directional ramp (ports ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS into quant scorer).
+# Weak |dir_sum| aborts to FLAT/WATCH; soft span multiplies confluence.
+ENGINE_A_V3_DIRECTIONAL_RAMP:
+  ENABLED: true
+  APPLY_TO_CONFLUENCE: true
+# Forex quant TRADE must also pass session scoring (not only setup upgrades).
+ENGINE_A_V3_QUANT_SESSION_GATE:
+  ENABLED: true
+  MIN_SCORE: 0.40
+# Mean-reversion: block forced fade when trend+momentum violently oppose location.
+ENGINE_A_V3_MR_OPPOSITION_GUARD:
+  ENABLED: true
+  MIN_OPPOSE_QUALITY: 0.55
+# Structural SL must be at least this many ATRs from entry (noise-stop floor).
+ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT: 0.35
+# Port selected V2 expectancy filters into V3 (multipliers / WATCH demotion).
+ENGINE_A_V3_LEGACY_FILTERS:
+  ENABLED: true
+  FOREX_EMA_CLUSTER: true
+  CRYPTO_LATE_TREND: true
+  BLOCKED_TREND_STATES: true
+# Commodity setup lookback / touch / extension (overrides hardcoded defaults).
+ENGINE_A_V3_COMMODITY_SETUP_PARAMS:
+  energy_oil: { lookback: 16, touch_distance_atr: 0.45, max_extension_atr: 1.35 }
+  nat_gas: { lookback: 12, touch_distance_atr: 0.60, max_extension_atr: 1.50 }
+  copper: { lookback: 20, touch_distance_atr: 0.40, max_extension_atr: 1.25 }
+  pgm_metals: { lookback: 24, touch_distance_atr: 0.45, max_extension_atr: 1.25 }
+  base_metals: { lookback: 24, touch_distance_atr: 0.40, max_extension_atr: 1.20 }
+  softs: { lookback: 18, touch_distance_atr: 0.55, max_extension_atr: 1.40 }
+  commodity_other: { lookback: 20, touch_distance_atr: 0.35, max_extension_atr: 1.25 }
+# Equities/ETFs: no TRADE when volume component quality is below floor.
+ENGINE_A_V3_EQUITY_VOLUME_FLOOR:
+  ENABLED: true
+  MIN_QUALITY: 0.15
+# Crypto funding/OI conflict demotion (off until analyze_pair wires context).
+ENGINE_A_V3_CRYPTO_DERIV_GUARD:
+  ENABLED: false
+  REQUIRE_FRESH: true
 # Optional orthogonal subsystem factors for V3 quant scoring (default OFF).
 # When ENABLED, carry/sentiment context entries feed direction/confluence using
 # the hybrid denominator policy from the ablation harness. intermarket/macro/
@@ -161,7 +198,11 @@ ENGINE_A_V3_TREND_HEALTH:
 # / D1 bias; swing = H4 entry / D1 bias (per horizon).
 # Tunable live with no code change, e.g.:
 #   crypto_btc: { trend: 0.40, momentum: 0.25, location: 0.15, volume: 0.20 }
-ENGINE_A_QUANT_WEIGHTS_BY_GROUP: {}
+ENGINE_A_QUANT_WEIGHTS_BY_GROUP:
+  us_indices_trackers: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
+  eu_indices: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
+  asian_indices: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
+  forex_exotics: { trend: 0.40, momentum: 0.26, location: 0.22, volume: 0.12 }
 
 # Per-TF candle freshness diagnostic (stalenessSeverity, bucketLag, etc.).
 # Always populated for production visibility (unlike candleMeta which is debug-only).
@@ -2007,8 +2048,8 @@ SIGNAL_MAX_AGE_SEC: 300       # 5 min freshness window
 # is true. Defaults are deliberately disabled — flipping this gate is a real
 # behavior change and must be done deliberately per the audit invariants.
 ATR_FRESHNESS:
-  ENABLED: false
-  BLOCK_EXECUTION_ON_STALE_ATR: false
+  ENABLED: true
+  BLOCK_EXECUTION_ON_STALE_ATR: true
   MAX_AGE_SECONDS:
     M1: 180
     M5: 600
@@ -2094,51 +2135,45 @@ DRAWDOWN_STOP_ENABLED: true   # fail-closed for broker-capable execution paths
 # attaches `quoteAgeEval.stale=true` to signals whose live-quote age exceeds
 # the threshold. This is observability ONLY — it does NOT block scoring or
 # execution. All values null by default (gate disabled per asset type).
+# Paper fail-closed live-quote ages (seconds). Scan may still score; risk_engine
+# blocks execution when LIVE_PRICE_BLOCK_EXECUTION is true and quote is stale/unknown.
 LIVE_PRICE_MAX_AGE_SEC:
-  forex: null
-  commodity: null
-  index: null
-  stock: null
-  etf: null
-  crypto: null
+  forex: 60
+  commodity: 60
+  index: 60
+  stock: 90
+  etf: 90
+  crypto: 15
+LIVE_PRICE_BLOCK_EXECUTION: true
+LIVE_PRICE_BLOCK_EXECUTION_ON_UNKNOWN_AGE: true
 
-# ── Broker-side tick age check (Fix #3, default disabled) ───────────────────
+# ── Broker-side tick age check (Fix #3) ─────────────────────────────────────
 # Hard execution guard. When set, mt5_execute / bybit_execute reject the order
 # BEFORE order_send / create_market_order if the broker tick timestamp is older
-# than the limit. Default null = check disabled. Distinct from Fix #1 which
-# inspects the in-memory _live_prices dict; Fix #3 inspects the broker's own
-# tick/ticker response just before submission.
+# than the limit. Distinct from LIVE_PRICE which inspects signal quote age.
 MAX_BROKER_TICK_AGE_SEC:
-  mt5: null
-  bybit: null
+  mt5: 5
+  bybit: 3
 
-# ── Execution-time spread cap (Fix #4, default disabled) ────────────────────
-# Per-asset-type ask-bid spread ceiling as a fraction of mid (e.g. 0.001 = 10
-# bps). When set, mt5_execute / bybit_execute reject the order BEFORE
-# submission if (ask-bid)/mid exceeds the limit. Default null per asset type =
-# disabled. Engine-agnostic: applies uniformly to A/B/C/D.
+# ── Execution-time spread cap (Fix #4) ──────────────────────────────────────
+# Per-asset-type ask-bid spread ceiling as a fraction of mid (e.g. 0.001 = 10 bps).
 MAX_EXECUTION_SPREAD_PCT:
-  forex: null
-  commodity: null
-  index: null
-  stock: null
-  etf: null
-  crypto: null
+  forex: 0.0005
+  commodity: 0.0015
+  index: 0.001
+  stock: 0.002
+  etf: 0.002
+  crypto: 0.002
 
-# ── Signal-to-execution drift cap (GAP-7, default disabled) ─────────────────
+# ── Signal-to-execution drift cap (GAP-7) ───────────────────────────────────
 # Per-asset-type ceiling on |broker_price - signal_price| / signal_price.
-# When set, bybit_execute rejects the order BEFORE submission if drift
-# exceeds the limit (fail-closed). The existing 1% SL/TP rebase still runs
-# below this hard ceiling. Engine-agnostic: applies to any signal routed
-# through bybit_execute. The `providerDrift` field is attached to every
-# bybit_execute result regardless of this gate (observability only).
 MAX_SIGNAL_DRIFT_PCT:
-  forex: null
-  commodity: null
-  index: null
-  stock: null
-  etf: null
-  crypto: null
+  forex: 0.0015
+  commodity: 0.003
+  index: 0.002
+  stock: 0.003
+  etf: 0.003
+  crypto: 0.005
 
 DATA_FRESHNESS_GATES:
   WARN_ON_STALE_SCAN: true
@@ -2162,10 +2197,12 @@ SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS: true
 # Engine B forming-bar policy (intentional split — not a bug):
 # - ENGINE_B_STRIP_FORMING_STRUCT: strips the live/forming bar from structure TF candles
 #   (BOS/CHoCH/sequence) via market_structure._engine_b_confirmed_only_struct_candles.
-# - ENGINE_B_USE_FORMING_FOR_TRIGGER: when true, include the live forming bar in trigger/
-#   follow-through candle series passed to calculate_confidence (default true). Trigger pattern
+# - ENGINE_B_USE_FORMING_FOR_TRIGGER: when true, include the live forming bar in trigger
+#   candle series passed to calculate_confidence (default true). Trigger pattern
 #   detection inside analyze_structure remains confirmed-bar only. Gate current_price always
 #   uses the structure entry close (engine_b_gate_current_price) — same basis as full scan.
+# - ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY: when true, follow-through/trap scoring drops the
+#   newest (forming) bar even if trigger series includes it — confirmed-only FT policy.
 # - ENGINE_B_USE_FORMING_FOR_STRUCTURE: chart-overlay label only (routes_market_data); does NOT
 #   control structure stripping — use ENGINE_B_STRIP_FORMING_STRUCT for that.
 ENGINE_B_STRIP_FORMING_STRUCT: true
@@ -2587,7 +2624,10 @@ ENGINE_B_PROFILE_TRUSTED_SCORE_GROUPS:
   - stock_other
   - smallcap_em_etf
 ENGINE_B_CRYPTO_AGGTRADE_ENABLED: true
+# Default for non-trusted crypto groups (soft penalty). Trusted VP/CVD groups
+# use ENGINE_B_CRYPTO_AGGTRADE_TRUSTED_MODE instead (hard-fail when missing).
 ENGINE_B_CRYPTO_AGGTRADE_MODE: degraded
+ENGINE_B_CRYPTO_AGGTRADE_TRUSTED_MODE: required
 ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY: 0.5
 ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS: true
 ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED: true
@@ -3439,6 +3479,13 @@ NAKED_ENGINE:
   # Set 0.0 to restore legacy body-agnostic engulfing.
   engulfing_min_body_atr_mult: 0.2
 
+  # Sweep / equal-extrema / structural TP distance (ATR multiples; was hardcoded).
+  sweep_wick_atr_mult: 0.3
+  equal_extrema_atr_mult: 0.15
+  structural_tp_min_distance_atr: 0.5
+  # Commodity swing: force require_macro_align (default off — trust style_profiles).
+  commodity_swing_force_macro_align: false
+
   # D1 PD-array conflict penalty (points deducted from score; gate_score unchanged)
   d1_pd_array_penalty: 0.25
 
@@ -3548,17 +3595,23 @@ NAKED_ENGINE:
 
     forex_exotics:
 
-      scalp: {min_room_atr: 0.5}
+      scalp: {min_room_atr: 0.5, min_rr: 1.5}
 
-      intraday: {min_room_atr: 0.85, min_rr: 1.35}
+      intraday: {min_room_atr: 0.85, min_rr: 1.5}
 
-      swing: {min_room_atr: 1.2, min_rr: 1.8}
+      swing: {min_room_atr: 1.2, min_rr: 2.0}
 
     nat_gas:
 
-      intraday: {min_rr: 1.6}
+      intraday: {min_rr: 1.6, min_room_atr: 0.6}
 
-      swing: {min_score: 5.0, min_rr: 2.0}
+      swing: {min_score: 5.0, min_rr: 2.0, min_room_atr: 1.0}
+
+    energy_oil:
+
+      intraday: {min_rr: 1.3, min_room_atr: 0.5}
+
+      swing: {min_rr: 1.8, min_room_atr: 0.8}
 
     crypto_doge:
 
@@ -3768,10 +3821,29 @@ ENGINE_B_CRYPTO_BOS_MIN_BREAK_ATR: 0.10
 # direction for 2-3 bars after BOS/CHoCH/Sweep.
 # +1.5 = strong follow-through | -0.5 = suspected liquidity trap
 ENGINE_B_FOLLOW_THROUGH:
-  ENABLED: false
+  ENABLED: true
   DIAGNOSTICS_ENABLED: true
+  BLOCK_ENTRY_ON_TRAP: true
   MAX_BONUS: 1.5
   MIN_PENALTY: -0.5
+# When trigger series may include a forming bar, evaluate follow-through/trap
+# on confirmed bars only (drop newest bar). Default true — edge protection.
+ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY: true
+
+# Structure gate: when micro+macro both oppose, require MTF BOS (not lone sweep/BOS).
+ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF: true
+# Open-air room (no opposing wall): require H1+H4 trend alignment + BOS.
+ENGINE_B_ROOM_NO_WALL_REQUIRE_MTF: true
+# Macro correlation short history fails closed when macro_required for the group.
+ENGINE_B_MACRO_SHORT_HISTORY_FAIL_CLOSED: true
+ENGINE_B_CHOCH_INVALIDATION_BARS: 5
+# Independent-direction vote threshold (|score_ratio| must exceed this).
+ENGINE_B_INDEPENDENT_DIRECTION_SCORE_THRESHOLD: 0.15
+# Zone peak find_peaks distance by structure TF (was hardcoded 5).
+ENGINE_B_ZONE_PEAK_DISTANCE:
+  H1: 3
+  H4: 5
+  D1: 5
 
 # ── Lower-TF Shadow Diagnostics (Engine B + ASE) ────────────────────────────
 # DIAGNOSTIC ONLY. When enabled, Engine B and ASE report read-only M30/M15/M5

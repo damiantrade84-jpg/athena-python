@@ -1893,6 +1893,52 @@ def test_build_engine_b_prompt_context_from_structure():
     assert eb_ctx["passed"] is True
     assert eb_ctx["nearestResistance"] == 67000.0
     assert eb_ctx["structuralVerdict"] == "CLEAR"
+    assert eb_ctx["available"] is True
+
+
+def test_build_engine_b_prompt_context_unavailable_without_structure():
+    from ai_review.engine_a_context import build_engine_b_prompt_context
+
+    ctx = _engine_a_ctx()
+    ctx["structure_context"] = {}
+    ctx["engine_snapshots"] = {"engineB": {}}
+    eb_ctx = build_engine_b_prompt_context(ctx)
+    assert eb_ctx["available"] is False
+
+
+def test_build_engine_b_prompt_context_includes_ob_fvg_gates():
+    from ai_review.engine_a_context import build_engine_b_prompt_context
+
+    ctx = _engine_a_ctx()
+    ctx["structure_context"] = {
+        "structural_verdict": "CLEAR",
+        "bos_confirmed": True,
+        "ob_at_zone": True,
+        "fvg_overlap": True,
+        "sweep_direction": "LONG",
+        "active_fvgs": [{"midpoint": 65500.0}],
+        "structure_ok": True,
+        "location_ok": True,
+        "entry_ok": True,
+        "room_ok": True,
+        "rr_ok": True,
+        "recommended_stop_loss": 63000.0,
+        "recommended_take_profit": 68000.0,
+        "rr": 1.8,
+    }
+    ctx["engine_snapshots"] = {
+        "engineB": {"score": 4.0, "passed": True, "direction": "LONG"}
+    }
+    eb_ctx = build_engine_b_prompt_context(ctx)
+    assert eb_ctx["available"] is True
+    assert eb_ctx["obAtZone"] is True
+    assert eb_ctx["fvgOverlap"] is True
+    assert eb_ctx["activeFvgCount"] == 1
+    assert eb_ctx["nearestFvgMid"] == 65500.0
+    assert eb_ctx["sweepDirection"] == "LONG"
+    assert eb_ctx["structureOk"] is True
+    assert eb_ctx["executionSl"] == 63000.0
+    assert eb_ctx["rr"] == 1.8
 
 
 def test_default_resolve_pair_unknown_symbol_returns_none(monkeypatch):

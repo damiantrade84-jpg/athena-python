@@ -4736,6 +4736,31 @@ def _build_signal_message(
             for fn, fv in _fs.items():
                 w = _fw.get(fn, "?") if _fw else "?"
                 lines.append(f"    {fn}: {fv if fv is not None else 'None'} [w={w}]")
+        _v3_components = _fd.get("components") if isinstance(_fd.get("components"), dict) else {}
+        if _v3_components:
+            lines.append("  Engine A V3 components (signal/quality/weight/contribution/available):")
+            for _cname, _comp in _v3_components.items():
+                if not isinstance(_comp, dict):
+                    continue
+                lines.append(
+                    f"    {_cname}: signal={_comp.get('signal')} quality={_comp.get('quality')} "
+                    f"weight={_comp.get('weight')} contribution={_comp.get('contribution')} "
+                    f"available={_comp.get('available')}"
+                )
+            lines.append(
+                "  Note: Engine A V3 uses factorScores trend/momentum/location/volume. "
+                "Do not require legacy directionalScore/activeDirectionalFactors unless supplied."
+            )
+        if signal.get("setupId") or signal.get("setup_id") or signal.get("decision"):
+            lines.append(
+                f"  V3 setup/decision: setupId={signal.get('setupId') or signal.get('setup_id')} "
+                f"decision={signal.get('decision')} qualified={signal.get('qualified')}"
+            )
+        if signal.get("confluenceScore") is not None or signal.get("confluenceThreshold") is not None:
+            lines.append(
+                f"  V3 confluence: score={signal.get('confluenceScore')} "
+                f"threshold={signal.get('confluenceThreshold') or signal.get('threshold')}"
+            )
         if _fd.get("directionalScore") is not None:
             lines.append(f"  Directional score (weighted): {_fd['directionalScore']:.4f}")
         if _fd.get("nondirectionalScore") is not None:
@@ -6420,6 +6445,12 @@ def api_analyze():
                     "disabled": sig.get("disabledFactors"),
                     "regime": sig.get("regimeName"),
                 }
+                try:
+                    from marcus_review import resolve_marcus_engine_source
+
+                    _audit_engine = resolve_marcus_engine_source(sig)
+                except Exception:
+                    _audit_engine = "engine_a"
                 _con.execute(
                     "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
                     "asset_class,score_pct,max_score,votes_json,warnings_json,"
@@ -6430,7 +6461,7 @@ def api_analyze():
                         datetime.now(timezone.utc).isoformat(),
                         sig.get("pair"),
                         sig.get("confluenceScore"),
-                        "engine_a",
+                        _audit_engine,
                         sig.get("direction"),
                         sig.get("trendState"),
                         result.get("grade"),
@@ -13896,13 +13927,18 @@ def _attach_v3_intermarket_confirmation(
     intermarket_snapshot: dict | None,
 ) -> dict:
     """Attach intermarket confirmation and optional score delta to an Engine A v3 signal."""
+    from athena_app.services.engine_a_direction import apply_direction_conflict_to_result
+    from athena_app.services.engine_a_v3_classify import retier_v3_after_score_adjust
+
     if not intermarket_snapshot or not isinstance(intermarket_snapshot, dict):
+        apply_direction_conflict_to_result(signal)
         return signal
     try:
         from intermarket import apply_confirmation_to_score, build_symbol_context
 
         ctx = build_symbol_context(pair, intermarket_snapshot, config=CONFIG)
         if not ctx:
+            apply_direction_conflict_to_result(signal)
             return signal
 
         direction = signal.get("direction")
@@ -13918,6 +13954,7 @@ def _attach_v3_intermarket_confirmation(
                 "engineADelta": 0.0,
             }
             signal["intermarketEngineADelta"] = 0.0
+            apply_direction_conflict_to_result(signal)
             return signal
 
         base_score = float(signal.get("confluenceScore") or signal.get("score") or 0.0)
@@ -13948,12 +13985,28 @@ def _attach_v3_intermarket_confirmation(
                         signal["scoreNorm"] = round(min(1.0, adjusted / _max), 6)
                 except (TypeError, ValueError):
                     pass
+            retier_v3_after_score_adjust(signal)
     except Exception as exc:
         log.warning(
             "[ANALYZE] %s intermarket confirmation skipped: %s",
             pair.get("display", "?"),
             exc,
         )
+    apply_direction_conflict_to_result(
+        signal,
+        intermarket_confirmation=signal.get("intermarketConfirmation"),
+        btc_bias=signal.get("btcBias") or signal.get("btc_bias"),
+        btc_correlation=signal.get("btcCorrelation") or signal.get("btc_correlation"),
+        btc_mult=signal.get("btc_bias_applied") or signal.get("btcBiasApplied"),
+    )
+    if signal.get("directionConflicted") is True and str(signal.get("decision") or "").upper() == "TRADE":
+        signal["decision"] = "WATCH"
+        signal["qualified"] = False
+        signal["trade"] = False
+        signal["executable"] = False
+        reasons = list(signal.get("rejectionReasons") or [])
+        reasons.append("direction_conflicted")
+        signal["rejectionReasons"] = list(dict.fromkeys(reasons))
     return signal
 
 

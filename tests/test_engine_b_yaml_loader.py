@@ -64,6 +64,7 @@ def test_translate_engine_b_yaml_maps_schema_to_runtime_config():
     assert out["ENGINE_B_REGIME_MULTIPLIERS"]["RANGING"] == pytest.approx(1.10)
     assert out["ENGINE_B_REGIME_MULTIPLIERS_ENABLED"] is True
     assert out["ENGINE_B_CRYPTO_AGGTRADE_MODE"] == "degraded"
+    assert out["ENGINE_B_CRYPTO_AGGTRADE_TRUSTED_MODE"] == "required"
     assert out["ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY"] == pytest.approx(0.5)
     assert out["ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED"] is False
     assert out["ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR"] == pytest.approx(0.5)

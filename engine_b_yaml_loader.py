@@ -108,6 +108,16 @@ def translate_engine_b_config(doc: dict[str, Any]) -> dict[str, Any]:
     mode = str(agg.get("mode") or "").strip().lower()
     if mode not in _AGGTRADE_MODES:
         raise ValueError("crypto_aggtrade.mode must be required, preferred, or degraded")
+    trusted_mode_raw = agg.get("trusted_mode")
+    trusted_mode = (
+        str(trusted_mode_raw or "required").strip().lower()
+        if trusted_mode_raw is not None
+        else "required"
+    )
+    if trusted_mode not in _AGGTRADE_MODES:
+        raise ValueError(
+            "crypto_aggtrade.trusted_mode must be required, preferred, or degraded"
+        )
 
     space = _as_mapping(root.get("space_gate"), "space_gate")
     execution = _as_mapping(root.get("execution_levels"), "execution_levels")
@@ -147,6 +157,7 @@ def translate_engine_b_config(doc: dict[str, Any]) -> dict[str, Any]:
         "ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED": True,
         "ENGINE_B_STYLE_MIN_SCORE_BY_STYLE": style_min_scores,
         "ENGINE_B_CRYPTO_AGGTRADE_MODE": mode,
+        "ENGINE_B_CRYPTO_AGGTRADE_TRUSTED_MODE": trusted_mode,
         "ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED": True,
         "ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY": _float(
             agg.get("missing_penalty"), "crypto_aggtrade.missing_penalty", min_value=0.0

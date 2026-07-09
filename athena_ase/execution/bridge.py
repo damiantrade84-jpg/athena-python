@@ -146,10 +146,16 @@ def _ptis_freshness_evidence(
         severity = str(diag.get("stalenessSeverity") or "")
         if severity == "fresh":
             exec_dict["candleConsistency"] = {tf: {"status": "OK"}}
-        elif severity == "stale_1_bucket":
+            return True, severity
+        if severity == "stale_1_bucket":
             # PTIS stores confirmed bars only; one-bucket lag is the intended policy.
             exec_dict["candleConsistency"] = {tf: {"status": "CONFIRMED_ONLY_OK"}}
-        return True, severity or "unclassified"
+            return True, severity
+        # Multi-bucket / missing / error severities fail closed — no trade bridge.
+        exec_dict["candleConsistency"] = {
+            tf: {"status": "ERROR_STALE", "severity": severity or "unclassified"}
+        }
+        return False, f"stale_ptis:{severity or 'unclassified'}"
     except Exception as exc:
         log.warning("ASE freshness evidence failed for %s: %s", signal.instrument, exc)
         return False, f"evidence_error:{exc}"

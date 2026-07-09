@@ -36,6 +36,8 @@ def test_build_engine_b_signal_message_uses_gate_pct_for_confidence():
 
     assert "Confidence: 5.00 / 5 (100% gates)" in message
     assert "Quality score (bonuses/penalties): 5.75 / 11.5" in message
+    assert "ATHENA TRADE PLAYBOOKS" in message
+    assert "ORDER_BLOCK_REJECTION" in message or "Engine B Structure" in message
 
 
 def test_get_engine_b_ai_verdict_empty_payload_returns_error(monkeypatch):

@@ -1515,37 +1515,9 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
         str(signal.get("engine") or "").upper() == "ENGINE_A_V3"
         and str(signal.get("contractVersion") or "").startswith("3.")
     ):
-        decision = str(signal.get("decision") or "NO_SIGNAL").upper()
-        reasons = [str(value) for value in signal.get("rejectionReasons") or [] if value]
-        reason = "; ".join(dict.fromkeys(reasons))
-        if decision == "NO_SIGNAL":
-            return "skip", reason or "V3 specialist returned NO_SIGNAL"
-        if decision == "WATCH":
-            return "watchlist", reason or "V3 specialist is awaiting confirmation"
-        if decision != "TRADE" or signal.get("qualified") is not True:
-            return "skip", reason or "V3 signal is not trade-qualified"
-        if signal.get("engineATradeEnabled") is not True:
-            return "watchlist", reason or "V3 execution eligibility is disabled"
-        if not pair.get("enabled", True):
-            return "watchlist", reason or "Pair is disabled"
-        if signal.get("exchangeClosed"):
-            return "watchlist", reason or "Exchange closed"
-        if bool(CONFIG.get("ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", False)):
-            min_conf = get_min_confidence_threshold(pair)
-            conf = _signal_confidence_for_gate(signal)
-            if conf is None:
-                conf_raw = signal.get("scoreNorm")
-                try:
-                    conf = float(conf_raw) if conf_raw is not None else None
-                except (TypeError, ValueError):
-                    conf = None
-            if conf is not None and conf < min_conf:
-                score_group = get_pair_score_group(pair)
-                return (
-                    "watchlist",
-                    f"Engine A confidence {conf:.2f} below {score_group} minimum {min_conf:.2f}",
-                )
-        return "trade", "V3 specialist trade-qualified"
+        from athena_app.services.engine_a_v3_classify import classify_engine_a_v3_signal
+
+        return classify_engine_a_v3_signal(signal, pair)
 
     threshold = signal.get("scanThreshold", get_min_confluence_threshold(pair))
     score = signal.get("confluenceScore", 0)

@@ -268,6 +268,17 @@ def build_engine_b_signal_message(
     except Exception:
         pass
 
+    # Engine B playbook (B-only) — parity with chart/Marcus injection surfaces.
+    try:
+        from ai_playbooks import get_engine_b_playbook, render_playbook_prompt_block
+
+        _pb = render_playbook_prompt_block([get_engine_b_playbook()], compact=True)
+        if _pb:
+            lines.append(_pb)
+            lines.append("")
+    except Exception:
+        pass
+
     # === ENGINE A CROSS-CHECK (only when compare mode) ===
     if engine_a_ctx and isinstance(engine_a_ctx, dict):
         a_dir = engine_a_ctx.get("direction", "?")

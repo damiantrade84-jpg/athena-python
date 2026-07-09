@@ -43,17 +43,31 @@ def build_structural_levels(
     *,
     direction: str,
     atr_pct: float | None = None,
+    atr_period: int = 14,
 ) -> StructuralLevels | None:
     if len(primary) < 20 or direction not in {"LONG", "SHORT"}:
         return None
     current = float(primary[-1]["close"])
-    atr = atr_for_levels(primary)
+    atr = atr_for_levels(primary, atr_period)
     if current <= 0 or atr <= 0:
         return None
+    floor_mult = 0.35
+    try:
+        from config import CONFIG
+
+        if bool(CONFIG.get("ENGINE_A_STRUCTURAL_SL_FLOOR_ATR", True)):
+            floor_mult = float(CONFIG.get("ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT", 0.35) or 0.35)
+        else:
+            floor_mult = 0.0
+    except Exception:
+        floor_mult = 0.35
     recent = primary[-20:]
     if direction == "LONG":
         structural = min(float(candle["low"]) for candle in recent)
         invalidation = min(structural, current - 0.8 * atr)
+        if floor_mult > 0:
+            floor_stop = current - floor_mult * atr
+            invalidation = min(invalidation, floor_stop)
         if invalidation >= current:
             return None
         risk = current - invalidation
@@ -65,6 +79,9 @@ def build_structural_levels(
     else:
         structural = max(float(candle["high"]) for candle in recent)
         invalidation = max(structural, current + 0.8 * atr)
+        if floor_mult > 0:
+            floor_stop = current + floor_mult * atr
+            invalidation = max(invalidation, floor_stop)
         if invalidation <= current:
             return None
         risk = invalidation - current
@@ -88,9 +105,11 @@ def build_mean_reversion_levels(
     swing_lookback: int = 6,
     sl_buffer_atr: float = 0.5,
     min_rr: float = 1.0,
+    atr_period: int = 14,
+    ema_period: int = 20,
 ) -> StructuralLevels | None:
     """Range-fade levels: stop just beyond the LOCAL swing being faded, target back
-    at the EMA20 mean (TP2). Opposite geometry to build_structural_levels — reward
+    at the EMA mean (TP2). Opposite geometry to build_structural_levels — reward
     shrinks toward the mean. Returns None if the resulting reward:risk to the mean
     is below min_rr (degenerate fade — skip rather than take poor geometry).
     """
@@ -98,10 +117,10 @@ def build_mean_reversion_levels(
         return None
     closes = [float(candle["close"]) for candle in primary]
     current = closes[-1]
-    atr = atr_for_levels(primary)
+    atr = atr_for_levels(primary, atr_period)
     if current <= 0 or atr <= 0:
         return None
-    mean = _ema(closes, 20)[-1]
+    mean = _ema(closes, ema_period)[-1]
     recent = primary[-swing_lookback:]
     if direction == "SHORT":
         extreme = max(float(candle["high"]) for candle in recent)

@@ -46,6 +46,7 @@ def test_evaluate_live_quote_age_flags_stale_when_over_threshold():
     assert result["thresholdSec"] == 30.0
     assert result["ageSec"] == 45.0
     assert result["reason"] == "STALE"
+    assert result["would_block"] is False  # block flag off by default
 
 
 def test_evaluate_live_quote_age_fresh_when_under_threshold():
@@ -56,9 +57,10 @@ def test_evaluate_live_quote_age_fresh_when_under_threshold():
     assert result["enabled"] is True
     assert result["stale"] is False
     assert result["reason"] == "FRESH"
+    assert result["would_block"] is False
 
 
-def test_evaluate_live_quote_age_unknown_age_does_not_block():
+def test_evaluate_live_quote_age_unknown_age_does_not_block_without_flag():
     from athena_app.services.data_freshness import evaluate_live_quote_age
 
     config = {"LIVE_PRICE_MAX_AGE_SEC": {"forex": 30}}
@@ -66,6 +68,32 @@ def test_evaluate_live_quote_age_unknown_age_does_not_block():
     assert result["enabled"] is True
     assert result["stale"] is False
     assert result["reason"] == "AGE_UNKNOWN"
+    assert result["would_block"] is False
+
+
+def test_evaluate_live_quote_age_would_block_when_stale_and_block_enabled():
+    from athena_app.services.data_freshness import evaluate_live_quote_age
+
+    config = {
+        "LIVE_PRICE_MAX_AGE_SEC": {"crypto": 15},
+        "LIVE_PRICE_BLOCK_EXECUTION": True,
+    }
+    result = evaluate_live_quote_age({"type": "crypto"}, 45.0, config)
+    assert result["stale"] is True
+    assert result["would_block"] is True
+
+
+def test_evaluate_live_quote_age_would_block_unknown_when_configured():
+    from athena_app.services.data_freshness import evaluate_live_quote_age
+
+    config = {
+        "LIVE_PRICE_MAX_AGE_SEC": {"forex": 60},
+        "LIVE_PRICE_BLOCK_EXECUTION": True,
+        "LIVE_PRICE_BLOCK_EXECUTION_ON_UNKNOWN_AGE": True,
+    }
+    result = evaluate_live_quote_age({"type": "forex"}, None, config)
+    assert result["reason"] == "AGE_UNKNOWN"
+    assert result["would_block"] is True
 
 
 # ─── Fix #3 + Fix #4 (MT5 helpers) ──────────────────────────────────────────

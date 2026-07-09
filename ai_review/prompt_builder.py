@@ -81,8 +81,8 @@ def _build_engine_a_chart_review_prompt(context: dict[str, Any]) -> str:
     macro_block = render_macro_prompt_block(context.get("symbol"), context.get("asset_class"))
 
     playbooks = [get_engine_a_playbook()]
-    has_engine_b = bool(engine_b_context and engine_b_context.get("available") is not False)
-    if has_engine_b or engine_b_context:
+    # Only inject Engine B playbook when real structure context is available.
+    if isinstance(engine_b_context, dict) and engine_b_context.get("available") is True:
         playbooks.append(get_engine_b_playbook())
     playbook_block = render_playbook_prompt_block(playbooks, compact=True)
     trade_skill_schema = render_trade_skill_prompt_schema("engine_a_chart")

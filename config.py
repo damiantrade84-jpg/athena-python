@@ -1352,6 +1352,7 @@ CONFIG: dict = {
     "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK": False,
     "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED": False,
     "ENGINE_B_CRYPTO_AGGTRADE_MODE": "degraded",
+    "ENGINE_B_CRYPTO_AGGTRADE_TRUSTED_MODE": "required",
     "ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY": 0.5,
     "ENGINE_B_SWEEP_LOOKBACK_BARS": 5,
     # Defaults True: synthetic-RR TP fallback rescues otherwise-valid Engine B
@@ -1869,12 +1870,40 @@ CONFIG: dict = {
     "ENGINE_A_V3_FOREX_THESIS": "trend",
     "ENGINE_A_V3_SETUP_UPGRADE": {
         "ENABLED": True,
-        "MIN_CONFLUENCE_FRAC": 0.5,
+        "MIN_CONFLUENCE_FRAC": 0.75,
     },
     "ENGINE_A_V3_MEAN_REVERSION": {
         "Z_ENTRY": 1.5,
         "EFF_MAX": 0.35,
         "LOOKBACK": 20,
+    },
+    "ENGINE_A_V3_DIRECTIONAL_RAMP": {
+        "ENABLED": True,
+        "APPLY_TO_CONFLUENCE": True,
+    },
+    "ENGINE_A_V3_QUANT_SESSION_GATE": {
+        "ENABLED": True,
+        "MIN_SCORE": 0.40,
+    },
+    "ENGINE_A_V3_MR_OPPOSITION_GUARD": {
+        "ENABLED": True,
+        "MIN_OPPOSE_QUALITY": 0.55,
+    },
+    "ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT": 0.35,
+    "ENGINE_A_V3_LEGACY_FILTERS": {
+        "ENABLED": True,
+        "FOREX_EMA_CLUSTER": True,
+        "CRYPTO_LATE_TREND": True,
+        "BLOCKED_TREND_STATES": True,
+    },
+    "ENGINE_A_V3_COMMODITY_SETUP_PARAMS": {},
+    "ENGINE_A_V3_EQUITY_VOLUME_FLOOR": {
+        "ENABLED": True,
+        "MIN_QUALITY": 0.15,
+    },
+    "ENGINE_A_V3_CRYPTO_DERIV_GUARD": {
+        "ENABLED": False,
+        "REQUIRE_FRESH": True,
     },
     "ENGINE_A_V3_SUBSYSTEMS": {
         "ENABLED": True,
@@ -2192,6 +2221,46 @@ CONFIG: dict = {
             "error_offset_mismatch",
         ],
     },
+    # Paper fail-closed live-quote / broker-tick / ATR / spread-drift gates.
+    "LIVE_PRICE_MAX_AGE_SEC": {
+        "forex": 60,
+        "commodity": 60,
+        "index": 60,
+        "stock": 90,
+        "etf": 90,
+        "crypto": 15,
+    },
+    "LIVE_PRICE_BLOCK_EXECUTION": True,
+    "LIVE_PRICE_BLOCK_EXECUTION_ON_UNKNOWN_AGE": True,
+    "MAX_BROKER_TICK_AGE_SEC": {"mt5": 5, "bybit": 3},
+    "MAX_EXECUTION_SPREAD_PCT": {
+        "forex": 0.0005,
+        "commodity": 0.0015,
+        "index": 0.001,
+        "stock": 0.002,
+        "etf": 0.002,
+        "crypto": 0.002,
+    },
+    "MAX_SIGNAL_DRIFT_PCT": {
+        "forex": 0.0015,
+        "commodity": 0.003,
+        "index": 0.002,
+        "stock": 0.003,
+        "etf": 0.003,
+        "crypto": 0.005,
+    },
+    "ATR_FRESHNESS": {
+        "ENABLED": True,
+        "BLOCK_EXECUTION_ON_STALE_ATR": True,
+        "MAX_AGE_SECONDS": {
+            "M1": 180,
+            "M5": 600,
+            "M15": 1800,
+            "H1": 7200,
+            "H4": 18000,
+            "D1": 172800,
+        },
+    },
     "DRAWDOWN_REDUCE_THRESHOLD": 0.10,  # At 10% drawdown, halve position sizes
     "DRAWDOWN_STOP_THRESHOLD": 0.15,  # At 15% drawdown, reject ALL new trades
     "DRAWDOWN_STOP_ENABLED": True,  # Set false only for paper/debug — disables stop + size reduction
@@ -2312,6 +2381,24 @@ CONFIG: dict = {
     # Block emit when independent structural opinion strongly opposes chosen side.
     "ENGINE_B_DIRECTION_INDEPENDENT_CONFLICT_GUARD_ENABLED": True,
     "ENGINE_B_DIRECTION_INDEPENDENT_CONFLICT_MIN_CONFIDENCE": "HIGH",
+    "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF": True,
+    "ENGINE_B_ROOM_NO_WALL_REQUIRE_MTF": True,
+    "ENGINE_B_MACRO_SHORT_HISTORY_FAIL_CLOSED": True,
+    "ENGINE_B_CHOCH_INVALIDATION_BARS": 5,
+    "ENGINE_B_INDEPENDENT_DIRECTION_SCORE_THRESHOLD": 0.15,
+    "ENGINE_B_FOLLOW_THROUGH": {
+        "ENABLED": True,
+        "DIAGNOSTICS_ENABLED": True,
+        "BLOCK_ENTRY_ON_TRAP": True,
+        "MAX_BONUS": 1.5,
+        "MIN_PENALTY": -0.5,
+    },
+    "ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY": True,
+    "ENGINE_B_ZONE_PEAK_DISTANCE": {
+        "H1": 3,
+        "H4": 5,
+        "D1": 5,
+    },
     # Scan-only: surface passed B-only structures as watchlist rows when A is
     # below its scan threshold. This does not grant execution permission.
     "ENGINE_B_SCAN_B_ONLY_WATCHLIST_ENABLED": False,
@@ -2363,7 +2450,7 @@ CONFIG: dict = {
         "ENABLED": False,
         "BONUS": 0.03,
     },
-    "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED": False,
+    "ENGINE_B_CRYPTO_VOLATILITY_ADJUSTMENT_ENABLED": True,
     "ENGINE_B_CRYPTO_STRUCTURE_MULT": 1.25,
     "ENGINE_B_CRYPTO_BOS_MIN_BREAK_ATR": 0.10,
     # ── Engine B (Naked Scalp) ────────────────────────────────────────────────
@@ -2378,6 +2465,10 @@ CONFIG: dict = {
         "structural_tp_buffer_atr_mult": 0.25,
         "d1_pd_array_conflict_window_atr_mult": 3.0,
         "rejection_wick_body_ratio": 1.2,
+        "sweep_wick_atr_mult": 0.3,
+        "equal_extrema_atr_mult": 0.15,
+        "structural_tp_min_distance_atr": 0.5,
+        "commodity_swing_force_macro_align": False,
         "style_profiles": {
             "scalp": {
                 "min_score": 4.0,
@@ -2410,14 +2501,18 @@ CONFIG: dict = {
                 "swing": {"min_rr": 1.8},
             },
             "forex_exotics": {
-                "scalp": {"min_room_atr": 0.5},
-                "intraday": {"min_room_atr": 0.85, "min_rr": 1.35},
-                "swing": {"min_room_atr": 1.2, "min_rr": 1.8},
+                "scalp": {"min_room_atr": 0.5, "min_rr": 1.5},
+                "intraday": {"min_room_atr": 0.85, "min_rr": 1.5},
+                "swing": {"min_room_atr": 1.2, "min_rr": 2.0},
             },
             "nat_gas": {
                 "scalp": {"min_score": 4.0},
-                "intraday": {"min_score": 4.5, "min_rr": 1.6},
-                "swing": {"min_score": 5.0, "min_rr": 2.0},
+                "intraday": {"min_score": 4.5, "min_rr": 1.6, "min_room_atr": 0.6},
+                "swing": {"min_score": 5.0, "min_rr": 2.0, "min_room_atr": 1.0},
+            },
+            "energy_oil": {
+                "intraday": {"min_rr": 1.3, "min_room_atr": 0.5},
+                "swing": {"min_rr": 1.8, "min_room_atr": 0.8},
             },
             "crypto_doge": {
                 "scalp": {"min_score": 4.0, "min_room_atr": 0.5},
@@ -2430,7 +2525,7 @@ CONFIG: dict = {
         "TRENDING": 0.95,
         "RANGING": 1.10,
         "HIGH_VOLATILITY": 1.10,
-        "LOW_VOLATILITY": 0.90,
+        "LOW_VOLATILITY": 1.0,
     },
     # True: regime adjusts Engine B min_score via ENGINE_B_REGIME_MULTIPLIERS.
     # False: min_score stays at style profile base (multiplier forced to 1.0).
@@ -2817,11 +2912,20 @@ def validate_config(cfg: dict) -> None:
         return
     aggtrade_required = bool(cfg.get("ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", False))
     aggtrade_mode = str(cfg.get("ENGINE_B_CRYPTO_AGGTRADE_MODE", "degraded") or "degraded").lower()
-    if aggtrade_required and aggtrade_mode != "required":
+    aggtrade_trusted_mode = str(
+        cfg.get("ENGINE_B_CRYPTO_AGGTRADE_TRUSTED_MODE", "required") or "required"
+    ).lower()
+    if (
+        aggtrade_required
+        and aggtrade_mode != "required"
+        and aggtrade_trusted_mode != "required"
+    ):
         log.warning(
             "[CFG] ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS is true but "
-            "ENGINE_B_CRYPTO_AGGTRADE_MODE=%r — aggtrade will not hard-block passes",
+            "ENGINE_B_CRYPTO_AGGTRADE_MODE=%r and TRUSTED_MODE=%r — "
+            "aggtrade will not hard-block passes",
             aggtrade_mode,
+            aggtrade_trusted_mode,
         )
     for profile_name, profile in pair_profiles.items():
         if not isinstance(profile, dict):

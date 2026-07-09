@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from statistics import fmean
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from engine_a_v3.contract import PredicateResult
 from engine_a_v3.routing import SpecialistRoute
@@ -26,6 +26,28 @@ class SetupCandidate:
     level_style: str = "trend"  # "trend" | "mean_reversion" | "london_open"
 
 
+@dataclass(frozen=True)
+class SetupPeriods:
+    """Group-resolved indicator periods shared with the quant scorer."""
+
+    ema_trend: int = 21
+    ema_momentum: int = 50
+    atr: int = 14
+
+    @classmethod
+    def from_mapping(cls, periods: Mapping[str, Any] | None) -> "SetupPeriods":
+        if not periods:
+            return cls()
+        try:
+            return cls(
+                ema_trend=int(periods.get("ema_trend", 21) or 21),
+                ema_momentum=int(periods.get("ema_momentum", 50) or 50),
+                atr=int(periods.get("atr", 14) or 14),
+            )
+        except (TypeError, ValueError):
+            return cls()
+
+
 def _ema(values: Iterable[float], period: int) -> list[float]:
     rows = [float(value) for value in values]
     if not rows:
@@ -38,15 +60,61 @@ def _ema(values: Iterable[float], period: int) -> list[float]:
 
 
 def _atr(candles: list[dict], period: int = 14) -> float:
-    if len(candles) < 2:
+    """Wilder ATR (same algorithm as indicators.calc_atr) — last valid value."""
+    if len(candles) < 2 or period <= 0:
         return 0.0
-    trs = []
-    for previous, current in zip(candles[:-1], candles[1:]):
-        high = float(current["high"])
-        low = float(current["low"])
-        prev_close = float(previous["close"])
-        trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
-    return fmean(trs[-period:]) if trs else 0.0
+    highs = [float(c["high"]) for c in candles]
+    lows = [float(c["low"]) for c in candles]
+    closes = [float(c["close"]) for c in candles]
+    from indicators import calc_atr
+
+    series = calc_atr(highs, lows, closes, period)
+    for value in reversed(series):
+        if value is not None:
+            try:
+                out = float(value)
+            except (TypeError, ValueError):
+                continue
+            if out == out and out > 0:  # not NaN
+                return out
+    return 0.0
+
+
+def _resolve_setup_candle_frames(
+    route: SpecialistRoute,
+    horizon: str,
+    candles: dict[str, list[dict]],
+) -> tuple[list[dict], list[dict], str, str]:
+    """Primary/context frames aligned with quant entry TF (execution_tf overrides)."""
+    from engine_a_v3.quant_scorer import _resolve_v3_entry_tf
+
+    asset_type = (
+        "forex"
+        if route.family == "forex"
+        else "crypto"
+        if route.family == "crypto"
+        else "commodity"
+        if route.family == "commodity"
+        else "index"
+        if route.family == "index"
+        else "stock"
+        if route.family == "equity_etf"
+        else "other"
+    )
+    primary_tf = _resolve_v3_entry_tf(route.score_group, asset_type, horizon)
+    if primary_tf == "H1":
+        context_tf = "H4"
+    elif primary_tf == "H4":
+        context_tf = "D1"
+    elif primary_tf == "D1":
+        context_tf = "D1"
+    else:
+        # Fallback for unexpected overrides: keep classic horizon pairing.
+        primary_tf = "H1" if horizon == "intraday" else "H4"
+        context_tf = "H4" if horizon == "intraday" else "D1"
+    primary = candles.get(primary_tf) or candles.get("H4") or candles.get("H1") or []
+    context = candles.get(context_tf) or candles.get("D1") or primary
+    return primary, context, primary_tf, context_tf
 
 
 def _predicate(name: str, passed: bool, actual, expected: str) -> PredicateResult:
@@ -114,20 +182,36 @@ def _with_session_gate(
     )
 
 
-def _trend_direction(context: list[dict]) -> tuple[str | None, tuple[PredicateResult, ...]]:
+def _trend_direction(
+    context: list[dict],
+    *,
+    periods: SetupPeriods | None = None,
+) -> tuple[str | None, tuple[PredicateResult, ...]]:
+    periods = periods or SetupPeriods()
     closes = [float(candle["close"]) for candle in context]
-    if len(closes) < 60:
+    need = max(60, periods.ema_momentum + 10)
+    if len(closes) < need:
         return None, (
-            _predicate("context_history", False, len(closes), "at least 60 bars"),
+            _predicate("context_history", False, len(closes), f"at least {need} bars"),
         )
-    ema20 = _ema(closes, 20)
-    ema50 = _ema(closes, 50)
-    long_ok = ema20[-1] > ema50[-1] and closes[-1] > ema20[-1]
-    short_ok = ema20[-1] < ema50[-1] and closes[-1] < ema20[-1]
+    ema_fast = _ema(closes, periods.ema_trend)
+    ema_slow = _ema(closes, periods.ema_momentum)
+    long_ok = ema_fast[-1] > ema_slow[-1] and closes[-1] > ema_fast[-1]
+    short_ok = ema_fast[-1] < ema_slow[-1] and closes[-1] < ema_fast[-1]
     direction = "LONG" if long_ok else "SHORT" if short_ok else None
     return direction, (
-        _predicate("context_trend_long", long_ok, round(ema20[-1] - ema50[-1], 8), "> 0"),
-        _predicate("context_trend_short", short_ok, round(ema20[-1] - ema50[-1], 8), "< 0"),
+        _predicate(
+            "context_trend_long",
+            long_ok,
+            round(ema_fast[-1] - ema_slow[-1], 8),
+            "> 0",
+        ),
+        _predicate(
+            "context_trend_short",
+            short_ok,
+            round(ema_fast[-1] - ema_slow[-1], 8),
+            "< 0",
+        ),
     )
 
 
@@ -138,18 +222,20 @@ def _pullback_candidate(
     *,
     touch_distance_atr: float = 0.35,
     max_extension_atr: float = 1.25,
+    periods: SetupPeriods | None = None,
 ) -> SetupCandidate:
-    direction, context_predicates = _trend_direction(context)
+    periods = periods or SetupPeriods()
+    direction, context_predicates = _trend_direction(context, periods=periods)
     closes = [float(candle["close"]) for candle in primary]
-    ema20 = _ema(closes, 20)
-    atr = _atr(primary)
+    ema_fast = _ema(closes, periods.ema_trend)
+    atr = _atr(primary, periods.atr)
     if direction is None or len(primary) < 60 or atr <= 0:
         reasons = ["trend_context_not_directional"] if direction is None else ["insufficient_primary_history"]
         return SetupCandidate(setup_id, "NO_SIGNAL", direction, context_predicates, tuple(reasons))
 
     previous = primary[-2]
     current = primary[-1]
-    ema_now = ema20[-1]
+    ema_now = ema_fast[-1]
     touched = (
         float(previous["low"]) <= ema_now + touch_distance_atr * atr
         if direction == "LONG"
@@ -166,7 +252,7 @@ def _pullback_candidate(
             "pullback_touched_ema20",
             touched,
             previous["low"] if direction == "LONG" else previous["high"],
-            f"touch EMA20 within {touch_distance_atr:.2f} ATR",
+            f"touch EMA{periods.ema_trend} within {touch_distance_atr:.2f} ATR",
         ),
         _predicate("confirmation_close", confirmed, current["close"], f"{direction} confirmation"),
         _predicate(
@@ -197,8 +283,10 @@ def _breakout_retest_candidate(
     *,
     require_contraction: bool,
     lookback: int = 20,
+    periods: SetupPeriods | None = None,
 ) -> SetupCandidate:
-    direction, context_predicates = _trend_direction(context)
+    periods = periods or SetupPeriods()
+    direction, context_predicates = _trend_direction(context, periods=periods)
     if direction is None or len(primary) < 60:
         return SetupCandidate(
             setup_id,
@@ -263,8 +351,11 @@ def _opening_range_gap_candidate(
     primary: list[dict],
     context: list[dict],
     route: SpecialistRoute,
+    *,
+    periods: SetupPeriods | None = None,
 ) -> SetupCandidate:
-    direction, context_predicates = _trend_direction(context)
+    periods = periods or SetupPeriods()
+    direction, context_predicates = _trend_direction(context, periods=periods)
     start_hour, end_hour, label = _session_window(route)
     current_time = _parse_time(primary[-1].get("time") or primary[-1].get("datetime"))
     session_rows: list[tuple[datetime, dict]] = []
@@ -308,7 +399,7 @@ def _opening_range_gap_candidate(
             ("prior_session_close_missing",),
         )
 
-    atr = _atr(primary)
+    atr = _atr(primary, periods.atr)
     opening_high = max(float(candle["high"]) for _, candle in opening_rows)
     opening_low = min(float(candle["low"]) for _, candle in opening_rows)
     first_open = float(opening_rows[0][1]["open"])
@@ -431,11 +522,13 @@ def _mean_reversion_candidate(
     z_entry: float = 1.5,
     eff_max: float = 0.35,
     lookback: int = 20,
+    periods: SetupPeriods | None = None,
 ) -> SetupCandidate:
     """Range-fade specialist: in a ranging (low-efficiency) regime, fade a stretch
-    away from the EMA20 mean once the candle turns back toward it. Direction is the
+    away from the EMA mean once the candle turns back toward it. Direction is the
     OPPOSITE of the stretch — counter-trend by design, unlike the trend specialists.
     """
+    periods = periods or SetupPeriods()
     if len(primary) < 60:
         return SetupCandidate(
             setup_id, "NO_SIGNAL", None,
@@ -443,8 +536,8 @@ def _mean_reversion_candidate(
             ("insufficient_primary_history",), "mean_reversion",
         )
     closes = [float(candle["close"]) for candle in primary]
-    ema20 = _ema(closes, 20)
-    atr = _atr(primary)
+    ema_mean = _ema(closes, periods.ema_trend)
+    atr = _atr(primary, periods.atr)
     efficiency, _ = _efficiency_ratio(primary, lookback)
     if atr <= 0:
         return SetupCandidate(
@@ -457,7 +550,7 @@ def _mean_reversion_candidate(
     close = float(current["close"])
     open_ = float(current["open"])
     prev_close = float(previous["close"])
-    mean = ema20[-1]
+    mean = ema_mean[-1]
     z = (close - mean) / atr
     ranging = efficiency <= eff_max
     direction = "SHORT" if z >= z_entry else "LONG" if z <= -z_entry else None
@@ -554,12 +647,39 @@ def _london_open_breakout_candidate(
     return SetupCandidate(setup_id, "NO_SIGNAL", direction, predicates, reasons, "london_open")
 
 
+def _commodity_setup_params(subclass: str) -> tuple[int, float, float]:
+    """Lookback / touch / extension for commodity specialists (config-gated)."""
+    defaults = {
+        "energy_oil": (16, 0.45, 1.35),
+        "nat_gas": (12, 0.60, 1.50),
+        "copper": (20, 0.40, 1.25),
+        "pgm_metals": (24, 0.45, 1.25),
+        "base_metals": (24, 0.40, 1.20),
+        "softs": (18, 0.55, 1.40),
+        "commodity_other": (20, 0.35, 1.25),
+    }
+    lookback, touch, extension = defaults.get(subclass, (20, 0.35, 1.25))
+    try:
+        from config import CONFIG
+
+        keyed = CONFIG.get("ENGINE_A_V3_COMMODITY_SETUP_PARAMS") or {}
+        override = keyed.get(subclass) if isinstance(keyed, dict) else None
+        if isinstance(override, dict):
+            lookback = int(override.get("lookback", lookback) or lookback)
+            touch = float(override.get("touch_distance_atr", touch) or touch)
+            extension = float(override.get("max_extension_atr", extension) or extension)
+    except Exception:
+        pass
+    return lookback, touch, extension
+
+
 def detect_setup(
     route: SpecialistRoute,
     horizon: str,
     candles: dict[str, list[dict]],
     *,
     display: str | None = None,
+    indicator_periods: Mapping[str, Any] | None = None,
 ) -> SetupCandidate:
     if route.family == "unknown":
         return SetupCandidate(
@@ -570,8 +690,14 @@ def detect_setup(
             ("unsupported_specialist",),
         )
 
-    primary = candles["H1"] if horizon == "intraday" else candles["H4"]
-    context = candles["H4"] if horizon == "intraday" else candles["D1"]
+    if indicator_periods is None:
+        from engine_a_v3.profile import _resolved_periods
+
+        indicator_periods = _resolved_periods(route.score_group, route.family)
+    periods = SetupPeriods.from_mapping(indicator_periods)
+    primary, context, _primary_tf, _context_tf = _resolve_setup_candle_frames(
+        route, horizon, candles
+    )
     setup_ids = route.setup_ids(horizon)
 
     if route.family == "forex":
@@ -588,6 +714,7 @@ def detect_setup(
                     z_entry=float(mr.get("Z_ENTRY", 1.5)),
                     eff_max=float(mr.get("EFF_MAX", 0.35)),
                     lookback=int(mr.get("LOOKBACK", 20)),
+                    periods=periods,
                 ),
             )
         elif setup_mode == "london_open":
@@ -600,16 +727,25 @@ def detect_setup(
                         primary,
                         context,
                         require_contraction=False,
+                        periods=periods,
                     ),
                     primary,
                     route,
                 ),
-                _pullback_candidate(setup_ids[-1], primary, context),
+                _pullback_candidate(
+                    setup_ids[-1], primary, context, periods=periods
+                ),
             )
     elif route.family == "crypto":
         candidates = (
-            _breakout_retest_candidate(setup_ids[0], primary, context, require_contraction=True),
-            _pullback_candidate(setup_ids[-1], primary, context),
+            _breakout_retest_candidate(
+                setup_ids[0],
+                primary,
+                context,
+                require_contraction=True,
+                periods=periods,
+            ),
+            _pullback_candidate(setup_ids[-1], primary, context, periods=periods),
         )
     elif route.subclass in {"xau", "precious"}:
         candidates = (
@@ -620,27 +756,18 @@ def detect_setup(
                     context,
                     require_contraction=False,
                     lookback=24,
+                    periods=periods,
                 ),
                 primary,
                 route,
             )
             if horizon == "intraday"
-            else _pullback_candidate(setup_ids[0], primary, context),
+            else _pullback_candidate(
+                setup_ids[0], primary, context, periods=periods
+            ),
         )
     elif route.family == "commodity":
-        parameters = {
-            "energy_oil": (16, 0.45, 1.35),
-            "nat_gas": (12, 0.60, 1.50),
-            "copper": (20, 0.40, 1.25),
-            "pgm_metals": (24, 0.45, 1.25),
-            "base_metals": (24, 0.40, 1.20),
-            "softs": (18, 0.55, 1.40),
-            "commodity_other": (20, 0.35, 1.25),
-        }
-        lookback, touch_distance, max_extension = parameters.get(
-            route.subclass,
-            (20, 0.35, 1.25),
-        )
+        lookback, touch_distance, max_extension = _commodity_setup_params(route.subclass)
         candidates = (
             _breakout_retest_candidate(
                 setup_ids[0],
@@ -648,6 +775,7 @@ def detect_setup(
                 context,
                 require_contraction=False,
                 lookback=lookback,
+                periods=periods,
             )
             if horizon == "intraday"
             else _pullback_candidate(
@@ -656,6 +784,7 @@ def detect_setup(
                 context,
                 touch_distance_atr=touch_distance,
                 max_extension_atr=max_extension,
+                periods=periods,
             ),
         )
     else:
@@ -666,6 +795,7 @@ def detect_setup(
                     primary,
                     context,
                     route,
+                    periods=periods,
                 ),
             )
         else:
@@ -678,8 +808,11 @@ def detect_setup(
                         context,
                         require_contraction=False,
                         lookback=40,
+                        periods=periods,
                     ),
-                    _pullback_candidate(setup_ids[0], primary, context),
+                    _pullback_candidate(
+                        setup_ids[0], primary, context, periods=periods
+                    ),
                 )
             )
 
@@ -687,5 +820,6 @@ def detect_setup(
     return max(candidates, key=lambda candidate: priority[candidate.decision])
 
 
-def atr_for_levels(candles: list[dict]) -> float:
-    return _atr(candles)
+def atr_for_levels(candles: list[dict], period: int = 14) -> float:
+    """Wilder ATR for SL/TP geometry — matches indicators.calc_atr / quant bundle."""
+    return _atr(candles, period)

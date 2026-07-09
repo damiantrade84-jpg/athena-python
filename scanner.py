@@ -776,27 +776,18 @@ def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:
     if not _is_engine_a_v3_signal(signal):
         return _classify_legacy_signal(signal, pair)
 
-    decision = str(signal.get("decision") or "NO_SIGNAL").upper()
-    reasons = [str(reason) for reason in signal.get("rejectionReasons") or [] if reason]
+    from athena_app.services.engine_a_v3_classify import classify_engine_a_v3_signal
+
+    tier, reason = classify_engine_a_v3_signal(signal, pair)
     diagnostics = [
         str(item.get("detail"))
         for item in signal.get("scanDiagnostics") or []
         if isinstance(item, dict) and item.get("detail")
     ]
-    reason = "; ".join(dict.fromkeys(reasons + diagnostics))
-    if decision == "NO_SIGNAL":
-        return "skip", reason or "V3 specialist returned NO_SIGNAL"
-    if decision == "WATCH":
-        return "watchlist", reason or "V3 specialist is awaiting confirmation"
-    if decision != "TRADE" or signal.get("qualified") is not True:
-        return "skip", reason or "V3 signal is not trade-qualified"
-    if signal.get("engineATradeEnabled") is not True:
-        return "watchlist", reason or "V3 execution eligibility is disabled"
-    if not pair.get("enabled", True):
-        return "watchlist", reason or "Pair is disabled"
-    if signal.get("exchangeClosed"):
-        return "watchlist", reason or "Exchange closed"
-    return "trade", "V3 specialist trade-qualified"
+    if diagnostics:
+        merged = "; ".join(dict.fromkeys(([reason] if reason else []) + diagnostics))
+        return tier, merged
+    return tier, reason
 
 
 def _make_engine_b_only_signal_stub(pair: dict) -> dict:
@@ -1030,30 +1021,32 @@ def _engine_b_independent_direction_probe(
 ) -> tuple[str | None, dict | None, dict | None]:
     """Pick best Engine B direction independently of Engine A.
 
-    Runs ``analyze_structure`` for both LONG and SHORT, and for any CLEAR
-    verdict computes confidence and tests the style/regime gate. Returns the
-    best ``(direction, res_b, conf_b)`` tuple — preferring gate-passed over
+    Precomputes structure once (BT parity), then runs
+    ``analyze_structure_direction`` for LONG and SHORT. For any CLEAR verdict
+    computes confidence and tests the style/regime gate. Returns the best
+    ``(direction, res_b, conf_b)`` tuple — preferring gate-passed over
     not-passed, then higher confidence score. Returns ``(None, None, None)``
     when neither direction has a CLEAR structural verdict.
     """
     candidates: list[dict[str, Any]] = []
+    engine.set_registry_context(pair.get("symbol") or pair.get("display"))
+    precompute = engine.precompute_structure_data(
+        d1_candles or [],
+        h4_candles or [],
+        h1_candles or [],
+        current_price,
+        atr,
+        regime=regime_label,
+        fallback_rr=style_profile.get("fallback_rr", 2.0),
+        asset_type=asset_type,
+        d1_snap=d1_snap or {},
+        h4_snap=h4_snap or {},
+        style=resolved_style,
+        pair=pair,
+    )
     for try_direction in ("LONG", "SHORT"):
-        res_b = engine.set_registry_context(
-            pair.get("symbol") or pair.get("display")
-        ).analyze_structure(
-            d1_candles or [],
-            h4_candles or [],
-            h1_candles or [],
-            current_price,
-            try_direction,
-            atr,
-            regime_label,
-            fallback_rr=style_profile.get("fallback_rr", 2.0),
-            asset_type=asset_type,
-            d1_snap=d1_snap or {},
-            h4_snap=h4_snap or {},
-            style=resolved_style,
-            pair=pair,
+        res_b = engine.analyze_structure_direction(
+            precompute, current_price, try_direction
         )
         if res_b.get("structural_verdict") != "CLEAR":
             continue

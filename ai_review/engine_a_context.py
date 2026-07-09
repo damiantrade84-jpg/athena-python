@@ -783,32 +783,109 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
     """Compact Engine B block for Opus prompt (projection only)."""
     snapshots = engine_a_ctx.get("engine_snapshots") or {}
     eb = snapshots.get("engineB") or {}
+    if not isinstance(eb, dict):
+        eb = {}
     struct = engine_a_ctx.get("structure_context") or {}
     if not isinstance(struct, dict):
         struct = {}
+    conf = engine_a_ctx.get("engine_b_confidence") or engine_a_ctx.get("confidence") or {}
+    if not isinstance(conf, dict):
+        conf = {}
 
     def _zone_level(zone: Any) -> float | None:
         if isinstance(zone, dict):
-            return _to_float(zone.get("level") or zone.get("price") or zone.get("top"))
+            return _to_float(
+                zone.get("level")
+                or zone.get("price")
+                or zone.get("mid")
+                or zone.get("center")
+                or zone.get("top")
+                or zone.get("upper")
+            )
         return _to_float(zone)
 
+    active_fvgs = struct.get("active_fvgs") or struct.get("activeFvgs") or []
+    if not isinstance(active_fvgs, list):
+        active_fvgs = []
+    nearest_fvg_mid = None
+    if active_fvgs:
+        first = active_fvgs[0]
+        if isinstance(first, dict):
+            nearest_fvg_mid = _to_float(
+                first.get("midpoint") or first.get("mid") or first.get("center")
+            )
+            if nearest_fvg_mid is None:
+                top = _to_float(first.get("top") or first.get("upper"))
+                bot = _to_float(first.get("bottom") or first.get("lower"))
+                if top is not None and bot is not None:
+                    nearest_fvg_mid = (top + bot) / 2.0
+
+    geometry = engine_a_ctx.get("geometry") or {}
+    if not isinstance(geometry, dict):
+        geometry = {}
+
+    available = bool(
+        struct.get("structural_verdict")
+        or struct.get("bos_confirmed") is True
+        or struct.get("choch_confirmed") is True
+        or struct.get("liquidity_sweep") is True
+        or struct.get("nearest_support_zone")
+        or struct.get("nearest_resistance_zone")
+        or struct.get("ob_at_zone") is True
+        or struct.get("fvg_overlap") is True
+        or eb.get("score") is not None
+        or eb.get("passed") is not None
+        or eb.get("structuralVerdict")
+    )
+
     return {
+        "available": available,
         "score": eb.get("score"),
         "maxScore": eb.get("maxScore"),
         "threshold": eb.get("threshold"),
         "normalizedScore": eb.get("normalizedScore"),
         "passed": eb.get("passed"),
-        "direction": eb.get("direction"),
-        "structuralVerdict": struct.get("structural_verdict"),
+        "direction": eb.get("direction") or engine_a_ctx.get("direction"),
+        "structuralVerdict": struct.get("structural_verdict") or eb.get("structuralVerdict"),
         "bosConfirmed": struct.get("bos_confirmed"),
         "chochConfirmed": struct.get("choch_confirmed"),
         "liquiditySweep": struct.get("liquidity_sweep"),
+        "sweepDirection": struct.get("sweep_direction") or struct.get("sweepDirection"),
+        "obAtZone": struct.get("ob_at_zone") if "ob_at_zone" in struct else struct.get("obAtZone"),
+        "fvgOverlap": struct.get("fvg_overlap") if "fvg_overlap" in struct else struct.get("fvgOverlap"),
+        "activeFvgCount": len(active_fvgs),
+        "nearestFvgMid": nearest_fvg_mid,
         "nearestSupport": _zone_level(struct.get("nearest_support_zone")),
         "nearestResistance": _zone_level(struct.get("nearest_resistance_zone")),
         "breakerLevel": _to_float(
             (struct.get("breaker_block") or {}).get("level")
             if isinstance(struct.get("breaker_block"), dict)
             else struct.get("breaker_block")
+        ),
+        "structureOk": conf.get("structure_ok", struct.get("structure_ok")),
+        "locationOk": conf.get("location_ok", struct.get("location_ok")),
+        "entryOk": conf.get("entry_ok", struct.get("entry_ok")),
+        "roomOk": conf.get("room_ok", struct.get("room_ok")),
+        "rrOk": conf.get("rr_ok", struct.get("rr_ok")),
+        "spaceGateOk": conf.get("space_gate_ok", struct.get("space_gate_ok")),
+        "executionSl": _to_float(
+            conf.get("execution_sl")
+            or struct.get("execution_sl")
+            or struct.get("recommended_stop_loss")
+            or geometry.get("stop_loss")
+        ),
+        "executionTp": _to_float(
+            conf.get("execution_tp")
+            or struct.get("execution_tp")
+            or struct.get("recommended_take_profit")
+            or geometry.get("take_profit")
+        ),
+        "rr": _to_float(
+            conf.get("rr_used_for_gate")
+            or conf.get("rr")
+            or struct.get("rr_used_for_gate")
+            or struct.get("rr")
+            or geometry.get("rr")
         ),
         "volumeProfileContext": struct.get("profile_vp_context")
         or build_engine_b_profile_vp_context(str(engine_a_ctx.get("asset_class") or "")),

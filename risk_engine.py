@@ -16,7 +16,10 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 
 from config import CONFIG
-from athena_app.services.data_freshness import evaluate_execution_data_freshness
+from athena_app.services.data_freshness import (
+    evaluate_execution_data_freshness,
+    evaluate_live_quote_age,
+)
 from scoring import CORR_CLUSTERS, _PAIR_TO_CLUSTER
 from symbol_matching import symbol_match_keys
 from sqlite_instrumentation import (
@@ -1219,6 +1222,29 @@ def risk_check(
     freshness = evaluate_execution_data_freshness(signal, CONFIG)
     if not freshness["allowed"]:
         reason = freshness["reason"] or "STALE_DATA_BLOCK"
+        log.warning(f"{prefix} REJECTED: {reason}")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, reason)
+
+    # ── Live-quote age (config-gated; paper defaults enable block) ─────────
+    quote_eval = signal.get("quoteAgeEval")
+    if not isinstance(quote_eval, dict):
+        pair_proxy = {
+            "type": signal.get("type") or signal.get("asset_type") or asset_type
+        }
+        age_raw = signal.get("quoteAgeSec")
+        if age_raw is None:
+            age_raw = signal.get("quote_age_sec")
+        quote_eval = evaluate_live_quote_age(pair_proxy, age_raw, CONFIG)
+        signal["quoteAgeEval"] = quote_eval
+    if isinstance(quote_eval, dict) and quote_eval.get("would_block"):
+        reason = f"STALE_LIVE_QUOTE:{quote_eval.get('reason') or 'STALE'}"
+        log.warning(f"{prefix} REJECTED: {reason}")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, reason)
+
+    # ── ATR freshness block (ATR_FRESHNESS.BLOCK_EXECUTION_ON_STALE_ATR) ───
+    atr_fresh = signal.get("atrFreshness")
+    if isinstance(atr_fresh, dict) and atr_fresh.get("would_block"):
+        reason = f"STALE_ATR:{atr_fresh.get('reason') or 'stale'}"
         log.warning(f"{prefix} REJECTED: {reason}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, 0.0, reason)
 

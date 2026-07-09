@@ -271,10 +271,19 @@ def evaluate_engine_a_ai_advisory_rules(
         ai_result.get("edgeProbability"),
     )
     if score is None:
+        # V3 / Engine A: prefer confluenceScore vs maxScore, else vs confluenceThreshold.
         max_score = _coerce_float(signal.get("maxScore")) or 0.0
         confluence = _coerce_float(signal.get("confluenceScore"))
         if confluence is not None and max_score > 0:
             score = max(0.0, min(100.0, confluence / max_score * 100.0))
+        elif confluence is not None:
+            threshold = _coerce_float(
+                signal.get("confluenceThreshold") or signal.get("threshold")
+            )
+            if threshold is not None and threshold > 0:
+                # Map confluence relative to threshold onto a 0-100 advisory band
+                # (100% of threshold ≈ 75 mid-band; capped at 100).
+                score = max(0.0, min(100.0, (confluence / threshold) * 75.0))
 
     blocking_reasons: list[str] = []
     action = "review_incomplete"

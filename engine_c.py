@@ -312,6 +312,12 @@ def _build_disagreement_diagnosis(
         conflict_type = "missing_signal"
         conflict_explanation = "Neither engine produced a tradeable signal."
 
+    elif verdict == "STALE_CHILD_DATA":
+        conflict_type = "stale_child"
+        conflict_explanation = (
+            "Upstream Engine A/B dataFreshness blocked; Engine C will not execute."
+        )
+
     return {
         "verdict_explanation": f"{verdict}: {conflict_explanation[:120]}" if conflict_explanation else verdict,
         "a_summary": a_summary,
@@ -797,6 +803,27 @@ def apply_vision(consensus: dict, vision_result: dict) -> dict:
         return consensus
 
     updated = dict(consensus)
+
+    # Stale VisionTradeRead cannot upgrade or keep execution context (policy).
+    _vtr_early = vision_result.get("vision_trade_read") or vision_result.get(
+        "visionTradeRead"
+    )
+    if isinstance(_vtr_early, dict) and _vtr_early.get(
+        "allowed_for_execution_context"
+    ) is False:
+        updated["trade"] = False
+        updated["verdict"] = "VISION_STALE"
+        updated["tier"] = "SKIP"
+        updated["sizing_override"] = 0.0
+        updated["decision_state"] = "blocked"
+        updated["vision_applied"] = True
+        updated["vision_action"] = "block"
+        updated["vision_freshness_blocked"] = True
+        updated["vision_rating"] = str(
+            (_vtr_early.get("freshness_status") or "stale")
+        ).upper()
+        return updated
+
     try:
         from ai_reconciliation import arbitrate_ai
 
@@ -1046,6 +1073,19 @@ def _maybe_apply_engine_c_ai_weight_verdict(
     return result
 
 
+def _child_data_freshness_blocks(signal: dict | None) -> str | None:
+    """Return block reason when a child A/B payload already failed freshness.
+
+    Engine C must not promote stale upstream signals to execute/reduced_risk.
+    """
+    if not isinstance(signal, dict):
+        return None
+    fe = signal.get("dataFreshness")
+    if isinstance(fe, dict) and fe.get("allowed") is False:
+        return str(fe.get("reason") or "STALE_CHILD_DATA")
+    return None
+
+
 def compute_consensus(
     signal_a: dict,
     signal_b: dict,
@@ -1076,6 +1116,31 @@ def compute_consensus(
     b = normalise_engine_b(signal_b, confidence_b)
 
     entry = entry_price or float(signal_a.get("price", 0))
+
+    # Fail-closed: stale A/B child payloads cannot become execute-tier trades.
+    _stale_a = _child_data_freshness_blocks(signal_a)
+    _stale_b = _child_data_freshness_blocks(signal_b)
+    if _stale_a or _stale_b:
+        reason = _stale_a or _stale_b
+        return _finalize_consensus(
+            _build_result(
+                trade=False,
+                verdict="STALE_CHILD_DATA",
+                direction=None,
+                conviction=0.0,
+                tier="SKIP",
+                sizing=0.0,
+                a_norm=a,
+                b_norm=b,
+                entry=entry,
+                decision_state="blocked",
+                decision_state_reason=reason,
+                disagreement_diagnosis=_build_disagreement_diagnosis(
+                    "STALE_CHILD_DATA", a, b, signal_a, signal_b, regime
+                ),
+            ),
+            asset_type,
+        )
 
     # Reliability / conviction thresholds (configurable)
     _REL_EXEC = float(CONFIG.get("ENGINE_C_REL_EXECUTE", 0.60))

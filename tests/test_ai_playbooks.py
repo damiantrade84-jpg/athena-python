@@ -62,6 +62,25 @@ def test_engine_a_and_b_playbooks_have_required_shape() -> None:
         assert pb["requiredOutputFields"]
 
 
+def test_engine_a_playbook_uses_v3_factor_score_keys() -> None:
+    pb = get_engine_a_playbook()
+    usage = " ".join(pb["indicatorUsage"].keys())
+    assert "factorScores.trend" in usage
+    assert "factorScores.momentum" in usage
+    assert "factorDiagnostics.minDirectionalFailed" in usage
+    assert "diagnostics.trendScore" not in pb["indicatorUsage"]
+
+
+def test_engine_b_playbook_documents_ob_fvg_and_gates() -> None:
+    pb = get_engine_b_playbook()
+    usage = " ".join(pb["structureUsage"].keys())
+    assert "obAtZone" in usage
+    assert "fvgOverlap" in usage
+    assert "structureOk" in usage
+    assert "ORDER_BLOCK_REJECTION" in pb["entryModels"]
+    assert "FVG_FILL_CONTINUATION" in pb["entryModels"]
+
+
 def test_render_playbook_prompt_block_includes_review_order() -> None:
     text = render_playbook_prompt_block([get_engine_d_scalp_playbook()])
     assert "ATHENA TRADE PLAYBOOKS" in text

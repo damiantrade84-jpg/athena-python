@@ -21,7 +21,7 @@ def test_engine_b_regime_multipliers_are_not_risk_inverted(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS", {})
 
     assert _engine_b_regime_gate("TRENDING", "forex") == pytest.approx(0.95)
-    assert _engine_b_regime_gate("LOW_VOLATILITY", "forex") == pytest.approx(0.90)
+    assert _engine_b_regime_gate("LOW_VOLATILITY", "forex") == pytest.approx(1.0)
     assert _engine_b_regime_gate("RANGING", "forex") == pytest.approx(1.10)
     assert _engine_b_regime_gate("HIGH_VOLATILITY", "forex") == pytest.approx(1.10)
 
