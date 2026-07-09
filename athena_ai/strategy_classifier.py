@@ -281,8 +281,8 @@ def classify_strategy(
         })
 
     # Any playbook in the universe that has zero affinity AND is a directional
-    # model gets surfaced as "considered but not preferred" — NOT outright
-    # rejected — unless we already rejected it for a hard reason above.
+    # model gets surfaced as unsupported by the current bars unless we already
+    # rejected it for a hard reason above.
     rejected_ids = {r["id"] for r in rejected}
     if not setup_hints:
         for pid, weight in survivors:
@@ -294,6 +294,12 @@ def classify_strategy(
                         "AI may still adopt it with explicit visual justification."
                     ),
                 })
+                rejected_ids.add(pid)
+
+    candidates = [
+        candidate for candidate in candidates
+        if candidate["id"] not in rejected_ids
+    ]
 
     return {
         "candidate_models": candidates,

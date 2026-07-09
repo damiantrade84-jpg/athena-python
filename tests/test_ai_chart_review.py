@@ -530,6 +530,77 @@ def test_normalizer_stable_schema_valid_json():
     assert out["parse_success"] is True
 
 
+def _strategy_playbook_verdict(**overrides):
+    payload = {
+        "final_verdict": "NO_TRADE",
+        "matched_strategy_model": "NONE",
+        "direction": "NONE",
+        "location_quality": "UNKNOWN",
+        "trigger_quality": "MISSING",
+        "rr_quality": "UNKNOWN",
+        "classifier_agreement": "AGREE",
+        "plain_english_reason": "No clean playbook setup is confirmed.",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_normalizer_preserves_valid_strategy_playbook_verdict():
+    verdict = _strategy_playbook_verdict()
+    raw = json.dumps(
+        {
+            "decision": "WATCH_ONLY",
+            "direction": "NEUTRAL",
+            "confidence": 40,
+            "entryAllowedNow": False,
+            "chartReadSummary": "No confirmed setup.",
+            "strategyPlaybookVerdict": verdict,
+        }
+    )
+    out = normalize_chart_review_response(raw)
+
+    assert out["strategyPlaybookVerdict"] == verdict
+    assert out["structured"]["strategyPlaybookVerdict"] == verdict
+
+
+def test_normalizer_rejects_invalid_strategy_playbook_verdict():
+    raw = json.dumps(
+        {
+            "decision": "WATCH_ONLY",
+            "direction": "NEUTRAL",
+            "confidence": 40,
+            "entryAllowedNow": False,
+            "chartReadSummary": "No confirmed setup.",
+            "strategyPlaybookVerdict": _strategy_playbook_verdict(
+                matched_strategy_model="MADE_UP_MODEL"
+            ),
+        }
+    )
+    out = normalize_chart_review_response(raw)
+
+    assert "strategyPlaybookVerdict" not in out
+    assert "strategyPlaybookVerdict" not in out["structured"]
+    assert "invalid_strategy_playbook_verdict" in out["tradeSkillWarnings"]
+
+
+def test_normalizer_rejects_wrong_type_strategy_playbook_verdict():
+    raw = json.dumps(
+        {
+            "decision": "WATCH_ONLY",
+            "direction": "NEUTRAL",
+            "confidence": 40,
+            "entryAllowedNow": False,
+            "chartReadSummary": "No confirmed setup.",
+            "strategyPlaybookVerdict": "NONE",
+        }
+    )
+    out = normalize_chart_review_response(raw)
+
+    assert "strategyPlaybookVerdict" not in out
+    assert "strategyPlaybookVerdict" not in out["structured"]
+    assert "invalid_strategy_playbook_verdict" in out["tradeSkillWarnings"]
+
+
 def test_normalizer_caution_on_parse_fail():
     out = normalize_chart_review_response("not json")
     assert out["verdict"] == "CAUTION"

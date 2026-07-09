@@ -6,8 +6,11 @@ import json
 import re
 from typing import Any
 
+from pydantic import ValidationError
+
 from ai_playbooks.trade_skill_normalizer import normalize_trade_skill_output, trade_skill_parse_failure
 from ai_review.suggested_trade_plan import sanitize_suggested_trade_plan
+from athena_ai.ai_review_schema import validate_verdict
 
 _VALID_VERDICTS = {"VALID", "CAUTION", "INVALID", "NO_TRADE"}
 _VALID_ACTIONS = {
@@ -29,6 +32,8 @@ _STRUCTURED_KEYS = (
     "context_completeness",
     "missingContextDetailed",
     "missing_context_detailed",
+    "strategyPlaybookVerdict",
+    "strategy_playbook_verdict",
     "metadata",
 )
 
@@ -92,11 +97,30 @@ def _pick_structured(parsed: dict[str, Any]) -> dict[str, Any]:
         ("engineBVerdictComparison", "engine_b_verdict_comparison"),
         ("contextCompleteness", "context_completeness"),
         ("missingContextDetailed", "missing_context_detailed"),
+        ("strategyPlaybookVerdict", "strategy_playbook_verdict"),
     )
     for camel, snake in aliases:
         if camel not in out and snake in parsed and isinstance(parsed[snake], dict):
             out[camel] = parsed[snake]
     return out
+
+
+def _validate_strategy_playbook_verdict(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    if "strategyPlaybookVerdict" in payload:
+        raw = payload["strategyPlaybookVerdict"]
+    elif "strategy_playbook_verdict" in payload:
+        raw = payload["strategy_playbook_verdict"]
+    else:
+        return None, None
+    if not isinstance(raw, dict):
+        return None, "invalid_strategy_playbook_verdict"
+    try:
+        verdict = validate_verdict(raw)
+    except ValidationError:
+        return None, "invalid_strategy_playbook_verdict"
+    return verdict.model_dump(mode="json", exclude_unset=True), None
 
 
 def _legacy_from_structured(parsed: dict[str, Any], structured: dict[str, Any]) -> dict[str, Any]:
@@ -210,12 +234,25 @@ def normalize_chart_review_response(
         }
 
     structured = _pick_structured(parsed)
+    strategy_playbook_verdict, strategy_playbook_warning = _validate_strategy_playbook_verdict(parsed)
+    if "strategyPlaybookVerdict" in structured or "strategy_playbook_verdict" in structured:
+        structured = dict(structured)
+        structured.pop("strategyPlaybookVerdict", None)
+        structured.pop("strategy_playbook_verdict", None)
+        if strategy_playbook_verdict is not None:
+            structured["strategyPlaybookVerdict"] = strategy_playbook_verdict
+
     legacy_fields = _legacy_from_structured(parsed, structured)
     trade_skill = _merge_trade_skill_fields(
         parsed,
         review_type=review_type,  # type: ignore[arg-type]
         backend_levels=backend_levels,
     )
+    if strategy_playbook_warning:
+        warnings = list(trade_skill.get("tradeSkillWarnings") or [])
+        if strategy_playbook_warning not in warnings:
+            warnings.append(strategy_playbook_warning)
+        trade_skill["tradeSkillWarnings"] = warnings
 
     verdict = str(trade_skill.get("verdict") or legacy_fields.get("verdict") or "CAUTION").upper()
     if verdict not in _VALID_VERDICTS:
@@ -264,5 +301,7 @@ def normalize_chart_review_response(
         "suggestedTradePlan": suggested_plan,
         "suggested_trade_plan": suggested_plan,
     }
+    if strategy_playbook_verdict is not None:
+        result["strategyPlaybookVerdict"] = strategy_playbook_verdict
     result.update(trade_skill)
     return result

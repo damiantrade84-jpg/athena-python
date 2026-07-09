@@ -5,15 +5,18 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import engine_a_v3.evaluator as evaluator_module
 from engine_a_v3.backtest import run_v3_backtest
-from engine_a_v3.contract import CONTRACT_VERSION, EngineASetupSignal
+from engine_a_v3.contract import CONTRACT_VERSION, EngineASetupSignal, PriceZone, Target
 from engine_a_v3.evaluator import evaluate_engine_a_v3
+from engine_a_v3.levels import StructuralLevels
 from engine_a_v3.promotion import (
     PromotionRegistry,
     demo_unvalidated_registry,
     production_registry,
     validate_promotion_artifact,
 )
+from engine_a_v3.quant_scorer import Component, QuantScore
 from engine_a_v3.routing import KNOWN_SCORE_GROUPS, route_specialist
 from engine_a_v3.profile import EngineAV3Profile, baseline_profile, scorer_sha256
 from engine_a_v3.setups import detect_setup
@@ -188,6 +191,45 @@ def _registry(tmp_path, pair: dict, horizon: str) -> PromotionRegistry:
     return PromotionRegistry(tmp_path)
 
 
+def _patch_trade_quant(monkeypatch):
+    def fake_score_pair(*_args, **_kwargs):
+        components = {
+            "trend": Component(signal=0.9, quality=0.9, available=True),
+            "momentum": Component(signal=0.8, quality=0.8, available=True),
+            "location": Component(signal=0.7, quality=0.7, available=True),
+            "volume": Component(signal=0.2, quality=0.2, available=True),
+        }
+        return QuantScore(
+            direction="LONG",
+            confluence_score=2.4,
+            max_score=3.0,
+            score_norm=0.8,
+            conviction=0.8,
+            decision="TRADE",
+            threshold=2.1,
+            level_style="trend",
+            factor_scores={},
+            factor_diagnostics={},
+            components=components,
+        )
+
+    def fake_levels(*_args, **_kwargs):
+        return StructuralLevels(
+            entry_zone=PriceZone(low=100.0, high=101.0),
+            invalidation=99.0,
+            targets=(
+                Target(label="TP1", price=102.0, rr=1.0),
+                Target(label="TP2", price=103.0, rr=2.0),
+            ),
+            price=101.0,
+        )
+
+    monkeypatch.setattr(evaluator_module, "score_pair", fake_score_pair)
+    monkeypatch.setattr(evaluator_module, "detect_setup", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(evaluator_module, "_build_levels", fake_levels)
+    monkeypatch.setattr(evaluator_module, "session_score_passes", lambda *_args, **_kwargs: True)
+
+
 def test_router_covers_all_26_score_groups_and_both_horizons():
     assert set(REPRESENTATIVE_PAIRS) == set(KNOWN_SCORE_GROUPS)
     assert len(KNOWN_SCORE_GROUPS) == 26
@@ -220,7 +262,13 @@ def test_contract_evaluation_covers_all_groups_and_both_horizons(tmp_path):
             assert signal.scoringProfile is not None
 
 
-def test_missing_promotion_artifact_caps_trade_to_watch(tmp_path):
+def test_demo_research_missing_promotion_artifact_keeps_trade_signal(monkeypatch, tmp_path):
+    from config import CONFIG
+
+    _patch_trade_quant(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "EXECUTOR_MODE", "demo")
+
     signal = evaluate_engine_a_v3(
         REPRESENTATIVE_PAIRS["forex_majors"],
         _trend_pullback_candles(),
@@ -228,12 +276,43 @@ def test_missing_promotion_artifact_caps_trade_to_watch(tmp_path):
         registry=PromotionRegistry(tmp_path),
     )
 
-    # No-veto contract: missing promotion caps TRADE -> WATCH; pair stays visible.
+    assert signal.decision == "TRADE"
+    assert signal.qualified is True
+    assert signal.engineATradeEnabled is True
+    assert signal.executionScope == "DEMO_ONLY"
+    assert signal.validationStatus == "UNVALIDATED"
+    assert signal.validationArtifact is None
+    assert "promotion_artifact_missing" not in signal.rejectionReasons
+    assert signal.confluenceScore is not None
+    assert signal.scoreNorm is not None
+    assert signal.factorDiagnostics["promotion"]["qualified"] is False
+    assert signal.factorDiagnostics["promotion"]["demoResearchOverride"] is True
+    assert "promotion_artifact_missing" in signal.factorDiagnostics["promotion"]["reasons"]
+
+
+def test_live_missing_promotion_artifact_still_caps_trade_signal(monkeypatch, tmp_path):
+    from config import CONFIG
+
+    _patch_trade_quant(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "EXECUTOR_MODE", "live")
+
+    signal = evaluate_engine_a_v3(
+        REPRESENTATIVE_PAIRS["forex_majors"],
+        _trend_pullback_candles(),
+        horizon="intraday",
+        registry=PromotionRegistry(tmp_path),
+    )
+
     assert signal.decision == "WATCH"
     assert signal.qualified is False
     assert signal.engineATradeEnabled is False
+    assert signal.executionScope == "NONE"
+    assert signal.validationStatus == "UNAVAILABLE"
+    assert "promotion_artifact_missing" in signal.rejectionReasons
     assert signal.confluenceScore is not None
     assert signal.scoreNorm is not None
+    assert signal.factorDiagnostics["promotion"]["demoResearchOverride"] is False
 
 
 def test_demo_unvalidated_registry_activates_all_routed_specialists_without_fake_metrics(

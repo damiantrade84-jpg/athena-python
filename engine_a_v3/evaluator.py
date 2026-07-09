@@ -116,6 +116,18 @@ def _expiry(decision_time: datetime, horizon: str) -> datetime:
     return decision_time + (timedelta(hours=4) if horizon == "intraday" else timedelta(days=2))
 
 
+def _demo_research_unpromoted_trade_allowed() -> bool:
+    try:
+        from config import CONFIG
+
+        return (
+            bool(CONFIG.get("ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED", False))
+            and str(CONFIG.get("EXECUTOR_MODE", "") or "").strip().lower() == "demo"
+        )
+    except Exception:
+        return False
+
+
 def _quant_predicates(quant: QuantScore) -> tuple[PredicateResult, ...]:
     """Transparency view of the price-based components (advisory; the full
     breakdown lives in factorScores). Never used to veto."""
@@ -400,9 +412,9 @@ def evaluate_engine_a_v3(
             ema_period=ema_period,
         )
 
-    # The quant model never emits NO_SIGNAL. Missing levels or ineligible promotion
-    # only cap TRADE -> WATCH so the pair stays visible; execution stays gated by
-    # executionScope / engineATradeEnabled below.
+    # The quant model never emits NO_SIGNAL. Missing levels caps TRADE -> WATCH
+    # so the pair stays visible. Promotion caps only outside demo research mode;
+    # execution stays gated by executionScope / engineATradeEnabled below.
     decision = "TRADE" if use_setup else quant.decision
     quant_session_blocked = False
     if (
@@ -425,10 +437,16 @@ def evaluate_engine_a_v3(
         except Exception:
             decision = "WATCH"
             quant_session_blocked = True
-    if decision == "TRADE" and (levels is None or not promotion.qualified):
+    demo_research_unpromoted_allowed = (
+        not promotion.qualified and _demo_research_unpromoted_trade_allowed()
+    )
+    if decision == "TRADE" and levels is None:
+        decision = "WATCH"
+    elif decision == "TRADE" and not promotion.qualified and not demo_research_unpromoted_allowed:
         decision = "WATCH"
 
-    qualified = decision == "TRADE" and promotion.qualified and levels is not None
+    promotion_execution_allowed = promotion.qualified or demo_research_unpromoted_allowed
+    qualified = decision == "TRADE" and promotion_execution_allowed and levels is not None
     executable_levels = levels
     targets = executable_levels.targets if executable_levels else ()
 
@@ -437,9 +455,11 @@ def evaluate_engine_a_v3(
         if promotion.artifact and promotion.artifact.status == "DEMO_UNVALIDATED"
         else "PROMOTED"
         if promotion.artifact and promotion.artifact.status == "PROMOTED"
+        else "UNVALIDATED"
+        if demo_research_unpromoted_allowed
         else "UNAVAILABLE"
     )
-    execution_scope = "DEMO_ONLY" if promotion.qualified else "NONE"
+    execution_scope = "DEMO_ONLY" if promotion_execution_allowed else "NONE"
 
     predicates = _quant_predicates(quant)
     if setup is not None:
@@ -479,10 +499,15 @@ def evaluate_engine_a_v3(
         rejection_reasons.append("crypto_derivatives_conflict")
 
     # Recompute after late demotions (blocked trend / equity volume / crypto deriv).
-    qualified = decision == "TRADE" and promotion.qualified and levels is not None
+    qualified = decision == "TRADE" and promotion_execution_allowed and levels is not None
 
     factor_diagnostics = dict(quant.factor_diagnostics or {})
     factor_diagnostics["setupOverlay"] = setup_diagnostics
+    factor_diagnostics["promotion"] = {
+        "qualified": bool(promotion.qualified),
+        "demoResearchOverride": bool(demo_research_unpromoted_allowed),
+        "reasons": list(promotion.reasons),
+    }
     if quant_session_blocked:
         factor_diagnostics["quantSessionGateBlocked"] = True
 
@@ -532,7 +557,7 @@ def evaluate_engine_a_v3(
         predicates=predicates,
         rejectionReasons=(
             tuple(rejection_reasons) + promotion.reasons
-            if not promotion.qualified
+            if not promotion.qualified and not demo_research_unpromoted_allowed
             else tuple(rejection_reasons)
         ),
         dataFreshness=DataFreshness(

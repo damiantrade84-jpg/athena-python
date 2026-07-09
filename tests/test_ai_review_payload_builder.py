@@ -16,6 +16,7 @@ from athena_ai.ai_review_payload_builder import (
     build_strategy_layer,
     render_strategy_block_for_prompt,
 )
+from athena_ai.strategy_classifier import classify_strategy
 
 
 def _bar(o: float, h: float, l: float, c: float, v: float = 100.0, t: int = 0) -> dict:
@@ -96,6 +97,28 @@ def test_rejected_models_carry_reasons_when_engines_missing_in_full() -> None:
     for r in layer["rejected_models"]:
         assert isinstance(r.get("rejection_reason"), str)
         assert r["rejection_reason"].strip()
+
+
+def test_classifier_does_not_list_rejected_models_as_candidates_without_hints() -> None:
+    result = classify_strategy(
+        price_action_facts={
+            "setup_candidates": {"hints": []},
+            "wick_event": {"type": "none"},
+            "breakout_state": {"state": "unknown"},
+            "profile_location": {"location": "unknown", "poc": None},
+            "profile_vp_context": {"enabled": True},
+            "volume_behavior": {"state": "normal"},
+        },
+        engine_a_summary={"regime": "balance", "confluence_score": 1, "max_score": 10},
+        engine_b_summary={"available": False},
+        engine_d_summary={"available": False},
+        asset_group="crypto",
+        direction="LONG",
+    )
+
+    candidate_ids = {c["id"] for c in result["candidate_models"]}
+    rejected_ids = {r["id"] for r in result["rejected_models"]}
+    assert not (candidate_ids & rejected_ids)
 
 
 # ----- FIX 2 ------------------------------------------------------------------
