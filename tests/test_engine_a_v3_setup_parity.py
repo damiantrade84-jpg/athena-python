@@ -158,6 +158,32 @@ def test_invalid_v3_entry_timeframe_override_fails_closed(monkeypatch):
     assert _resolve_v3_entry_tf("forex_exotics", "forex", "intraday") is None
 
 
+@pytest.mark.parametrize(
+    ("display", "symbol", "asset_type"),
+    [
+        ("USD/ZAR", "USDZAR", "forex"),
+        ("USD/MXN", "USDMXN", "forex"),
+        ("USD/BRL", "USDBRL", "forex"),
+        ("USD/INR", "USDINR", "forex"),
+        ("AAVE/USDT", "AAVEUSDT", "crypto"),
+        ("ALGO/USDT", "ALGOUSDT", "crypto"),
+        ("ATOM/USDT", "ATOMUSDT", "crypto"),
+        ("BCH/USDT", "BCHUSDT", "crypto"),
+        ("ETC/USDT", "ETCUSDT", "crypto"),
+        ("TRX/USDT", "TRXUSDT", "crypto"),
+        ("XLM/USDT", "XLMUSDT", "crypto"),
+        ("FIL/USDT", "FILUSDT", "crypto"),
+        ("ICP/USDT", "ICPUSDT", "crypto"),
+        ("HBAR/USDT", "HBARUSDT", "crypto"),
+        ("SEI/USDT", "SEIUSDT", "crypto"),
+    ],
+)
+def test_configured_h4_entry_pairs_route_to_h4(display, symbol, asset_type):
+    route = route_specialist({"display": display, "symbol": symbol, "type": asset_type})
+    assert route.score_group in {"forex_exotics", "crypto_other"}
+    assert _resolve_v3_entry_tf(route.score_group, asset_type, "intraday") == "H4"
+
+
 def test_setup_uses_group_ema_periods_forex_vs_crypto():
     forex_profile = baseline_profile("forex_majors", "intraday")
     crypto_profile = baseline_profile("crypto_btc", "intraday")
