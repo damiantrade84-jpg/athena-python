@@ -197,6 +197,96 @@ def _engine_b_scan_freshness_stale_tfs(
     return stale_tfs, freshness_diag
 
 
+def _attach_engine_a_execution_freshness(
+    signal: dict[str, Any],
+    pair: dict[str, Any],
+    *,
+    preloaded_market_state: dict[str, Any],
+    raw_candles: dict[str, list],
+    config: dict[str, Any] | None = None,
+    time_now: float | None = None,
+) -> dict[str, Any]:
+    """Attach policy-aware execution freshness to an Engine A scan signal."""
+    from athena_app.services.data_freshness import (
+        check_live_candle_consistency,
+        evaluate_execution_data_freshness,
+    )
+    from athena_app.services.market_state import candle_freshness_diagnostic
+
+    cfg = config or CONFIG
+    now = time_now if time_now is not None else datetime.now(timezone.utc).timestamp()
+
+    def _scan_state(tf_key: str) -> dict[str, Any]:
+        state = preloaded_market_state.get(tf_key)
+        if isinstance(state, dict):
+            return state
+        return {"confirmed": list(raw_candles.get(tf_key) or []), "forming": None}
+
+    def _scan_series_for_diag(tf_key: str) -> list:
+        state = _scan_state(tf_key)
+        confirmed = list(state.get("confirmed") or [])
+        forming = state.get("forming")
+        return confirmed + ([forming] if forming else [])
+
+    signal["candleFreshness"] = {
+        "D1": candle_freshness_diagnostic(
+            pair,
+            "D1",
+            _scan_series_for_diag("D1"),
+            source=pair.get("source"),
+            time_now=now,
+        ),
+        "H4": candle_freshness_diagnostic(
+            pair,
+            "H4",
+            _scan_series_for_diag("H4"),
+            source=pair.get("source"),
+            time_now=now,
+        ),
+        "H1": candle_freshness_diagnostic(
+            pair,
+            "H1",
+            _scan_series_for_diag("H1"),
+            source=pair.get("source"),
+            time_now=now,
+        ),
+    }
+
+    for tf_u in ("H4", "H1", "D1"):
+        state = _scan_state(tf_u)
+        confirmed = list(state.get("confirmed") or [])
+        forming = state.get("forming")
+        provider_series = list(raw_candles.get(tf_u) or [])
+        if not provider_series:
+            provider_series = confirmed + ([forming] if forming else [])
+        consistency_paths = {
+            "raw_provider": provider_series,
+            "market_state": state,
+            "engine_a": confirmed,
+            "engine_b": confirmed,
+            "scanner": confirmed,
+            "compare": confirmed,
+        }
+        consistency = check_live_candle_consistency(
+            pair,
+            tf_u,
+            consistency_paths,
+            time_now=now,
+        )
+        if consistency:
+            signal.setdefault("candleConsistency", {})[tf_u] = consistency
+
+    exec_fresh = evaluate_execution_data_freshness(signal, cfg)
+    signal["dataFreshness"] = exec_fresh
+    if (
+        bool(cfg.get("SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS", True))
+        and isinstance(exec_fresh, dict)
+        and not exec_fresh.get("allowed")
+    ):
+        signal["executable"] = False
+    return exec_fresh
+
+
 def _fetch_ab_crypto_signal_candles(runtime, pair: dict, tf: str, limit: int):
     """Fetch shared Engine A/B scan candles with optional crypto Bybit experiment."""
     if (
@@ -1943,41 +2033,13 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 # on stale_1_bucket. Mirrors the athena.py naked-scan pattern.
                 if sig_a:
                     try:
-                        from athena_app.services.market_state import candle_freshness_diagnostic
-                        from athena_app.services.data_freshness import (
-                            evaluate_execution_data_freshness,
+                        _attach_engine_a_execution_freshness(
+                            sig_a,
+                            pair,
+                            preloaded_market_state=preloaded_market_state,
+                            raw_candles=raw_candles,
+                            config=CONFIG,
                         )
-
-                        def _scan_series_for_diag(tf_key):
-                            state = preloaded_market_state.get(tf_key)
-                            if isinstance(state, dict):
-                                confirmed = list(state.get("confirmed") or [])
-                                forming = state.get("forming")
-                                return confirmed + ([forming] if forming else [])
-                            return list(raw_candles.get(tf_key) or [])
-
-                        sig_a["candleFreshness"] = {
-                            "D1": candle_freshness_diagnostic(
-                                pair, "D1", _scan_series_for_diag("D1"),
-                                source=pair.get("source"),
-                            ),
-                            "H4": candle_freshness_diagnostic(
-                                pair, "H4", _scan_series_for_diag("H4"),
-                                source=pair.get("source"),
-                            ),
-                            "H1": candle_freshness_diagnostic(
-                                pair, "H1", _scan_series_for_diag("H1"),
-                                source=pair.get("source"),
-                            ),
-                        }
-                        _exec_fresh = evaluate_execution_data_freshness(sig_a, CONFIG)
-                        sig_a["dataFreshness"] = _exec_fresh
-                        if (
-                            bool(CONFIG.get("SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS", True))
-                            and isinstance(_exec_fresh, dict)
-                            and not _exec_fresh.get("allowed")
-                        ):
-                            sig_a["executable"] = False
                     except Exception as _scan_fresh_err:
                         log.debug(
                             "[SCAN] %s execution freshness unavailable: %s",

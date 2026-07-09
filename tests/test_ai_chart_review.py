@@ -2210,6 +2210,15 @@ def test_prompt_includes_crypto_confirmed_only_freshness_wording():
     assert "do NOT list H4/D1/H1 as stale" in prompt
 
 
+def test_prompt_generalizes_confirmed_only_stale_1_wording_for_stocks():
+    ctx = _engine_a_ctx(symbol="AAPL", asset_group="stock")
+    ctx["freshness"] = _crypto_policy_fresh_ctx()["freshness"]
+    prompt = build_chart_review_prompt(ctx)
+    assert "Candle freshness (confirmed-only paths)" in prompt
+    assert "crypto 24/7" not in prompt
+    assert "policy_ok_not_stale" in prompt
+
+
 def test_verdict_strips_false_h4_d1_stale_downgrade_when_policy_ok():
     ctx = _crypto_policy_fresh_ctx(passed=True)
     model_comparison = {

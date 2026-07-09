@@ -102,6 +102,7 @@ def _maybe_ingest(
     sources: Iterable[str] | None,
     *,
     bybit_lookback_days: int = DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS,
+    bybit_symbols: list[str] | None = None,
     budget_s: float = DEFAULT_SCAN_INGEST_BUDGET_S,
 ) -> dict[str, Any] | None:
     """Refresh PTIS before a scan. Fail-open: log and return error metadata on failure.
@@ -121,11 +122,16 @@ def _maybe_ingest(
 
     def _run() -> None:
         try:
+            ingest_kwargs: dict[str, Any] = {
+                "store": store,
+                "sources": selected,
+                "bybit_lookback_days": bybit_lookback_days,
+                "write_audit": False,
+            }
+            if bybit_symbols is not None:
+                ingest_kwargs["bybit_symbols"] = bybit_symbols
             outcome["result"] = run_ingest(
-                store=store,
-                sources=selected,
-                bybit_lookback_days=bybit_lookback_days,
-                write_audit=False,
+                **ingest_kwargs,
             )
         except BaseException as exc:  # noqa: BLE001 - fail-open; legacy config
             # validation raises a SystemExit subclass, which must not kill the
@@ -168,12 +174,19 @@ def _scan_ingest_sources_for_instruments(
     selected = tuple(sources)
     if selected != DEFAULT_SCAN_INGEST_SOURCES:
         return selected
+    if instruments and not any(inst.family == "crypto" for inst in instruments):
+        return ("mt5_live",)
     if instruments and all(inst.family == "crypto" for inst in instruments):
         # Crypto-only scans skip the MT5 leg but keep Bybit: klines are the
         # sole live crypto OHLC path into PTIS (the Binance backtest-cache
         # ingest goes stale whenever the app stops backfilling).
         return ("bybit",)
     return selected
+
+
+def _bybit_symbols_for_scan(instruments: tuple[Instrument, ...]) -> list[str] | None:
+    symbols = [inst.symbol for inst in instruments if inst.family == "crypto"]
+    return symbols or None
 
 
 def _latest_candidate(
@@ -286,9 +299,15 @@ def run_ase_scan(
 ) -> dict[str, Any]:
     store = PTISStore(ptis_root or default_ptis_root())
     instruments = _resolve_instruments(family=family, symbols=symbols)
+    ingest_sources_selected = _scan_ingest_sources_for_instruments(ingest_sources, instruments)
     ingest_result = _maybe_ingest(
         store,
-        _scan_ingest_sources_for_instruments(ingest_sources, instruments),
+        ingest_sources_selected,
+        bybit_symbols=(
+            _bybit_symbols_for_scan(instruments)
+            if ingest_sources_selected and "bybit" in ingest_sources_selected
+            else None
+        ),
     )
 
     candidates = generate_live_candidates(store, instruments, horizon=horizon)
@@ -380,9 +399,15 @@ def run_ase_dual_horizon_scan(
     horizons: tuple[Horizon, ...] = ("intraday", "swing")
     store = PTISStore(ptis_root or default_ptis_root())
     instruments = _resolve_instruments(family=family, symbols=symbols)
+    ingest_sources_selected = _scan_ingest_sources_for_instruments(ingest_sources, instruments)
     ingest_result = _maybe_ingest(
         store,
-        _scan_ingest_sources_for_instruments(ingest_sources, instruments),
+        ingest_sources_selected,
+        bybit_symbols=(
+            _bybit_symbols_for_scan(instruments)
+            if ingest_sources_selected and "bybit" in ingest_sources_selected
+            else None
+        ),
     )
 
     by_horizon: dict[str, Any] = {}

@@ -272,3 +272,56 @@ def test_execution_freshness_allows_d1_calendar_gap_policy_ok() -> None:
     assert result["allowed"] is True
     assert result["blocked"] == []
     assert all(w.get("severity") != "d1_calendar_gap_policy_ok" for w in result["warnings"])
+
+
+def test_scanner_stock_h4_confirmed_only_lag_sets_consistency_before_freshness() -> None:
+    """Scan-time Engine A freshness must not poison US stock AI/risk context.
+
+    US stock H4 uses a 3h offset grid. At 18:30 UTC the current bucket is 15:00;
+    a confirmed-only Engine A path ending at 11:00 is exactly one bucket behind
+    and must be marked CONFIRMED_ONLY_OK before execution freshness is evaluated.
+    """
+    import scanner
+
+    def _bar(iso: str) -> dict:
+        return {
+            "time": int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+        }
+
+    now = datetime(2026, 5, 11, 18, 30, tzinfo=timezone.utc).timestamp()
+    pair = {"display": "AAPL", "symbol": "AAPL", "type": "stock", "source": "mt5"}
+    signal = {"pair": "AAPL", "type": "stock"}
+    market_state = {
+        "D1": {"confirmed": [_bar("2026-05-11T00:00:00Z")], "forming": None},
+        "H4": {
+            "confirmed": [_bar("2026-05-11T07:00:00Z"), _bar("2026-05-11T11:00:00Z")],
+            "forming": None,
+        },
+        "H1": {"confirmed": [_bar("2026-05-11T18:00:00Z")], "forming": None},
+    }
+    raw_candles = {tf: list(state["confirmed"]) for tf, state in market_state.items()}
+
+    scanner._attach_engine_a_execution_freshness(
+        signal,
+        pair,
+        preloaded_market_state=market_state,
+        raw_candles=raw_candles,
+        config={
+            "DATA_FRESHNESS_GATES": {
+                "BLOCK_EXECUTION_ON_STALE": True,
+                "BLOCK_TIMEFRAMES": ["H4"],
+                "BLOCK_SEVERITIES": ["stale_1_bucket"],
+            },
+            "SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS": True,
+        },
+        time_now=now,
+    )
+
+    assert signal["candleFreshness"]["H4"]["stalenessSeverity"] == "stale_1_bucket"
+    assert signal["candleConsistency"]["H4"]["status"] == "CONFIRMED_ONLY_OK"
+    assert signal["dataFreshness"]["allowed"] is True
+    assert signal["dataFreshness"]["blocked"] == []
