@@ -120,8 +120,13 @@ ENGINE_A_V3_MEAN_REVERSION:
   LOOKBACK: 20
 # V3 directional ramp (ports ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS into quant scorer).
 # Weak |dir_sum| aborts to FLAT/WATCH; soft span multiplies confluence.
+# DISABLED 2026-07-09: ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS thresholds are calibrated
+# for V2 trend_score (~±1); V3 dir_sum is a weighted mean of signal×quality incl.
+# non-directional components and runs far smaller, so the ramp multiplied most
+# confluence scores toward zero (observed DOGE rescore 2.21→0.05) and emptied the
+# TRADE tier. Re-enable only with min/span recalibrated to the V3 dir_sum scale.
 ENGINE_A_V3_DIRECTIONAL_RAMP:
-  ENABLED: true
+  ENABLED: false
   APPLY_TO_CONFLUENCE: true
 # Forex quant TRADE must also pass session scoring (not only setup upgrades).
 ENGINE_A_V3_QUANT_SESSION_GATE:
@@ -134,6 +139,9 @@ ENGINE_A_V3_MR_OPPOSITION_GUARD:
 # Structural SL must be at least this many ATRs from entry (noise-stop floor).
 ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT: 0.35
 # Port selected V2 expectancy filters into V3 (multipliers / WATCH demotion).
+# BLOCKED_TREND_STATES only demotes when ENGINE_A_BLOCKED_TREND_STATES explicitly
+# configures a "live" scope. A flat list stays backtest-only (research contract in
+# scoring.get_blocked_trend_states) — it must NOT demote live scans.
 ENGINE_A_V3_LEGACY_FILTERS:
   ENABLED: true
   FOREX_EMA_CLUSTER: true
@@ -2145,7 +2153,11 @@ LIVE_PRICE_MAX_AGE_SEC:
   etf: 90
   crypto: 15
 LIVE_PRICE_BLOCK_EXECUTION: true
-LIVE_PRICE_BLOCK_EXECUTION_ON_UNKNOWN_AGE: true
+# UNKNOWN-age blocking OFF 2026-07-09: no producer attaches quoteAgeSec/quoteAgeEval
+# to signals yet (ageSec only exists on /api/prices entries), so unknown-age blocking
+# rejected 100% of executions (STALE_LIVE_QUOTE:AGE_UNKNOWN, e.g. Dow Jones 10:09).
+# Re-enable only after the scan/execution path measures and attaches quote age.
+LIVE_PRICE_BLOCK_EXECUTION_ON_UNKNOWN_AGE: false
 
 # ── Broker-side tick age check (Fix #3) ─────────────────────────────────────
 # Hard execution guard. When set, mt5_execute / bybit_execute reject the order

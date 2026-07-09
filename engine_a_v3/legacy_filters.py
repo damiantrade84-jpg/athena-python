@@ -54,20 +54,14 @@ def resolve_v3_trend_state(adx_value: float | None, asset_type: str) -> str:
 def _blocked_states_for_v3(pair_type: str) -> set[str]:
     """Blocked trend labels for V3 live demotion.
 
-    When ENGINE_A_V3_LEGACY_FILTERS.BLOCKED_TREND_STATES is on, use the live
-    scope if configured; otherwise honor a flat list (same labels as research).
+    Live scans only honor an explicitly configured "live" scope. A flat
+    ENGINE_A_BLOCKED_TREND_STATES list is backtest-only by contract
+    (scoring.get_blocked_trend_states) and must never demote live scans.
     """
     try:
-        from config import CONFIG
         from scoring import get_blocked_trend_states
 
-        live = get_blocked_trend_states({"type": pair_type}, scope="live")
-        if live:
-            return live
-        cfg = CONFIG.get("ENGINE_A_BLOCKED_TREND_STATES")
-        if isinstance(cfg, list):
-            return {str(s).upper() for s in cfg if s}
-        return set()
+        return get_blocked_trend_states({"type": pair_type}, scope="live")
     except Exception:
         return set()
 

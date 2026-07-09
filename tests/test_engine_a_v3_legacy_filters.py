@@ -16,7 +16,48 @@ def test_resolve_v3_trend_state_buckets():
     assert resolve_v3_trend_state(50.0, "forex") == "TRENDING"
 
 
-def test_blocked_trend_states_demote_trade(monkeypatch):
+def _blocked_state_filter_args() -> dict:
+    return dict(
+        asset_type="forex",
+        score_group="forex_majors",
+        family="forex",
+        direction="LONG",
+        confluence=2.5,
+        decision="TRADE",
+        snaps={"H4": {"adx": 10.0, "close": 1.1, "ema21": 1.1, "ema50": 1.09, "ema200": 1.08, "atr": 0.01}},
+        candles={"H4": []},
+        coherence={"h4": "UP", "d1": "UP"},
+        mom_diag={"adxValue": 10.0},
+        entry_tf="H1",
+    )
+
+
+def test_blocked_trend_states_demote_trade_with_live_scope(monkeypatch):
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_V3_LEGACY_FILTERS",
+        {
+            "ENABLED": True,
+            "FOREX_EMA_CLUSTER": False,
+            "CRYPTO_LATE_TREND": False,
+            "BLOCKED_TREND_STATES": True,
+        },
+    )
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_BLOCKED_TREND_STATES",
+        {"live": ["DEAD RANGING", "RANGING", "DEVELOPING"]},
+    )
+    confluence, decision, diag = apply_legacy_filters(**_blocked_state_filter_args())
+    assert diag.get("trendState") in {"DEAD RANGING", "RANGING", "DEVELOPING"}
+    assert diag.get("trendStateBlocked") is True
+    assert decision == "WATCH"
+    assert confluence == 2.5  # no mult when cluster/late-trend off
+
+
+def test_flat_blocked_trend_states_do_not_demote_live(monkeypatch):
+    """Flat ENGINE_A_BLOCKED_TREND_STATES lists are backtest-only by contract
+    (scoring.get_blocked_trend_states) and must not demote live V3 scans."""
     monkeypatch.setitem(
         CONFIG,
         "ENGINE_A_V3_LEGACY_FILTERS",
@@ -32,23 +73,10 @@ def test_blocked_trend_states_demote_trade(monkeypatch):
         "ENGINE_A_BLOCKED_TREND_STATES",
         ["DEAD RANGING", "DEVELOPING"],
     )
-    confluence, decision, diag = apply_legacy_filters(
-        asset_type="forex",
-        score_group="forex_majors",
-        family="forex",
-        direction="LONG",
-        confluence=2.5,
-        decision="TRADE",
-        snaps={"H4": {"adx": 10.0, "close": 1.1, "ema21": 1.1, "ema50": 1.09, "ema200": 1.08, "atr": 0.01}},
-        candles={"H4": []},
-        coherence={"h4": "UP", "d1": "UP"},
-        mom_diag={"adxValue": 10.0},
-        entry_tf="H1",
-    )
-    assert diag.get("trendState") in {"DEAD RANGING", "RANGING", "DEVELOPING"}
-    if diag.get("trendStateBlocked"):
-        assert decision == "WATCH"
-    assert confluence == 2.5  # no mult when cluster/late-trend off
+    confluence, decision, diag = apply_legacy_filters(**_blocked_state_filter_args())
+    assert diag.get("trendStateBlocked") is False
+    assert decision == "TRADE"
+    assert confluence == 2.5
 
 
 def test_legacy_filters_disabled_noop(monkeypatch):
