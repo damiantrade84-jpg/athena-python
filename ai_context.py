@@ -86,7 +86,13 @@ def resolve_ai_review_min_rr(signal: Dict[str, Any], resolved_style: str) -> flo
 
 
 def derive_engine_b_score_pct(engine_b: Dict[str, Any] | None) -> float:
-    """Return Engine B gate-completion percent when available; else score/max."""
+    """Return Engine B graded score percent (total score / max headroom).
+
+    gate_pct cannot serve as the headline: a signal is only emitted when every
+    mandatory gate passes, so gate_pct saturates at 100 for all emitted
+    signals. Prefer the graded total, then provided pct fields, with gate_pct
+    only as a last resort.
+    """
 
     def _num(value: Any) -> float | None:
         try:
@@ -97,17 +103,20 @@ def derive_engine_b_score_pct(engine_b: Dict[str, Any] | None) -> float:
             return None
 
     data = engine_b if isinstance(engine_b, dict) else {}
-    gate_pct = _num(data.get("gate_pct"))
-    if gate_pct is not None:
-        return gate_pct
     score = _num(data.get("score"))
     max_score = _num(data.get("max_possible")) or _num(data.get("maxScore"))
     provided_pct = _num(data.get("score_pct"))
+    if provided_pct is None:
+        provided_pct = _num(data.get("pct"))
     if score is not None and max_score and max_score > 0:
         derived = score / max_score * 100.0
         if provided_pct is None or abs(provided_pct - derived) > 1.0:
             return derived
-    return provided_pct if provided_pct is not None else 0.0
+        return provided_pct
+    if provided_pct is not None:
+        return provided_pct
+    gate_pct = _num(data.get("gate_pct"))
+    return gate_pct if gate_pct is not None else 0.0
 
 
 def classify_rr_by_style(asset_type: str, style: str, rr: float) -> str:

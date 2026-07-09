@@ -5217,7 +5217,7 @@ def _normalize_ai_analyze_signal(sig: dict) -> dict:
                 sig["confluencePct"] = derive_engine_b_score_pct(naked) if naked else None
             except Exception:
                 sig["confluencePct"] = _first_present(
-                    naked.get("gate_pct"), naked.get("pct"), naked.get("score_pct")
+                    naked.get("pct"), naked.get("score_pct"), naked.get("gate_pct")
                 )
         if sig.get("score_pct") is None:
             sig["score_pct"] = sig.get("confluencePct")
@@ -8168,11 +8168,9 @@ def api_scan_naked():
                     "direction": direction,
                     "price": current_price,
                     "confluenceScore": conf_data["score"],
-                    "confluencePct": (
-                        conf_data.get("gate_pct")
-                        if conf_data.get("gate_pct") is not None
-                        else conf_data["pct"]
-                    ),
+                    # Headline pct must be the graded total (score/max). gate_pct
+                    # is always 100 here: emission requires every mandatory gate.
+                    "confluencePct": conf_data["pct"],
                     "maxScore": conf_data.get("max_possible"),
                     "threshold": _min_score_scaled,
                     "volRatio": 1.0,
@@ -8182,17 +8180,9 @@ def api_scan_naked():
                     "session": {"name": "Global"},
                     "grade": "Naked Structure",
                     "trendState": seq,
-                    "edgeProbability": (
-                        conf_data.get("gate_pct")
-                        if conf_data.get("gate_pct") is not None
-                        else conf_data["pct"]
-                    ),
+                    "edgeProbability": conf_data["pct"],
                     "riskLevel": "Low",
-                    "score_pct": (
-                        conf_data.get("gate_pct")
-                        if conf_data.get("gate_pct") is not None
-                        else conf_data["pct"]
-                    ),
+                    "score_pct": conf_data["pct"],
                     "gate_pct": conf_data.get("gate_pct"),
                     "quality_pct": conf_data.get("pct"),
                     "is_naked": True,

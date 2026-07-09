@@ -318,8 +318,10 @@ def test_calibration_context_string_injects_engine_c_consensus_fields():
     assert "Engine C components: a_norm=0.86 b_norm=0.5" in text
 
 
-def test_derive_engine_b_score_pct_prefers_gate_pct():
-    assert derive_engine_b_score_pct({"gate_pct": 100, "score": 5.0, "max_possible": 11.5}) == 100.0
+def test_derive_engine_b_score_pct_ignores_saturated_gate_pct():
+    # gate_pct is 100 for every emitted signal; headline must stay graded.
+    derived = derive_engine_b_score_pct({"gate_pct": 100, "score": 5.0, "max_possible": 11.5})
+    assert round(derived, 1) == 43.5
 
 
 def test_derive_engine_b_score_pct_recomputes_stale_zero_percent():

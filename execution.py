@@ -335,7 +335,7 @@ def _quick_audit_context(sig: dict, engine_b: dict | None) -> dict:
 
             score_pct = derive_engine_b_score_pct(engine_b)
         except Exception:
-            score_pct = engine_b.get("gate_pct", engine_b.get("pct"))
+            score_pct = engine_b.get("pct", engine_b.get("gate_pct"))
         trend = engine_b.get("current_swing_sequence", sig.get("trendState", "RANGING"))
         regime = engine_b.get("regime", sig.get("regimeName", "RANGING"))
         edge_prob = (

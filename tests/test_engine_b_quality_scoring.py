@@ -201,7 +201,7 @@ def test_aggregate_quality_score_returns_points_and_max():
     assert components["structure_alignment"] == pytest.approx(0.5)
 
 
-def test_scanner_watchlist_prefers_gate_pct_for_score_floor(monkeypatch):
+def test_scanner_watchlist_uses_total_score_floor_not_gate_pct(monkeypatch):
     from scanner import _engine_b_structure_ready_watchlist_detail
 
     monkeypatch.setitem(
@@ -209,9 +209,8 @@ def test_scanner_watchlist_prefers_gate_pct_for_score_floor(monkeypatch):
         "ENGINE_B_STRUCTURE_READY_WATCHLIST",
         {"ENABLED": True, "MIN_SCORE_RATIO": 0.85},
     )
-    conf = {
+    base_conf = {
         "passed": False,
-        "score": 5.5,
         "gate_score": 5.0,
         "gate_max_possible": 5.0,
         "gate_pct": 100,
@@ -229,43 +228,64 @@ def test_scanner_watchlist_prefers_gate_pct_for_score_floor(monkeypatch):
         "bos_confirmed": True,
         "zone_touched": True,
     }
-    out = _engine_b_structure_ready_watchlist_detail(conf, res, config=config.CONFIG)
-    assert out is not None
 
-    b_score = float(conf.get("score", 0))
-    b_max = float(conf.get("max_possible", 5))
-    legacy_pct = round(b_score / b_max * 100, 1) if b_max else 0
-    assert float(conf.get("gate_pct")) == 100.0
-    assert legacy_pct < float(conf.get("gate_pct"))
+    # gate_pct is 100 whenever all mandatory gates pass, so it must not
+    # satisfy the score floor on its own: low graded total -> no watchlist.
+    low_quality = dict(base_conf, score=5.5)
+    assert (
+        _engine_b_structure_ready_watchlist_detail(low_quality, res, config=config.CONFIG)
+        is None
+    )
+
+    # High graded total (score/max >= MIN_SCORE_RATIO) qualifies.
+    high_quality = dict(base_conf, score=9.5)
+    assert (
+        _engine_b_structure_ready_watchlist_detail(high_quality, res, config=config.CONFIG)
+        is not None
+    )
 
 
 def test_weighted_scoring_enabled_reads_config():
     assert isinstance(weighted_scoring_enabled(), bool)
 
 
-def test_derive_engine_b_score_pct_prefers_gate_over_quality_total():
-  from ai_context import derive_engine_b_score_pct
+def test_derive_engine_b_score_pct_prefers_graded_total_over_gate_pct():
+    from ai_context import derive_engine_b_score_pct
 
-  conf = {
-      "gate_pct": 75.0,
-      "pct": 88.0,
-      "score": 5.28,
-      "max_possible": 6.04,
-  }
-  assert derive_engine_b_score_pct(conf) == 75.0
+    # gate_pct saturates at 100 for every emitted signal, so the headline must
+    # come from the graded total (score/max), never gate_pct.
+    conf = {
+        "gate_pct": 100.0,
+        "pct": 88.0,
+        "score": 5.28,
+        "max_possible": 6.04,
+    }
+    assert derive_engine_b_score_pct(conf) == 88.0
 
 
-def test_quick_audit_engine_b_score_pct_prefers_gate():
+def test_derive_engine_b_score_pct_derives_when_provided_pct_stale():
+    from ai_context import derive_engine_b_score_pct
+
+    conf = {
+        "gate_pct": 100.0,
+        "pct": 100.0,
+        "score": 5.28,
+        "max_possible": 6.04,
+    }
+    assert round(derive_engine_b_score_pct(conf), 1) == 87.4
+
+
+def test_quick_audit_engine_b_score_pct_uses_graded_total():
     from execution import _quick_audit_context
 
     ctx = _quick_audit_context(
         {"is_naked": True},
         {
-            "gate_pct": 74.0,
+            "gate_pct": 100.0,
             "pct": 88.0,
             "score": 5.3,
             "max_possible": 6.04,
             "structural_verdict": "CLEAR",
         },
     )
-    assert ctx["score_pct"] == 74.0
+    assert ctx["score_pct"] == 88.0

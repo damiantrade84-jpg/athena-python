@@ -15,6 +15,7 @@ Claude Code repo instructions. Keep this file short; use current source as truth
 
 - Inspect current files before claims or patches. Do not infer from old audits, memory files, or stale docs.
 - Keep Engine A, B, C, D, ASE, Research Lab, UI, and execution paths separate unless the task requires integration.
+- Engine A and Engine B scoring must not affect each other. Never write one engine's score, pct, or gate state into the other engine's score fields. Cross-engine consensus lives only in explicitly named blend/annotation fields (`combinedConviction`, `engine_b_*`) and must use graded totals (score/max_possible) — never binary gate outputs like `gate_pct`, which are 100 for every passing signal and silently saturate blends and headline scores.
 - Do not change thresholds, weights, gates, SL/TP, RR, strategy semantics, or execution safety unless explicitly requested.
 - Never bypass risk, freshness, kill switch, execution approval, broker, audit, or deterministic safety checks.
 - AI is advisory only and cannot execute, approve orders, mutate config, or override deterministic gates.

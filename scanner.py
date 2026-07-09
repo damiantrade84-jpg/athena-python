@@ -490,18 +490,6 @@ def _engine_b_structure_ready_watchlist_detail(
     except (TypeError, ValueError):
         score = 0.0
     try:
-        gate_score = float(conf_b.get("gate_score", score) or 0.0)
-    except (TypeError, ValueError):
-        gate_score = score
-    try:
-        gate_max = float(conf_b.get("gate_max_possible", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        gate_max = 0.0
-    try:
-        gate_pct = float(conf_b.get("gate_pct"))
-    except (TypeError, ValueError):
-        gate_pct = None
-    try:
         min_score = float(conf_b.get("min_score_scaled", 0.0) or 0.0)
     except (TypeError, ValueError):
         min_score = 0.0
@@ -515,10 +503,11 @@ def _engine_b_structure_ready_watchlist_detail(
         min_ratio = 0.85
     min_ratio = max(0.0, min(1.0, min_ratio))
 
-    if gate_max > 0 and gate_pct is not None:
-        score_ok = gate_pct >= (min_ratio * 100.0) if min_score <= 0 else gate_score >= (min_score * min_ratio)
-    elif min_score > 0:
-        score_ok = gate_score >= (min_score * min_ratio)
+    # min_score_scaled is a TOTAL-score floor (gates + quality bonuses), so it
+    # must be compared against the total score. gate_score/gate_pct are wrong
+    # units here: gate_pct is 100 for any full-gate pass regardless of quality.
+    if min_score > 0:
+        score_ok = score >= (min_score * min_ratio)
     elif max_possible > 0:
         score_ok = (score / max_possible) >= min_ratio
     else:
@@ -2463,7 +2452,10 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     sig_a["engine_b_max"] = round(b_max, 1)
                                     sig_a["engine_b_gate_score"] = round(b_gate_score, 2)
                                     sig_a["engine_b_gate_max"] = round(b_gate_max, 2) if b_gate_max else None
-                                    sig_a["engine_b_pct"] = round(b_gate_pct_f, 1)
+                                    # Graded pct (score/max). gate_pct saturates at 100 whenever the
+                                    # checklist passes, so it stays a separate diagnostic field.
+                                    sig_a["engine_b_pct"] = round(b_score / b_max * 100, 1) if b_max else 0.0
+                                    sig_a["engine_b_gate_pct"] = round(b_gate_pct_f, 1)
                                     sig_a["engine_b_direction"] = _engine_b_direction_used
                                     annotate_signal_direction_metadata(
                                         sig_a,
@@ -2482,7 +2474,10 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                     a_max = sig_a.get("maxScore", 3.0)
                                     a_score = sig_a.get("confluenceScore", 0)
                                     a_norm = float(sig_a.get("scoreNorm", 0))
-                                    b_norm = min(b_gate_pct_f / 100.0, 1.0)
+                                    # Blend input must be the graded Engine B total, never gate_pct
+                                    # (gate_pct == 100 for any pass, which saturates the blend and
+                                    # lets Engine B's binary gate state distort combinedConviction).
+                                    b_norm = min(b_score / b_max, 1.0) if b_max else 0.0
 
                                     # Use same regime-conditional weights as engine_c.
                                     _rl = (regime_label or "").upper()

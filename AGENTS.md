@@ -16,6 +16,7 @@ paper/demo only unless the user explicitly approves live trading.
 
 - Read current source before claims or patches. Do not rely on memory, old audits, or generated logs unless the user names them.
 - Use the smallest safe diff. No unrelated refactors, thresholds, weights, gate behavior, SL/TP, RR, or strategy changes unless requested.
+- Engine A and Engine B scoring must not affect each other. Never write one engine's score, pct, or gate state into the other engine's score fields. Cross-engine consensus lives only in explicitly named blend/annotation fields (`combinedConviction`, `engine_b_*`) and must use graded totals (score/max_possible) — never binary gate outputs like `gate_pct`, which are 100 for every passing signal and silently saturate blends and headline scores.
 - Never bypass risk, freshness, kill switch, execution approval, broker, audit, or deterministic safety gates.
 - AI is advisory only. It cannot execute, approve orders, mutate config, or override deterministic gates.
 - Never read, print, modify, or commit `.env`, secrets, API keys, tokens, or credentials.

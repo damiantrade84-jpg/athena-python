@@ -83,27 +83,22 @@ export default function EngineASignalCard({
   const bBreakdown = isNakedScan
     ? engineBScoreBreakdown((signal.naked_data || signal.engine_b || signal) as Record<string, unknown>)
     : null;
-  // Headline % reflects gate completion (gate_pct), not weighted quality total.
-  const nakedGatePct = isNakedScan
-    ? toNum(
-        raw.gate_pct ?? raw.engine_b_pct ?? (
-          bBreakdown?.gateScore != null && bBreakdown?.gateMax
-            ? (bBreakdown.gateScore / bBreakdown.gateMax) * 100
-            : NaN
-        ),
-        NaN,
-      )
-    : NaN;
+  // Headline % is the graded total (score/max incl. bonuses). gate_pct is 100
+  // for every emitted signal (all mandatory gates must pass to emit), so it is
+  // only a last-resort fallback, never the headline.
   const nakedQualityPct = isNakedScan
     ? toNum(raw.quality_pct ?? raw.confluencePct ?? raw.score_pct ?? raw.edgeProbability, NaN)
     : NaN;
+  const nakedGatePct = isNakedScan
+    ? toNum(raw.gate_pct ?? raw.engine_b_pct, NaN)
+    : NaN;
   const conf = isNakedScan
-    ? (Number.isFinite(nakedGatePct)
-        ? Math.max(0, Math.min(100, Math.round(nakedGatePct)))
-        : Number.isFinite(nakedQualityPct)
-          ? Math.max(0, Math.min(100, Math.round(nakedQualityPct)))
-          : bBreakdown?.totalScore != null && bBreakdown.totalMax
-            ? Math.max(0, Math.min(100, Math.round((bBreakdown.totalScore / bBreakdown.totalMax) * 100)))
+    ? (Number.isFinite(nakedQualityPct)
+        ? Math.max(0, Math.min(100, Math.round(nakedQualityPct)))
+        : bBreakdown?.totalScore != null && bBreakdown.totalMax
+          ? Math.max(0, Math.min(100, Math.round((bBreakdown.totalScore / bBreakdown.totalMax) * 100)))
+          : Number.isFinite(nakedGatePct)
+            ? Math.max(0, Math.min(100, Math.round(nakedGatePct)))
             : null)
     : confluencePct(signal);
   const conv = toNum(signal.conviction, NaN);
