@@ -11,6 +11,9 @@ from engine_a_v3.evaluator import evaluate_engine_a_v3, _parse_time
 from athena_app.services.market_state import candle_timestamp_epoch
 
 
+_TF_SECONDS = {"H1": 3600, "H4": 14_400, "D1": 86_400}
+
+
 def _walk_tf_for_signal(signal_tf: str) -> str:
     return signal_tf if signal_tf in ("H1", "H4", "D1") else "H4"
 
@@ -19,12 +22,12 @@ def _candles_for_tf(candles: dict[str, list], tf: str) -> list[dict]:
     return list(candles.get(tf) or [])
 
 
-def _find_entry_index(entry_candles: list[dict], signal_epoch: int) -> int | None:
+def _find_entry_index(entry_candles: list[dict], decision_epoch: int) -> int | None:
     epochs = [candle_timestamp_epoch(c) for c in entry_candles]
-    idx = bisect.bisect_right(epochs, signal_epoch)
-    if idx >= len(entry_candles) - 1:
+    idx = bisect.bisect_right(epochs, decision_epoch)
+    if idx >= len(entry_candles):
         return None
-    return idx + 1
+    return idx
 
 
 def run_diagnostic_v3_backtest(
@@ -94,8 +97,8 @@ def run_diagnostic_v3_backtest(
         if signal.decision != "TRADE" or not signal.qualified:
             continue
 
-        signal_epoch = walk_epochs[index]
-        entry_idx = _find_entry_index(entry_rows, signal_epoch)
+        decision_epoch = walk_epochs[index] + _TF_SECONDS[walk_tf]
+        entry_idx = _find_entry_index(entry_rows, decision_epoch)
         if entry_idx is None:
             continue
         entry_bar = entry_rows[entry_idx]
@@ -107,11 +110,9 @@ def run_diagnostic_v3_backtest(
         bar_low = float(entry_bar["low"])
         bar_high = float(entry_bar["high"])
         if bar_high < zone_low or bar_low > zone_high:
-            bar_open = float(entry_bar["open"])
-            entry = min(max(bar_open, zone_low), zone_high) if signal.direction == "LONG" else max(min(bar_open, zone_high), zone_low)
-        else:
-            bar_open = float(entry_bar["open"])
-            entry = min(max(bar_open, zone_low), zone_high) if signal.direction == "LONG" else max(min(bar_open, zone_high), zone_low)
+            continue
+        bar_open = float(entry_bar["open"])
+        entry = min(max(bar_open, zone_low), zone_high) if signal.direction == "LONG" else max(min(bar_open, zone_high), zone_low)
 
         sl = float(signal.sl)
         tp1 = float(signal.tp1) if signal.tp1 is not None else None
