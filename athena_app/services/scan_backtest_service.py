@@ -66,6 +66,17 @@ def handle_backtest_request(
             purge_gap=_pg,
             folds=max(1, _fd),
         )
+        if isinstance(result, dict) and result.get("error"):
+            try:
+                status = int(result.get("status", 400))
+            except (TypeError, ValueError):
+                status = 400
+            if status >= 400:
+                return {
+                    key: value
+                    for key, value in result.items()
+                    if key != "data"
+                }
         if allow_auto_toggle:
             toggle = auto_toggle_pair(pair, result)
             if toggle:

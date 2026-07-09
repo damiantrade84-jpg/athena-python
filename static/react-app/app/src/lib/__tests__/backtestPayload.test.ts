@@ -43,4 +43,24 @@ describe('buildBacktestRequest', () => {
       },
     });
   });
+
+  it('normalizes Engine A V3 validation requests to standard', () => {
+    const request = buildBacktestRequest({
+      engine: 'A',
+      pair: 'EURUSD',
+      style: 'intraday',
+      validationMode: 'walk_forward',
+      aseHorizon: 'both',
+      aseLookbackDays: 365,
+    });
+
+    expect(request).toEqual({
+      endpoint: '/api/backtest',
+      payload: {
+        pair: 'EURUSD',
+        style: 'intraday',
+        validation_mode: 'standard',
+      },
+    });
+  });
 });

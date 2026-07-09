@@ -9593,7 +9593,12 @@ def api_backtest():
             ),
         )
         if out.get("error"):
-            return jsonify({"error": out["error"]}), out.get("status", 400)
+            error_body = {
+                key: value
+                for key, value in out.items()
+                if key not in {"status", "data"}
+            }
+            return jsonify(_json_safe(error_body)), out.get("status", 400)
         return jsonify(_json_safe(out.get("data", {}))), out.get("status", 200)
 
     except Exception as e:

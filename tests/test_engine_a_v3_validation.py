@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -16,6 +17,80 @@ from engine_a_v3.validation import (
     build_validation_windows,
     provenance_sha256,
 )
+
+
+def _backtest_bars(timeframe: str, count: int = 100) -> list[dict]:
+    step = {"D1": timedelta(days=1), "H4": timedelta(hours=4), "H1": timedelta(hours=1)}[
+        timeframe
+    ]
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    return [
+        {
+            "time": (start + index * step).isoformat(),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "vol": 1_000.0,
+        }
+        for index in range(count)
+    ]
+
+
+@pytest.mark.parametrize("validation_mode", ["walk_forward", "purged_cv"])
+def test_v3_backtest_rejects_unsupported_validation_before_candle_fetch(
+    monkeypatch, validation_mode
+):
+    import backtest_runner
+
+    pair = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex", "source": "mt5"}
+    monkeypatch.setattr(
+        backtest_runner,
+        "_bt_cached_fetch",
+        lambda _pair, timeframe, *_args, **_kwargs: _backtest_bars(timeframe),
+    )
+    monkeypatch.setattr(
+        backtest_runner,
+        "_bt_confirmed_candles",
+        lambda _pair, _timeframe, candles: candles,
+    )
+    import engine_a_v3.backtest as v3_backtest
+
+    monkeypatch.setattr(v3_backtest, "run_v3_backtest", lambda *_args, **_kwargs: {"unexpected": True})
+
+    result = backtest_runner.backtest_pair(
+        pair,
+        style="intraday",
+        validation_mode=validation_mode,
+    )
+
+    assert result == {
+        "error": "ENGINE_A_V3_VALIDATION_MODE_UNSUPPORTED",
+        "status": 422,
+        "validation_mode": validation_mode,
+    }
+
+
+def test_v3_backtest_keeps_standard_validation_mode(monkeypatch):
+    import backtest_runner
+    import engine_a_v3.backtest as v3_backtest
+
+    pair = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex", "source": "mt5"}
+    monkeypatch.setattr(
+        backtest_runner,
+        "_bt_cached_fetch",
+        lambda _pair, timeframe, *_args, **_kwargs: _backtest_bars(timeframe),
+    )
+    monkeypatch.setattr(
+        backtest_runner,
+        "_bt_confirmed_candles",
+        lambda _pair, _timeframe, candles: candles,
+    )
+    monkeypatch.setattr(v3_backtest, "run_v3_backtest", lambda *_args, **_kwargs: {"success": True})
+
+    assert backtest_runner.backtest_pair(pair, style="intraday", validation_mode="standard") == {
+        "success": True
+    }
 
 
 def test_validation_uses_four_purged_folds_and_untouched_20_percent_holdout():

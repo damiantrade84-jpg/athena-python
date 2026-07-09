@@ -14,7 +14,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { ErrorBanner, SqnBadge, EquityAreaChart } from '@/components/shared';
 import { FlaskConical, Play, AlertTriangle, Trophy, Layers, ChevronsUpDown, Check } from 'lucide-react';
 import { cn, fmtNum, toNum } from '@/lib/utils';
-import { buildBacktestRequest, type ASEBacktestHorizon, type BacktestEngineKey } from '@/lib/backtestPayload';
+import {
+  buildBacktestRequest,
+  normalizeBacktestValidationMode,
+  type ASEBacktestHorizon,
+  type BacktestEngineKey,
+} from '@/lib/backtestPayload';
 import {
   normalizeBacktestDirection,
   resolveDirectionBreakdown,
@@ -440,6 +445,7 @@ export default function BacktestPanel() {
 
   const { data: pairsData } = useApiPoll<PairsResponse>('/api/pairs', 0);
   const allPairs = useMemo(() => flattenPairs(pairsData), [pairsData]);
+  const effectiveValidationMode = normalizeBacktestValidationMode(engine, validationMode);
 
   const { post: postBacktest, loading: running, error: btError } = useApiPost<BacktestResult>();
   const { post: postBatchB } = useApiPost<EngineBBatchResponse>();
@@ -456,7 +462,7 @@ export default function BacktestPanel() {
       engine,
       pair: pairKey,
       style,
-      validationMode,
+      validationMode: effectiveValidationMode,
       aseHorizon,
       aseLookbackDays,
     });
@@ -530,7 +536,7 @@ export default function BacktestPanel() {
     );
     refreshHistory();
   }, [
-    pair, engine, style, validationMode, postBacktest, postBatchB, showToast, refreshHistory,
+    pair, engine, style, validationMode, effectiveValidationMode, postBacktest, postBatchB, showToast, refreshHistory,
     batchMode, batchList, allPairs, aseHorizon, aseLookbackDays,
   ]);
 
@@ -633,12 +639,12 @@ export default function BacktestPanel() {
                     />
                   </>
                 )}
-                <Select value={validationMode} onValueChange={setValidationMode}>
+                <Select value={effectiveValidationMode} onValueChange={setValidationMode}>
                   <SelectTrigger className="w-[150px] h-8 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="standard">standard</SelectItem>
-                    <SelectItem value="walk_forward">walk_forward</SelectItem>
-                    <SelectItem value="purged_cv">purged_cv</SelectItem>
+                    <SelectItem value="walk_forward" disabled={engine === 'A'}>walk_forward</SelectItem>
+                    <SelectItem value="purged_cv" disabled={engine === 'A'}>purged_cv</SelectItem>
                   </SelectContent>
                 </Select>
                 <Button size="sm" className="h-8 gap-1 text-xs" onClick={handleRun} disabled={running}>
@@ -661,6 +667,11 @@ export default function BacktestPanel() {
               <p className="text-[10px] text-muted-foreground">
                 {ENGINE_OPTIONS.find((o) => o.value === engine)?.help}
               </p>
+              {engine === 'A' && (
+                <p className="text-[10px] text-muted-foreground">
+                  Walk-forward and purged-CV are not implemented for Engine A V3; standard validation is the only available mode.
+                </p>
+              )}
               {btError && <ErrorBanner message={btError} onRetry={handleRun} />}
             </CardContent>
           </Card>
