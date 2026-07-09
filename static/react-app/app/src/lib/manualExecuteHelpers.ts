@@ -2,10 +2,12 @@ import type {
   AIChartReviewResponse,
   AiTextReviewResponse,
   EngineASignal,
+  EngineBNakedResult,
   ScalpAIChartReviewResponse,
   SuggestedTradePlan,
 } from '@/types/athena';
 import { isEngineAV3Signal, resolveEngineAV3Signal } from '@/lib/engineAV3';
+import { readEngineBCanonicalGatesFromNaked } from '@/lib/engineBCanonicalGates';
 
 export type QuickExecuteStyle = 'scalp' | 'intraday' | 'swing' | 'auto';
 export type ExecutionVolumeMode = 'min_lot' | 'calculated';
@@ -174,6 +176,68 @@ export function resolveEngineBExecutionPreviewLevels(
     ?? positiveNumber(engineB?.price as number | undefined);
 
   return { entry, sl };
+}
+
+function engineBNakedPayload(signal: EngineASignal): EngineBNakedResult | null {
+  const raw = signal as Record<string, unknown>;
+  const naked = (raw.naked_data ?? raw.engine_b) as EngineBNakedResult | undefined;
+  return naked && typeof naked === 'object' ? naked : null;
+}
+
+function engineBCanonicalTradeOk(signal: EngineASignal): boolean | null {
+  const raw = signal as Record<string, unknown>;
+  const topLevel = raw.canonical_trade_ok ?? raw.engine_b_canonical_actionable;
+  if (topLevel !== undefined && topLevel !== null) return Boolean(topLevel);
+  const naked = engineBNakedPayload(signal);
+  if (!naked) return null;
+  const gates = readEngineBCanonicalGatesFromNaked(naked);
+  return gates?.canonicalTradeOk ?? null;
+}
+
+function engineBExecutableTp(signal: EngineASignal): number | undefined {
+  const raw = signal as Record<string, unknown>;
+  const naked = engineBNakedPayload(signal);
+  return positiveNumber(signal.tp1 ?? signal.tp)
+    ?? positiveNumber(naked?.recommended_take_profit as number | undefined)
+    ?? positiveNumber(naked?.final_take_profit as number | undefined)
+    ?? positiveNumber((raw.engine_b as Record<string, unknown> | undefined)?.recommended_take_profit as number | undefined);
+}
+
+/** Engine B score threshold pass is separate from canonical actionability. */
+export function canExecuteEngineBSignal(signal: EngineASignal | null): boolean {
+  if (!signal || !isEngineBOnlySignal(signal)) return false;
+  if (signal.executable === false) return false;
+  const canonicalOk = engineBCanonicalTradeOk(signal);
+  if (canonicalOk === false) return false;
+  const { entry, sl } = resolveEngineBExecutionPreviewLevels(signal, { engineBOnly: true });
+  const tp = engineBExecutableTp(signal);
+  return isPositiveNumber(entry) && isPositiveNumber(sl) && isPositiveNumber(tp);
+}
+
+export function engineBExecuteBlockReason(signal: EngineASignal | null): string | null {
+  if (!signal || !isEngineBOnlySignal(signal)) return null;
+  if (signal.executable === false) {
+    const freshness = (signal as { dataFreshness?: { reason?: string } }).dataFreshness;
+    if (freshness?.reason) return 'Stale data';
+    return 'Not executable';
+  }
+  const canonicalOk = engineBCanonicalTradeOk(signal);
+  if (canonicalOk === false) {
+    const naked = engineBNakedPayload(signal);
+    const gates = naked ? readEngineBCanonicalGatesFromNaked(naked) : null;
+    const raw = signal as Record<string, unknown>;
+    const status = gates?.canonicalStatus
+      ?? (typeof raw.engine_b_canonical_status === 'string' ? raw.engine_b_canonical_status : null);
+    if (status) return `NO ENTRY · ${status}`;
+    if (gates?.confidencePassed && !gates.canonicalTradeOk) return 'NO ENTRY';
+    return 'NO ENTRY';
+  }
+  const { entry, sl } = resolveEngineBExecutionPreviewLevels(signal, { engineBOnly: true });
+  const tp = engineBExecutableTp(signal);
+  if (!isPositiveNumber(entry) || !isPositiveNumber(sl) || !isPositiveNumber(tp)) {
+    return 'Missing SL/TP';
+  }
+  return null;
 }
 
 export interface AiLevelOverride {
@@ -429,16 +493,8 @@ export function evaluateTvChartExecuteBlock(args: {
 
   const isEngineBOnly = isEngineBOnlySignal(signal);
   if (isEngineBOnly) {
-    const { entry, sl } = resolveEngineBExecutionPreviewLevels(signal, { engineBOnly: true });
-    const raw = signal as Record<string, unknown>;
-    const naked = (raw.naked_data ?? raw.engine_b) as Record<string, unknown> | undefined;
-    const tp = signal.tp1 ?? signal.tp
-      ?? positiveNumber(naked?.recommended_take_profit as number | undefined)
-      ?? positiveNumber(naked?.final_take_profit as number | undefined);
-    if (!isPositiveNumber(entry) || !isPositiveNumber(sl) || !isPositiveNumber(tp)) {
-      return 'Missing SL/TP';
-    }
-    if (signal.executable === false) return 'Not executable';
+    const blockReason = engineBExecuteBlockReason(signal);
+    if (blockReason) return blockReason;
   } else {
     const entry = signal.entry ?? signal.price;
     const tp = signal.tp1 ?? signal.tp;

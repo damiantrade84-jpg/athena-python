@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   aiLevelOverrideFromReview,
   buildQuickExecutePayload,
+  canExecuteEngineBSignal,
   computeLevelOverrideRR,
+  engineBExecuteBlockReason,
   parseAiLevelString,
 } from '../manualExecuteHelpers';
 import type { AiTextReviewResponse, EngineASignal } from '@/types/athena';
@@ -93,5 +95,53 @@ describe('buildQuickExecutePayload level_override', () => {
 describe('computeLevelOverrideRR', () => {
   it('computes reward/risk for short setup', () => {
     expect(computeLevelOverrideRR(0.04984, 0.05106, 0.0477)).toBeCloseTo(1.75, 1);
+  });
+});
+
+describe('engine B execute gating', () => {
+  const bchLike = {
+    pair: 'BCH/USDT',
+    display: 'BCH/USDT',
+    type: 'crypto',
+    direction: 'LONG',
+    is_naked: true,
+    executable: true,
+    price: 237.2,
+    sl: 228.42,
+    tp1: 241.02,
+    confidence_passed: true,
+    canonical_trade_ok: false,
+    engine_b_canonical_status: 'REJECT_LEARNING_CONTEXT',
+    naked_data: {
+      passed: true,
+      confidence: { passed: true, score: 130, min_score_scaled: 129 },
+      canonical_trade_ok: false,
+      engine_b_canonical_actionable: false,
+      engine_b_canonical_status: 'REJECT_LEARNING_CONTEXT',
+      execution_sl: 228.42,
+      execution_tp1: 241.02,
+      current_price: 237.2,
+    },
+  } as EngineASignal;
+
+  it('blocks execute when score passes but canonical trade is false', () => {
+    expect(canExecuteEngineBSignal(bchLike)).toBe(false);
+    expect(engineBExecuteBlockReason(bchLike)).toBe('NO ENTRY · REJECT_LEARNING_CONTEXT');
+  });
+
+  it('allows execute when canonical trade is true and levels are present', () => {
+    const actionable = {
+      ...bchLike,
+      canonical_trade_ok: true,
+      engine_b_canonical_status: 'ACTIONABLE',
+      naked_data: {
+        ...bchLike.naked_data,
+        canonical_trade_ok: true,
+        engine_b_canonical_actionable: true,
+        engine_b_canonical_status: 'ACTIONABLE',
+      },
+    } as EngineASignal;
+    expect(canExecuteEngineBSignal(actionable)).toBe(true);
+    expect(engineBExecuteBlockReason(actionable)).toBeNull();
   });
 });

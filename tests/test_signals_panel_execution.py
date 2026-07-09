@@ -72,3 +72,12 @@ def test_engine_b_ai_text_review_uses_b_presentation_payload():
     assert "feed === 'B' && hasEngineBFeedRow(row)" in panel_src
     assert "return engineBPresentationSignal(row);" in panel_src
     assert "onClick={() => runAiTextReview(aiTextReviewSignal(selectedRow, feedEngine))}" in panel_src
+
+
+def test_engine_b_execute_uses_canonical_actionability_gate():
+    panel_src = _source()
+
+    assert "canExecuteEngineBSignal" in panel_src
+    assert "engineBExecuteBlockReason" in panel_src
+    assert "showStyleExecuteToolbar" in panel_src
+    assert "feedEngine === 'B' && hasEngineBFeedRow(selectedRow)" in panel_src

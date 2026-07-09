@@ -212,11 +212,11 @@ def test_bybit_execute_drift_block_rejects_when_drift_above_limit(monkeypatch):
             return None
 
         def fetch_ticker(self, _sym):
-            # 2% above the signal price — definitely above a 0.5% drift cap.
+            # 2% above the signal price on last — drift gate uses last, not ask.
             return {
-                "ask": 51_000.0,
+                "ask": 51_010.0,
                 "bid": 50_990.0,
-                "last": 50_995.0,
+                "last": 51_000.0,
                 "timestamp": 1_716_200_000.0 * 1000.0,
             }
 
@@ -253,7 +253,122 @@ def test_bybit_execute_drift_block_rejects_when_drift_above_limit(monkeypatch):
     assert abs(result["providerDrift"] - 0.02) < 1e-6
     assert result["signalDriftLimitPct"] == 0.005
     assert result["signalPrice"] == 50_000.0
-    assert result["brokerPrice"] == 51_000.0
+    assert result["brokerPrice"] == 51_010.0
+    assert result.get("driftVsLast") == result["providerDrift"]
+    assert result.get("driftVsExecutable") is not None
+
+
+def test_bybit_execute_drift_passes_when_last_near_signal_despite_wide_ask(monkeypatch):
+    """AAVE-like case: wide ask premium must not trip drift when last is near signal."""
+    import bybit_executor
+    from risk_engine import RiskApproval
+
+    class _StubExchange:
+        def load_markets(self):
+            return None
+
+        def fetch_ticker(self, _sym):
+            return {
+                "ask": 90.22,
+                "bid": 89.90,
+                "last": 89.50,
+                "timestamp": 1_716_200_000.0 * 1000.0,
+            }
+
+        def create_market_order(self, *_a, **_kw):
+            raise RuntimeError("STUB_ORDER_PATH_REACHED")
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _StubExchange())
+    monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *a, **k: None)
+    monkeypatch.setattr(bybit_executor.time, "time", lambda: 1_716_200_001.0)
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_SIGNAL_DRIFT_PCT", {"crypto": 0.005})
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"bybit": None})
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_EXECUTION_SPREAD_PCT", {"crypto": None})
+
+    approval = RiskApproval(
+        approved=True,
+        volume=0.1,
+        risk_amount=10.0,
+        risk_pct=0.5,
+        portfolio_heat=0.0,
+        drawdown_pct=0.0,
+        reason="test",
+    )
+    signal = {
+        "pair": "AAVE/USDT",
+        "symbol": "AAVEUSDT",
+        "direction": "LONG",
+        "type": "crypto",
+        "price": 89.08,
+        "sl": 88.0,
+        "tp1": 91.0,
+        "engine": "intraday",
+        "candleFetchMeta": {"H1": {"signalFeed": "bybit"}},
+    }
+    result = bybit_executor.bybit_execute(signal, approval)
+    assert result["success"] is False
+    assert "SIGNAL_DRIFT_TOO_LARGE" not in (result.get("error") or "")
+    assert "STUB_ORDER_PATH_REACHED" in (result.get("error") or "")
+
+
+def test_bybit_execute_drift_rejects_when_last_stale_not_just_ask(monkeypatch):
+    import bybit_executor
+    from risk_engine import RiskApproval
+
+    class _StubExchange:
+        def load_markets(self):
+            return None
+
+        def fetch_ticker(self, _sym):
+            return {
+                "ask": 90.50,
+                "bid": 90.40,
+                "last": 91.00,
+                "timestamp": 1_716_200_000.0 * 1000.0,
+            }
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _StubExchange())
+    monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *a, **k: None)
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_SIGNAL_DRIFT_PCT", {"crypto": 0.005})
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"bybit": None})
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_EXECUTION_SPREAD_PCT", {"crypto": None})
+
+    approval = RiskApproval(
+        approved=True,
+        volume=0.1,
+        risk_amount=10.0,
+        risk_pct=0.5,
+        portfolio_heat=0.0,
+        drawdown_pct=0.0,
+        reason="test",
+    )
+    signal = {
+        "pair": "AAVE/USDT",
+        "symbol": "AAVEUSDT",
+        "direction": "LONG",
+        "type": "crypto",
+        "price": 89.08,
+        "sl": 88.0,
+        "tp1": 91.0,
+    }
+    result = bybit_executor.bybit_execute(signal, approval)
+    assert result["success"] is False
+    assert "SIGNAL_DRIFT_TOO_LARGE" in result["error"]
+    assert result.get("driftVsLast") is not None
+    assert result.get("driftVsExecutable") is not None
+    assert result.get("brokerLast") == 91.00
+
+
+def test_should_refresh_engine_b_before_execute_for_fresh_crypto() -> None:
+    from execution import _should_refresh_engine_b_before_execute
+
+    sig = {"type": "crypto", "price": 89.08}
+    assert _should_refresh_engine_b_before_execute(
+        sig, sig_age=5, max_age=300, missing_price=False
+    )
+    assert not _should_refresh_engine_b_before_execute(
+        {"type": "forex", "price": 1.1}, sig_age=5, max_age=300, missing_price=False
+    )
 
 
 def test_bybit_execute_drift_disabled_does_not_block(monkeypatch):

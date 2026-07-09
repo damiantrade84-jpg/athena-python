@@ -242,6 +242,57 @@ def _bybit_execution_side_price(ticker: dict, direction: str) -> float | None:
     return price if price > 0 else None
 
 
+def _bybit_drift_reference_price(ticker: dict) -> float | None:
+    """Return last or mid for the signal drift gate — not the executable side."""
+    if not isinstance(ticker, dict):
+        return None
+    try:
+        last = float(ticker.get("last") or 0)
+        if last > 0:
+            return last
+    except (TypeError, ValueError):
+        pass
+    try:
+        ask = float(ticker.get("ask") or 0)
+        bid = float(ticker.get("bid") or 0)
+        if ask > 0 and bid > 0 and ask >= bid:
+            return (ask + bid) / 2.0
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _signal_price_source_from_meta(signal: dict) -> str | None:
+    """Best-effort signal-feed label for drift diagnostics."""
+    meta = signal.get("candleFetchMeta")
+    if isinstance(meta, dict):
+        for tf_meta in meta.values():
+            if not isinstance(tf_meta, dict):
+                continue
+            if tf_meta.get("signalFeed"):
+                return str(tf_meta.get("signalFeed"))
+            if tf_meta.get("upstream"):
+                return str(tf_meta.get("upstream"))
+    feed_meta = signal.get("crypto_signal_feed_meta")
+    if isinstance(feed_meta, dict):
+        for tf_meta in feed_meta.values():
+            if isinstance(tf_meta, dict) and tf_meta.get("signalFeed"):
+                return str(tf_meta.get("signalFeed"))
+    return None
+
+
+def _bybit_drift_pct(signal_price: float, reference_price: float | None) -> float | None:
+    if signal_price <= 0 or reference_price is None:
+        return None
+    try:
+        ref = float(reference_price)
+    except (TypeError, ValueError):
+        return None
+    if ref <= 0:
+        return None
+    return abs(ref - signal_price) / signal_price
+
+
 def _uses_trailing_atr_exit(signal: dict) -> bool:
     """True when Engine A/B exits are managed by the timed-exit chandelier trail."""
     mode = str((CONFIG.get("TIMED_EXIT") or {}).get("tp_mode", "fixed")).strip().lower()
@@ -1566,20 +1617,19 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         sl = float(signal.get("sl", 0) or 0)
         tp1 = float(signal.get("tp1", 0) or 0)
         _v3_tp2 = float(signal.get("tp2", 0) or 0)
+        # GAP-7 — signal-to-broker drift: compare scan-time signal-feed candle close
+        # to broker last/mid on the same venue. Executable ask/bid is used for the
+        # fill and for rebase math, but bid-ask spread must not trip the drift gate.
         signal_price = float(signal.get("price") or signal.get("livePrice") or 0)
+        signal_price_ref = signal.get("signalPriceRef")
+        drift_ref_price = _bybit_drift_reference_price(ticker)
+        _provider_drift_pct = _bybit_drift_pct(signal_price, drift_ref_price)
+        _executable_drift_pct = _bybit_drift_pct(signal_price, float(price) if price else None)
         if _v3_exit_policy == "SPLIT_50_50":
             split_level_error = _validate_exit_levels(direction, signal_price, sl, _v3_tp2)
             if split_level_error:
                 return {"success": False, "error": f"ENGINE_A_V3_SPLIT_LEVELS_INVALID: {split_level_error}"}
 
-        # GAP-7 — provider drift between the signal price (Binance candle close
-        # at scan time) and the broker side (Bybit ask for LONG / bid for SHORT
-        # taken seconds earlier above). Computed once and reused by both the
-        # hard drift gate below and the existing 1% rebase block further down.
-        if signal_price > 0:
-            _provider_drift_pct = abs(float(price) - signal_price) / signal_price
-        else:
-            _provider_drift_pct = None
         _drift_limit = _bybit_max_signal_drift_pct(signal)
         if (
             _drift_limit is not None
@@ -1587,21 +1637,34 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             and _provider_drift_pct > _drift_limit
         ):
             log.warning(
-                f"[BYBIT] {ccxt_symbol}: signal-to-execution drift "
+                f"[BYBIT] {ccxt_symbol}: signal-to-broker drift "
                 f"{_provider_drift_pct*100:.4f}% exceeds MAX_SIGNAL_DRIFT_PCT "
                 f"cap {_drift_limit*100:.4f}% — rejecting"
             )
-            return {
+            _reject_payload = {
                 "success": False,
                 "error": (
                     f"SIGNAL_DRIFT_TOO_LARGE: {_provider_drift_pct*100:.4f}% > "
                     f"{_drift_limit*100:.4f}% limit"
                 ),
                 "providerDrift": round(_provider_drift_pct, 6),
+                "driftVsLast": round(_provider_drift_pct, 6),
                 "signalDriftLimitPct": _drift_limit,
                 "signalPrice": signal_price,
                 "brokerPrice": float(price),
+                "brokerLast": drift_ref_price,
+                "signalPriceSource": _signal_price_source_from_meta(signal),
             }
+            if signal_price_ref is not None:
+                _reject_payload["signalPriceRef"] = signal_price_ref
+            if _executable_drift_pct is not None:
+                _reject_payload["driftVsExecutable"] = round(_executable_drift_pct, 6)
+            try:
+                _reject_payload["brokerAsk"] = float(ticker.get("ask") or 0) or None
+                _reject_payload["brokerBid"] = float(ticker.get("bid") or 0) or None
+            except (TypeError, ValueError):
+                pass
+            return _reject_payload
 
         override_meta = signal.get("level_override")
         if not isinstance(override_meta, dict):
@@ -1631,8 +1694,8 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 )
 
         # Rebase levels when the scanned price is materially stale versus the live fill price.
-        elif signal_price > 0 and sl and tp1 and _provider_drift_pct is not None:
-            if _provider_drift_pct > 0.01:
+        elif signal_price > 0 and sl and tp1 and _executable_drift_pct is not None:
+            if _executable_drift_pct > 0.01:
                 sl_offset = float(sl) - signal_price
                 tp_offset = float(tp1) - signal_price
                 _pre_rebase_sl = float(sl)
@@ -1642,7 +1705,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 signal["sl"] = sl
                 signal["tp1"] = tp1
                 log.info(
-                    f"[BYBIT] {ccxt_symbol}: price drift {_provider_drift_pct:.1%} ({signal_price}→{price}) — rebased SL={sl} TP={tp1}"
+                    f"[BYBIT] {ccxt_symbol}: price drift {_executable_drift_pct:.1%} ({signal_price}→{price}) — rebased SL={sl} TP={tp1}"
                 )
                 # F4: classify this rebase. Engine B / naked structural levels
                 # were placed at specific market structure; parallel-shifting
@@ -1655,7 +1718,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                 except Exception:
                     _is_structural = False
                 _structural_rebase_event = {
-                    "drift_pct": round(_provider_drift_pct, 6),
+                    "drift_pct": round(_executable_drift_pct, 6),
                     "signal_price": signal_price,
                     "broker_price": float(price),
                     "pre_rebase_sl": _pre_rebase_sl,
@@ -1684,10 +1747,15 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
                         "success": False,
                         "error": (
                             "STRUCTURAL_DRIFT_REQUIRES_REFRESH: Engine B/structural levels parallel-shifted"
-                            f" by drift {_provider_drift_pct*100:.4f}% — refuse fail-closed per config"
+                            f" by drift {_executable_drift_pct*100:.4f}% — refuse fail-closed per config"
                         ),
                         "structuralRebase": _structural_rebase_event,
                         "providerDrift": round(_provider_drift_pct, 6),
+                        "driftVsExecutable": (
+                            round(_executable_drift_pct, 6)
+                            if _executable_drift_pct is not None
+                            else None
+                        ),
                         "signalPrice": signal_price,
                         "brokerPrice": float(price),
                     }

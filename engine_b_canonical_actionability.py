@@ -1054,5 +1054,7 @@ def apply_to_naked_signal(
     ):
         if key in conf:
             signal[key] = conf[key]
+    if conf.get("canonical_trade_ok") is False or conf.get("suggested_levels_executable") is False:
+        signal["executable"] = False
     blocked = should_block_normal_routing(str(conf.get("engine_b_canonical_status") or ""))
     return signal, blocked

@@ -28,6 +28,7 @@ from engine_b_canonical_actionability import (
     STRUCTURE_PASS,
     STRUCTURE_REJECT,
     attach_canonical_actionability,
+    apply_to_naked_signal,
     reconcile_engine_b_actionability,
 )
 from market_structure import (
@@ -722,3 +723,28 @@ def test_rejected_setup_canonical_badge_state_not_all_pass():
     assert badge["location"] == "PASS"
     assert badge["room_rr"] == "FAIL"
     assert badge["confidence"] == "PASSED_GATE_FAILED"
+
+
+def test_apply_to_naked_signal_marks_executable_false_when_canonical_trade_false():
+    signal = {
+        "pair": "BCH/USDT",
+        "direction": "LONG",
+        "price": 237.2,
+        "is_naked": True,
+        "executable": True,
+        "naked_data": {
+            "passed": True,
+            "structure_ok": True,
+            "location_ok": True,
+            "entry_ok": True,
+            "room_ok": False,
+            "rr_ok": True,
+            "execution_sl": 228.4,
+            "execution_tp1": 241.0,
+            "current_price": 237.2,
+        },
+    }
+    updated, blocked = apply_to_naked_signal(signal)
+    assert updated["canonical_trade_ok"] is False
+    assert updated["executable"] is False
+    assert blocked is False

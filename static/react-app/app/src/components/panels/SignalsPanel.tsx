@@ -34,7 +34,9 @@ import apiClient from '@/lib/apiClient';
 import {
   aiLevelOverrideFromReview,
   buildQuickExecutePayload,
+  canExecuteEngineBSignal,
   computeLevelOverrideRR,
+  engineBExecuteBlockReason,
   resolveEngineBExecutionPreviewLevels,
 } from '@/lib/manualExecuteHelpers';
 import VolumeModeField from '@/components/execution/VolumeModeField';
@@ -300,23 +302,50 @@ function rowMatchesFeed(row: UnifiedRow, feed: EngineSource): boolean {
   return row.engines.has('A');
 }
 
-function canExecuteRow(row: UnifiedRow | null): boolean {
+function canExecuteRow(row: UnifiedRow | null, feed: EngineSource = 'A'): boolean {
   if (!row) return false;
+  const bPresentation = hasEngineBFeedRow(row) ? engineBPresentationSignal(row) : null;
+  if (feed === 'B' && bPresentation) {
+    return canExecuteEngineBSignal(bPresentation);
+  }
   const bSignal = row.engineBSignal;
   if (bSignal?.is_naked) {
-    if (bSignal.executable === false) return false;
-    return true;
+    return canExecuteEngineBSignal(bSignal);
   }
   if (row.signal.executable === false) return false;
   if (row.engines.has('A') && row.signal.engineATradeEnabled === false) return false;
   // Engine B alone is always executable (it has its own gates). Engine A
   // watchlist tier is display-only.
-  if (row.engines.has('B') && !row.engines.has('A')) return true;
+  if (row.engines.has('B') && !row.engines.has('A')) {
+    return canExecuteEngineBSignal(row.signal);
+  }
   const tier = String(
     row.signal.signalTier || row.signal.scan_tier || row.signal.signalClass || '',
   ).toLowerCase();
   if (tier.includes('watch') || tier === 'skip' || tier === 'blocked') return false;
   return tier === 'trade' || tier === 'criteria' || row.signal.trade === true;
+}
+
+function executeBlockReasonForRow(row: UnifiedRow | null, feed: EngineSource = 'A'): string | null {
+  if (!row) return null;
+  const bPresentation = hasEngineBFeedRow(row) ? engineBPresentationSignal(row) : null;
+  if (feed === 'B' && bPresentation) {
+    return engineBExecuteBlockReason(bPresentation);
+  }
+  const bSignal = row.engineBSignal;
+  if (bSignal?.is_naked) {
+    return engineBExecuteBlockReason(bSignal);
+  }
+  if (row.engines.has('B') && !row.engines.has('A')) {
+    return engineBExecuteBlockReason(row.signal);
+  }
+  if (row.signal.executable === false) return 'Not executable';
+  if (row.engines.has('A') && row.signal.engineATradeEnabled === false) return 'Research-only';
+  const tier = String(
+    row.signal.signalTier || row.signal.scan_tier || row.signal.signalClass || '',
+  ).toLowerCase();
+  if (tier.includes('watch') || tier === 'skip' || tier === 'blocked') return 'Watchlist only';
+  return null;
 }
 
 function signalTraceId(signal: EngineASignal | null): string | null {
@@ -684,15 +713,20 @@ export default function SignalsPanel() {
     showToast(`Opening ${sig.display || symbol} on TV Chart for AI review`, 'info');
   }, [setActivePanel, setTvChartIntent, showToast]);
 
-  const selectedCanExecute = canExecuteRow(selectedRow);
+  const selectedCanExecute = canExecuteRow(selectedRow, feedEngine);
+  const selectedExecuteBlockReason = executeBlockReasonForRow(selectedRow, feedEngine);
   const executeDisabled = isTestMode || !selectedCanExecute;
   const executeLabel = isTestMode
     ? 'TEST MODE'
     : !selectedCanExecute
-      ? 'WATCHLIST'
+      ? (selectedExecuteBlockReason || 'WATCHLIST')
       : isPaper
         ? 'PAPER MODE'
         : 'Execute';
+  const showStyleExecuteToolbar = selectedRow
+    ? (feedEngine === 'B' && hasEngineBFeedRow(selectedRow))
+      || !isEngineAV3Signal(selectedRow.signal)
+    : false;
   const crossEngineNotes = useMemo(
     () => (selectedRow ? crossEngineContextNotes(selectedRow) : []),
     [selectedRow],
@@ -1209,19 +1243,22 @@ export default function SignalsPanel() {
                     </Button>
 
                     {/* Per-style execute toolbar */}
-                    {isEngineAV3Signal(selectedRow.signal) ? (
-                      <Card className="border-border/60 bg-card/50">
-                        <CardContent className="p-3 text-[11px] text-muted-foreground">
-                          V3 execution re-validates the fixed {selectedRow.signal.horizon || 'signal'} horizon
-                          from fresh confirmed candles and submits broker minimum volume on a verified demo venue.
-                        </CardContent>
-                      </Card>
-                    ) : (
+                    {showStyleExecuteToolbar ? (
                     <Card className="border-border/60 bg-card/50">
                       <CardContent className="p-3 space-y-3">
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-[10px] uppercase text-muted-foreground">Execute by Style</p>
                         </div>
+                        {executeDisabled && selectedExecuteBlockReason && (
+                          <p className="text-[10px] text-warning leading-snug">
+                            {selectedExecuteBlockReason}
+                            {selectedExecuteBlockReason === 'NO ENTRY' && (
+                              <span className="block text-muted-foreground mt-1">
+                                Score cleared the threshold, but Engine B structural gates did not pass.
+                              </span>
+                            )}
+                          </p>
+                        )}
                         <VolumeModeField
                           compact
                           volumeMode={volumeMode}
@@ -1269,6 +1306,13 @@ export default function SignalsPanel() {
                         <p className="text-[10px] text-muted-foreground">
                           Backend recomputes SL/TP for the chosen style (ATR ladder). Sizing scales risk between 0.25x and 1.0x.
                         </p>
+                      </CardContent>
+                    </Card>
+                    ) : (
+                    <Card className="border-border/60 bg-card/50">
+                      <CardContent className="p-3 text-[11px] text-muted-foreground">
+                        V3 execution re-validates the fixed {selectedRow.signal.horizon || 'signal'} horizon
+                        from fresh confirmed candles and submits broker minimum volume on a verified demo venue.
                       </CardContent>
                     </Card>
                     )}
