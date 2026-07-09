@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 import exit_policy
 import telegram_notify
+from data_feeds import _fetch_bybit_ticker
 
 log = logging.getLogger("sentinel")
 
@@ -167,14 +168,46 @@ def _bybit_max_signal_drift_pct(signal: dict) -> float | None:
     return None
 
 
-def _bybit_ticker_age_seconds(ticker: dict) -> float | None:
-    """Compute now − ticker timestamp in seconds. ccxt reports timestamp in ms."""
+def _bybit_ticker_timestamp_ms(ticker: dict) -> int | None:
+    """Resolve an attestable broker tick timestamp in milliseconds."""
     if not isinstance(ticker, dict):
         return None
+
     ts_raw = ticker.get("timestamp")
-    if not isinstance(ts_raw, (int, float)) or ts_raw <= 0:
+    if isinstance(ts_raw, (int, float)) and ts_raw > 0:
+        val = int(float(ts_raw))
+        return val if val > 1_000_000_000_000 else val * 1000
+
+    info = ticker.get("info")
+    if isinstance(info, dict):
+        for key in ("ts", "timestamp", "time"):
+            raw = info.get(key)
+            if raw is None:
+                continue
+            try:
+                val = int(float(raw))
+            except (TypeError, ValueError):
+                continue
+            if val > 0:
+                return val if val > 1_000_000_000_000 else val * 1000
+
+    dt = ticker.get("datetime")
+    if isinstance(dt, str) and dt.strip():
+        try:
+            parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+            return int(parsed.timestamp() * 1000)
+        except ValueError:
+            pass
+
+    return None
+
+
+def _bybit_ticker_age_seconds(ticker: dict) -> float | None:
+    """Compute now − ticker timestamp in seconds."""
+    ts_ms = _bybit_ticker_timestamp_ms(ticker)
+    if ts_ms is None:
         return None
-    ts_sec = float(ts_raw) / 1000.0
+    ts_sec = float(ts_ms) / 1000.0
     return max(0.0, time.time() - ts_sec)
 
 
@@ -1473,6 +1506,13 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         _tick_age_limit = _bybit_max_tick_age_sec()
         if _tick_age_limit is not None:
             _tick_age = _bybit_ticker_age_seconds(ticker)
+            if _tick_age is None:
+                raw_symbol = ccxt_symbol.split(":")[0].replace("/", "")
+                rest_tick = _fetch_bybit_ticker(raw_symbol, category="linear")
+                if isinstance(rest_tick, dict) and rest_tick.get("timestamp"):
+                    _tick_age = _bybit_ticker_age_seconds(
+                        {"timestamp": rest_tick["timestamp"]}
+                    )
             if _tick_age is None:
                 log.warning(
                     f"[BYBIT] {ccxt_symbol}: ticker.timestamp missing — "

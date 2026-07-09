@@ -172,6 +172,7 @@ def test_bybit_execute_fail_closed_when_ticker_timestamp_missing(monkeypatch):
 
     monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _StubExchange())
     monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *a, **k: None)
+    monkeypatch.setattr(bybit_executor, "_fetch_bybit_ticker", lambda *_a, **_k: None)
     monkeypatch.setitem(bybit_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"bybit": 5.0})
 
     approval = RiskApproval(

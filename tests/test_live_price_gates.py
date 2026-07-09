@@ -249,6 +249,139 @@ def test_bybit_ticker_age_returns_none_when_timestamp_missing():
     assert bybit_executor._bybit_ticker_age_seconds({"timestamp": 0}) is None
 
 
+def test_bybit_ticker_timestamp_ms_from_info_ts(monkeypatch):
+    import bybit_executor
+
+    monkeypatch.setattr(bybit_executor.time, "time", lambda: 1_716_200_010.0)
+    ts_ms = 1_716_200_000_000
+    ticker = {"ask": 50_010.0, "bid": 50_000.0, "info": {"ts": ts_ms}}
+    assert bybit_executor._bybit_ticker_timestamp_ms(ticker) == ts_ms
+    age = bybit_executor._bybit_ticker_age_seconds(ticker)
+    assert age is not None
+    assert abs(age - 10.0) < 1e-6
+
+
+def test_bybit_ticker_timestamp_ms_from_datetime(monkeypatch):
+    import bybit_executor
+
+    monkeypatch.setattr(bybit_executor.time, "time", lambda: 1_716_200_010.0)
+    ticker = {
+        "ask": 50_010.0,
+        "bid": 50_000.0,
+        "datetime": "2024-05-20T10:13:20.000Z",
+    }
+    assert bybit_executor._bybit_ticker_timestamp_ms(ticker) == 1_716_200_000_000
+    age = bybit_executor._bybit_ticker_age_seconds(ticker)
+    assert age is not None
+    assert abs(age - 10.0) < 1e-6
+
+
+def test_bybit_ticker_timestamp_ms_returns_none_when_unattestable():
+    import bybit_executor
+
+    assert bybit_executor._bybit_ticker_timestamp_ms({}) is None
+    assert bybit_executor._bybit_ticker_timestamp_ms({"info": {}}) is None
+    assert bybit_executor._bybit_ticker_timestamp_ms({"datetime": "not-a-date"}) is None
+
+
+def test_bybit_execute_passes_age_gate_when_info_ts_present(monkeypatch):
+    """ccxt tickers without top-level timestamp but with info.ts must pass the age gate."""
+    import bybit_executor
+    from risk_engine import RiskApproval
+
+    class _StubExchange:
+        def fetch_ticker(self, _sym):
+            return {
+                "ask": 50_010.0,
+                "bid": 50_000.0,
+                "last": 50_005.0,
+                "info": {"ts": 1_716_200_000_000},
+            }
+
+        def create_market_order(self, _symbol, _side, amount, params=None):
+            return {
+                "id": "order-info-ts",
+                "status": "closed",
+                "average": 50_010.0,
+                "filled": amount,
+                "fee": {"cost": 0.0},
+            }
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _StubExchange())
+    monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda _pair: "BTC/USDT:USDT")
+    monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *a, **k: None)
+    monkeypatch.setattr(bybit_executor, "_set_trading_stop", lambda *a, **k: None)
+    monkeypatch.setattr(bybit_executor.telegram_notify, "notify_trade_opened", lambda **_k: None)
+    monkeypatch.setattr(bybit_executor.time, "time", lambda: 1_716_200_001.0)
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"bybit": 5.0})
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_EXECUTION_SPREAD_PCT", {"crypto": None})
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_SIGNAL_DRIFT_PCT", {"crypto": None})
+
+    approval = RiskApproval(True, 0.001, 10.0, 0.5, 0.0, 0.0, "test")
+    signal = {
+        "pair": "BTC/USDT",
+        "direction": "LONG",
+        "type": "crypto",
+        "price": 50_000.0,
+        "sl": 49_500.0,
+        "tp1": 51_000.0,
+    }
+    result = bybit_executor.bybit_execute(signal, approval)
+    assert result["success"] is True
+    assert result.get("error") != "BROKER_TICK_TIMESTAMP_MISSING"
+
+
+def test_bybit_execute_rest_fallback_passes_age_gate(monkeypatch):
+    """When ccxt omits timestamp entirely, REST fallback supplies attestable age."""
+    import bybit_executor
+    from risk_engine import RiskApproval
+
+    class _StubExchange:
+        def fetch_ticker(self, _sym):
+            return {"ask": 50_010.0, "bid": 50_000.0, "last": 50_005.0}
+
+        def create_market_order(self, _symbol, _side, amount, params=None):
+            return {
+                "id": "order-rest-ts",
+                "status": "closed",
+                "average": 50_010.0,
+                "filled": amount,
+                "fee": {"cost": 0.0},
+            }
+
+    monkeypatch.setattr(bybit_executor, "_get_exchange", lambda: _StubExchange())
+    monkeypatch.setattr(bybit_executor, "bybit_map_symbol", lambda _pair: "BTC/USDT:USDT")
+    monkeypatch.setattr(bybit_executor, "_ensure_leverage", lambda *a, **k: None)
+    monkeypatch.setattr(bybit_executor, "_set_trading_stop", lambda *a, **k: None)
+    monkeypatch.setattr(bybit_executor.telegram_notify, "notify_trade_opened", lambda **_k: None)
+    monkeypatch.setattr(bybit_executor.time, "time", lambda: 1_716_200_001.0)
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"bybit": 5.0})
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_EXECUTION_SPREAD_PCT", {"crypto": None})
+    monkeypatch.setitem(bybit_executor.CONFIG, "MAX_SIGNAL_DRIFT_PCT", {"crypto": None})
+    monkeypatch.setattr(
+        bybit_executor,
+        "_fetch_bybit_ticker",
+        lambda _symbol, category="linear": {
+            "symbol": "BTCUSDT",
+            "price": 50_005.0,
+            "timestamp": 1_716_200_000_000,
+        },
+    )
+
+    approval = RiskApproval(True, 0.001, 10.0, 0.5, 0.0, 0.0, "test")
+    signal = {
+        "pair": "BTC/USDT",
+        "direction": "LONG",
+        "type": "crypto",
+        "price": 50_000.0,
+        "sl": 49_500.0,
+        "tp1": 51_000.0,
+    }
+    result = bybit_executor.bybit_execute(signal, approval)
+    assert result["success"] is True
+    assert result.get("error") != "BROKER_TICK_TIMESTAMP_MISSING"
+
+
 def test_bybit_max_spread_falls_back_to_crypto_key_when_signal_missing_type(monkeypatch):
     import bybit_executor
 
