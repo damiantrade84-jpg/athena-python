@@ -18,7 +18,10 @@ groups:
         dataSymbol: BTC/USDT
     costs:
       spreadBps: 2.0
-      commissionBps: 11.0
+      # commissionBps/slippageBps are PER LEG: the v3 cost model charges them on
+      # both entry and exit. Bybit taker 5.5 bps/leg -> 11 bps round trip,
+      # matching FEE_PCT.crypto. (Was 11.0, which double-counted to 22 bps RT.)
+      commissionBps: 5.5
       slippageBps: 2.0
       swapBpsPerDay: 1.0
     purgeBars: 5
@@ -38,7 +41,7 @@ groups:
         dataSymbol: ETH/USDT
     costs:
       spreadBps: 2.5
-      commissionBps: 11.0
+      commissionBps: 5.5  # per leg (see crypto_btc note)
       slippageBps: 2.5
       swapBpsPerDay: 1.0
     purgeBars: 5
@@ -58,7 +61,7 @@ groups:
         dataSymbol: DOGE/USDT
     costs:
       spreadBps: 5.0
-      commissionBps: 11.0
+      commissionBps: 5.5  # per leg (see crypto_btc note)
       slippageBps: 5.0
       swapBpsPerDay: 1.5
     purgeBars: 5

@@ -36,6 +36,21 @@ def confirmed_cutoff_open_epoch(primary_tf: str, primary_open_epoch: int, tf: st
     return int(primary_open_epoch) + _tf_seconds(primary_tf) - _tf_seconds(tf)
 
 
+def engine_a_v3_backtest_costs(asset_type: str | None, config: dict) -> dict:
+    """Effective ENGINE_A_V3_BACKTEST cost block for one asset class.
+
+    Base keys stay flat for backwards compatibility; BY_ASSET entries override
+    per asset class so crypto backtests carry exchange-grade commissions (the
+    promotion manifest's costs) instead of the flat forex-grade defaults.
+    """
+    base = dict(config.get("ENGINE_A_V3_BACKTEST") or {})
+    by_asset = base.pop("BY_ASSET", None) or {}
+    override = by_asset.get(str(asset_type or "").strip().lower())
+    if isinstance(override, dict):
+        base.update(override)
+    return base
+
+
 def _cost_r(
     entry: float,
     sl: float,
@@ -83,15 +98,19 @@ def _simulate_exit(
         return ExitResult("INVALID", 0.0, 0)
     split = exit_policy == "SPLIT_50_50"
     tp1_filled = False
+    # Split policy keeps the ORIGINAL stop on the runner half after TP1 fills:
+    # half banked at TP1, half stopped at -1R. The previous hardcoded 0.0 was
+    # only correct when TP1 sat exactly 1R from entry.
+    tp1_then_sl_r = 0.5 * abs(tp1 - entry) / risk - 0.5
     for offset, bar in enumerate(bars):
         high, low = float(bar["high"]), float(bar["low"])
         sl_hit = low <= sl if direction == "LONG" else high >= sl
         tp1_hit = high >= tp1 if direction == "LONG" else low <= tp1
         tp2_hit = high >= tp2 if direction == "LONG" else low <= tp2
         if sl_hit and ((not tp1_filled and tp1_hit) or (tp1_filled and tp2_hit)):
-            return ExitResult("SL" if not tp1_filled else "TP1_THEN_SL", -1.0 if not tp1_filled else 0.0, offset, True)
+            return ExitResult("SL" if not tp1_filled else "TP1_THEN_SL", -1.0 if not tp1_filled else tp1_then_sl_r, offset, True)
         if sl_hit:
-            return ExitResult("SL" if not tp1_filled else "TP1_THEN_SL", -1.0 if not tp1_filled else 0.0, offset)
+            return ExitResult("SL" if not tp1_filled else "TP1_THEN_SL", -1.0 if not tp1_filled else tp1_then_sl_r, offset)
         if not split and tp1_hit:
             return ExitResult("TP1", abs(tp1 - entry) / risk, offset)
         if split:

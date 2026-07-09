@@ -31,6 +31,20 @@ def test_split_exit_keeps_original_stop_and_realizes_zero_when_runner_stops():
     assert outcome.exit_offset == 1
 
 
+def test_split_exit_tp1_then_sl_scales_with_tp1_distance():
+    # TP1 at 1.5R: half banked at +1.5R, runner half stopped at -1R -> +0.25R.
+    bars = [
+        {"high": 101.7, "low": 100.0, "close": 101.5},
+        {"high": 101.6, "low": 98.9, "close": 99.0},
+    ]
+    outcome = _simulate_exit(
+        bars, direction="LONG", entry=100, sl=99, tp1=101.5, tp2=103,
+        exit_policy="SPLIT_50_50",
+    )
+    assert outcome.outcome == "TP1_THEN_SL"
+    assert outcome.result_r == pytest.approx(0.25)
+
+
 def test_split_exit_returns_one_point_five_r_and_adverse_same_bar_is_sl():
     winner = _simulate_exit(
         [{"high": 101.2, "low": 99.5, "close": 101}, {"high": 102.1, "low": 100.5, "close": 102}],

@@ -69,6 +69,31 @@ def _dataset_id(provenance: dict[str, Any]) -> str:
     return f"engine-a-v3-{digest[:20]}"
 
 
+def _record_validation_attempt(root: Path, group_name: str, horizon: str) -> int:
+    """Increment and return the 1-based attempt count for this validation lane.
+
+    Keyed by (group, horizon, scorer sha) so a scorer change resets the count.
+    Best-effort per-process registry: concurrent runs may race, but the count
+    is diagnostic provenance, not a gate.
+    """
+    from engine_a_v3.profile import scorer_sha256
+
+    registry_path = root / "validation_attempts.json"
+    try:
+        attempts = json.loads(registry_path.read_text(encoding="utf-8"))
+        if not isinstance(attempts, dict):
+            attempts = {}
+    except (OSError, json.JSONDecodeError):
+        attempts = {}
+    key = f"{group_name}|{horizon}|{scorer_sha256()}"
+    attempt_index = int(attempts.get(key) or 0) + 1
+    attempts[key] = attempt_index
+    temporary = registry_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(attempts, sort_keys=True, indent=2), encoding="utf-8")
+    temporary.replace(registry_path)
+    return attempt_index
+
+
 def validate_manifest_group(
     group_name: str,
     horizon: str,
@@ -76,7 +101,15 @@ def validate_manifest_group(
     manifest_path: str | os.PathLike[str] = DEFAULT_MANIFEST,
     candidate_root: str | os.PathLike[str] | None = None,
     force_refresh: bool = False,
+    data_as_of: str | None = None,
 ) -> Path:
+    """Validate one manifest lane and write a candidate artifact.
+
+    ``data_as_of`` opts into frozen-data validation: every series is read from
+    the sha256-verified frozen store for that date (frozen_data.py) and the run
+    fails closed if any series is missing or tampered. Default (None) keeps the
+    live-provider path.
+    """
     manifest = load_manifest(manifest_path)
     group = manifest["groups"].get(group_name)
     if not isinstance(group, dict):
@@ -97,7 +130,32 @@ def validate_manifest_group(
         data_symbol = str(pair.pop("dataSymbol", pair.get("display") or ""))
         candles: dict[str, list[dict[str, Any]]] = {}
         pair_provenance: dict[str, Any] = {}
+        expected_provider = "bybit_rest" if group["requiredProvider"] == "bybit" else "mt5"
         for timeframe in ("H1", "H4", "D1"):
+            if data_as_of:
+                from frozen_data import read_frozen_candles
+
+                rows = read_frozen_candles(
+                    data_as_of,
+                    {"display": data_symbol},
+                    timeframe,
+                    expected_provider,
+                    limit=int(limits.get(timeframe, 1000)),
+                    min_bars=2,
+                )
+                # Frozen rows are cutoff-filtered but the final bar may have
+                # been forming at freeze time; drop it for confirmed-only
+                # parity with the live path.
+                candles[timeframe] = rows[:-1]
+                if len(candles[timeframe]) < 1:
+                    raise ValueError(
+                        f"validation_data_insufficient:{data_symbol}:{timeframe}"
+                    )
+                pair_provenance[timeframe] = {
+                    "data_source": expected_provider,
+                    "frozen_data_as_of": data_as_of,
+                }
+                continue
             frame, provenance = load_ohlcv(
                 data_symbol,
                 timeframe,
@@ -123,6 +181,9 @@ def validate_manifest_group(
         provenance_manifest[symbol] = pair_provenance
 
     costs = group.get("costs") or {}
+    root = Path(candidate_root) if candidate_root else default_candidate_root()
+    root.mkdir(parents=True, exist_ok=True)
+    attempt_index = _record_validation_attempt(root, group_name, horizon)
     artifact = validate_specialist_cohort(
         datasets,
         horizon=horizon,
@@ -137,9 +198,27 @@ def validate_manifest_group(
         provider=("bybit_rest" if group["requiredProvider"] == "bybit" else "mt5"),
     )
     artifact["provenance"]["sourceManifest"] = provenance_manifest
-    root = Path(candidate_root) if candidate_root else default_candidate_root()
-    root.mkdir(parents=True, exist_ok=True)
+    # Trial accounting: how many validation runs this lane has seen with the
+    # current scorer. A holdout pass after many attempts is weaker evidence
+    # than a first-try pass; reviewers can now see the difference.
+    artifact["provenance"]["attemptIndex"] = attempt_index
+    artifact["provenance"]["dataFrozen"] = bool(data_as_of)
+    if data_as_of:
+        artifact["provenance"]["dataAsOf"] = str(data_as_of)
     path = root / f"{group_name}-{horizon}-{artifact['artifactId']}.json"
+    # Reproducibility: persist the exact candles the artifact was computed on,
+    # so the run can be replayed byte-for-byte against the recorded hashes.
+    dataset_path = path.with_name(path.stem + ".dataset.json")
+    dataset_snapshot = {
+        str(item["pair"].get("symbol") or ""): item["candles"] for item in datasets
+    }
+    dataset_tmp = dataset_path.with_suffix(".tmp")
+    dataset_tmp.write_text(
+        json.dumps(dataset_snapshot, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    dataset_tmp.replace(dataset_path)
+    artifact["provenance"]["datasetSnapshotPath"] = dataset_path.name
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(artifact, sort_keys=True, indent=2), encoding="utf-8")
     temporary.replace(path)

@@ -986,8 +986,16 @@ def _engine_b_crypto_aggtrade_context(
     *,
     reference_ts=None,
     require_fresh: bool = True,
+    historical_mode: bool = False,
 ) -> dict:
-    """Read-only crypto aggTrade VP/CVD context for Engine B."""
+    """Read-only crypto aggTrade VP/CVD context for Engine B.
+
+    ``historical_mode`` is for backtests: there is no historical aggTrade
+    bucket store, and reading the live one would apply *current* CVD to past
+    bars. In that mode the gate is disabled (not failed) and clearly labeled,
+    so backtest results disclose that live crypto carries an extra CVD gate
+    the backtest cannot reproduce.
+    """
     asset_key = str(asset_type or "").lower()
     enabled = asset_key == "crypto" and bool(
         config.CONFIG.get("ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
@@ -1019,6 +1027,10 @@ def _engine_b_crypto_aggtrade_context(
         "engine_b_data_fidelity": base_fidelity,
     }
     if not enabled:
+        return out
+    if historical_mode:
+        out["aggtrade_required"] = False
+        out["aggtrade_reason"] = "aggtrade_unavailable_historical"
         return out
 
     display = (
@@ -3906,6 +3918,7 @@ class NakedEngine:
         pair: dict | None = None,
         trade_bucket_reference_ts=None,
         trade_bucket_require_fresh: bool = True,
+        trade_bucket_historical_mode: bool = False,
     ) -> dict:
         """Precompute all direction-independent structure analysis data.
 
@@ -4196,6 +4209,7 @@ class NakedEngine:
             pair,
             reference_ts=trade_bucket_reference_ts,
             require_fresh=trade_bucket_require_fresh,
+            historical_mode=trade_bucket_historical_mode,
         )
         if enable_profile_context:
             if _aggtrade_context.get("aggtrade_profile"):
@@ -4695,6 +4709,7 @@ class NakedEngine:
         pair: dict | None = None,
         trade_bucket_reference_ts=None,
         trade_bucket_require_fresh: bool = True,
+        trade_bucket_historical_mode: bool = False,
     ) -> dict:
         """
         Analyzes raw candle data to find Support/Resistance zones and trend sequence.
@@ -4716,6 +4731,7 @@ class NakedEngine:
             d1_snap=d1_snap, h4_snap=h4_snap, style=style, pair=pair,
             trade_bucket_reference_ts=trade_bucket_reference_ts,
             trade_bucket_require_fresh=trade_bucket_require_fresh,
+            trade_bucket_historical_mode=trade_bucket_historical_mode,
         )
         return self.analyze_structure_direction(pre, current_price, direction)
 

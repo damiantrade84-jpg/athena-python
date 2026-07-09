@@ -14410,6 +14410,13 @@ def analyze_pair(
     }
     _v3_signal["is_forming"] = is_forming
     _attach_engine_a_v3_atr_provenance(_v3_signal, pair, style, d1, h4, h1)
+    if CONFIG.get("ENGINE_A_V3_SHADOW_JOURNAL_ENABLED", False):
+        try:
+            from engine_a_v3.shadow_journal import record_shadow_entry
+
+            record_shadow_entry(pair, {"D1": d1, "H4": h4, "H1": h1}, _v3_signal)
+        except Exception:
+            pass
     return _attach_v3_intermarket_confirmation(
         _v3_signal,
         pair,

@@ -364,10 +364,12 @@ def validate_specialist_cohort(
         raise ValueError("validation_cohort_incomplete")
 
     first_route = route_specialist(datasets[0]["pair"])
+    primary_tf = "H1" if horizon == "intraday" else "H4"
     pooled_folds: list[list[float]] = [[], [], [], []]
     pooled_holdout: list[float] = []
     pair_metrics: dict[str, Any] = {}
     dataset_hashes: dict[str, str] = {}
+    dataset_spans: dict[str, Any] = {}
     for item in datasets:
         pair = item["pair"]
         candles = item["candles"]
@@ -391,6 +393,14 @@ def validate_specialist_cohort(
         pooled_holdout.extend(holdout_results)
         pair_metrics[symbol] = _summary_metrics(fold_results, holdout_results)
         dataset_hashes[symbol] = provenance_sha256(candles)
+        primary_rows = candles.get(primary_tf) or []
+        if primary_rows:
+            dataset_spans[symbol] = {
+                "primaryTf": primary_tf,
+                "bars": len(primary_rows),
+                "start": str(primary_rows[0].get("time") or primary_rows[0].get("datetime")),
+                "end": str(primary_rows[-1].get("time") or primary_rows[-1].get("datetime")),
+            }
 
     metrics = _summary_metrics(pooled_folds, pooled_holdout)
     promoted = _promotion_passes(metrics, pair_adapter=False)
@@ -433,6 +443,10 @@ def validate_specialist_cohort(
             "sha256": aggregate_sha,
             "implementationSha256": implementation_sha256(),
             "datasetHashes": dataset_hashes,
+            # Regime-coverage disclosure: the calendar window each symbol's
+            # metrics were computed over. A pass covering one regime is weaker
+            # evidence than one spanning several; reviewers can now see which.
+            "datasetSpans": dataset_spans,
             "confirmedOnly": True,
             "untouchedHoldoutPct": 20,
             "walkForwardFolds": 4,

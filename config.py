@@ -1864,6 +1864,10 @@ CONFIG: dict = {
     },
     "ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED": False,
     "ENGINE_A_V3_PROFILE_TTL_DAYS": 90,
+    # Best-effort JSONL journal of live V3 signals for offline live-vs-backtest
+    # reconciliation (engine_a_v3/shadow_journal.py). Diagnostic only: gates
+    # nothing, blocks nothing, fails silently. Off by default (disk growth).
+    "ENGINE_A_V3_SHADOW_JOURNAL_ENABLED": False,
     # Per-group thesis selector for the v3 forex specialist. "trend" keeps the
     # trend-pullback/breakout setups; "mean_reversion" swaps in the range-fade
     # (counter-trend) specialist. Reversible; default preserves existing behavior.

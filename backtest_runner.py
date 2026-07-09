@@ -1995,9 +1995,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     # this return is UNREACHABLE dead code retained for historical reference;
     # do not add new logic below it. To restore v2, gate this return behind a
     # config flag and re-enter the v2 body.
-    from engine_a_v3.backtest import run_v3_backtest
+    from engine_a_v3.backtest import engine_a_v3_backtest_costs, run_v3_backtest
 
-    _v3_costs = CONFIG.get("ENGINE_A_V3_BACKTEST") or {}
+    _v3_costs = engine_a_v3_backtest_costs(pair.get("type"), CONFIG)
     return run_v3_backtest(
         pair,
         {"D1": d1_raw, "H4": h4_raw, "H1": h1_raw},
@@ -5316,6 +5316,10 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             h4_snap=_bt_b_zone_snap,
             style=resolved_style,
             pair=pair,
+            # No historical aggTrade store exists; without this flag the engine
+            # would read the LIVE bucket store (current CVD applied to past bars)
+            # or hard-fail every crypto bar in a standalone run.
+            trade_bucket_historical_mode=True,
         )
         candidates = []
         for direction in ["LONG", "SHORT"]:
@@ -6006,6 +6010,16 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         result["btStyleRequested"] = requested_style
         # Structure gate is mandatory; reported for downstream telemetry consumers.
         result["btStructureGateEnabled"] = True
+        # Live/backtest parity disclosure: live crypto Engine B hard-requires a
+        # fresh aggTrade CVD gate; no historical bucket store exists, so the
+        # backtest runs with that gate disabled. Crypto backtest results are an
+        # optimistic upper bound relative to the live gate set.
+        result["btAggtradeCvdGateSimulated"] = False
+        result["btAggtradeCvdGateLiveRequired"] = bool(
+            str(pair.get("type") or "").lower() == "crypto"
+            and CONFIG.get("ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
+            and CONFIG.get("ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True)
+        )
         try:
             import sqlite3 as _sq
 
