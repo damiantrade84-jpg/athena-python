@@ -1484,7 +1484,14 @@ CONFIG: dict = {
         "ENFORCE_ROUTING": False,
         "ALLOW_WARN_IN_RESEARCH": False,
         "ALLOW_RR1_BELOW_MIN_IN_RESEARCH": False,
+        # Learning context is prompt/advisory evidence by default. Set to
+        # "reject" only after explicit validation that the cohort has a
+        # safety-critical negative edge and should hard-block Engine B entries.
+        "LEARNING_NEGATIVE_MODE": "diagnostic",
         "INCLUDE_REJECT_IN_AI_REVIEW": False,
+        # CSV audits are useful for investigations but expensive inside
+        # broad scans because each candidate appends multiple report rows.
+        "AUDIT_CSV_ENABLED": False,
         "STRUCTURE_AUDIT_CSV": "reports/engine_b_structure_gate_audit.csv",
         "RECONCILIATION_AUDIT_CSV": "reports/engine_b_actionability_reconciliation.csv",
     },

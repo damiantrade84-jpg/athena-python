@@ -76,6 +76,9 @@ def test_provider_alias_resolution_covers_eodhd_and_cot():
     copper = resolve_provider_aliases(_pair("Copper"))
     assert copper.eodhd_volume_ticker == "XCUUSD.FOREX"
 
+    cocoa = resolve_provider_aliases(_pair("Cocoa"))
+    assert cocoa.yfinance_symbol == "CC=F"
+
 
 def test_timeframe_mapping_in_acquisition_batch():
     batch = recommended_acquisition_batch()

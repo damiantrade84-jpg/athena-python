@@ -90,6 +90,11 @@ def test_yfinance_symbol_for_us_stocks_and_etfs_strips_us_suffix(display: str, e
     assert _ATHENA_MOD._yfinance_symbol_for_pair(pair) == expected
 
 
+def test_yfinance_symbol_for_cocoa_uses_yahoo_futures_ticker():
+    pair = next(p for p in ALL_PAIRS if p["display"] == "Cocoa")
+    assert _ATHENA_MOD._yfinance_symbol_for_pair(pair) == "CC=F"
+
+
 def test_fetch_mt5_falls_back_when_symbol_missing(monkeypatch):
     import mt5_executor
 

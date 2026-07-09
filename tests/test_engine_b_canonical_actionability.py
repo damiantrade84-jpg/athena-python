@@ -9,12 +9,17 @@ selected to include bands containing price.
 
 from __future__ import annotations
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from engine_b_canonical_actionability import (
     REASON_CONFLICT,
+    REASON_LEARNING_NEGATIVE,
     REASON_PARTIAL_RR,
     STATUS_ACTIONABLE,
     STATUS_REJECT_CONFIDENCE,
     STATUS_REJECT_ENTRY_LOCATION,
+    STATUS_REJECT_LEARNING,
     STATUS_REJECT_NO_ROOM,
     STATUS_REJECT_NO_TRIGGER,
     STATUS_REJECT_RR_QUALITY,
@@ -22,6 +27,7 @@ from engine_b_canonical_actionability import (
     STATUS_REJECT_STRUCTURE,
     STRUCTURE_PASS,
     STRUCTURE_REJECT,
+    attach_canonical_actionability,
     reconcile_engine_b_actionability,
 )
 from market_structure import (
@@ -148,7 +154,129 @@ def test_unset_legacy_is_actionable_is_not_a_conflict():
     assert REASON_CONFLICT not in out["engine_b_canonical_diagnostics"]
 
 
+def test_negative_learning_context_is_diagnostic_not_reject_by_default():
+    out = reconcile_engine_b_actionability(
+        direction="LONG",
+        entry=17.55,
+        sl=17.45,
+        tp1=17.90,
+        conf=_passing_conf(),
+        res=_zones_support(),
+        candle_freshness_status="fresh",
+        learning_ctx={
+            "pair_stats": {"win_rate": 0.2, "avg_r": -0.3, "total_trades": 30},
+        },
+    )
+
+    assert out["learning_context_negative"] is True
+    assert out["engine_b_canonical_status"] == STATUS_ACTIONABLE
+    assert out["engine_b_canonical_actionable"] is True
+    assert REASON_LEARNING_NEGATIVE in out["engine_b_canonical_diagnostics"]
+    assert REASON_LEARNING_NEGATIVE not in out["engine_b_rejection_reasons"]
+
+
+def test_negative_learning_context_can_be_configured_to_reject(monkeypatch):
+    from config import CONFIG
+
+    current = dict(CONFIG.get("ENGINE_B_CANONICAL_ACTIONABILITY") or {})
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_B_CANONICAL_ACTIONABILITY",
+        {**current, "LEARNING_NEGATIVE_MODE": "reject"},
+    )
+    out = reconcile_engine_b_actionability(
+        direction="LONG",
+        entry=17.55,
+        sl=17.45,
+        tp1=17.90,
+        conf=_passing_conf(),
+        res=_zones_support(),
+        candle_freshness_status="fresh",
+        learning_ctx={
+            "pair_stats": {"win_rate": 0.2, "avg_r": -0.3, "total_trades": 30},
+        },
+    )
+
+    assert out["engine_b_canonical_status"] == STATUS_REJECT_LEARNING
+    assert out["engine_b_canonical_actionable"] is False
+    assert REASON_LEARNING_NEGATIVE in out["engine_b_rejection_reasons"]
+
+
 # ── Gate-driven rejections ───────────────────────────────────────────────────
+
+
+def test_attach_canonical_actionability_does_not_write_audit_csv_by_default(monkeypatch):
+    from config import CONFIG
+
+    with TemporaryDirectory() as temp_dir:
+        report_dir = Path(temp_dir)
+        structure_csv = report_dir / "structure.csv"
+        reconciliation_csv = report_dir / "reconciliation.csv"
+        consistency_csv = report_dir / "consistency.csv"
+        current = dict(CONFIG.get("ENGINE_B_CANONICAL_ACTIONABILITY") or {})
+        monkeypatch.setitem(
+            CONFIG,
+            "ENGINE_B_CANONICAL_ACTIONABILITY",
+            {
+                **current,
+                "AUDIT_CSV_ENABLED": False,
+                "STRUCTURE_AUDIT_CSV": str(structure_csv),
+                "RECONCILIATION_AUDIT_CSV": str(reconciliation_csv),
+                "SIGNAL_CARD_CONSISTENCY_CSV": str(consistency_csv),
+            },
+        )
+        conf = _passing_conf(execution_sl=17.45, execution_tp1=17.90)
+
+        out = attach_canonical_actionability(
+            conf,
+            _zones_support(),
+            direction="LONG",
+            current_price=17.55,
+            pair="BTCUSDT",
+            reached_ui=True,
+        )
+
+        assert out["engine_b_canonical_status"] == STATUS_ACTIONABLE
+        assert not structure_csv.exists()
+        assert not reconciliation_csv.exists()
+        assert not consistency_csv.exists()
+
+
+def test_attach_canonical_actionability_writes_audit_csv_when_enabled(monkeypatch):
+    from config import CONFIG
+
+    with TemporaryDirectory() as temp_dir:
+        report_dir = Path(temp_dir)
+        structure_csv = report_dir / "structure.csv"
+        reconciliation_csv = report_dir / "reconciliation.csv"
+        consistency_csv = report_dir / "consistency.csv"
+        current = dict(CONFIG.get("ENGINE_B_CANONICAL_ACTIONABILITY") or {})
+        monkeypatch.setitem(
+            CONFIG,
+            "ENGINE_B_CANONICAL_ACTIONABILITY",
+            {
+                **current,
+                "AUDIT_CSV_ENABLED": True,
+                "STRUCTURE_AUDIT_CSV": str(structure_csv),
+                "RECONCILIATION_AUDIT_CSV": str(reconciliation_csv),
+                "SIGNAL_CARD_CONSISTENCY_CSV": str(consistency_csv),
+            },
+        )
+        conf = _passing_conf(execution_sl=17.45, execution_tp1=17.90)
+
+        attach_canonical_actionability(
+            conf,
+            _zones_support(),
+            direction="LONG",
+            current_price=17.55,
+            pair="BTCUSDT",
+            reached_ui=True,
+        )
+
+        assert structure_csv.exists()
+        assert reconciliation_csv.exists()
+        assert consistency_csv.exists()
+        assert "BTCUSDT" in structure_csv.read_text(encoding="utf-8")
 
 
 def test_structure_gate_failed_rejects():

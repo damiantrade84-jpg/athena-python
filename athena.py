@@ -1334,7 +1334,8 @@ _VENDOR_SYMBOL_OVERRIDES = {
     # COPPER/ALUMINUM: no valid EODHD EOD ticker - falls back to yfinance
     "Copper": {"yfinance": "HG=F", "eodhd": "", "fallback": "yfinance"},
     "Aluminium": {"yfinance": "ALI=F", "eodhd": "", "fallback": "yfinance"},
-    # Agricultural commodities: COFFEE/COTTON/SUGAR/WHEAT have no valid EODHD EOD ticker
+    # Agricultural commodities: most have no valid EODHD EOD ticker
+    "Cocoa": {"yfinance": "CC=F", "eodhd": "", "fallback": "yfinance"},
     "Coffee": {"yfinance": "KC=F", "eodhd": "", "fallback": "yfinance"},
     "Corn": {"yfinance": "ZC=F", "eodhd": "CORN", "fallback": "yfinance"},
     "Cotton": {"yfinance": "CT=F", "eodhd": "", "fallback": "yfinance"},

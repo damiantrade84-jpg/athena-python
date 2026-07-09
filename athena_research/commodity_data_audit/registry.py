@@ -67,6 +67,7 @@ _VENDOR_OVERRIDES: dict[str, dict[str, str]] = {
     "Nat Gas": {"eodhd": "NG", "yfinance": "NG=F"},
     "Copper": {"eodhd": "", "yfinance": "HG=F"},
     "Aluminium": {"eodhd": "", "yfinance": "ALI=F"},
+    "Cocoa": {"eodhd": "", "yfinance": "CC=F"},
     "Coffee": {"eodhd": "", "yfinance": "KC=F"},
     "Corn": {"eodhd": "CORN", "yfinance": "ZC=F"},
     "Cotton": {"eodhd": "", "yfinance": "CT=F"},

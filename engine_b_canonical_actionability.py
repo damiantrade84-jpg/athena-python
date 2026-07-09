@@ -185,6 +185,10 @@ def _enabled() -> bool:
     return bool(_cfg().get("ENABLED", True))
 
 
+def _audit_csv_enabled() -> bool:
+    return bool(_cfg().get("AUDIT_CSV_ENABLED", False))
+
+
 def _float(value: Any) -> float | None:
     try:
         if value is None or value == "":
@@ -695,9 +699,18 @@ def reconcile_engine_b_actionability(
         STATUS_WARNING_ONLY,
         STATUS_ACTIONABLE,
     }
+    learning_negative_mode = str(
+        _cfg().get("LEARNING_NEGATIVE_MODE", "diagnostic") or "diagnostic"
+    ).strip().lower()
     if learning["learning_context_negative"]:
-        extra_reasons.append(REASON_LEARNING_NEGATIVE)
-        if not structural_blockers and primary_status is None:
+        diagnostics.append(REASON_LEARNING_NEGATIVE)
+        if learning_negative_mode in {"reject", "block", "hard_reject"}:
+            extra_reasons.append(REASON_LEARNING_NEGATIVE)
+        if (
+            learning_negative_mode in {"reject", "block", "hard_reject"}
+            and not structural_blockers
+            and primary_status is None
+        ):
             primary_status = STATUS_REJECT_LEARNING
             primary_reason = REASON_LEARNING_NEGATIVE
             all_reasons = sorted(set(extra_reasons))
@@ -854,6 +867,9 @@ def _append_audit_rows(
     reached_ui: bool | None,
     reached_ai_review: bool | None,
 ) -> None:
+    if not _audit_csv_enabled():
+        return
+
     cfg = _cfg()
     ts = datetime.now(timezone.utc).isoformat()
     sup_lo, sup_hi = _zone_bounds(res.get("nearest_support_zone"))
