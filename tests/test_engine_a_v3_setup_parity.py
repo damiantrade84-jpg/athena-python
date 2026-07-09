@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from engine_a_v3.levels import build_structural_levels
 from engine_a_v3.profile import baseline_profile
@@ -117,6 +121,41 @@ def test_setup_primary_tf_follows_execution_tf_override(monkeypatch):
     # detect_setup must not crash and must use the resolved frames internally.
     detect_setup(exotic, "intraday", candles)
     detect_setup(crypto, "intraday", candles)
+
+
+@pytest.mark.parametrize(
+    ("score_group", "asset_type", "horizon", "expected"),
+    [
+        ("forex_majors", "forex", "intraday", "H1"),
+        ("forex_exotics", "forex", "intraday", "H4"),
+        ("crypto_other", "crypto", "intraday", "H4"),
+    ],
+)
+def test_public_v3_entry_timeframe_resolver_is_group_aware(
+    score_group, asset_type, horizon, expected
+):
+    assert importlib.util.find_spec("engine_a_v3.timeframes") is not None
+    resolver = importlib.import_module(
+        "engine_a_v3.timeframes"
+    ).resolve_v3_entry_timeframe
+    assert resolver(score_group, asset_type, horizon) == expected
+
+
+def test_invalid_v3_entry_timeframe_override_fails_closed(monkeypatch):
+    from config import CONFIG
+
+    by_group = dict(
+        ((CONFIG.get("ENGINE_A_SCORING_PROFILE") or {}).get("BY_SCORE_GROUP") or {})
+    )
+    by_group["forex_exotics"] = {
+        **dict(by_group.get("forex_exotics") or {}),
+        "execution_tf": "M15",
+    }
+    monkeypatch.setitem(
+        CONFIG.setdefault("ENGINE_A_SCORING_PROFILE", {}), "BY_SCORE_GROUP", by_group
+    )
+
+    assert _resolve_v3_entry_tf("forex_exotics", "forex", "intraday") is None
 
 
 def test_setup_uses_group_ema_periods_forex_vs_crypto():

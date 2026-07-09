@@ -20,11 +20,12 @@ from engine_a_v3.levels import (
     build_structural_levels,
 )
 from engine_a_v3.promotion import PromotionRegistry, production_registry
-from engine_a_v3.quant_scorer import QuantScore, _resolve_v3_entry_tf, score_pair
+from engine_a_v3.quant_scorer import QuantScore, score_pair
 from engine_a_v3.profile import baseline_profile
 from engine_a_v3.routing import route_specialist
 from engine_a_v3.session_scoring import session_score_passes
 from engine_a_v3.setups import SetupCandidate, detect_setup
+from engine_a_v3.timeframes import resolve_v3_entry_timeframe
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -191,7 +192,7 @@ def evaluate_engine_a_v3(
 ) -> EngineASetupSignal:
     route = route_specialist(pair)
     normalized_horizon = _horizon(horizon)
-    primary_tf = _resolve_v3_entry_tf(
+    primary_tf = resolve_v3_entry_timeframe(
         route.score_group,
         str(pair.get("type") or pair.get("asset_type") or "other"),
         normalized_horizon or "intraday",
@@ -211,7 +212,9 @@ def evaluate_engine_a_v3(
     valid_candles, candle_reasons = _validate_candles(candles)
     if normalized_horizon is None:
         candle_reasons = ("unsupported_horizon",) + candle_reasons
-    if not valid_candles or normalized_horizon is None or blocked_reasons:
+    if primary_tf is None:
+        candle_reasons = ("invalid_entry_timeframe",) + candle_reasons
+    if not valid_candles or normalized_horizon is None or primary_tf is None or blocked_reasons:
         rejection_reasons = tuple(
             dict.fromkeys(
                 tuple(blocked_reasons)
@@ -238,6 +241,7 @@ def evaluate_engine_a_v3(
             family=route.family,
             subclass=route.subclass,
             horizon=normalized_horizon or str(horizon),
+            entryTimeframe=primary_tf,
             setupId=None,
             decision="NO_SIGNAL",
             qualified=False,
@@ -538,6 +542,7 @@ def evaluate_engine_a_v3(
         family=route.family,
         subclass=route.subclass,
         horizon=normalized_horizon,
+        entryTimeframe=primary_tf,
         setupId=setup_id,
         decision=decision,
         qualified=qualified,

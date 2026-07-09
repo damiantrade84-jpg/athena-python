@@ -86,7 +86,7 @@ def _resolve_setup_candle_frames(
     candles: dict[str, list[dict]],
 ) -> tuple[list[dict], list[dict], str, str]:
     """Primary/context frames aligned with quant entry TF (execution_tf overrides)."""
-    from engine_a_v3.quant_scorer import _resolve_v3_entry_tf
+    from engine_a_v3.timeframes import resolve_v3_entry_timeframe
 
     asset_type = (
         "forex"
@@ -101,7 +101,7 @@ def _resolve_setup_candle_frames(
         if route.family == "equity_etf"
         else "other"
     )
-    primary_tf = _resolve_v3_entry_tf(route.score_group, asset_type, horizon)
+    primary_tf = resolve_v3_entry_timeframe(route.score_group, asset_type, horizon)
     if primary_tf == "H1":
         context_tf = "H4"
     elif primary_tf == "H4":
@@ -109,9 +109,7 @@ def _resolve_setup_candle_frames(
     elif primary_tf == "D1":
         context_tf = "D1"
     else:
-        # Fallback for unexpected overrides: keep classic horizon pairing.
-        primary_tf = "H1" if horizon == "intraday" else "H4"
-        context_tf = "H4" if horizon == "intraday" else "D1"
+        return [], [], "", ""
     primary = candles.get(primary_tf) or candles.get("H4") or candles.get("H1") or []
     context = candles.get(context_tf) or candles.get("D1") or primary
     return primary, context, primary_tf, context_tf

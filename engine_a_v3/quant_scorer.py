@@ -32,6 +32,7 @@ from typing import Any
 from factor_scoring import _adx_multiplier_from_value, _resolve_adx_thresholds
 from engine_a_scoring_profile import resolve_engine_a_scoring_profile
 from engine_a_v3.profile import CORE_COMPONENTS
+from engine_a_v3.timeframes import resolve_v3_entry_timeframe
 from engine_a_v3.subsystems import (
     ST_AVAILABLE,
     ST_NA,
@@ -108,25 +109,14 @@ def _resolve_v3_momentum_tf(score_group: str, asset_type: str, horizon: str) -> 
     return str(profile.get("momentum_tf") or "H4").upper() or "H4"
 
 
-def _resolve_v3_entry_tf(score_group: str, asset_type: str, horizon: str) -> str:
+def _resolve_v3_entry_tf(score_group: str, asset_type: str, horizon: str) -> str | None:
     """Resolve primary entry TF for V3 scoring.
 
     Default remains H1 (intraday) / H4 (swing). Only ``BY_SCORE_GROUP.execution_tf``
     overrides change the entry anchor — not the universal ``BY_STYLE.execution_tf``,
     which describes chart/execution context rather than the quant entry bar.
     """
-    fallback = "H1" if str(horizon).lower() == "intraday" else "H4"
-    try:
-        from config import CONFIG
-
-        by_group = (CONFIG.get("ENGINE_A_SCORING_PROFILE") or {}).get("BY_SCORE_GROUP") or {}
-        group_cfg = by_group.get(score_group) or {}
-        override = str(group_cfg.get("execution_tf") or "").strip().upper()
-        if override:
-            return override
-    except Exception:
-        pass
-    return fallback
+    return resolve_v3_entry_timeframe(score_group, asset_type, horizon)
 
 
 # route.family -> asset_type expected by calc_indicators_with_normalized.
@@ -633,6 +623,29 @@ def score_pair(
     if profile is None:
         from engine_a_v3.profile import baseline_profile
         profile = baseline_profile(group, horizon)
+    if entry_tf is None:
+        unavailable = Component(0.0, 0.0, available=False)
+        return QuantScore(
+            direction="FLAT",
+            confluence_score=0.0,
+            max_score=MAX_SCORE,
+            score_norm=0.0,
+            conviction=0.0,
+            decision="WATCH",
+            threshold=profile.trade_threshold,
+            level_style="trend",
+            factor_scores={"trend": 0.0, "momentum": 0.0, "ortho": {}},
+            factor_diagnostics={
+                "entryTimeframe": None,
+                "rejectionReason": "invalid_entry_timeframe",
+            },
+            components={
+                "trend": unavailable,
+                "momentum": unavailable,
+                "location": unavailable,
+                "volume": unavailable,
+            },
+        )
     snaps = _snapshots(candles, asset_type, dict(profile.indicator_periods), snapshot_cache)
     entry_snap = snaps.get(entry_tf) or snaps.get("H4") or snaps.get("D1") or {}
     momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
