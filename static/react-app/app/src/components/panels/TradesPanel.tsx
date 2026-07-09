@@ -548,11 +548,11 @@ export default function TradesPanel() {
                           </TableCell>
                           <TableCell className="text-xs font-mono text-right">{fmtNum(t.entry_price, 5)}</TableCell>
                           <TableCell className="text-xs font-mono text-right">{fmtNum(t.exit_price, 5)}</TableCell>
-                          <TableCell className={`text-xs font-mono text-right ${num(t.pnl) >= 0 ? 'text-long' : 'text-short'}`}>
-                            {num(t.pnl) >= 0 ? '+' : ''}${fmtNum(t.pnl, 2)}
+                          <TableCell className={`text-xs font-mono text-right ${t.pnl == null ? 'text-muted-foreground' : num(t.pnl) >= 0 ? 'text-long' : 'text-short'}`}>
+                            {t.pnl == null ? '—' : `${num(t.pnl) >= 0 ? '+' : ''}$${fmtNum(t.pnl, 2)}`}
                           </TableCell>
-                          <TableCell className={`text-xs font-mono text-right ${num(t.r_multiple) >= 0 ? 'text-long' : 'text-short'}`}>
-                            {fmtNum(t.r_multiple, 2)}R
+                          <TableCell className={`text-xs font-mono text-right ${t.r_multiple == null ? 'text-muted-foreground' : num(t.r_multiple) >= 0 ? 'text-long' : 'text-short'}`}>
+                            {t.r_multiple == null ? '—' : `${fmtNum(t.r_multiple, 2)}R`}
                           </TableCell>
                           <TableCell className="text-[10px] font-mono text-muted-foreground">{String(t.exit_reason || '—')}</TableCell>
                         </TableRow>
