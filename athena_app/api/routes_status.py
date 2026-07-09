@@ -275,8 +275,32 @@ def api_debug_routes():
 
 def api_microstructure_health():
     """Feed freshness for crypto microstructure WS (operational dashboard)."""
+    from athena.crypto_ws_scope import binance_micro_symbol_strings
+    from athena.microstructure.trade_bucket_store import (
+        trade_bucket_health_snapshot,
+        write_stats_snapshot,
+    )
+
     now = time.time()
     enabled = bool(CONFIG.get("MICROSTRUCTURE_FEEDS_ENABLED"))
+    scalp_cfg = CONFIG.get("SCALP_ENGINE") or {}
+    trade_bucket_exchange = str(
+        scalp_cfg.get("TRADE_BUCKET_EXCHANGE")
+        or CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED")
+        or "bybit"
+    ).strip().lower()
+    if trade_bucket_exchange not in {"bybit", "binance"}:
+        trade_bucket_exchange = "bybit"
+    max_age_sec = int(scalp_cfg.get("TRADE_BUCKET_MAX_AGE_SEC", 900) or 900)
+    min_levels = int(scalp_cfg.get("TRADE_BUCKET_MIN_LEVELS", 3) or 3)
+    micro_symbols = binance_micro_symbol_strings(_all_pairs_getter())
+    bucket_health = trade_bucket_health_snapshot(
+        trade_bucket_exchange,
+        max_age_sec=max_age_sec,
+        min_levels=min_levels,
+        symbols=micro_symbols,
+    )
+    write_stats = write_stats_snapshot()
     rows = []
     for sym, data in _micro_cache_getter().items():
         if not isinstance(data, dict):
@@ -294,7 +318,20 @@ def api_microstructure_health():
         )
     rows.sort(key=lambda r: r["symbol"])
     return jsonify(
-        _json_safe({"feeds_enabled": enabled, "symbol_count": len(rows), "symbols": rows})
+        _json_safe(
+            {
+                "feeds_enabled": enabled,
+                "symbol_count": len(rows),
+                "symbols": rows,
+                "trade_bucket_exchange": trade_bucket_exchange,
+                "trade_bucket_writes_1m": write_stats.get("writes_1m"),
+                "trade_bucket_newest_write_age_sec": write_stats.get("newest_write_age_sec"),
+                "trade_bucket_newest_age_sec": bucket_health.get("newest_bucket_age_sec"),
+                "trade_bucket_fresh_symbol_count": bucket_health.get("fresh_symbol_count"),
+                "trade_bucket_monitored_symbol_count": bucket_health.get("monitored_symbol_count"),
+                "trade_bucket_session_id": bucket_health.get("session_id"),
+            }
+        )
     )
 
 

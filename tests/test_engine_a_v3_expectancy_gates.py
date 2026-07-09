@@ -58,7 +58,7 @@ def test_directional_ramp_aborts_weak_dir_sum(monkeypatch):
     )
     monkeypatch.setitem(
         CONFIG,
-        "ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS",
+        "ENGINE_A_V3_DIRECTIONAL_RAMP_BY_CLASS",
         {"forex_majors": {"min_directional": 0.90, "soft_span": 0.05}},
     )
     # Mild uptrend — dir_sum will be positive but typically << 0.90.
@@ -74,6 +74,41 @@ def test_directional_ramp_aborts_weak_dir_sum(monkeypatch):
     assert result.factor_diagnostics.get("minDirectionalFailed") is True
     assert result.direction == "FLAT"
     assert result.decision == "WATCH"
+
+
+def test_v3_directional_ramp_does_not_crush_frozen_crypto_slice(monkeypatch):
+    """V3-calibrated ramp must not zero scores that clear direction on real candles."""
+    import glob
+    import json
+    from pathlib import Path
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_V3_DIRECTIONAL_RAMP",
+        {"ENABLED": True, "APPLY_TO_CONFLUENCE": True},
+    )
+    repo = Path(__file__).resolve().parents[1]
+    candles_root = repo / "data" / "frozen" / "2026-05-30" / "candles"
+    hits = glob.glob(str(candles_root / "DOGE_USDT__*__*.json"))
+    if len(hits) < 3:
+        return
+    loaded: dict[str, list[dict]] = {}
+    for hit in hits:
+        tf = Path(hit).name.split("__")[1]
+        rows = json.load(open(hit, encoding="utf-8"))
+        rows = [r for r in rows if isinstance(r, dict) and r.get("time")]
+        rows.sort(key=lambda r: r["time"])
+        loaded[tf] = rows[-300:]
+    if not all(tf in loaded for tf in ("D1", "H4", "H1")):
+        return
+    route = route_specialist(
+        {"display": "DOGE/USDT", "symbol": "DOGE/USDT", "type": "crypto"}
+    )
+    result = score_pair(route, "swing", loaded)
+    assert result.direction in ("LONG", "SHORT")
+    assert result.confluence_score > 0.3
+    assert result.factor_diagnostics.get("minDirectionalFailed") is not True
+    assert float(result.factor_diagnostics.get("directionalRampMult") or 0) > 0.0
 
 
 def test_mr_opposition_guard_blocks_forced_fade(monkeypatch):

@@ -90,10 +90,15 @@ def test_family_spotcheck_edge_config_active():
 
     upgrade = CONFIG.get("ENGINE_A_V3_SETUP_UPGRADE") or {}
     assert float(upgrade.get("MIN_CONFLUENCE_FRAC", 0)) >= 0.75
-    # Ramp deliberately disabled 2026-07-09: V2-calibrated min/span thresholds
-    # applied to V3 dir_sum crushed confluence and emptied the TRADE tier.
     ramp = CONFIG.get("ENGINE_A_V3_DIRECTIONAL_RAMP") or {}
-    assert ramp.get("ENABLED", True) is False
+    assert ramp.get("ENABLED", True) is True
+    v3_ramp = CONFIG.get("ENGINE_A_V3_DIRECTIONAL_RAMP_BY_CLASS") or {}
+    assert v3_ramp.get("crypto_other", {}).get("min_directional", 0) > (
+        v3_ramp.get("crypto_btc", {}).get("min_directional", 1)
+    )
+    assert v3_ramp.get("forex_exotics", {}).get("min_directional", 1) < (
+        v3_ramp.get("forex_majors", {}).get("min_directional", 0)
+    )
     legacy = CONFIG.get("ENGINE_A_V3_LEGACY_FILTERS") or {}
     assert legacy.get("ENABLED", False) is True
     assert (CONFIG.get("ENGINE_A_V3_EQUITY_VOLUME_FLOOR") or {}).get("ENABLED", False) is True

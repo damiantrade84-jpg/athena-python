@@ -49,6 +49,68 @@ _live_prices_lock = threading.Lock()
 
 _ws_manager_started = False
 
+
+def _pair_source_by_display(display: str, pairs: list | None = None) -> str | None:
+    """Resolve pair routing source (mt5, eodhd, binance, …) from display or symbol key."""
+    if not display:
+        return None
+    if pairs is None:
+        try:
+            pairs = list(rt().ALL_PAIRS)
+        except RuntimeError:
+            return None
+    for p in pairs:
+        if not isinstance(p, dict):
+            continue
+        if p.get("display") == display or p.get("symbol") == display:
+            src = p.get("source")
+            return str(src).strip() if src else None
+    return None
+
+
+def _is_mt5_routed_display(display: str, pairs: list | None = None) -> bool:
+    return _pair_source_by_display(display, pairs) == "mt5"
+
+
+def _record_mt5_live_price(
+    display: str,
+    price: float,
+    bid=None,
+    ask=None,
+    *,
+    now_ts: float | None = None,
+    broker_ts: float | None = None,
+) -> None:
+    """Authoritative live quote for MT5-routed pairs (broker tick mid)."""
+    now_ts = time.time() if now_ts is None else now_ts
+    entry = {
+        "price": float(price),
+        "bid": bid,
+        "ask": ask,
+        "ts": now_ts,
+        "source": "mt5",
+    }
+    if broker_ts is not None:
+        entry["broker_ts"] = broker_ts
+    with _live_prices_lock:
+        _live_prices[display] = entry
+
+
+def _record_eodhd_ws_live_price(
+    disp: str,
+    entry: dict,
+    *,
+    pairs: list | None = None,
+) -> bool:
+    """Write EODHD WS tick into _live_prices for eodhd-routed pairs only."""
+    if _is_mt5_routed_display(disp, pairs):
+        return False
+    if not entry.get("price"):
+        return False
+    with _live_prices_lock:
+        _live_prices[disp] = entry
+    return True
+
 _PRICE_POLL_FIRST_RUN = True
 
 
@@ -1154,15 +1216,13 @@ def _run_mt5_tick_poller(poll_interval: float = 1.5):
                         if _tick_epoch > 0
                         else None
                     )
-                    with _live_prices_lock:
-                        _live_prices[display] = {
-                            "price": price,
-                            "bid": bid,
-                            "ask": ask,
-                            "ts": time.time(),
-                            "broker_ts": _broker_ts,
-                            "source": "mt5",
-                        }
+                    _record_mt5_live_price(
+                        display,
+                        price,
+                        bid=bid,
+                        ask=ask,
+                        broker_ts=_broker_ts,
+                    )
                     updated += 1
                 except Exception as e:
                     log.debug("[MT5-PRICE-POLL] %s tick error: %s", p.get("display"), e)
@@ -1663,6 +1723,8 @@ class EODHDWebSocketManager:
         display_map = {}  # ws_ticker â†’ athena display name
 
         for p in pairs:
+            if p.get("source") != "eodhd":
+                continue
             if not p.get("ws", True):  # default True = backward-compatible
                 continue
 
@@ -1828,12 +1890,8 @@ class EODHDWebSocketManager:
 
                                 entry["marketStatus"] = msg.get("ms", "unknown")
 
-                            if entry.get("price"):
-                                with _live_prices_lock:
-                                    _live_prices[disp] = entry
-
+                            if _record_eodhd_ws_live_price(disp, entry):
                                 # Crypto candles come from Binance — only build WS candles for forex/US
-
                                 _cb = get_candle_builder()
                                 if _cb and endpoint != "crypto":
                                     _cb.on_tick(
@@ -1888,20 +1946,13 @@ class EODHDWebSocketManager:
 
             asyncio.set_event_loop(self._loop)
 
-            # Subscribe WS-capable pairs only (ws:True, default) — capped at 50 tickers per endpoint (EODHD plan limit)
-            # us (~23):  AAPL,TSLA,NVDA,MSFT,META,GOOG,NFLX,AMD,COIN,PYPL,INTC,UBER,PLTR
-            #            + SPY,IWM,EEM,DIA,GDX,SOXX,SLV,USO + GSPC.INDX,DJI.INDX
-            # forex (~49): 21 forex pairs + XAU/USD,XAG/USD,XPT/USD,XPD/USD,WTI Oil,Brent Oil,Nat Gas,Copper,
-            #              Aluminium,Lead,Nickel,Zinc,Gasoline,Cattle,Cocoa,Coffee,Corn,Cotton,Soybeans,Sugar,Wheat
-            #              + UK100,ASX 200,Nikkei 225,Hang Seng,EURX,JPYX,USDX
+            # Subscribe EODHD-routed pairs only (source=eodhd, ws:True) — capped at 50
+            # tickers per endpoint (EODHD plan limit). MT5-routed forex/commodities/
+            # indices/US CFDs use the MT5 tick poller for live prices, not EODHD WS.
             # crypto: handled by BinanceLivePriceWS/BinanceCandleWS — not counted here
-            # ws:False pairs use REST cache (H1:55m, H4:3h55m, D1:23h TTL) — scan/backtest/execute unaffected
-            # US stock ticks (us endpoint) carry real exchange volume → CandleBuilder builds M1/M5/M15 bars live
+            # ws:False eodhd pairs use REST cache (H1:55m, H4:3h55m, D1:23h TTL)
 
-            try:
-                ws_pairs = list(rt().ALL_PAIRS)
-            except RuntimeError:
-                ws_pairs = []
+            ws_pairs = list(pairs) if pairs else []
 
             self._loop.run_until_complete(self._run_all(ws_pairs))
 

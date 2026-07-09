@@ -793,9 +793,9 @@ def score_pair(
 
         ramp_cfg = CONFIG.get("ENGINE_A_V3_DIRECTIONAL_RAMP") or {}
         if ramp_cfg.get("ENABLED", True) and direction in ("LONG", "SHORT"):
-            from factor_scoring import _resolve_directional_ramp
+            from engine_a_v3.directional_ramp import resolve_v3_directional_ramp
 
-            min_dir, soft_span = _resolve_directional_ramp(asset_type, group)
+            min_dir, soft_span = resolve_v3_directional_ramp(asset_type, group)
             abs_dir = abs(dir_sum)
             if abs_dir < min_dir:
                 min_directional_failed = True
@@ -906,6 +906,7 @@ def score_pair(
         "adxValue": mom_diag.get("adxValue"),
         "adxMultiplier": mom_diag.get("adxMultiplier"),
         "diAlignMult": mom_diag.get("diAlignMult"),
+        "dirSum": round(dir_sum, 4),
         "directionalRampMult": round(dir_ramp_mult, 4),
         "minDirectionalFailed": min_directional_failed,
         "mrOppositionBlocked": mr_opposition_blocked,

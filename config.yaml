@@ -127,16 +127,36 @@ ENGINE_A_V3_MEAN_REVERSION:
   Z_ENTRY: 1.5
   EFF_MAX: 0.35
   LOOKBACK: 20
-# V3 directional ramp (ports ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS into quant scorer).
-# Weak |dir_sum| aborts to FLAT/WATCH; soft span multiplies confluence.
-# DISABLED 2026-07-09: ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS thresholds are calibrated
-# for V2 trend_score (~±1); V3 dir_sum is a weighted mean of signal×quality incl.
-# non-directional components and runs far smaller, so the ramp multiplied most
-# confluence scores toward zero (observed DOGE rescore 2.21→0.05) and emptied the
-# TRADE tier. Re-enable only with min/span recalibrated to the V3 dir_sum scale.
+# V3 directional ramp — uses dir_sum (weighted signal×quality), NOT V2 trend_score.
+# Thresholds live in ENGINE_A_V3_DIRECTIONAL_RAMP_BY_CLASS (~0.04–0.06 min).
+# Do not point V3 at ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS (V2 scale ~0.20–0.25).
 ENGINE_A_V3_DIRECTIONAL_RAMP:
-  ENABLED: false
+  ENABLED: true
   APPLY_TO_CONFLUENCE: true
+ENGINE_A_V3_DIRECTIONAL_RAMP_BY_CLASS:
+  crypto_btc: { min_directional: 0.04, soft_span: 0.06 }
+  crypto_eth: { min_directional: 0.04, soft_span: 0.06 }
+  crypto_alt_majors: { min_directional: 0.04, soft_span: 0.06 }
+  crypto_doge: { min_directional: 0.045, soft_span: 0.055 }
+  crypto_other: { min_directional: 0.05, soft_span: 0.05 }
+  forex_majors: { min_directional: 0.05, soft_span: 0.07 }
+  forex_crosses: { min_directional: 0.05, soft_span: 0.07 }
+  forex_other: { min_directional: 0.05, soft_span: 0.07 }
+  forex_exotics: { min_directional: 0.045, soft_span: 0.065 }
+  us_stock_single: { min_directional: 0.06, soft_span: 0.08 }
+  stock_other: { min_directional: 0.06, soft_span: 0.08 }
+  us_indices_trackers: { min_directional: 0.05, soft_span: 0.07 }
+  eu_indices: { min_directional: 0.05, soft_span: 0.07 }
+  asian_indices: { min_directional: 0.05, soft_span: 0.07 }
+  index_other: { min_directional: 0.05, soft_span: 0.07 }
+  precious_trackers: { min_directional: 0.05, soft_span: 0.08 }
+  energy_oil: { min_directional: 0.05, soft_span: 0.08 }
+  nat_gas: { min_directional: 0.05, soft_span: 0.08 }
+  copper: { min_directional: 0.05, soft_span: 0.08 }
+  pgm_metals: { min_directional: 0.05, soft_span: 0.08 }
+  base_metals: { min_directional: 0.05, soft_span: 0.08 }
+  softs: { min_directional: 0.05, soft_span: 0.08 }
+  commodity_other: { min_directional: 0.05, soft_span: 0.08 }
 # Forex quant TRADE must also pass session scoring (not only setup upgrades).
 ENGINE_A_V3_QUANT_SESSION_GATE:
   ENABLED: true

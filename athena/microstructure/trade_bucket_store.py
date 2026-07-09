@@ -18,7 +18,12 @@ from typing import Iterable
 log = logging.getLogger("sentinel")
 
 _DB_LOCK = threading.Lock()
+_WRITE_STATS_LOCK = threading.Lock()
+_WRITE_EVENT_TS: list[float] = []
+_LAST_WRITE_TS: dict[str, float] = {}
 _KEEP_HOURS = int(os.environ.get("TRADE_BUCKET_KEEP_HOURS", "168"))
+_STORE_FAIL_LOG_INTERVAL_SEC = 60.0
+_last_store_fail_log_ts = 0.0
 
 
 def _resolve_db_path() -> Path:
@@ -102,6 +107,95 @@ def default_bucket_size(price: float) -> float:
     return 0.00001
 
 
+def _record_write_success(exchange: str) -> None:
+    now = time.time()
+    ex = str(exchange or "").strip().lower() or "unknown"
+    with _WRITE_STATS_LOCK:
+        _LAST_WRITE_TS[ex] = now
+        _WRITE_EVENT_TS.append(now)
+        cutoff = now - 60.0
+        if len(_WRITE_EVENT_TS) > 5000:
+            _WRITE_EVENT_TS[:] = [t for t in _WRITE_EVENT_TS if t >= cutoff]
+        else:
+            _WRITE_EVENT_TS[:] = [t for t in _WRITE_EVENT_TS if t >= cutoff]
+
+
+def write_stats_snapshot() -> dict:
+    """In-memory trade-bucket write telemetry (not persisted)."""
+    now = time.time()
+    with _WRITE_STATS_LOCK:
+        recent = sum(1 for t in _WRITE_EVENT_TS if t >= now - 60.0)
+        newest = max(_LAST_WRITE_TS.values()) if _LAST_WRITE_TS else None
+        by_exchange = dict(_LAST_WRITE_TS)
+    return {
+        "writes_1m": recent,
+        "newest_write_age_sec": round(now - newest, 3) if newest else None,
+        "last_write_by_exchange": {
+            ex: round(now - ts, 3) for ex, ts in by_exchange.items()
+        },
+    }
+
+
+def trade_bucket_health_snapshot(
+    exchange: str,
+    *,
+    max_age_sec: int = 900,
+    min_levels: int = 3,
+    symbols: Iterable[str] | None = None,
+) -> dict:
+    """Summarise SQLite bucket freshness for microstructure health endpoints."""
+    ex = str(exchange or "binance").strip().lower()
+    now = time.time()
+    fresh_cutoff = now - int(max_age_sec)
+    session_id = _session_id(now)
+    sym_list = [
+        str(s).replace("/", "").upper()
+        for s in (symbols or [])
+        if str(s or "").strip()
+    ]
+    out = {
+        "db_path": str(DB_PATH),
+        "exchange": ex,
+        "session_id": session_id,
+        "max_age_sec": int(max_age_sec),
+        "min_levels": int(min_levels),
+        "newest_bucket_age_sec": None,
+        "fresh_symbol_count": 0,
+        "monitored_symbol_count": len(sym_list),
+    }
+    try:
+        with sqlite3.connect(DB_PATH, timeout=15.0) as con:
+            row = con.execute(
+                "SELECT MAX(last_ts) FROM trade_buckets WHERE exchange = ?",
+                (ex,),
+            ).fetchone()
+            newest = float(row[0]) if row and row[0] is not None else None
+            if newest is not None:
+                out["newest_bucket_age_sec"] = round(now - newest, 3)
+
+            if not sym_list:
+                return out
+
+            fresh_symbols = 0
+            for sym in sym_list:
+                cnt_row = con.execute(
+                    """
+                    SELECT COUNT(*) FROM trade_buckets
+                    WHERE exchange = ? AND symbol = ? AND session_id = ?
+                      AND last_ts >= ?
+                    """,
+                    (ex, sym, session_id, fresh_cutoff),
+                ).fetchone()
+                fresh_count = int(cnt_row[0] or 0) if cnt_row else 0
+                if fresh_count >= int(min_levels):
+                    fresh_symbols += 1
+            out["fresh_symbol_count"] = fresh_symbols
+    except Exception as exc:
+        log.warning("[TradeBuckets] health snapshot failed: %s", exc)
+        out["error"] = str(exc)
+    return out
+
+
 def bucket_price(price: float, bucket_size: float | None = None) -> tuple[float, float]:
     size = float(bucket_size or default_bucket_size(price))
     if size <= 0:
@@ -137,6 +231,8 @@ def store_trade(
     buy_vol = 0.0 if is_buyer_maker else qty
     sell_vol = qty if is_buyer_maker else 0.0
     delta = buy_vol - sell_vol
+    ex_key = str(exchange).lower()
+    sym_key = str(symbol).replace("/", "").upper()
     try:
         with _DB_LOCK:
             with sqlite3.connect(DB_PATH, timeout=15.0) as con:
@@ -155,8 +251,8 @@ def store_trade(
                         trade_count = trade_count + 1
                     """,
                     (
-                        str(exchange).lower(),
-                        str(symbol).replace("/", "").upper(),
+                        ex_key,
+                        sym_key,
                         sess,
                         price_bucket,
                         size,
@@ -168,8 +264,19 @@ def store_trade(
                         event_ts,
                     ),
                 )
+                con.commit()
+        _record_write_success(ex_key)
     except Exception as exc:
-        log.debug("[TradeBuckets] store failed: %s", exc)
+        global _last_store_fail_log_ts
+        now = time.time()
+        if now - _last_store_fail_log_ts >= _STORE_FAIL_LOG_INTERVAL_SEC:
+            _last_store_fail_log_ts = now
+            log.warning(
+                "[TradeBuckets] store failed exchange=%s symbol=%s: %s",
+                ex_key,
+                sym_key,
+                exc,
+            )
 
 
 def query_session_buckets(

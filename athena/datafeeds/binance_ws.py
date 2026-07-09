@@ -26,6 +26,53 @@ from athena.microstructure.trade_bucket_store import store_trade  # noqa: E402
 
 _micro_boot_lock = threading.Lock()
 _micro_boot_logged = False
+# Binance USDT-M multiplex often delivers @trade + @depth but not @aggTrade.
+# After this grace window with zero aggTrade ticks, persist buckets from @trade.
+_TRADE_BUCKET_FALLBACK_GRACE_SEC = 30.0
+
+
+def _parse_binance_trade_tick(data: dict) -> tuple[float, float, bool, float] | None:
+    try:
+        price = float(data.get("p", 0))
+        size = float(data.get("q", 0))
+        is_buyer_maker = bool(data.get("m"))
+        event_ts = float(data.get("T") or data.get("E") or 0) / 1000.0
+        if event_ts <= 0:
+            event_ts = time.time()
+    except (TypeError, ValueError):
+        return None
+    if price <= 0 or size <= 0:
+        return None
+    return price, size, is_buyer_maker, event_ts
+
+
+def _persist_binance_trade_tick(symbol: str, data: dict) -> None:
+    parsed = _parse_binance_trade_tick(data)
+    if not parsed:
+        return
+    price, size, is_buyer_maker, event_ts = parsed
+    store_trade(
+        exchange="binance",
+        symbol=str(symbol).replace("/", "").upper(),
+        price=price,
+        quantity=size,
+        is_buyer_maker=is_buyer_maker,
+        ts=event_ts,
+    )
+
+
+def _trade_bucket_fallback_active(
+    *,
+    connected_at: float,
+    last_aggtrade_ts: float,
+    now_ts: float | None = None,
+) -> bool:
+    if last_aggtrade_ts > 0:
+        return False
+    now = now_ts if now_ts is not None else time.time()
+    if connected_at <= 0:
+        return False
+    return (now - connected_at) >= _TRADE_BUCKET_FALLBACK_GRACE_SEC
 
 
 def binance_futures_micro_stream_url(symbol: str) -> str:
@@ -58,6 +105,8 @@ class BinanceWS:
         # Metrics callbacks
         self.on_metrics: Optional[callable] = None
         self._reconnect_attempt: int = 0
+        self._connected_at: float = 0.0
+        self._last_aggtrade_ts: float = 0.0
 
     def _next_reconnect_delay(self) -> float:
         base = 2.0
@@ -85,6 +134,7 @@ class BinanceWS:
                 ssl=default_ssl_context(),
             ) as ws:
                 self._reconnect_attempt = 0
+                self._connected_at = time.time()
                 global _micro_boot_logged
                 log.info(f"[BinanceWS] Connected to combined stream for {self.symbol}")
                 with _micro_boot_lock:
@@ -160,8 +210,8 @@ class BinanceWS:
     def _handle_trade(self, data: Dict) -> None:
         """Accumulate taker volume from the @trade stream (taker side from ``m``).
 
-        Persistence to the price-bucket store is handled by ``_handle_agg_trade``;
-        aggTrade is the canonical bucket source so the same fill is not counted twice.
+        When @aggTrade is silent on Binance USDT-M multiplex, persist buckets from
+        @trade after a short grace window so Engine B/CVD gates stay fed.
         """
         try:
             size = float(data.get("q", 0))
@@ -175,26 +225,16 @@ class BinanceWS:
         else:
             self.sell_taker_volume += size
             self.orderflow_delta -= size
+        if _trade_bucket_fallback_active(
+            connected_at=self._connected_at,
+            last_aggtrade_ts=self._last_aggtrade_ts,
+        ):
+            _persist_binance_trade_tick(self.symbol, data)
 
     def _handle_agg_trade(self, data: Dict) -> None:
         """Persist aggregate-trade volume by price bucket for Engine D orderflow."""
-        try:
-            price = float(data.get("p", 0))
-            size = float(data.get("q", 0))
-            is_buyer_maker = bool(data.get("m"))
-            event_ts = float(data.get("T") or data.get("E") or 0) / 1000.0
-            if event_ts <= 0:
-                event_ts = time.time()
-        except (TypeError, ValueError):
-            return
-        store_trade(
-            exchange="binance",
-            symbol=self.symbol.upper(),
-            price=price,
-            quantity=size,
-            is_buyer_maker=is_buyer_maker,
-            ts=event_ts,
-        )
+        self._last_aggtrade_ts = time.time()
+        _persist_binance_trade_tick(self.symbol, data)
 
     def _compute_imbalance(self) -> float:
         """Compute order book imbalance: (bid_vol - ask_vol) / (bid_vol + ask_vol)."""
@@ -324,6 +364,7 @@ class _SymbolState:
         "sell_taker_volume",
         "orderflow_delta",
         "last_msg_ts",
+        "last_aggtrade_ts",
     )
 
     def __init__(self) -> None:
@@ -333,6 +374,7 @@ class _SymbolState:
         self.sell_taker_volume: float = 0.0
         self.orderflow_delta: float = 0.0
         self.last_msg_ts: float = 0.0
+        self.last_aggtrade_ts: float = 0.0
 
 
 class BinanceMicroMultiWS:
@@ -534,25 +576,17 @@ class BinanceMicroMultiWS:
         else:
             st.sell_taker_volume += size
             st.orderflow_delta -= size
+        if _trade_bucket_fallback_active(
+            connected_at=self._connected_at,
+            last_aggtrade_ts=st.last_aggtrade_ts,
+        ):
+            _persist_binance_trade_tick(sym_u, data)
 
     def _handle_agg_trade(self, sym_u: str, data: Dict) -> None:
-        try:
-            price = float(data.get("p", 0))
-            size = float(data.get("q", 0))
-            is_buyer_maker = bool(data.get("m"))
-            event_ts = float(data.get("T") or data.get("E") or 0) / 1000.0
-            if event_ts <= 0:
-                event_ts = time.time()
-        except (TypeError, ValueError):
-            return
-        store_trade(
-            exchange="binance",
-            symbol=sym_u,
-            price=price,
-            quantity=size,
-            is_buyer_maker=is_buyer_maker,
-            ts=event_ts,
-        )
+        st = self._state.get(sym_u)
+        if st is not None:
+            st.last_aggtrade_ts = time.time()
+        _persist_binance_trade_tick(sym_u, data)
 
     @staticmethod
     def _compute_imbalance(orderbook: Dict[str, List[Tuple[float, float]]]) -> float:

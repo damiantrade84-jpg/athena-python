@@ -207,6 +207,7 @@ from candle_feeds import (  # noqa: E402
     _bybit_crypto_symbol_map,
     _live_prices,
     _live_prices_lock,
+    _record_mt5_live_price,
     _run_binance_price_poller,
     _run_bybit_price_poller,
     _run_mt5_tick_poller,
@@ -3210,14 +3211,12 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     else:
         live_px = None
     if live_px is not None:
-        with _live_prices_lock:
-            _live_prices[symbol] = {
-                "price": live_px,
-                "bid": float(tick.bid) if tick and tick.bid > 0 else None,
-                "ask": float(tick.ask) if tick and tick.ask > 0 else None,
-                "ts": time.time(),
-                "source": "mt5",
-            }
+        _record_mt5_live_price(
+            symbol,
+            live_px,
+            bid=float(tick.bid) if tick and tick.bid > 0 else None,
+            ask=float(tick.ask) if tick and tick.ask > 0 else None,
+        )
 
     resp = {
         "error": False,

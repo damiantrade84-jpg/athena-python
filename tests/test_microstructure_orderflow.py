@@ -377,8 +377,8 @@ def test_binance_micro_multi_ws_per_symbol_state_isolation():
     assert eth.last_msg_ts == 0.0
 
 
-def test_binance_micro_multi_ws_trade_does_not_persist_only_aggtrade_does(monkeypatch):
-    """A @trade envelope must update accumulators only; aggTrade is the sole persister."""
+def test_binance_micro_multi_ws_trade_does_not_persist_during_cold_start(monkeypatch):
+    """@trade must not persist buckets until aggTrade grace expires (cold start)."""
     import asyncio
 
     from athena.datafeeds import binance_ws
@@ -400,6 +400,116 @@ def test_binance_micro_multi_ws_trade_does_not_persist_only_aggtrade_does(monkey
     assert stored == []
     assert multi._state["BTCUSDT"].buy_taker_volume == 2.0
     assert multi._state["BTCUSDT"].orderflow_delta == 2.0
+
+
+def test_binance_micro_multi_ws_trade_persists_when_aggtrade_silent(monkeypatch):
+    """When @aggTrade never arrives, @trade must backfill trade buckets after grace."""
+    import asyncio
+    import time as _time
+
+    from athena.datafeeds import binance_ws
+
+    stored: list[dict] = []
+    monkeypatch.setattr(binance_ws, "store_trade", lambda **kwargs: stored.append(kwargs))
+    multi = binance_ws.BinanceMicroMultiWS(symbols=["btcusdt"])
+    multi._connected_at = _time.time() - 120.0
+
+    async def _drive():
+        await multi._handle_message(
+            {
+                "stream": "btcusdt@trade",
+                "data": {"p": "65000.0", "q": "2.0", "m": False, "T": 1710000000000},
+            }
+        )
+
+    asyncio.run(_drive())
+
+    assert len(stored) == 1
+    assert stored[0]["symbol"] == "BTCUSDT"
+    assert stored[0]["exchange"] == "binance"
+
+
+def test_binance_micro_multi_ws_aggtrade_suppresses_trade_fallback(monkeypatch):
+    """When @aggTrade is active, @trade must not double-count into buckets."""
+    import asyncio
+    import time as _time
+
+    from athena.datafeeds import binance_ws
+
+    stored: list[dict] = []
+    monkeypatch.setattr(binance_ws, "store_trade", lambda **kwargs: stored.append(kwargs))
+    multi = binance_ws.BinanceMicroMultiWS(symbols=["btcusdt"])
+    multi._connected_at = _time.time() - 120.0
+    multi._state["BTCUSDT"].last_aggtrade_ts = _time.time()
+
+    async def _drive():
+        await multi._handle_message(
+            {
+                "stream": "btcusdt@trade",
+                "data": {"p": "65000.0", "q": "2.0", "m": False, "T": 1710000000000},
+            }
+        )
+
+    asyncio.run(_drive())
+
+    assert stored == []
+
+
+def test_store_trade_persists_row_and_updates_write_stats(monkeypatch):
+    import tempfile
+    import time as _time
+    from pathlib import Path
+
+    from athena.microstructure import trade_bucket_store as store
+
+    db_file = Path(tempfile.mkdtemp()) / "trade_buckets_test.db"
+    monkeypatch.setattr(store, "DB_PATH", db_file)
+    store._ensure_db()
+    store._WRITE_EVENT_TS.clear()
+    store._LAST_WRITE_TS.clear()
+
+    store.store_trade(
+        exchange="binance",
+        symbol="BTCUSDT",
+        price=65000.0,
+        quantity=0.5,
+        is_buyer_maker=False,
+        ts=_time.time(),
+    )
+
+    rows = store.query_session_buckets("BTCUSDT", exchange="binance")
+    stats = store.write_stats_snapshot()
+    assert len(rows) == 1
+    assert stats["writes_1m"] >= 1
+    assert stats["newest_write_age_sec"] is not None
+
+
+def test_store_trade_failure_logs_warning(monkeypatch, caplog):
+    import logging
+    import sqlite3
+
+    from athena.microstructure import trade_bucket_store as store
+
+    class _BrokenConn:
+        def __enter__(self):
+            raise sqlite3.OperationalError("database is locked")
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(store.sqlite3, "connect", lambda *_a, **_k: _BrokenConn())
+    store._last_store_fail_log_ts = 0.0
+
+    with caplog.at_level(logging.WARNING, logger="sentinel"):
+        store.store_trade(
+            exchange="binance",
+            symbol="BTCUSDT",
+            price=1.0,
+            quantity=1.0,
+            is_buyer_maker=False,
+        )
+
+    assert any("store failed" in rec.message for rec in caplog.records)
 
 
 def test_binance_micro_multi_ws_stale_symbol_watchdog_detects_silent_stream():

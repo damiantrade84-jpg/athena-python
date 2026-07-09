@@ -194,6 +194,9 @@ def test_microstructure_health_uses_runtime_cache():
     assert data["feeds_enabled"] is True
     assert data["symbol_count"] == 1
     assert data["symbols"][0]["symbol"] == "BTCUSDT"
+    assert "trade_bucket_exchange" in data
+    assert "trade_bucket_writes_1m" in data
+    assert "trade_bucket_fresh_symbol_count" in data
 
 
 def test_debug_routes_lists_registered_api_routes():
