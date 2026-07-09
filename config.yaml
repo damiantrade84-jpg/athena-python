@@ -1734,7 +1734,12 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
 
   # Forex
   forex_majors: 2.1
-  forex_crosses: 2.1
+  # forex_crosses 2.1 was effectively unreachable: 0/160 samples passed on the
+  # frozen 2026-05-30 V3 score sweep (max 2.068, p90 1.823) while majors on the
+  # same weights reached 2.62. 1.9 (2026-07-09, UNVALIDATED judgment value, not
+  # n>=30 outcome-backed) sits between exotics 1.7 and majors 2.1 and admits
+  # roughly the top ~5-8% of sampled scores. Reversible: reset to 2.1.
+  forex_crosses: 1.9
   forex_other: 2.1
   forex_exotics: 1.7
 
