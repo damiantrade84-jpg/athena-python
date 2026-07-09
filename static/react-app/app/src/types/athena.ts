@@ -156,6 +156,7 @@ export interface EngineASignal {
   family?: string;
   subclass?: string;
   horizon?: 'intraday' | 'swing' | string;
+  entryTimeframe?: string | null;
   setupId?: string | null;
   decision?: 'TRADE' | 'WATCH' | 'NO_SIGNAL' | string;
   qualified?: boolean;

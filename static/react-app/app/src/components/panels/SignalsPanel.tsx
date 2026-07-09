@@ -382,9 +382,9 @@ function resolveSignalSymbol(signal: EngineASignal): string {
   return String(signal.symbol || signal.pair || signal.display || '').toUpperCase().trim();
 }
 
-function preferredTvChartTf(signal: EngineASignal): string {
+export function preferredTvChartTf(signal: EngineASignal): string {
   const route = (signal as { timeframe_route?: { autoSelectTf?: string } }).timeframe_route?.autoSelectTf;
-  const direct = signal.timeframe || route;
+  const direct = signal.entryTimeframe || signal.timeframe || route;
   if (direct && typeof direct === 'string') {
     return direct.toUpperCase();
   }
