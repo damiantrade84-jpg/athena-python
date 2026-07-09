@@ -54,6 +54,28 @@ def _fmt_list(value: Any) -> str:
     return ", ".join(str(item) for item in value)
 
 
+def _engine_b_tf_roles_block(style: str) -> str:
+    """Resolve struct/zone/trigger/atr TFs for analyze_style from the B playbook matrix."""
+    matrix = get_engine_b_playbook().get("timeframeMatrix") or {}
+    macro = matrix.get("macroSwing", "H4")
+    style_key = str(style or "intraday").lower()
+    if style_key == "auto":
+        style_key = "intraday"
+    roles = matrix.get(style_key) or matrix.get("intraday") or {}
+    if not isinstance(roles, dict):
+        roles = {}
+    return (
+        "== ENGINE B TIMEFRAME ROLES (style-resolved) ==\n"
+        f"analyze_style: {style_key}\n"
+        f"struct_tf: {roles.get('struct', 'unavailable')} | zone_tf: {roles.get('zone', 'unavailable')} | "
+        f"trigger_tf: {roles.get('trigger', 'unavailable')} | atr_tf: {roles.get('atr', 'unavailable')}\n"
+        f"macro_swing: {macro}\n"
+        "Evaluate zone retest on zone_tf; evaluate entry trigger on trigger_tf.\n"
+        "Chart screenshot TF may differ — server-trusted engineBContext gates override visual zone guesses.\n"
+        "When locationOk=true and entryOk=true, do not downgrade solely because price is at/near a zone band.\n"
+    )
+
+
 def build_chart_review_prompt(context: dict[str, Any]) -> str:
     if str(context.get("primary_engine") or "A").upper() == "B":
         return _build_engine_b_chart_review_prompt(context)
@@ -220,6 +242,8 @@ def _build_engine_b_chart_review_prompt(context: dict[str, Any]) -> str:
     playbook_block = render_playbook_prompt_block([get_engine_b_playbook()], compact=True)
     trade_skill_schema = render_trade_skill_prompt_schema("engine_b_chart")
     macro_block = render_macro_prompt_block(context.get("symbol"), context.get("asset_class"))
+    analyze_style = str(context.get("analyze_style") or "intraday")
+    tf_roles_block = _engine_b_tf_roles_block(analyze_style)
 
     return f"""{_CHART_REVIEW_B_PREAMBLE}
 1. Follow Engine B playbook: structure, liquidity, zones, invalidation.
@@ -229,6 +253,7 @@ def _build_engine_b_chart_review_prompt(context: dict[str, Any]) -> str:
 
 {playbook_block}
 
+{tf_roles_block}
 == TRADE SKILL OUTPUT (required top-level fields) ==
 {trade_skill_schema}
 
@@ -260,6 +285,8 @@ Rules:
 - Never change Engine B score or threshold. AI review may validate or downgrade timing only.
 - Use the chart image for visual direction and timing validation.
 - Engine B overlays on the chart (zones, BOS, FVG) are advisory visual context — server-trusted structure fields in engineBContext are authoritative.
+- Engine B is zone-retest: when locationOk=true and entryOk=true, retest at the active zone is valid — do not reflex-reject as inside resistance/support.
+- Judge zones on zone_tf and triggers on trigger_tf (see ENGINE B TIMEFRAME ROLES); chart TF may differ from zone_tf.
 - This is review-only. Do not issue execution instructions.
 
 == SERVER-TRUSTED engineBContext (JSON) ==

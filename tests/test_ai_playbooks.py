@@ -81,6 +81,49 @@ def test_engine_b_playbook_documents_ob_fvg_and_gates() -> None:
     assert "FVG_FILL_CONTINUATION" in pb["entryModels"]
 
 
+def test_engine_b_playbook_has_timeframe_matrix() -> None:
+    pb = get_engine_b_playbook()
+    matrix = pb["timeframeMatrix"]
+    for style in ("scalp", "intraday", "swing"):
+        assert style in matrix
+        roles = matrix[style]
+        assert roles["struct"]
+        assert roles["zone"]
+        assert roles["trigger"]
+        assert roles["atr"]
+    assert "H4" in str(matrix.get("macroSwing", ""))
+
+
+def test_engine_b_playbook_zone_retest_principles() -> None:
+    pb = get_engine_b_playbook()
+    principles = " ".join(pb["principles"]).lower()
+    assert "zone-retest" in principles
+    assert "reflex" in principles
+    assert "locationok" in principles
+
+
+def test_engine_b_playbook_must_reject_if_qualified_not_blunt() -> None:
+    pb = get_engine_b_playbook()
+    rejects = pb["mustRejectIf"]
+    assert "Longing directly into supply or resistance zone." not in rejects
+    assert "Shorting directly into demand or support zone." not in rejects
+    assert any("locationOk=false" in r for r in rejects)
+
+
+def test_engine_b_playbook_strategy_mapping() -> None:
+    pb = get_engine_b_playbook()
+    mapping = pb["strategyMapping"]
+    assert "ORDER_BLOCK_REJECTION" in mapping
+    assert "obAtZone" in mapping["ORDER_BLOCK_REJECTION"]
+
+
+def test_engine_b_rendered_prompt_includes_timeframe_matrix() -> None:
+    text = render_playbook_prompt_block([get_engine_b_playbook()])
+    assert "timeframeMatrix" in text
+    assert '"zone": "H4"' in text or '"zone":"H4"' in text
+    assert "zone-retest" in text.lower() or "zone-retest engine" in text.lower()
+
+
 def test_render_playbook_prompt_block_includes_review_order() -> None:
     text = render_playbook_prompt_block([get_engine_d_scalp_playbook()])
     assert "ATHENA TRADE PLAYBOOKS" in text
