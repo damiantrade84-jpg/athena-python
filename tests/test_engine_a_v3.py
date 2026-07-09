@@ -532,3 +532,21 @@ def test_timezone_naive_parsing(monkeypatch):
     assert dt3.tzinfo == timezone.utc
     assert dt3.hour == 10
 
+
+
+def test_intraday_expiry_covers_h4_entry_tf_groups():
+    """H4-entry intraday signals must not be born expired: decision_time is the
+    last CONFIRMED bar's open, so validity must span at least 2x the primary TF
+    (H4 -> 8h). Default H1 groups keep the historical 4h window; swing unchanged."""
+    from engine_a_v3.evaluator import _expiry
+
+    decision_time = datetime(2026, 7, 9, 8, 0, tzinfo=timezone.utc)
+    assert _expiry(decision_time, "intraday", "H1") == decision_time + timedelta(hours=4)
+    assert _expiry(decision_time, "intraday", "H4") == decision_time + timedelta(hours=8)
+    assert _expiry(decision_time, "intraday", "D1") == decision_time + timedelta(hours=48)
+    # Unknown/missing TF falls back to the historical 4h window.
+    assert _expiry(decision_time, "intraday", "") == decision_time + timedelta(hours=4)
+    assert _expiry(decision_time, "swing", "H4") == decision_time + timedelta(days=2)
+    # A confirmed H4 bar closes at open+4h: the old flat 4h window expired at
+    # evaluation time; the widened window leaves a full H4 bar of validity.
+    assert _expiry(decision_time, "intraday", "H4") > decision_time + timedelta(hours=4)

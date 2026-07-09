@@ -112,8 +112,20 @@ def _signal_id(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
 
 
-def _expiry(decision_time: datetime, horizon: str) -> datetime:
-    return decision_time + (timedelta(hours=4) if horizon == "intraday" else timedelta(days=2))
+def _expiry(decision_time: datetime, horizon: str, primary_tf: str = "H1") -> datetime:
+    """Signal validity window anchored to the decision bar's OPEN time.
+
+    Intraday validity must cover at least two primary bars: decision_time is the
+    open of the last CONFIRMED bar, so a window shorter than 2x the primary TF
+    expires at (or before) evaluation time. Groups whose intraday entry TF is
+    overridden to H4 (ENGINE_A_SCORING_PROFILE.BY_SCORE_GROUP.execution_tf) were
+    born expired under the flat 4h window and could never pass
+    verify_refreshed_signal. Default H1 groups keep the historical 4h window.
+    """
+    if horizon == "intraday":
+        tf_hours = {"H1": 1, "H4": 4, "D1": 24}.get(str(primary_tf or "").upper(), 1)
+        return decision_time + timedelta(hours=max(4, 2 * tf_hours))
+    return decision_time + timedelta(days=2)
 
 
 def _demo_research_unpromoted_trade_allowed() -> bool:
@@ -244,7 +256,9 @@ def evaluate_engine_a_v3(
             direction=None,
             decisionTime=decision_time.isoformat(),
             lastConfirmedCandleTs=last_ts,
-            validUntil=_expiry(decision_time, normalized_horizon or "intraday").isoformat(),
+            validUntil=_expiry(
+                decision_time, normalized_horizon or "intraday", primary_tf
+            ).isoformat(),
             entryZone=None,
             invalidation=None,
             targets=(),
@@ -544,7 +558,7 @@ def evaluate_engine_a_v3(
         direction=direction,
         decisionTime=decision_time.isoformat(),
         lastConfirmedCandleTs=last_ts,
-        validUntil=_expiry(decision_time, normalized_horizon).isoformat(),
+        validUntil=_expiry(decision_time, normalized_horizon, primary_tf).isoformat(),
         entryZone=executable_levels.entry_zone if executable_levels else None,
         invalidation=executable_levels.invalidation if executable_levels else None,
         targets=targets,

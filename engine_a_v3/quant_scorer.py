@@ -303,11 +303,13 @@ def _trend_health_mult(
         or snaps.get("D1")
         or {}
     )
+    # ADX is unsigned trend strength: a falling slope means the trend is
+    # weakening regardless of direction, so the penalty applies symmetrically
+    # to LONG and SHORT (previously the SHORT branch penalized rising ADX —
+    # i.e. strengthening downtrends — inverting the intent for shorts).
     adx_slope = _f(entry_snap.get("adxSlope"), 0.0) or 0.0
-    if trend_signal > 0 and adx_slope < 0:
+    if adx_slope < 0:
         mult *= _clamp(1.0 + adx_weakening_penalty * adx_slope, floor, 1.0)
-    elif trend_signal < 0 and adx_slope > 0:
-        mult *= _clamp(1.0 - adx_weakening_penalty * adx_slope, floor, 1.0)
 
     adx = _f(entry_snap.get("adx"), 0.0) or 0.0
     adx_prev = _f(entry_snap.get("adxPrev"))
