@@ -1943,7 +1943,14 @@ CONFIG: dict = {
     },
     "ENGINE_A_V3_SUBSYSTEMS": {
         "ENABLED": True,
-        "WEIGHTS_BY_FAMILY": {},
+        "WEIGHTS_BY_FAMILY": {
+            "crypto": {"microstructure": 0.08},
+        },
+    },
+    "ENGINE_A_V3_MICROSTRUCTURE": {
+        "ENABLED": True,
+        "MAX_AGE_SEC": 120,
+        "EXCHANGE": "binance",
     },
     "ENGINE_A_V3_MOMENTUM_BLEND": {
         "ENABLED": True,

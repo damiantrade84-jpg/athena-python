@@ -14381,7 +14381,7 @@ def analyze_pair(
             )
 
     from engine_a_v3.evaluator import evaluate_engine_a_v3
-    from engine_a_v3.quant_context import build_quant_context
+    from engine_a_v3.quant_context import build_quant_context, resolve_live_microstructure_metrics
 
     # Relative-volume input for the quant scorer's volume component. Assembled
     # here because the forex volume-ratio feed lives in analyze_pair scope.
@@ -14393,7 +14393,13 @@ def analyze_pair(
             _v3_vr = _get_forex_vr(pair.get("display", ""), tf="H1", lookback=20)
         except Exception:
             _v3_vr = None
-    _v3_ctx = build_quant_context(volume_ratio=_v3_vr, display=pair.get("display"))
+    _v3_micro = resolve_live_microstructure_metrics(pair, runtime_cache=_micro_cache)
+    _v3_ctx = build_quant_context(
+        volume_ratio=_v3_vr,
+        display=pair.get("display"),
+        pair_type=pair.get("type"),
+        microstructure_metrics=_v3_micro,
+    )
 
     _v3_signal = evaluate_engine_a_v3(
         pair,
