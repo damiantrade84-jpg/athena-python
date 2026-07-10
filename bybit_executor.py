@@ -139,8 +139,24 @@ def _bybit_max_tick_age_sec() -> float | None:
     return None
 
 
+def _spread_cap_symbol_key(pair) -> str:
+    """Normalize a display pair ('BTC/USDT') to a compact config key ('BTCUSDT')."""
+    return str(pair or "").replace("/", "").replace(" ", "").strip().upper()
+
+
 def _bybit_max_spread_pct(signal: dict) -> float | None:
-    """Return the configured per-asset-type spread ceiling, or None when disabled."""
+    """Return the spread ceiling: per-symbol override first, then per-asset-type; None disables."""
+    by_symbol = CONFIG.get("MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL")
+    if isinstance(by_symbol, dict):
+        key = _spread_cap_symbol_key(
+            (signal or {}).get("pair") or (signal or {}).get("symbol")
+        )
+        if key:
+            for cfg_key, raw in by_symbol.items():
+                if _spread_cap_symbol_key(cfg_key) == key:
+                    if isinstance(raw, (int, float)) and raw > 0:
+                        return float(raw)
+                    break
     cfg = CONFIG.get("MAX_EXECUTION_SPREAD_PCT")
     if not isinstance(cfg, dict):
         return None

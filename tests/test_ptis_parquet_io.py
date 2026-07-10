@@ -33,6 +33,22 @@ def test_read_rejects_four_byte_parquet(tmp_path: Path):
     assert len(quarantined) == 1
 
 
+def test_read_missing_engine_raises_without_quarantine(tmp_path: Path, monkeypatch):
+    part = tmp_path / "2025" / "data.parquet"
+    part.parent.mkdir(parents=True)
+    write_parquet_atomic(part, pd.DataFrame({"a": [1]}))
+
+    def _no_engine(*args, **kwargs):
+        raise ImportError("Unable to find a usable engine")
+
+    monkeypatch.setattr(pd, "read_parquet", _no_engine)
+    with pytest.raises(ImportError):
+        read_parquet_safe(part)
+
+    assert part.exists()
+    assert list(part.parent.glob("data.parquet.corrupt.*")) == []
+
+
 def test_append_rows_merges_after_quarantined_corrupt_existing(tmp_path: Path):
     store = PTISStore(tmp_path / "ptis")
     series_id = "MT5:GLD:H1:close"

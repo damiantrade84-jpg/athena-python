@@ -62,6 +62,11 @@ def read_parquet_safe(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
     try:
         return pd.read_parquet(path)
+    except ImportError:
+        # Missing parquet engine (pyarrow/fastparquet) is an environment
+        # failure, not file corruption — quarantining here would destroy a
+        # healthy store. Fail loudly instead of returning fictitious "no data".
+        raise
     except Exception as exc:
         try:
             size = path.stat().st_size

@@ -17,8 +17,8 @@
 # Or override only on this machine via the same keys in config.local.yaml.
 
 PAPER_SOAK:
-  ENABLED: false
-  REAL_ORDERS_ALLOWED: true
+  ENABLED: true
+  REAL_ORDERS_ALLOWED: false
   LOG_ALL_SIGNALS: true
   LOG_BLOCKED_SIGNALS: true
   LOG_EXECUTION_DECISIONS: true
@@ -2217,6 +2217,20 @@ MAX_EXECUTION_SPREAD_PCT:
   stock: 0.002
   etf: 0.002
   crypto: 0.002
+
+# Per-symbol overrides for instruments whose normal resting spread exceeds the
+# asset-class cap (measured on Pepperstone demo 2026-07-10; caps ~1.4x resting).
+# Keys are display pairs normalized to compact uppercase ('XPT/USD' -> XPTUSD).
+# Symbols not listed fall back to the MAX_EXECUTION_SPREAD_PCT asset-type cap.
+MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL:
+  XPTUSD: 0.0030      # platinum, resting ~0.21%
+  XPDUSD: 0.0050      # palladium, resting ~0.36%
+  SUGAR: 0.0037       # resting ~0.26%
+  LEAD: 0.0034        # resting ~0.24%
+  COTTON: 0.0026      # resting ~0.18%
+  CORN: 0.0025        # resting ~0.18%
+  ALUMINIUM: 0.0023   # resting ~0.17%
+  ZINC: 0.0021        # resting ~0.15%
 
 # ── Signal-to-execution drift cap (GAP-7) ───────────────────────────────────
 # Per-asset-type ceiling on |broker_price - signal_price| / signal_price.

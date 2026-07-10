@@ -139,6 +139,51 @@ def test_mt5_max_spread_disabled_when_asset_type_null(monkeypatch):
     assert mt5_executor._mt5_max_spread_pct({"type": "commodity"}) == 0.001
 
 
+def test_mt5_max_spread_per_symbol_override(monkeypatch):
+    import mt5_executor
+
+    monkeypatch.setitem(
+        mt5_executor.CONFIG,
+        "MAX_EXECUTION_SPREAD_PCT",
+        {"commodity": 0.0015},
+    )
+    monkeypatch.setitem(
+        mt5_executor.CONFIG,
+        "MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL",
+        {"XPTUSD": 0.0030, "SUGAR": 0.0037, "LEAD": None},
+    )
+    # Display pair normalizes to the compact config key
+    assert mt5_executor._mt5_max_spread_pct(
+        {"pair": "XPT/USD", "type": "commodity"}
+    ) == 0.0030
+    assert mt5_executor._mt5_max_spread_pct(
+        {"pair": "Sugar", "type": "commodity"}
+    ) == 0.0037
+    # Unlisted symbol falls back to the asset-class cap
+    assert mt5_executor._mt5_max_spread_pct(
+        {"pair": "XAU/USD", "type": "commodity"}
+    ) == 0.0015
+    # Invalid override value also falls back to the asset-class cap
+    assert mt5_executor._mt5_max_spread_pct(
+        {"pair": "Lead", "type": "commodity"}
+    ) == 0.0015
+
+
+def test_bybit_max_spread_per_symbol_override(monkeypatch):
+    import bybit_executor
+
+    monkeypatch.setitem(
+        bybit_executor.CONFIG, "MAX_EXECUTION_SPREAD_PCT", {"crypto": 0.002}
+    )
+    monkeypatch.setitem(
+        bybit_executor.CONFIG,
+        "MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL",
+        {"ICPUSDT": 0.004},
+    )
+    assert bybit_executor._bybit_max_spread_pct({"pair": "ICP/USDT"}) == 0.004
+    assert bybit_executor._bybit_max_spread_pct({"pair": "BTC/USDT"}) == 0.002
+
+
 def test_mt5_spread_pct_uses_ask_bid_mid():
     import mt5_executor
 
