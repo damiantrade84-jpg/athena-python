@@ -440,7 +440,7 @@ export default function ASEPanel() {
   )), [family, health?.modelProvenance, horizon]);
 
   return (
-    <div className="h-full min-h-0 flex flex-col gap-3 p-3" style={{ background: 'hsl(200 35% 4%)', fontFamily: '"IBM Plex Mono", monospace' }}>
+    <div className="h-full min-h-0 min-w-0 overflow-x-hidden flex flex-col gap-3 p-3" style={{ background: 'hsl(200 35% 4%)', fontFamily: '"IBM Plex Mono", monospace' }}>
       <div
         className="shrink-0 rounded-lg border px-4 py-3 flex items-center justify-between"
         style={{ borderColor: CYAN_DIM, background: 'linear-gradient(135deg, hsl(195 40% 8%), hsl(200 35% 5%))' }}
@@ -467,7 +467,7 @@ export default function ASEPanel() {
       {backtestAllError && <ErrorBanner message={backtestAllError} />}
 
       {provenanceRows.length > 0 && (
-        <div className="shrink-0 rounded-lg border px-3 py-2" style={{ borderColor: CYAN_DIM, background: 'hsl(200 30% 6%)' }}>
+        <div className="shrink-0 min-w-0 max-w-full overflow-hidden rounded-lg border px-3 py-2" style={{ borderColor: CYAN_DIM, background: 'hsl(200 30% 6%)' }}>
           <div className="text-[9px] uppercase tracking-wider text-muted-foreground mb-1">Frozen model provenance</div>
           <div className="flex gap-3 overflow-x-auto font-mono text-[10px]">
             {provenanceRows.map((row) => (
@@ -501,16 +501,16 @@ export default function ASEPanel() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 shrink-0">
-        <Card className="lg:col-span-3 border-0" style={{ background: 'hsl(200 30% 7%)', border: `1px solid ${CYAN_DIM}` }}>
+      <div className="grid min-w-0 grid-cols-1 lg:grid-cols-4 gap-3 shrink-0">
+        <Card className="min-w-0 lg:col-span-3 border-0" style={{ background: 'hsl(200 30% 7%)', border: `1px solid ${CYAN_DIM}` }}>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-2" style={{ color: CYAN }}>
               <Radar className="h-4 w-4" /> Live Scan
             </CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-wrap gap-2 items-end">
+          <CardContent className="grid min-w-0 grid-cols-1 gap-2 items-end sm:grid-cols-[140px_120px_minmax(180px,1fr)_auto]">
             <Select value={family} onValueChange={setFamily}>
-              <SelectTrigger className="w-[140px] h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-8 w-full text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {FAMILY_OPTIONS.map((o) => (
                   <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
@@ -518,7 +518,7 @@ export default function ASEPanel() {
               </SelectContent>
             </Select>
             <Select value={horizon} onValueChange={(v) => setHorizon(v as 'intraday' | 'swing' | 'both')}>
-              <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-8 w-full text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="both">Both horizons</SelectItem>
                 <SelectItem value="intraday">Intraday H1</SelectItem>
@@ -526,7 +526,7 @@ export default function ASEPanel() {
               </SelectContent>
             </Select>
             <Input
-              className="h-8 text-xs flex-1 min-w-[160px]"
+              className="h-8 min-w-0 w-full text-xs"
               placeholder="Optional symbols: EURUSD, BTCUSDT"
               value={pairFilter}
               onChange={(e) => setPairFilter(e.target.value)}
@@ -535,7 +535,7 @@ export default function ASEPanel() {
               size="sm"
               onClick={runScan}
               disabled={scanning}
-              className="h-8"
+              className="h-8 w-full whitespace-nowrap sm:w-auto"
               style={{ background: CYAN, color: 'hsl(200 40% 6%)' }}
             >
               {scanning ? 'Scanning…' : 'Run ASE Scan'}
@@ -543,7 +543,7 @@ export default function ASEPanel() {
           </CardContent>
         </Card>
 
-        <Card className="border-0" style={{ background: 'hsl(200 30% 7%)', border: `1px solid ${CYAN_DIM}` }}>
+        <Card className="min-w-0 border-0" style={{ background: 'hsl(200 30% 7%)', border: `1px solid ${CYAN_DIM}` }}>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-2" style={{ color: CYAN }}>
               <Shield className="h-4 w-4" /> Trade Journal
