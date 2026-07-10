@@ -223,15 +223,24 @@ def test_pair_scan_classifier_uses_v3_decision_without_nullable_score_comparison
 def test_scanner_does_not_apply_legacy_strategy_gates_to_v3():
     pair = {"display": "EUR/USD", "type": "forex", "enabled": True}
     signal = _v3_signal("TRADE", qualified=True)
+    signal["sentimentBlocked"] = True
+
+    assert classify_signal(signal, pair)[0] == "trade"
+
+
+def test_scanner_applies_event_risk_hard_blocks_to_v3():
+    # e3235d2e: eventRisk/macroEventRisk hard blocks are enforced on V3
+    # (demote to watchlist, fail-closed) — unlike legacy sentiment gates.
+    pair = {"display": "EUR/USD", "type": "forex", "enabled": True}
+    signal = _v3_signal("TRADE", qualified=True)
     signal.update(
         {
             "eventRisk": {"hardBlock": True},
             "macroEventRisk": {"blocked": True},
-            "sentimentBlocked": True,
         }
     )
 
-    assert classify_signal(signal, pair)[0] == "trade"
+    assert classify_signal(signal, pair)[0] == "watchlist"
 
 
 def test_active_scanner_has_no_legacy_analyze_fallback():
