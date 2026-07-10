@@ -184,6 +184,26 @@ def run_ase_pair_backtest(
                 continue
             levels = _barrier_prices(outcome)
             decision_iso = _ms_to_iso(outcome.decision_time_ms)
+            fx_ctx = None
+            tri = None
+            if inst.family == "forex" and bool(CONFIG.get("ASE_FX_CONTEXT_SHADOW", True)):
+                # Read-only historical context at trade decision time (WO Phases 1-2).
+                try:
+                    from athena_ase.context.currency_state import (
+                        compute_currency_states,
+                        pair_context,
+                    )
+                    from athena_ase.context.triangular import triangular_label
+
+                    states = compute_currency_states(store, outcome.decision_time_ms, hz)
+                    sym = inst.symbol.upper().replace("/", "")
+                    fx_ctx = pair_context(states, sym[:3], sym[3:6])
+                    tri = triangular_label(
+                        store, sym, outcome.direction, outcome.decision_time_ms, hz
+                    )
+                except Exception:  # noqa: BLE001 — diagnostics never break the backtest
+                    fx_ctx = None
+                    tri = None
             trades.append(
                 {
                     "resultR": round(float(outcome.net_R), 4),
@@ -203,12 +223,19 @@ def run_ase_pair_backtest(
                     "tp1": round(levels["tp"], 8),
                     "grossR": float(outcome.gross_R),
                     "costR": float(outcome.cost_R),
+                    "swapR": float(getattr(outcome, "swap_R", 0.0) or 0.0),
+                    "totalCostR": float(
+                        getattr(outcome, "total_cost_R", 0.0)
+                        or (float(outcome.cost_R) + float(getattr(outcome, "swap_R", 0.0) or 0.0))
+                    ),
                     "maeR": float(outcome.mae_R),
                     "mfeR": float(outcome.mfe_R),
                     "expectedNetR": float(sig.expectedNetR),
                     "probabilityPositive": float(sig.probabilityPositive),
                     "score": float(sig.expectedNetR),
                     "engine": "ASE",
+                    "fxContext": fx_ctx,
+                    "triangular": tri,
                 }
             )
 

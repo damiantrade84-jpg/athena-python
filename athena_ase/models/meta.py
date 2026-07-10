@@ -13,14 +13,17 @@ from athena_research.ase.trials_registry import append_trial
 
 RANDOM_STATE = 42
 
+# max_iter is pinned globally (WO-ASE-INTEGRITY-2026-07 T0.3): sklearn's internal
+# early-stopping uses a random validation split, which leaks train information
+# through overlapping triple-barrier labels. Iteration count must come from the
+# purged walk-forward harness, not a random split.
 BASE_HGB_PARAMS: dict[str, Any] = {
-    "max_iter": 400,
+    "max_iter": 300,
     "learning_rate": 0.06,
     "max_leaf_nodes": 31,
     "min_samples_leaf": 200,
     "l2_regularization": 1.0,
-    "early_stopping": True,
-    "validation_fraction": 0.15,
+    "early_stopping": False,
     "class_weight": "balanced",
     "random_state": RANDOM_STATE,
 }
@@ -30,7 +33,8 @@ class MetaTrainResult:
     model: HistGradientBoostingClassifier
     config: dict[str, Any]
     config_hash: str
-    fold_score: float
+    # Diagnostic only (accuracy on the training rows themselves) — never a gate input.
+    train_accuracy: float
     feature_names: tuple[str, ...]
 
 
@@ -117,6 +121,6 @@ def train_meta_classifier(
         model=clf,
         config=dict(BASE_HGB_PARAMS),
         config_hash=trial_row.get("config_hash", ""),
-        fold_score=score,
+        train_accuracy=score,
         feature_names=names,
     )

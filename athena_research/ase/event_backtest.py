@@ -40,6 +40,8 @@ class EventOutcome:
     agreement_count: int
     conflict_flag: bool
     primary_signals: str
+    swap_R: float = 0.0
+    total_cost_R: float = 0.0
 
 
 def simulate_candidate(
@@ -77,6 +79,8 @@ def simulate_candidate(
         gross_R=labeled.gross_R,
         cost_R=labeled.cost_R,
         net_R=labeled.net_R,
+        swap_R=labeled.swap_R,
+        total_cost_R=labeled.total_cost_R,
         mae_R=labeled.mae_R,
         mfe_R=labeled.mfe_R,
         hold_bars=labeled.hold_bars,

@@ -18,7 +18,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { ErrorBanner } from '@/components/shared';
-import { Cpu, Radar, Activity, Shield, AlertTriangle, Copy, ClipboardList, FlaskConical, Play } from 'lucide-react';
+import { Cpu, Radar, Activity, Shield, AlertTriangle, Copy, ClipboardList, FlaskConical, Play, ChevronDown, ChevronRight } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { aseTradePlanText, fmtAsePrice } from '@/components/athena/ASEFillWatcher';
 import type { ASEBacktestHorizon } from '@/lib/backtestPayload';
@@ -53,6 +53,22 @@ function statusBadgeClass(status?: string): string {
     case 'ERROR': return 'badge-short';
     default: return 'badge-neutral';
   }
+}
+
+function triangularBadgeClass(label?: string): string {
+  switch ((label || '').toUpperCase()) {
+    case 'CONSISTENT': return 'border-green-500/50 text-green-400';
+    case 'PARTIALLY_CONSISTENT': return 'border-amber-500/50 text-amber-400';
+    case 'CONTRADICTORY': return 'border-red-500/50 text-red-400';
+    default: return 'border-slate-500/50 text-slate-400';
+  }
+}
+
+function pipelineStageClass(status?: string): string {
+  const normalized = (status || '').toLowerCase();
+  if (normalized === 'passed' || normalized === 'filled') return 'text-green-400';
+  if (normalized === 'blocked' || normalized === 'failed' || normalized === 'rejected') return 'text-red-400';
+  return 'text-muted-foreground';
 }
 
 function signalKey(row: ASESignalRow): string {
@@ -90,6 +106,7 @@ function SignalCard({
   executing: boolean;
   outcome?: ASEExecuteResponse;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const dq = row.dataQuality || {};
   const health = row.modelHealth || {};
   const monitor = (health.monitor || {}) as Record<string, unknown>;
@@ -100,6 +117,8 @@ function SignalCard({
   const q90 = toNum(retQ.q90 ?? retQ['0.9'], NaN);
   const blocker = String(dq.blocker || health.blocker || '');
   const modelsMissing = dq.artifactsPresent === false || health.errorReason === 'artifact_missing';
+  const fxContext = row.fxContext || null;
+  const triangularLabel = row.triangular?.label;
 
   return (
     <div
@@ -119,6 +138,11 @@ function SignalCard({
           <Badge className={statusBadgeClass(row.decisionStatus)}>{row.decisionStatus}</Badge>
           {row.direction && row.direction !== 'NONE' && (
             <Badge variant="outline">{row.direction}</Badge>
+          )}
+          {triangularLabel && (
+            <Badge variant="outline" className={`text-[9px] ${triangularBadgeClass(triangularLabel)}`}>
+              {triangularLabel.replace('PARTIALLY_CONSISTENT', 'PARTIAL').replace('INSUFFICIENT_DATA', 'INSUFFICIENT')}
+            </Badge>
           )}
         </div>
       </div>
@@ -154,14 +178,6 @@ function SignalCard({
         </div>
       )}
 
-      <div className="flex flex-wrap gap-1 mt-2">
-        {(row.primarySignals || []).map((s) => (
-          <Badge key={`${s.name}-${s.direction}`} variant="secondary" className="text-[10px]">
-            {s.name}:{s.direction > 0 ? '+' : s.direction < 0 ? '−' : '0'}
-          </Badge>
-        ))}
-      </div>
-
       <div className="flex flex-wrap gap-2 mt-2 text-[10px] text-muted-foreground">
         <span>route: {String(dq.route || 'core')}</span>
         <span>v: {row.modelVersion || '—'}</span>
@@ -181,6 +197,61 @@ function SignalCard({
         {Boolean(monitor.watchMax) && <span className="text-amber-400">WATCH-max</span>}
       </div>
 
+      <button
+        type="button"
+        className="mt-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+        onClick={() => setExpanded((current) => !current)}
+        aria-expanded={expanded}
+      >
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        Factors & context
+      </button>
+
+      {expanded && (
+        <div className="mt-2 space-y-2 border-t pt-2" style={{ borderColor: CYAN_DIM }}>
+          <div className="space-y-1">
+            {(row.primarySignals || []).length === 0 && (
+              <div className="text-[10px] text-muted-foreground">No layer-1 contributions recorded.</div>
+            )}
+            {(row.primarySignals || []).map((signal) => {
+              const strength = Math.max(0, Math.min(1, Math.abs(toNum(signal.rawStrength, 0))));
+              return (
+                <div key={`${signal.name}-${signal.direction}`} className="grid grid-cols-[72px_16px_1fr_40px] items-center gap-1 text-[10px]">
+                  <span className="truncate">{signal.name}</span>
+                  <span className={signal.direction > 0 ? 'text-long' : signal.direction < 0 ? 'text-short' : 'text-muted-foreground'}>
+                    {signal.direction > 0 ? '↑' : signal.direction < 0 ? '↓' : '→'}
+                  </span>
+                  <span className="h-1.5 rounded bg-slate-800 overflow-hidden">
+                    <span
+                      className="block h-full rounded"
+                      style={{ width: `${strength * 100}%`, background: signal.direction < 0 ? 'hsl(0 70% 50%)' : CYAN }}
+                    />
+                  </span>
+                  <span className="text-right text-muted-foreground">{fmtNum(strength, 2)}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap gap-1 text-[10px]">
+            {fxContext ? (
+              <>
+                <Badge variant="outline" className={toNum(fxContext.bias) >= 0 ? 'text-long' : 'text-short'}>
+                  FX bias {fmtNum(fxContext.bias, 2)}
+                </Badge>
+                <Badge variant="outline">carry {fxContext.carry_diff == null ? '—' : fmtNum(fxContext.carry_diff, 2)}</Badge>
+                <Badge variant="outline">trend {fmtNum(fxContext.trend_diff, 2)}</Badge>
+                <Badge variant="outline" className={fxContext.freshness === 'degraded' ? 'text-amber-400' : 'text-muted-foreground'}>
+                  {fxContext.freshness || 'unknown'}
+                </Badge>
+              </>
+            ) : (
+              <span className="text-muted-foreground">FX context not applicable / not recorded.</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {row.decisionStatus === 'TRADE' && (
         <div className="mt-3 flex items-center justify-between gap-2 border-t pt-2" style={{ borderColor: CYAN_DIM }}>
           <Button
@@ -194,11 +265,17 @@ function SignalCard({
             {executing ? 'Executing...' : 'Execute Demo'}
           </Button>
           {outcome && (
-            <span className={outcome.executed ? 'text-long text-[10px]' : 'text-amber-400 text-[10px]'}>
-              {outcome.executed
-                ? `Filled${executionTicket(outcome) ? ` #${executionTicket(outcome)}` : ''}`
-                : `Blocked: ${outcome.reason || outcome.error || 'unknown'}`}
-            </span>
+            <div className="text-right text-[10px]">
+              <div className={outcome.executed ? 'text-long' : 'text-amber-400'}>
+                {outcome.executed
+                  ? `Filled${executionTicket(outcome) ? ` #${executionTicket(outcome)}` : ''}`
+                  : `Blocked: ${outcome.reason || outcome.error || 'unknown'}`}
+              </div>
+              <div className="text-muted-foreground">
+                gate → guardian → risk → {outcome.executed ? 'fill' : 'blocked'}
+                {outcome.execution?.approval_volume != null && ` · approved ${fmtNum(outcome.execution.approval_volume, 2)}`}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -357,6 +434,10 @@ export default function ASEPanel() {
   const showArtifactsBanner = artifactFamilies < 5
     || (health?.blockers || []).includes('no_frozen_artifacts');
   const trainingFamilies = (summary as ASEShadowSummary & { trainingReport?: { families?: Array<Record<string, string>> } })?.trainingReport?.families || [];
+  const provenanceRows = useMemo(() => (health?.modelProvenance || []).filter((row) => (
+    (family === 'all' || row.family === family)
+    && (horizon === 'both' || row.horizon === horizon)
+  )), [family, health?.modelProvenance, horizon]);
 
   return (
     <div className="h-full min-h-0 flex flex-col gap-3 p-3" style={{ background: 'hsl(200 35% 4%)', fontFamily: '"IBM Plex Mono", monospace' }}>
@@ -384,6 +465,24 @@ export default function ASEPanel() {
       {executeError && <ErrorBanner message={executeError} />}
       {backtestError && <ErrorBanner message={backtestError} />}
       {backtestAllError && <ErrorBanner message={backtestAllError} />}
+
+      {provenanceRows.length > 0 && (
+        <div className="shrink-0 rounded-lg border px-3 py-2" style={{ borderColor: CYAN_DIM, background: 'hsl(200 30% 6%)' }}>
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground mb-1">Frozen model provenance</div>
+          <div className="flex gap-3 overflow-x-auto font-mono text-[10px]">
+            {provenanceRows.map((row) => (
+              <div key={`${row.family}-${row.horizon}`} className="min-w-max">
+                <span style={{ color: CYAN }}>{row.family}/{row.horizon}</span>
+                {' '}<span>v:{row.version || '—'}</span>
+                {' '}<span>thr:{fmtNum(row.threshold, 3)}</span>
+                {row.thresholdFallback && <span className="text-amber-400"> fallback</span>}
+                {' '}<span className="text-muted-foreground">{row.thresholdSource || 'source not recorded'}</span>
+                {' '}<span className="text-muted-foreground">ds:{row.datasetHash ? row.datasetHash.slice(0, 8) : '—'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {showArtifactsBanner && (
         <div
@@ -542,6 +641,34 @@ export default function ASEPanel() {
                   ))}
                 </div>
               )}
+              {(backtestResult.trades || []).some((trade) => 'swapR' in trade || 'totalCostR' in trade) && (
+                <div className="col-span-full overflow-x-auto rounded border" style={{ borderColor: CYAN_DIM }}>
+                  <table className="w-full text-[10px] font-mono">
+                    <thead className="text-muted-foreground">
+                      <tr>
+                        <th className="text-left px-2 py-1">Trade</th>
+                        <th className="text-right px-2 py-1">Gross R</th>
+                        <th className="text-right px-2 py-1">Entry cost R</th>
+                        <th className="text-right px-2 py-1">Swap R</th>
+                        <th className="text-right px-2 py-1">Total cost R</th>
+                        <th className="text-right px-2 py-1">Net R</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(backtestResult.trades || []).slice(-5).reverse().map((trade, index) => (
+                        <tr key={`${String(trade.instrument || trade.date || index)}-${index}`} className="border-t" style={{ borderColor: CYAN_DIM }}>
+                          <td className="px-2 py-1">{String(trade.instrument || trade.date || `#${index + 1}`)}</td>
+                          <td className="text-right px-2 py-1">{fmtNum(trade.grossR, 3)}</td>
+                          <td className="text-right px-2 py-1">{fmtNum(trade.costR, 3)}</td>
+                          <td className="text-right px-2 py-1">{fmtNum(trade.swapR, 3)}</td>
+                          <td className="text-right px-2 py-1">{fmtNum(trade.totalCostR, 3)}</td>
+                          <td className={`text-right px-2 py-1 ${toNum(trade.resultR) >= 0 ? 'text-long' : 'text-short'}`}>{fmtNum(trade.resultR, 3)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
 
@@ -633,6 +760,17 @@ export default function ASEPanel() {
                       <span className="text-muted-foreground hidden lg:inline">
                         RR <span className="text-foreground">{fmtNum(trade.rr1, 2)}</span>
                       </span>
+                    </div>
+                    <div className="hidden lg:flex items-center gap-1 text-[9px] shrink-0" title={trade.executionReason || undefined}>
+                      {(['gate', 'guardian', 'risk', 'fill'] as const).map((stage, index) => (
+                        <span key={stage} className={pipelineStageClass(trade.pipeline?.[stage])}>
+                          {index > 0 && <span className="text-muted-foreground mr-1">→</span>}
+                          {stage}:{trade.pipeline?.[stage] || '—'}
+                        </span>
+                      ))}
+                      {trade.approvalVolume != null && (
+                        <span className="text-muted-foreground">vol {fmtNum(trade.approvalVolume, 2)}</span>
+                      )}
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       {(trade.brokerFill?.ticket || trade.orderId) && (

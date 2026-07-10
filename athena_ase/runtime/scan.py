@@ -272,6 +272,66 @@ def _pair_meta_for_symbol(symbol: str) -> dict[str, Any] | None:
     }
 
 
+def _attach_fx_context_shadow(
+    signals: list[ASESignal],
+    store: PTISStore,
+    horizon: Horizon,
+    inst_map: dict[str, Instrument],
+    now_ms: int,
+) -> list[ASESignal]:
+    """Attach fxContext/triangular shadow diagnostics to forex signals.
+
+    Diagnostics only (WO Phases 1-2): fields are attached via dataclasses.replace
+    after prediction, journaled separately, and must never gate, veto, score,
+    or size anything. Fail-open: any error leaves signals untouched.
+    """
+    from config import CONFIG
+
+    if not bool(CONFIG.get("ASE_FX_CONTEXT_SHADOW", True)):
+        return signals
+    try:
+        from dataclasses import replace as _dc_replace
+
+        from athena_ase.context.currency_state import compute_currency_states, pair_context
+        from athena_ase.context.triangular import triangular_label
+        from athena_ase.shadow.journal import append_fx_context_rows
+
+        states = None
+        out: list[ASESignal] = []
+        journal_rows: list[dict[str, Any]] = []
+        for sig in signals:
+            inst = inst_map.get(sig.instrument)
+            if inst is None or inst.family != "forex":
+                out.append(sig)
+                continue
+            decision_ms = int(sig.decisionTimeMs or now_ms)
+            if states is None:
+                states = compute_currency_states(store, decision_ms, horizon)
+            sym = sig.instrument.upper().replace("/", "")
+            fx_ctx = pair_context(states, sym[:3], sym[3:6])
+            dir_int = 1 if sig.direction == "LONG" else -1 if sig.direction == "SHORT" else 0
+            tri = triangular_label(store, sym, dir_int, decision_ms, horizon)
+            out.append(_dc_replace(sig, fxContext=fx_ctx, triangular=tri))
+            journal_rows.append(
+                {
+                    "decision_time_ms": decision_ms,
+                    "instrument": sig.instrument,
+                    "ase_direction": sig.direction,
+                    "fx_context": fx_ctx,
+                    "triangular": tri,
+                }
+            )
+        if journal_rows:
+            try:
+                append_fx_context_rows(journal_rows)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("ASE fx-context journal write failed: %s", exc)
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ASE fx-context shadow attach failed (scan continues): %s", exc)
+        return signals
+
+
 def run_ase_scan(
     *,
     family: str | None = None,
@@ -307,6 +367,11 @@ def run_ase_scan(
                     decision_time_ms=now_ms,
                 )
             )
+
+    # WO Phases 1-2: diagnostic-only FX context + triangular labels on forex
+    # signals. Shadow guarantee: attach happens after predict_batch and never
+    # touches decisionStatus/direction/expectedNetR or execution.
+    signals = _attach_fx_context_shadow(signals, store, horizon, inst_map, now_ms)
 
     journal_error: str | None = None
     if write_journal:

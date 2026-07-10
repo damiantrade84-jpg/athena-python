@@ -34,6 +34,10 @@ def shadow_journal_path() -> Path:
     return default_ase_state_root() / "ase_shadow_journal.parquet"
 
 
+def fx_context_journal_path() -> Path:
+    return default_ase_state_root() / "ase_fx_context_journal.parquet"
+
+
 def trade_journal_path() -> Path:
     return default_ase_state_root() / "ase_trade_journal.parquet"
 

@@ -43,7 +43,8 @@ from athena_research.ase.bootstrap import block_bootstrap_expectancy
 from athena_research.ase.dsr_pbo import deflated_sharpe_ratio
 from athena_research.ase.event_backtest import EVENTS_PATH
 from athena_research.ase.training_report import write_training_report
-from athena_research.ase.walkforward import expanding_folds
+from athena_research.ase.walkforward import expanding_folds, purge_embargo_mask
+from athena_ase.horizon import HORIZONS
 
 log = logging.getLogger("ase.train")
 
@@ -142,6 +143,11 @@ def materialize_labeled_dataset(store: PTISStore, df: pd.DataFrame, *, family: s
                 sigma_bar=float(rec["sigma_bar"]),
                 gross_R=float(rec.get("gross_R", rec["net_R"])),
                 cost_R=float(rec.get("cost_R", 0.0)),
+                swap_R=float(rec.get("swap_R", 0.0) or 0.0),
+                total_cost_R=float(
+                    rec.get("total_cost_R", 0.0)
+                    or (float(rec.get("cost_R", 0.0)) + float(rec.get("swap_R", 0.0) or 0.0))
+                ),
                 net_R=float(rec["net_R"]),
                 mae_R=float(rec["mae_R"]),
                 mfe_R=float(rec["mfe_R"]),
@@ -264,7 +270,7 @@ def _fit_calibrated_classifier(
     family: str,
     horizon: str,
     log_trials: bool,
-) -> tuple[Any, Any, dict[str, float]]:
+) -> tuple[Any, Any, dict[str, float], pd.DataFrame]:
     fit_idx, calibration_idx = chronological_calibration_split(len(training))
     fit_frame = training.iloc[fit_idx]
     calibration_frame = training.iloc[calibration_idx]
@@ -288,10 +294,61 @@ def _fit_calibrated_classifier(
     )
     calibrated = calibrator.predict(raw_probability)
     y_calibration = calibration_frame["y"].to_numpy(dtype=int)
-    return result, calibrator, {
+    summary = {
         "rows": int(len(calibration_frame)),
         "brier": brier_score(calibrated, y_calibration),
         "brier_skill": brier_skill(calibrated, y_calibration),
+    }
+    return result, calibrator, summary, calibration_frame
+
+
+def _fit_and_threshold(
+    frame: pd.DataFrame,
+    *,
+    feature_names: Sequence[str],
+    family: str,
+    horizon: str,
+    log_trials: bool,
+) -> dict[str, Any]:
+    """Fit classifier + calibrator + quantile heads on `frame`, then select the
+    expected-net-R threshold on the frame's chronological calibration slice.
+
+    T0.1 (WO-ASE-INTEGRITY-2026-07): the threshold is frozen train-side and the
+    caller applies it exactly once to unseen data — the eval frame must never
+    influence threshold selection. Shared by the main train path and the T0.2
+    per-fold walk-forward retraining.
+    """
+    result, calibrator, calibration_summary, calibration_frame = _fit_calibrated_classifier(
+        frame,
+        feature_names=feature_names,
+        family=family,
+        horizon=horizon,
+        log_trials=log_trials,
+    )
+    heads = train_quantile_heads(
+        frame.to_dict(orient="records"),
+        {target: frame[target].to_numpy(dtype=float) for target in TARGETS},
+        sample_weight=frame["sample_weight"].to_numpy(dtype=float),
+        feature_names=feature_names,
+    )
+    cal_matrix = _prepare_matrix(
+        calibration_frame.to_dict(orient="records"),
+        feature_names,
+    )
+    cal_probability = calibrator.predict(_positive_probability(result.model, cal_matrix))
+    cal_quantiles = predict_quantile_heads(heads, cal_matrix)
+    cal_expected_net_r = _expected_net_r(cal_probability, cal_quantiles)
+    threshold = select_expected_net_r_threshold(
+        cal_expected_net_r,
+        calibration_frame["net_R"].to_numpy(dtype=float),
+    )
+    return {
+        "result": result,
+        "calibrator": calibrator,
+        "heads": heads,
+        "threshold": threshold,
+        "calibration_summary": calibration_summary,
+        "threshold_selected_on_rows": int(len(calibration_frame)),
     }
 
 
@@ -339,19 +396,20 @@ def train_family_horizon(
     core_schema = active_feature_schema(enriched=False)
     enriched_schema = active_feature_schema(enriched=True)
 
-    core_result, core_calibrator, calibration_summary = _fit_calibrated_classifier(
+    fitted = _fit_and_threshold(
         train_frame,
         feature_names=core_schema,
         family=family,
         horizon=horizon,
         log_trials=True,
     )
-    quantile_heads = train_quantile_heads(
-        train_frame.to_dict(orient="records"),
-        {target: train_frame[target].to_numpy(dtype=float) for target in TARGETS},
-        sample_weight=train_frame["sample_weight"].to_numpy(dtype=float),
-        feature_names=core_schema,
-    )
+    core_result = fitted["result"]
+    core_calibrator = fitted["calibrator"]
+    quantile_heads = fitted["heads"]
+    calibration_summary = fitted["calibration_summary"]
+    # T0.1: threshold frozen on the train-side calibration slice; applied to
+    # eval exactly once below. Eval never influences threshold selection.
+    threshold = fitted["threshold"]
     eval_matrix = _prepare_matrix(
         eval_frame.to_dict(orient="records"),
         core_schema,
@@ -360,10 +418,6 @@ def train_family_horizon(
     eval_probability = core_calibrator.predict(eval_raw_probability)
     eval_quantiles = predict_quantile_heads(quantile_heads, eval_matrix)
     eval_expected_net_r = _expected_net_r(eval_probability, eval_quantiles)
-    threshold = select_expected_net_r_threshold(
-        eval_expected_net_r,
-        eval_frame["net_R"].to_numpy(dtype=float),
-    )
     selected = eval_expected_net_r >= threshold.threshold
     selected_net_r = eval_frame["net_R"].to_numpy(dtype=float)[selected]
     eval_y = eval_frame["y"].to_numpy(dtype=int)
@@ -383,6 +437,9 @@ def train_family_horizon(
         "eval_rows": int(len(eval_frame)),
         "threshold": threshold.threshold,
         "threshold_fallback": threshold.fallback,
+        "threshold_source": "train_calibration_slice",
+        "threshold_selected_on_rows": fitted["threshold_selected_on_rows"],
+        "eval_untouched": True,
     }
 
     oos_trades = int(selected.sum())
@@ -411,9 +468,13 @@ def train_family_horizon(
     else:
         max_dd_R = 0.0
 
-    # Re-score expanding folds through the same trained model, calibrator,
-    # quantile heads, and global threshold. Empty-selection folds provide no
-    # evidence and are excluded from the non-negative fold count.
+    # T0.2 (WO-ASE-INTEGRITY-2026-07): genuine walk-forward — each expanding
+    # fold retrains a fold-local model/calibrator/heads/threshold on its own
+    # purged+embargoed train slice, so no fold's test rows are ever inside the
+    # model that scores them. Empty-selection folds provide no evidence and are
+    # excluded from the non-negative fold count.
+    import time as _time
+
     fold_details: list[dict[str, Any]] = []
     folds_nonneg = 0
     folds_with_evidence = 0
@@ -421,20 +482,69 @@ def train_family_horizon(
         "decision_time_ms",
         kind="stable",
     ).reset_index(drop=True)
+    max_hold_bars = HORIZONS[horizon].max_hold_bars
     for fold in expanding_folds(fold_frame):
         fold_df = fold_frame.iloc[fold.test_idx]
         if fold_df.empty:
+            continue
+        purged_train_idx = purge_embargo_mask(
+            fold_frame,
+            train_idx=fold.train_idx,
+            test_idx=fold.test_idx,
+            max_hold_bars=max_hold_bars,
+        )
+        fold_train = fold_frame.iloc[purged_train_idx]
+        if (
+            len(fold_train) < MIN_TRAIN_CANDIDATES // 2
+            or fold_train["y"].nunique() < 2
+        ):
+            fold_details.append(
+                {
+                    "fold": fold.fold,
+                    "trades": 0,
+                    "expectancy": None,
+                    "skipped": "insufficient_train",
+                    "train_rows": int(len(fold_train)),
+                    "oos": True,
+                }
+            )
+            continue
+        t0 = _time.monotonic()
+        try:
+            fold_fit = _fit_and_threshold(
+                fold_train,
+                feature_names=core_schema,
+                family=family,
+                horizon=horizon,
+                log_trials=False,
+            )
+        except ValueError:
+            fold_details.append(
+                {
+                    "fold": fold.fold,
+                    "trades": 0,
+                    "expectancy": None,
+                    "skipped": "insufficient_train",
+                    "train_rows": int(len(fold_train)),
+                    "oos": True,
+                }
+            )
             continue
         fold_matrix = _prepare_matrix(
             fold_df.to_dict(orient="records"),
             core_schema,
         )
-        fold_raw_p = _positive_probability(core_result.model, fold_matrix)
-        fold_p = core_calibrator.predict(fold_raw_p)
-        fold_quantiles = predict_quantile_heads(quantile_heads, fold_matrix)
+        fold_raw_p = _positive_probability(fold_fit["result"].model, fold_matrix)
+        fold_p = fold_fit["calibrator"].predict(fold_raw_p)
+        fold_quantiles = predict_quantile_heads(fold_fit["heads"], fold_matrix)
         fold_expected_r = _expected_net_r(fold_p, fold_quantiles)
-        fold_selected = fold_expected_r >= threshold.threshold
+        fold_selected = fold_expected_r >= fold_fit["threshold"].threshold
         fold_net_r = fold_df["net_R"].to_numpy(dtype=float)[fold_selected]
+        fold_seconds = _time.monotonic() - t0
+        log.info(
+            "walk-forward fold %d (%s/%s): train_rows=%d wall=%.1fs",
+            fold.fold, family, horizon, len(fold_train), fold_seconds,
+        )
         if len(fold_net_r):
             folds_with_evidence += 1
             fold_expectancy = float(fold_net_r.mean())
@@ -445,6 +555,8 @@ def train_family_horizon(
                     "fold": fold.fold,
                     "trades": int(len(fold_net_r)),
                     "expectancy": fold_expectancy,
+                    "train_rows": int(len(fold_train)),
+                    "oos": True,
                 }
             )
         else:
@@ -453,6 +565,8 @@ def train_family_horizon(
                     "fold": fold.fold,
                     "trades": 0,
                     "expectancy": None,
+                    "train_rows": int(len(fold_train)),
+                    "oos": True,
                 }
             )
 
@@ -482,7 +596,7 @@ def train_family_horizon(
         "reason": "family_has_no_verified_enriched_route",
     }
     if len(enriched_rows) >= MIN_ENRICHED_CANDIDATES:
-        enriched_result, enriched_calibrator, enriched_calibration = _fit_calibrated_classifier(
+        enriched_result, enriched_calibrator, enriched_calibration, _ = _fit_calibrated_classifier(
             enriched_rows,
             feature_names=enriched_schema,
             family=family,
@@ -523,6 +637,12 @@ def train_family_horizon(
         "instruments": int(labeled["instrument"].nunique()),
         "thr_family": threshold.threshold,
         "threshold_fallback": threshold.fallback,
+        "threshold_source": "train_calibration_slice",
+        "threshold_selected_on_rows": fitted["threshold_selected_on_rows"],
+        "eval_untouched": True,
+        # Isotonic calibrator and threshold share the calibration slice (both
+        # train-side; recorded for honesty per T0.1).
+        "calibration_slice_dual_use": True,
         "calibration": calibration_summary,
         "enriched": enriched_summary,
         "bootstrap_lb": boot.lb_expectancy,

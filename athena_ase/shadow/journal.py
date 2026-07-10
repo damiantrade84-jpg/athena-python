@@ -11,14 +11,14 @@ from typing import Any
 import pandas as pd
 
 from athena_ase.contracts import ASESignal
-from athena_ase.paths import shadow_journal_path
+from athena_ase.paths import fx_context_journal_path, shadow_journal_path
 
 log = logging.getLogger("ase.shadow.journal")
 
 
 def _flatten_signal(sig: ASESignal) -> dict[str, Any]:
     row = sig.to_dict()
-    for key in ("returnQ", "maeQ", "mfeQ", "holdQ", "primarySignals", "predictionDiagnostics", "dataQuality", "modelHealth", "entryZone"):
+    for key in ("returnQ", "maeQ", "mfeQ", "holdQ", "primarySignals", "predictionDiagnostics", "dataQuality", "modelHealth", "entryZone", "fxContext", "triangular"):
         if key in row and not isinstance(row[key], (str, int, float, bool, type(None))):
             row[key] = json.dumps(row[key], sort_keys=True, default=str)
     row["recordedAt"] = datetime.now(timezone.utc).isoformat()
@@ -47,6 +47,41 @@ def append_shadow_signals(signals: list[ASESignal], *, path: Path | None = None)
         df = df_new
     df.to_parquet(out_path, index=False)
     return out_path
+
+
+def append_fx_context_rows(rows: list[dict[str, Any]], *, path: Path | None = None) -> Path:
+    """Append FX-context shadow rows (WO Phase 1) — diagnostics only.
+
+    Row shape: {decision_time_ms, instrument, ase_direction, fx_context, triangular}.
+    Dict payloads are JSON-encoded so the parquet schema stays flat.
+    """
+    out_path = path or fx_context_journal_path()
+    if not rows:
+        return out_path
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    flat = []
+    for row in rows:
+        rec = dict(row)
+        for key in ("fx_context", "triangular"):
+            if key in rec and not isinstance(rec[key], (str, int, float, bool, type(None))):
+                rec[key] = json.dumps(rec[key], sort_keys=True, default=str)
+        rec["recordedAt"] = datetime.now(timezone.utc).isoformat()
+        flat.append(rec)
+    df_new = pd.DataFrame(flat)
+    if out_path.exists():
+        try:
+            df_new = pd.concat([pd.read_parquet(out_path), df_new], ignore_index=True)
+        except Exception as exc:
+            log.warning("FX-context journal read failed (%s) — overwriting", exc)
+    df_new.to_parquet(out_path, index=False)
+    return out_path
+
+
+def load_fx_context_journal(path: Path | None = None) -> pd.DataFrame:
+    out_path = path or fx_context_journal_path()
+    if not out_path.exists():
+        return pd.DataFrame()
+    return pd.read_parquet(out_path)
 
 
 def load_shadow_journal(path: Path | None = None) -> pd.DataFrame:

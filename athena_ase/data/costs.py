@@ -77,7 +77,13 @@ def cost_r_units(
     hold_days: float = 0.0,
     carry_sign: int = 0,
 ) -> float:
-    """Round-trip cost expressed in R-units at label time."""
+    """Round-trip cost expressed in R-units at label time.
+
+    Single cost formula (WO T0.4): the live label path (`_entry_cost_r` in
+    triple_barrier.py) is implemented on top of this function; swap/financing
+    is computed separately via swap_bps_per_day_for so the debit reflects the
+    realized hold, not the max hold.
+    """
     if sigma_h_bps <= 0 or k_sl <= 0:
         raise ValueError("sigma_h_bps and k_sl must be positive")
     bps = cost_model.round_trip_cost_bps()
@@ -85,3 +91,41 @@ def cost_r_units(
     if hold_days and carry_sign:
         bps += abs(cost_model.swap_bps_per_day) * hold_days
     return bps / (k_sl * sigma_h_bps)
+
+
+def swap_bps_per_day_for(
+    instrument,
+    store,
+    decision_time_ms: int,
+    direction: int,
+) -> float:
+    """Conservative daily financing debit in bps of notional (always >= 0).
+
+    Derived from the same as-of carry differential used by the carry signal
+    (FRED short rates for forex, Bybit funding for crypto). v1 rule
+    (WO-ASE-INTEGRITY-2026-07 T0.4): debit when financing is against the
+    position; credit 0 when in favor — brokers pay less than interbank, so
+    credits stay off until broker swap tables are measured (T0.4b).
+    """
+    if not direction:
+        return 0.0
+    from athena_ase.signals.carry import _crypto_funding_annual, _forex_carry_annual
+
+    family = getattr(instrument, "family", "")
+    if family == "forex":
+        carry = _forex_carry_annual(store, instrument, decision_time_ms)
+        if carry is None:
+            return 0.0
+        # FRED rates are in percent (e.g. 5.33) — convert to annual fraction.
+        annual_frac = carry / 100.0
+    elif family == "crypto":
+        annual = _crypto_funding_annual(store, instrument.symbol, decision_time_ms)
+        if annual is None:
+            return 0.0
+        # Bybit funding is already an annualized fraction here.
+        annual_frac = annual
+    else:
+        return 0.0
+    # Positive carry is favorable to LONG (carry.py sign convention).
+    daily_bps_in_favor = annual_frac / 365.0 * 1e4 * float(direction)
+    return max(0.0, -daily_bps_in_favor)

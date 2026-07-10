@@ -23,6 +23,7 @@ class AvailabilityRuleId(str, Enum):
     CFTC_COT = "cftc_cot"
     FRED_DAILY = "fred_daily"
     FRED_POLICY = "fred_policy"
+    FRED_MONTHLY_OECD = "fred_monthly_oecd"
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,12 @@ AVAILABILITY_RULES: dict[AvailabilityRuleId, AvailabilityRule] = {
     AvailabilityRuleId.FRED_POLICY: AvailabilityRule(
         AvailabilityRuleId.FRED_POLICY,
         "FRED policy rates: release calendar where known, else obs + 1 BD",
+        verified=False,
+    ),
+    AvailabilityRuleId.FRED_MONTHLY_OECD: AvailabilityRule(
+        AvailabilityRuleId.FRED_MONTHLY_OECD,
+        "OECD MEI monthly series: available = observation-month end + 42 calendar days, "
+        "12:00 ET (conservative default pending release-calendar verification)",
         verified=False,
     ),
 }
@@ -116,6 +123,11 @@ def compute_available_time_ms(
             return realtime_start_ms
         return fred_default_available_time_ms(value_time_ms)
 
+    if rule_id == AvailabilityRuleId.FRED_MONTHLY_OECD:
+        if realtime_start_ms is not None:
+            return realtime_start_ms
+        return fred_monthly_oecd_available_time_ms(value_time_ms)
+
     raise ValueError(f"unknown availability rule: {rule_id}")
 
 
@@ -162,6 +174,30 @@ def fred_default_available_time_ms(observation_date_ms: int) -> int:
     return _ms(avail_et.astimezone(_UTC))
 
 
+def fred_monthly_oecd_available_time_ms(observation_date_ms: int) -> int:
+    """OECD MEI monthly series: observation-month end + 42 calendar days, 12:00 ET.
+
+    Real OECD MEI publication lag is ~4-8 weeks after month end; 42 days is a
+    conservative default pending release-calendar verification (WO T0.5).
+    """
+    obs = _from_ms(observation_date_ms)
+    if obs.month == 12:
+        month_end = datetime(obs.year + 1, 1, 1, tzinfo=_UTC)
+    else:
+        month_end = datetime(obs.year, obs.month + 1, 1, tzinfo=_UTC)
+    avail_day = month_end + timedelta(days=42)
+    avail_et = datetime(
+        avail_day.year,
+        avail_day.month,
+        avail_day.day,
+        12,
+        0,
+        0,
+        tzinfo=_ET,
+    )
+    return _ms(avail_et.astimezone(_UTC))
+
+
 def rule_for_source(source: str) -> AvailabilityRuleId:
     """Map ingest source prefix to a frozen availability rule."""
     src = source.strip().upper()
@@ -177,6 +213,8 @@ def rule_for_source(source: str) -> AvailabilityRuleId:
         return AvailabilityRuleId.CFTC_COT
     if src.startswith("FRED_POLICY"):
         return AvailabilityRuleId.FRED_POLICY
+    if src.startswith("FRED_MONTHLY"):
+        return AvailabilityRuleId.FRED_MONTHLY_OECD
     if src.startswith("FRED"):
         return AvailabilityRuleId.FRED_DAILY
     raise ValueError(f"no availability rule for source: {source}")

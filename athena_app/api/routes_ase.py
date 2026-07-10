@@ -13,11 +13,15 @@ from flask import jsonify, request
 from athena_ase.execution.journal import load_trade_journal, trade_journal_summary
 from athena_ase.horizon import Horizon
 from athena_ase.instruments import instrument_by_symbol
+from athena_ase.registry.artifacts import default_artifacts_root, load_manifest
 from athena_ase.runtime.health import ase_health
 from athena_ase.runtime.scan import run_ase_dual_horizon_scan, run_ase_scan
 from athena_research.ase.training_report import write_training_report
 
 log = logging.getLogger("sentinel.ase")
+
+_MODEL_FAMILIES = ("forex", "crypto", "commodity", "equity", "index_etf")
+_MODEL_HORIZONS = ("intraday", "swing")
 
 
 def _json_safe(obj: Any) -> Any:
@@ -50,6 +54,50 @@ def _training_report_summary() -> dict[str, Any]:
                     }
                 )
     return {"available": True, "path": str(path), "families": families}
+
+
+def _model_provenance() -> list[dict[str, Any]]:
+    """Read latest frozen manifest metadata without loading model pickle files."""
+    root = default_artifacts_root()
+    rows: list[dict[str, Any]] = []
+    for family in _MODEL_FAMILIES:
+        for horizon in _MODEL_HORIZONS:
+            base = root / family / horizon
+            if not base.exists():
+                continue
+            versions = sorted(
+                (path for path in base.iterdir() if path.is_dir()),
+                key=lambda path: path.name,
+                reverse=True,
+            )
+            if not versions:
+                continue
+            manifest_path = versions[0] / "manifest.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = load_manifest(manifest_path)
+            except (OSError, TypeError, ValueError) as exc:
+                log.warning("ASE manifest provenance read failed for %s: %s", manifest_path, exc)
+                continue
+            eval_summary = manifest.eval_summary or {}
+            validation_metrics = (manifest.validation_report or {}).get("metrics") or {}
+            rows.append(
+                {
+                    "family": manifest.family,
+                    "horizon": manifest.horizon,
+                    "version": manifest.version,
+                    "threshold": float(manifest.thr_family),
+                    "thresholdSource": (
+                        eval_summary.get("threshold_source")
+                        or validation_metrics.get("threshold_source")
+                    ),
+                    "thresholdFallback": bool(manifest.threshold_fallback),
+                    "datasetHash": manifest.dataset_hash,
+                    "trainedAt": manifest.trained_at,
+                }
+            )
+    return rows
 
 
 def _extract_ingest_sources(d: dict[str, Any]) -> tuple[tuple[str, ...] | None, bool]:
@@ -224,8 +272,8 @@ def _cell_float(value: Any) -> float | None:
     return None if math.isnan(f) else f
 
 
-def _execution_detail_extract(raw: Any) -> dict[str, Any]:
-    """Pull fill price / volume / ticket out of the journalled broker result."""
+def _execution_detail_dict(raw: Any) -> dict[str, Any]:
+    """Journalled execution detail as a JSON-safe mapping."""
     raw = _cell(raw)
     if not raw:
         return {}
@@ -233,8 +281,12 @@ def _execution_detail_extract(raw: Any) -> dict[str, Any]:
         detail = json.loads(raw) if isinstance(raw, str) else dict(raw)
     except (ValueError, TypeError):
         return {}
-    if not isinstance(detail, dict):
-        return {}
+    return detail if isinstance(detail, dict) else {}
+
+
+def _execution_detail_extract(raw: Any) -> dict[str, Any]:
+    """Pull fill price / volume / ticket out of the journalled broker result."""
+    detail = _execution_detail_dict(raw)
     out: dict[str, Any] = {}
     for key in ("fillPrice", "fill_price", "price"):
         val = _cell_float(detail.get(key))
@@ -254,6 +306,44 @@ def _execution_detail_extract(raw: Any) -> dict[str, Any]:
     return out
 
 
+def _execution_pipeline(raw: Any, status: Any) -> dict[str, Any]:
+    """Normalize new and legacy journal details into display-only stage state."""
+    detail = _execution_detail_dict(raw)
+    pipeline = detail.get("pipeline")
+    if isinstance(pipeline, dict):
+        return {str(key): _json_safe(value) for key, value in pipeline.items()}
+
+    normalized_status = str(_cell(status) or "").lower()
+    if normalized_status == "filled":
+        # A fill from the ASE bridge is reachable only after all three checks.
+        return {
+            "gate": "passed",
+            "guardian": "passed",
+            "risk": "passed",
+            "fill": "filled",
+        }
+
+    stage = str(detail.get("stage") or "").lower()
+    stages = {
+        "gate": "pending",
+        "guardian": "pending",
+        "risk": "pending",
+        "fill": normalized_status or "pending",
+    }
+    order = ("gate", "guardian", "risk", "fill")
+    aliases = {"demo_gate": "gate", "freshness": "gate", "venue": "gate"}
+    stage = aliases.get(stage, stage)
+    if stage in order:
+        for prior in order[: order.index(stage)]:
+            stages[prior] = "passed"
+        stages[stage] = (
+            "blocked"
+            if normalized_status == "rejected"
+            else normalized_status or "failed"
+        )
+    return stages
+
+
 def _executed_trade_row(row: dict[str, Any]) -> dict[str, Any]:
     entry = _cell_float(row.get("entryReference"))
     sl = _cell_float(row.get("sl"))
@@ -264,6 +354,7 @@ def _executed_trade_row(row: dict[str, Any]) -> dict[str, Any]:
         if sl_dist > 0:
             rr1 = abs(tp1 - entry) / sl_dist
     decision_ms = _cell(row.get("decisionTimeMs"))
+    detail = _execution_detail_dict(row.get("executionDetail"))
     return {
         "instrument": _cell(row.get("instrument")),
         "direction": _cell(row.get("direction")),
@@ -280,6 +371,11 @@ def _executed_trade_row(row: dict[str, Any]) -> dict[str, Any]:
         "recordedAt": _cell(row.get("recordedAt")),
         "orderId": _cell(row.get("orderId")),
         "executionStatus": _cell(row.get("executionStatus")),
+        "executionReason": _cell(detail.get("reason")),
+        "approvalVolume": _cell_float(detail.get("approval_volume")),
+        "pipeline": _execution_pipeline(
+            row.get("executionDetail"), row.get("executionStatus")
+        ),
         "rr1": rr1,
         "brokerFill": _execution_detail_extract(row.get("executionDetail")),
     }
@@ -335,6 +431,7 @@ def api_ase_health():
     try:
         health = ase_health(ptis_root=ptis_root, horizon=horizon)
         health["deployment"] = "OPERATIONAL"
+        health["modelProvenance"] = _model_provenance()
         return jsonify(_json_safe(health))
     except Exception as exc:
         log.exception("ASE health check failed")

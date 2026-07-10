@@ -230,6 +230,25 @@ def execute_trade_signal(
     deps = deps or ASEExecutionDeps()
     log_outcomes = write_journal if journal_outcomes is None else journal_outcomes
 
+    def _pipeline_for_rejection(stage: str) -> dict[str, str]:
+        normalized = {
+            "demo_gate": "gate",
+            "freshness": "gate",
+            "venue": "gate",
+        }.get(stage, stage)
+        stages = {
+            "gate": "pending",
+            "guardian": "pending",
+            "risk": "pending",
+            "fill": "not_sent",
+        }
+        order = ("gate", "guardian", "risk", "fill")
+        if normalized in order:
+            for prior in order[: order.index(normalized)]:
+                stages[prior] = "passed"
+            stages[normalized] = "blocked"
+        return stages
+
     def _reject(stage: str, reason: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         if log_outcomes:
             try:
@@ -237,7 +256,11 @@ def execute_trade_signal(
                     instrument=signal.instrument,
                     decision_time_ms=signal.decisionTimeMs,
                     status="rejected",
-                    detail={"stage": stage, "reason": reason},
+                    detail={
+                        "stage": stage,
+                        "reason": reason,
+                        "pipeline": _pipeline_for_rejection(stage),
+                    },
                 )
             except Exception as exc:
                 log.warning("ASE outcome journal failed for %s: %s", signal.instrument, exc)
@@ -303,11 +326,19 @@ def execute_trade_signal(
     success = bool(result.get("success"))
     status = "filled" if success else "failed"
     if log_outcomes:
+        journal_detail = dict(result)
+        journal_detail["approval_volume"] = getattr(approval, "volume", None)
+        journal_detail["pipeline"] = {
+            "gate": "passed",
+            "guardian": "passed",
+            "risk": "passed",
+            "fill": status,
+        }
         append_execution_outcome(
             instrument=signal.instrument,
             decision_time_ms=signal.decisionTimeMs,
             status=status,
-            detail=result,
+            detail=journal_detail,
             order_id=_result_order_id(result),
         )
     if success:

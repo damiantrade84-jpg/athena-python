@@ -1262,6 +1262,31 @@ export interface EngineCBacktestResponse {
 }
 
 /** ASE v2.1 shadow signal row (/api/ase-scan). */
+export interface ASEFxContext {
+  bias?: number | null;
+  carry_diff?: number | null;
+  trend_diff?: number | null;
+  freshness?: string;
+  [k: string]: unknown;
+}
+
+export interface ASETriangularContext {
+  label?: 'CONSISTENT' | 'PARTIALLY_CONSISTENT' | 'CONTRADICTORY' | 'INSUFFICIENT_DATA' | string;
+  legs?: Record<string, unknown>;
+  [k: string]: unknown;
+}
+
+export interface ASEModelProvenance {
+  family?: string;
+  horizon?: string;
+  version?: string;
+  threshold?: number;
+  thresholdSource?: string | null;
+  thresholdFallback?: boolean;
+  datasetHash?: string;
+  trainedAt?: string;
+}
+
 export interface ASESignalRow {
   engineVersion?: string;
   modelFamily?: string;
@@ -1285,6 +1310,8 @@ export interface ASESignalRow {
   tp2?: number;
   maxHoldBars?: number;
   primarySignals?: Array<{ name: string; direction: number; rawStrength: number }>;
+  fxContext?: ASEFxContext | null;
+  triangular?: ASETriangularContext | null;
   predictionDiagnostics?: Record<string, unknown>;
   dataQuality?: Record<string, unknown>;
   modelHealth?: Record<string, unknown>;
@@ -1393,6 +1420,7 @@ export interface ASEHealthResponse {
   artifactsRoot?: string;
   horizon?: string;
   familiesWithArtifacts?: string[];
+  modelProvenance?: ASEModelProvenance[];
   error?: string;
 }
 
@@ -1412,6 +1440,9 @@ export interface ASEExecutedTrade {
   recordedAt?: string | null;
   orderId?: string | null;
   executionStatus?: string | null;
+  executionReason?: string | null;
+  approvalVolume?: number | null;
+  pipeline?: Partial<Record<'gate' | 'guardian' | 'risk' | 'fill', string>>;
   rr1?: number | null;
   brokerFill?: {
     fillPrice?: number;

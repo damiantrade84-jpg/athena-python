@@ -8212,6 +8212,17 @@ def api_scan_naked():
                     "naked_data": _res,
                 }
 
+                # WO Phase 3: read-only ASE shadow view on forex cards. Adds
+                # only the aseShadow key — never touches score, direction,
+                # eligibility, or targets, and never blocks the card.
+                if pair.get("type") == "forex":
+                    try:
+                        from athena_ase.context.engine_b_shadow import attach_ase_shadow
+
+                        attach_ase_shadow(signal)
+                    except Exception as _ase_shadow_exc:
+                        log.debug(f"aseShadow attach skipped: {_ase_shadow_exc}")
+
                 signal["candleFetchMeta"] = {
                     "D1": _get_candle_fetch_meta(pair, "D1", _lim_b["D1"]),
                     "H4": _get_candle_fetch_meta(pair, "H4", _lim_b["H4"]),

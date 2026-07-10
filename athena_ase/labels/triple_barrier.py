@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 import pandas as pd
 
-from athena_ase.data.costs import cost_model_for_instrument
+from athena_ase.data.costs import cost_model_for_instrument, cost_r_units, swap_bps_per_day_for
 from athena_ase.horizon import HORIZONS, K_SL, K_TP, Horizon
 from athena_ase.instruments import Instrument
 from athena_ase.signals.arbitrate import Candidate
@@ -38,6 +38,10 @@ class LabelOutcome:
     primary_signals: str
     label_start_ms: int
     label_end_ms: int
+    # WO T0.4: financing debit for the realized hold (0 for intraday / pre-fix rows).
+    swap_R: float = 0.0
+    # cost_R stays entry-side only for backward compatibility.
+    total_cost_R: float = 0.0
 
 
 def _median_range_frac(
@@ -53,18 +57,27 @@ def _median_range_frac(
     return float(np.median(np.abs(ranges)))
 
 
-def _cost_r(
+def _entry_cost_r(
     instrument: Instrument,
     sigma_bar: float,
     max_hold: int,
     range_frac: float,
 ) -> float:
+    """Entry-side cost (spread + commission + slippage) in R-units.
+
+    Thin wrapper over the single cost formula in costs.cost_r_units (WO T0.4);
+    swap/financing is applied separately from the realized hold.
+    """
     cm = cost_model_for_instrument(instrument.family, subclass=instrument.subclass)
-    r_unit = K_SL * sigma_bar * math.sqrt(max_hold)
-    if r_unit <= 0:
+    sigma_h = sigma_bar * math.sqrt(max_hold)
+    if sigma_h <= 0 or K_SL <= 0:
         return 0.0
-    cost_frac = cm.round_trip_cost_bps() / 1e4 + cm.slippage_frac_of_range * range_frac * 2.0
-    return cost_frac / r_unit
+    return cost_r_units(
+        cm,
+        k_sl=K_SL,
+        sigma_h_bps=sigma_h * 1e4,
+        bar_range_frac=range_frac / sigma_h,
+    )
 
 
 def simulate_barriers(
@@ -79,6 +92,7 @@ def simulate_barriers(
     sigma_bar: float,
     horizon: Horizon,
     instrument: Instrument,
+    swap_bps_per_day: float = 0.0,
 ) -> LabelOutcome | None:
     cfg = HORIZONS[horizon]
     d = direction
@@ -127,8 +141,14 @@ def simulate_barriers(
 
     gross_r = (exit_log - p_t) * d / r_unit
     range_frac = _median_range_frac(high_log, low_log, idx)
-    cost_r = _cost_r(instrument, sig, h, range_frac)
-    net_r = gross_r - cost_r
+    cost_r = _entry_cost_r(instrument, sig, h, range_frac)
+    # WO T0.4: financing debit for the realized hold. Intraday holds are
+    # < 24h by construction (16 H1 bars), so swap applies to swing (D1) only.
+    if horizon == "swing" and swap_bps_per_day > 0 and hold > 0:
+        swap_r = swap_bps_per_day * float(hold) / 1e4 / r_unit
+    else:
+        swap_r = 0.0
+    net_r = gross_r - cost_r - swap_r
     label_end_ms = int(value_time[vertical_idx])
     label_start_ms = int(value_time[idx])
 
@@ -153,6 +173,8 @@ def simulate_barriers(
         primary_signals="[]",
         label_start_ms=label_start_ms,
         label_end_ms=label_end_ms,
+        swap_R=swap_r,
+        total_cost_R=cost_r + swap_r,
     )
 
 
@@ -180,6 +202,11 @@ def label_candidate(
     if idx is None or idx >= len(series.close_log) - 1:
         return None
 
+    swap_bps = 0.0
+    if candidate.horizon == "swing":
+        swap_bps = swap_bps_per_day_for(
+            instrument, store, candidate.decision_time_ms, candidate.direction
+        )
     base = simulate_barriers(
         close_log=series.close_log,
         high_log=series.high_log,
@@ -191,6 +218,7 @@ def label_candidate(
         sigma_bar=candidate.sigma_bar,
         horizon=candidate.horizon,
         instrument=instrument,
+        swap_bps_per_day=swap_bps,
     )
     if base is None:
         return None

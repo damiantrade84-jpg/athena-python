@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 
 from athena_ase.data.availability import AvailabilityRuleId
@@ -31,9 +32,19 @@ def list_fred_series(*, db_path: str | None = None) -> list[str]:
     return [r[0] for r in rows]
 
 
+# OECD MEI monthly series (interbank IRSTCI01*, long-term IRLTLT01*) publish
+# ~4-8 weeks after the observation month — must NOT get the daily obs+1BD rule
+# (WO T0.5).
+_OECD_MONTHLY_RE = re.compile(r"^IR(STCI|LTLT)01[A-Z]{2}M156N$")
+
+
 def _rule_for_fred_series(fred_id: str) -> AvailabilityRuleId:
-    policy = {"FEDFUNDS", "SOFR", "EFFR"}
-    if fred_id.upper() in policy:
+    fid = fred_id.upper()
+    if _OECD_MONTHLY_RE.match(fid):
+        return AvailabilityRuleId.FRED_MONTHLY_OECD
+    # DFF included: it is the series carry.py actually uses for USD.
+    policy = {"FEDFUNDS", "SOFR", "EFFR", "DFF"}
+    if fid in policy:
         return AvailabilityRuleId.FRED_POLICY
     return AvailabilityRuleId.FRED_DAILY
 
@@ -58,7 +69,12 @@ def ingest_series(store: PTISStore, fred_id: str, *, db_path: str | None = None)
                     value=float(rate),
                 )
             )
-    source = "FRED_POLICY" if rule == AvailabilityRuleId.FRED_POLICY else "FRED"
+    if rule == AvailabilityRuleId.FRED_POLICY:
+        source = "FRED_POLICY"
+    elif rule == AvailabilityRuleId.FRED_MONTHLY_OECD:
+        source = "FRED_MONTHLY_OECD"
+    else:
+        source = "FRED"
     return append_ptis_rows(store, sid, source, rows)
 
 

@@ -29,6 +29,8 @@ def _flatten_signal(sig: ASESignal) -> dict[str, Any]:
         "dataQuality",
         "modelHealth",
         "entryZone",
+        "fxContext",
+        "triangular",
     ):
         if key in row and not isinstance(row[key], (str, int, float, bool, type(None))):
             row[key] = json.dumps(row[key], sort_keys=True, default=str)

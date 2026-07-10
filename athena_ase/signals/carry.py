@@ -68,6 +68,11 @@ def _fred_rate_at(store: PTISStore, currency: str, decision_time_ms: int) -> flo
     return float(rows[0]["value"])
 
 
+def fred_rate_asof(store: PTISStore, currency: str, decision_time_ms: int) -> float | None:
+    """Public as-of FRED rate lookup for context shadow layers (WO Phase 1)."""
+    return _fred_rate_at(store, currency, decision_time_ms)
+
+
 def _forex_carry_annual(store: PTISStore, instrument: Instrument, decision_time_ms: int) -> float | None:
     legs = FOREX_CARRY_LEGS.get(compact_symbol(instrument.symbol))
     if not legs:

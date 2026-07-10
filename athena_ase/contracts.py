@@ -52,6 +52,10 @@ class ASESignal:
     modelHealth: dict[str, Any]
     instrument: str = ""
     decisionTimeMs: int = 0
+    # WO Phases 1-2: diagnostic-only shadow context. Optional so old journal
+    # rows still parse; must never influence decisionStatus/direction/sizing.
+    fxContext: dict[str, Any] | None = None
+    triangular: dict[str, Any] | None = None
 
     @property
     def confluenceScore(self) -> int:

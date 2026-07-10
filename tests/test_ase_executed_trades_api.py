@@ -75,7 +75,19 @@ def _journal_with_fills(path: Path) -> None:
         instrument="EURUSD",
         decision_time_ms=1_700_000_000_000,
         status="filled",
-        detail={"success": True, "orderId": "t-1", "volume": 0.2, "price": 1.1001},
+        detail={
+            "success": True,
+            "orderId": "t-1",
+            "volume": 0.2,
+            "price": 1.1001,
+            "approval_volume": 0.2,
+            "pipeline": {
+                "gate": "passed",
+                "guardian": "passed",
+                "risk": "passed",
+                "fill": "filled",
+            },
+        },
         order_id="t-1",
         path=path,
     )
@@ -123,6 +135,13 @@ def test_executed_trades_filled_only_sorted_desc(client):
     assert eur["orderId"] == "t-1"
     assert eur["brokerFill"]["volume"] == pytest.approx(0.2)
     assert eur["brokerFill"]["fillPrice"] == pytest.approx(1.1001)
+    assert eur["approvalVolume"] == pytest.approx(0.2)
+    assert eur["pipeline"] == {
+        "gate": "passed",
+        "guardian": "passed",
+        "risk": "passed",
+        "fill": "filled",
+    }
     assert trades[0]["brokerFill"]["ticket"] == "t-2"
 
 
@@ -223,6 +242,36 @@ def test_fill_notification_failure_does_not_affect_execution(monkeypatch):
     )
     assert result["executed"] is True
     assert result["reason"] == "ok"
+
+
+def test_execution_journal_proves_pipeline_and_risk_approved_volume(monkeypatch):
+    import athena_ase.execution.bridge as bridge
+
+    journal_calls: list[dict] = []
+    monkeypatch.setattr(
+        bridge,
+        "append_execution_outcome",
+        lambda **kwargs: journal_calls.append(kwargs) or True,
+    )
+    monkeypatch.setattr(bridge, "_notify_fill_opened", lambda *_a, **_k: None)
+
+    result = execute_trade_signal(
+        _trade_signal(),
+        deps=_demo_deps(),
+        write_journal=False,
+        journal_outcomes=True,
+    )
+
+    assert result["executed"] is True
+    assert result["approval_volume"] == pytest.approx(0.2)
+    assert len(journal_calls) == 1
+    assert journal_calls[0]["detail"]["approval_volume"] == pytest.approx(0.2)
+    assert journal_calls[0]["detail"]["pipeline"] == {
+        "gate": "passed",
+        "guardian": "passed",
+        "risk": "passed",
+        "fill": "filled",
+    }
 
 
 def test_no_notification_on_rejected_trade(monkeypatch):
