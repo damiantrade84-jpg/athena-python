@@ -132,6 +132,10 @@ def test_precompute_crypto_uses_aggtrade_profile_when_available(monkeypatch):
 
 
 def test_calculate_confidence_crypto_aligned_aggtrade_cvd_adds_orderflow_bonus(monkeypatch):
+    # This test pins the LEGACY bonus path (per-slot max_possible additions).
+    # The live default runs weighted scoring, where CVD alignment is a weighted
+    # orderflow component instead — covered by the weighted-path tests below.
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_WEIGHTED_SCORING", {"ENABLED": False})
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS", True)
@@ -310,6 +314,10 @@ def test_engine_b_profile_trusted_override_enables_untrusted_group(monkeypatch):
 
 
 def test_calculate_confidence_forex_excludes_profile_slot(monkeypatch):
+    # Pins the LEGACY bonus path (crypto gets +1 profile slot in max_possible).
+    # Under weighted scoring (live default) max_possible is class-uniform —
+    # covered by the weighted-path tests below.
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_WEIGHTED_SCORING", {"ENABLED": False})
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_PROFILE_TRUST_MODE", "asset_type")
     monkeypatch.setitem(

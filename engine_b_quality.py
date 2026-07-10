@@ -118,14 +118,30 @@ def _nearest_zone(res: dict[str, Any], direction: str) -> dict[str, Any] | None:
     return zone if isinstance(zone, dict) else None
 
 
+def _ob_confluence_directional() -> bool:
+    try:
+        from config import CONFIG
+
+        return bool(CONFIG.get("ENGINE_B_OB_CONFLUENCE_DIRECTIONAL", True))
+    except Exception:
+        return True
+
+
 def _ob_confluence_score(res: dict[str, Any], direction: str) -> float:
     if not bool(res.get("ob_at_zone", False)):
         return 0.0
     blocks = res.get("order_blocks") or []
+    # 2026-07-10 audit: only direction-aligned order blocks count as confluence
+    # (bullish for LONG, bearish for SHORT) — an opposing OB's strength must not
+    # inflate this component. Same flag as the _ob_at_zone location filter.
+    directional = _ob_confluence_directional()
+    aligned_type = "bullish" if str(direction).upper() == "LONG" else "bearish"
     best = 0.0
     if isinstance(blocks, list):
         for block in blocks:
             if not isinstance(block, dict):
+                continue
+            if directional and str(block.get("type") or "").lower() != aligned_type:
                 continue
             try:
                 strength = float(block.get("strength") or 0.0)
@@ -189,9 +205,11 @@ def _session_context_score(res: dict[str, Any]) -> float:
             continue
         if not bool(payload.get("score_influence_enabled", False)):
             continue
+        # Continuous map: negative bonus < 0.5 < positive bonus, neutral = 0.5.
+        # The old `bonus == 0 -> 0.0` special case made a penalized session
+        # (~0.25-0.49) outscore a neutral one (0.0). max_abs comes from the
+        # session payload (forex 0.04 / equity 0.03) with 0.04 fallback.
         bonus = _float_mapping(payload.get("score_bonus"), 0.0)
-        if bonus == 0.0:
-            return 0.0
         max_abs = abs(_float_mapping(payload.get("max_abs_score_bonus"), 0.04))
         if max_abs <= 0:
             max_abs = 0.04
@@ -230,6 +248,7 @@ def compute_confluence_subscores(
     aggtrade_cvd_direction: str | None = None,
     asset_type: str = "",
     pair_display: str | None = None,
+    as_of_date: str | None = None,
 ) -> dict[str, float]:
     asset_lower = str(asset_type or res.get("asset_type") or "").lower()
     display = pair_display or res.get("pair_display")
@@ -241,7 +260,11 @@ def compute_confluence_subscores(
             aggtrade_cvd_direction=aggtrade_cvd_direction,
         )
     else:
-        orderflow = compute_subsystem_orderflow_score(asset_lower, display, direction)
+        # as_of_date is set only by backtests (point-in-time carry/COT);
+        # live passes None and keeps the mem-cached current snapshot.
+        orderflow = compute_subsystem_orderflow_score(
+            asset_lower, display, direction, as_of_date=as_of_date
+        )
 
     return {
         "structure_alignment": compute_structure_alignment_score(res, direction),

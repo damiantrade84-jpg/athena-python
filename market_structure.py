@@ -242,6 +242,11 @@ def _engine_b_forex_session_structure_context(
         "active_session_structure": bool(active_quality and confluence_count > 0),
         "liquidity_sweep_active_session": bool(liquidity_sweep and active_quality),
         "score_bonus": round(score_bonus, 6),
+        # Normalization scale for engine_b_quality._session_context_score —
+        # without it the scorer fell back to a hardcoded 0.04.
+        "max_abs_score_bonus": abs(
+            _float_value_from_mapping(session_cfg, "MAX_ABS_SCORE_BONUS", 0.04)
+        ),
         "score_influence_enabled": bool(
             session_cfg.get("SCORE_INFLUENCE_ENABLED", False)
         ),
@@ -354,6 +359,11 @@ def _engine_b_equity_session_structure_context(
         "active_session_structure": bool(active_quality and confluence_count > 0),
         "liquidity_sweep_active_session": bool(liquidity_sweep and active_quality),
         "score_bonus": round(score_bonus, 6),
+        # Normalization scale for engine_b_quality._session_context_score —
+        # equity uses 0.03, not the scorer's previous hardcoded 0.04 fallback.
+        "max_abs_score_bonus": abs(
+            _float_value_from_mapping(session_cfg, "MAX_ABS_SCORE_BONUS", 0.03)
+        ),
         "score_influence_enabled": bool(
             session_cfg.get("SCORE_INFLUENCE_ENABLED", False)
         ),
@@ -4294,6 +4304,9 @@ class NakedEngine:
             "pair": pair,
             "enable_profile_context": enable_profile_context,
             "forming_strip_diagnostics": forming_strip_diag,
+            # Backtest flag: lets calculate_confidence resolve point-in-time
+            # subsystem data (carry/COT as-of the bar) instead of current values.
+            "historical_mode": bool(trade_bucket_historical_mode),
         }
 
     def analyze_structure_direction(
@@ -4512,11 +4525,21 @@ class NakedEngine:
         )
 
         _ob_min_strength = config.CONFIG.get("NAKED_ENGINE", {}).get("ob_min_strength", 50)
+        # 2026-07-10 audit: OB-at-zone confluence must be direction-aligned — a
+        # bearish OB overlapping the support zone is opposing evidence, not
+        # confluence for a LONG. Config escape hatch restores legacy any-type
+        # behaviour (ENGINE_B_OB_CONFLUENCE_DIRECTIONAL: false).
+        _ob_directional = bool(
+            config.CONFIG.get("ENGINE_B_OB_CONFLUENCE_DIRECTIONAL", True)
+        )
+        _aligned_ob_type = "bullish" if direction == "LONG" else "bearish"
         _ob_at_zone = False
         if active_zone and order_blocks:
             az_lower = active_zone.get("lower", 0)
             az_upper = active_zone.get("upper", 0)
             for ob in order_blocks:
+                if _ob_directional and str(ob.get("type") or "").lower() != _aligned_ob_type:
+                    continue
                 if not (ob["top"] < az_lower or ob["bottom"] > az_upper):
                     if ob.get("strength", 0) >= _ob_min_strength:
                         _ob_at_zone = True
@@ -4671,6 +4694,7 @@ class NakedEngine:
             "aggtrade_cvd_slope": precompute.get("aggtrade_cvd_slope"),
             "aggtrade_cvd_bucket_count": precompute.get("aggtrade_cvd_bucket_count"),
             "engine_b_data_fidelity": precompute.get("engine_b_data_fidelity"),
+            "historical_mode": bool(precompute.get("historical_mode")),
             **({"forex_session_structure": forex_session_structure} if str(asset_type or "").lower() == "forex" else {}),
             **({"asset_class_structure_diagnostics": asset_struct_diag} if asset_struct_diag.get("asset_class") in {"stock", "index", "commodity", "etf", "etf_bond"} else {}),
             **({"equity_session_structure": equity_session_structure} if equity_session_structure is not None else {}),
@@ -5406,6 +5430,16 @@ class NakedEngine:
                     else 0.0
                 )
                 _ft_norm = normalize_followthrough_bonus(_ft_bonus, _ft_max_for_norm)
+                # Backtest point-in-time subsystems: pass the bar date so
+                # carry/COT z-scores resolve as-of the bar, not as-of today.
+                # Live keeps as_of=None (mem-cached current snapshot).
+                _subsystem_as_of = None
+                if bool(res.get("historical_mode")):
+                    _bar_time = str(
+                        res.get("latest_confirmed_trigger_candle_time") or ""
+                    )
+                    if len(_bar_time) >= 10:
+                        _subsystem_as_of = _bar_time[:10]
                 _subscores = compute_confluence_subscores(
                     res,
                     direction,
@@ -5418,6 +5452,7 @@ class NakedEngine:
                     aggtrade_cvd_direction=_aggtrade_cvd_direction,
                     asset_type=asset_type_lower,
                     pair_display=res.get("pair_display"),
+                    as_of_date=_subsystem_as_of,
                 )
                 _regime_label = str(res.get("_adx_derived_regime") or "").upper()
                 _weighted_subscores = apply_regime_component_weights(
@@ -5506,16 +5541,12 @@ class NakedEngine:
                 _aggtrade_cvd_alignment = "opposed"
             elif _aggtrade_available and _aggtrade_cvd_direction:
                 _aggtrade_cvd_alignment = "neutral"
-        # Regime modulates discretionary bonuses, not mandatory gate floors.
-        if (
-            not _use_weighted_scoring
-            and bool(config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True))
-            and bool(config.CONFIG.get("ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_BONUSES", True))
-        ):
-            _regime_label = str(res.get("_adx_derived_regime") or "").upper()
-            _regime_bonus_mult = _engine_b_regime_gate(_regime_label, asset_type_lower)
-            if bonus_points > 0 and _regime_bonus_mult != 1.0:
-                bonus_points = round(bonus_points * _regime_bonus_mult, 4)
+        # 2026-07-10 audit: the legacy bonus-scaling by ENGINE_B_REGIME_MULTIPLIERS
+        # was removed — the table's min_score semantics (RANGING 1.10 = stricter
+        # floor) inverted when applied to bonus points (RANGING 1.10 = inflated
+        # score). Regime now influences weighted components only via
+        # ENGINE_B_WEIGHTED_SCORING.REGIME_COMPONENT_MULT, and the min_score
+        # floor only via ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE (opt-in).
         total_score = gate_score + bonus_points
 
         try:
@@ -5886,97 +5917,10 @@ class NakedEngine:
         )
         return ok
 
-    def simulate_trade(
-        self,
-        d1_candles,
-        h4_candles,
-        h1_candles,
-        current_price,
-        direction,
-        atr,
-        regime_label="RANGING",
-        confidence_threshold=1.8,
-        learning_ctx=None,
-        style_profile=None,
-        asset_type="",
-        d1_snap=None,
-        h4_snap=None,
-        pair=None,
-    ):
-        """Backtest-friendly wrapper that returns entry/exit signals.
-        Returns dict compatible with existing backtest reporting."""
-        result = self.analyze_structure(
-            d1_candles,
-            h4_candles,
-            h1_candles,
-            current_price,
-            direction,
-            atr,
-            regime_label,
-            asset_type=asset_type,
-            d1_snap=d1_snap,
-            h4_snap=h4_snap,
-            pair=pair,
-        )
-        # Use entry_tf from style_profile to select entry candles (H4 for swing, H1 for intraday/scalp)
-        _entry_tf = str((style_profile or {}).get("entry_tf", "H1")).upper() if style_profile else "H1"
-        _entry_candles = h4_candles if _entry_tf == "H4" else h1_candles
-        confidence = self.calculate_confidence(
-            result,
-            current_price,
-            direction,
-            learning_ctx,
-            entry_candles=_entry_candles,
-            style_profile=style_profile,
-        )
-        if isinstance(style_profile, dict):
-            gate_ok, _ = engine_b_confidence_passes(
-                confidence,
-                style_profile,
-                regime_label,
-                asset_type,
-                diagnostics_context={
-                    "pair": (pair or {}).get("display") if isinstance(pair, dict) else None,
-                    "symbol": (pair or {}).get("symbol") if isinstance(pair, dict) else None,
-                    "asset_class": asset_type,
-                    "score_group": style_profile.get("score_group") if isinstance(style_profile, dict) else None,
-                    "style": style_profile.get("style") if isinstance(style_profile, dict) else None,
-                },
-            )
-            if not gate_ok:
-                return None  # No trade signal
-        elif not confidence.get("passed") or confidence.get("pct", 0) < 40:
-            # H-6: the legacy fallback keyed off score < 1.8 (~14% of a 12.5 max),
-            # which let near-empty signals through. Require the checklist `passed`
-            # flag AND a meaningful gate percentage. confidence_threshold retained
-            # for API compatibility but no longer the primary gate.
-            return None  # No trade signal
-
-        return {
-            "entry_price": current_price,
-            "sl": confidence.get("execution_sl") or result.get("recommended_stop_loss"),
-            "tp1": (
-                confidence.get("execution_tp1")
-                or confidence.get("execution_tp")
-                or result.get("recommended_take_profit")
-            ),
-            "tp2": (
-                confidence.get("execution_tp2")
-                or confidence.get("execution_tp")
-                or result.get("recommended_take_profit")
-            ),
-            "rr1": confidence.get("execution_rr1") or confidence.get("rr_used_for_gate"),
-            "rr2": confidence.get("execution_rr2") or confidence.get("rr_used_for_gate"),
-            "exit_strategy": confidence.get("exit_strategy"),
-            "direction": direction,
-            "score": confidence["score"],
-            "confidence_pct": confidence["pct"],
-            "fvg_overlap": result.get("fvg_overlap", False),
-            "liquidity_sweep": result.get("liquidity_sweep", False),
-            "structural_verdict": result["structural_verdict"],
-            "ai_adjustment": confidence.get("ai_adjustment", 0.0),
-            "trigger_pattern": confidence.get("trigger_pattern", "NONE"),
-        }
+    # simulate_trade was removed 2026-07-10 (audit): it had no callers and
+    # diverged from the real backtest contract (always style="intraday",
+    # live aggTrade mode on historical bars). The Engine B backtests call
+    # precompute_structure_data + analyze_structure_direction directly.
 
 
 # Singleton instance

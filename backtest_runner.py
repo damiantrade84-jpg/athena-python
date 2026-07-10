@@ -89,6 +89,7 @@ from research_validation import (
 from stability_monitor import record_backtest_summary
 
 from market_structure import (
+    _engine_b_resolve_profile_trusted_override,
     engine_b_forex_asian_session_blocks_bar,
     engine_b_profile_context_enabled,
     resolve_engine_b_asset_class,
@@ -1524,6 +1525,11 @@ def _engine_c_select_engine_b_bt_candidate(
             h4_snap=h4_snap or {},
             style=resolved_style,
             pair=pair,
+            # No historical aggTrade store exists; without this flag crypto bars
+            # would read the LIVE bucket store (current CVD applied to past bars)
+            # or hard-fail every candidate in a standalone run. Mirrors the
+            # standalone Engine B backtest precompute.
+            trade_bucket_historical_mode=True,
         )
 
     candidates: list[tuple[dict, dict, dict]] = []
@@ -1546,6 +1552,7 @@ def _engine_c_select_engine_b_bt_candidate(
                 h4_snap=h4_snap or {},
                 style=resolved_style,
                 pair=pair,
+                trade_bucket_historical_mode=True,
             )
         if res_b.get("structural_verdict") != "CLEAR":
             continue
@@ -5089,7 +5096,17 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     _zone_tf = style_profile.get("zone_tf", "H4")
     _entry_tf = style_profile.get("entry_tf", "H1")
     _atr_tf = style_profile.get("atr_tf", "H4")
-    _bt_enable_profile_context = engine_b_profile_context_enabled(_pair_type)
+    # Live parity: under ENGINE_B_PROFILE_TRUST_MODE=score_group the trust check
+    # needs the pair's score group (and any per-(group,style) profile_trusted
+    # override); asset-type-only always resolved False and silently disabled VP
+    # context for every backtest bar while live scans kept it on.
+    _bt_enable_profile_context = engine_b_profile_context_enabled(
+        _pair_type,
+        score_group=_pair_score_group,
+        profile_trusted_override=_engine_b_resolve_profile_trusted_override(
+            _pair_score_group, resolved_style
+        ),
+    )
     _b_funnel = {
         "bars_evaluated": 0,
         "fail_verdict":   0,
@@ -6312,7 +6329,15 @@ def backtest_pair_consensus(
     _zone_tf = style_profile.get("zone_tf", "H4")
     _entry_tf = style_profile.get("entry_tf", "H1")
     _atr_tf = style_profile.get("atr_tf", "H4")
-    _bt_enable_profile_context = engine_b_profile_context_enabled(_ptype)
+    # Live parity: thread score_group (+ per-(group,style) profile_trusted
+    # override) so score_group trust mode does not disable VP context BT-only.
+    _bt_enable_profile_context = engine_b_profile_context_enabled(
+        _ptype,
+        score_group=_pair_score_group,
+        profile_trusted_override=_engine_b_resolve_profile_trusted_override(
+            _pair_score_group, resolved_style
+        ),
+    )
 
     _h4_need = max(50, CONFIG.get("H4_CANDLES", 1001))
     _h1_need = max(50, CONFIG.get("H1_CANDLES", 1001))

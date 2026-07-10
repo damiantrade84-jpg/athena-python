@@ -3677,11 +3677,9 @@ NAKED_ENGINE:
 
       swing: {min_rr: 1.8}
 
-    energy_oil:
-
-      intraday: {min_rr: 1.3}
-
-      swing: {min_rr: 1.8}
+    # energy_oil is defined once above (with min_room_atr rows). A duplicate
+    # plain-min_rr block here silently shadowed it via YAML last-wins — removed
+    # 2026-07-10 audit; the duplicate-key guard only scans top-level keys.
 
     us_stock_single:
 
@@ -3727,11 +3725,13 @@ NAKED_ENGINE:
 
 
 
-# ENGINE_B_REGIME_MULTIPLIERS_ENABLED: true  -> multipliers enabled: regime
-#   adjusts Engine B min_score (base_min_score * regime_multiplier, 1dp ceil).
-# ENGINE_B_REGIME_MULTIPLIERS_ENABLED: false -> multipliers disabled: Engine B
-#   min_score remains the style profile base value (no regime adjustment).
-# Default true preserves backward-compatible live behavior.
+# Regime multipliers for the Engine B min_score floor. They take effect ONLY
+# when BOTH flags are true: ENGINE_B_REGIME_MULTIPLIERS_ENABLED and
+# ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE (config.py default: false).
+# With APPLY_TO_MIN_SCORE false the table below is inert — kept for opt-in
+# tuning (base_min_score * regime_multiplier, 1dp ceil). 2026-07-10 audit: the
+# legacy path that multiplied BONUS points by this table was removed — it
+# inverted the intent (RANGING 1.10 inflated scores in ranging regimes).
 
 ENGINE_B_REGIME_MULTIPLIERS_ENABLED: true
 
@@ -3764,6 +3764,12 @@ ENGINE_B_ZONE_PERSISTENCE: false
 # See ENGINE_B_STRIP_FORMING_STRUCT (above) for structure vs trigger forming-bar split.
 ENGINE_B_USE_FORMING_FOR_STRUCTURE: false
 
+# 2026-07-10 audit note: this flag does NOT affect trigger-pattern detection —
+# the trigger series inside precompute_structure_data comes from the canonical
+# confirmed-only candles. The forming series it enables is only passed as
+# calculate_confidence entry_candles (follow-through / research-lab gates,
+# where ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY strips the forming bar again)
+# and as a current-price fallback. Live and backtest trigger evaluation agree.
 ENGINE_B_USE_FORMING_FOR_TRIGGER: true
 
 # When true, apply NAKED_ENGINE.bos_volume_multiplier to BOS volume confirmation using

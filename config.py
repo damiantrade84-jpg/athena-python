@@ -2574,9 +2574,11 @@ CONFIG: dict = {
     # False: min_score stays at style profile base (multiplier forced to 1.0).
     "ENGINE_B_REGIME_MULTIPLIERS_ENABLED": True,
     # False (default): regime multipliers do not raise/lower the mandatory gate floor.
+    # NOTE: with this False the multiplier table is fully inert — the legacy
+    # bonus-scaling application was removed 2026-07-10 (it inverted the intent:
+    # RANGING 1.10 inflated bonus points in ranging regimes instead of
+    # tightening the floor).
     "ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE": False,
-    # True (default): regime multipliers scale discretionary bonus points only.
-    "ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_BONUSES": True,
     "ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED": True,
     "ENGINE_B_STYLE_MIN_SCORE_BY_STYLE": {
         "scalp": 4.0,

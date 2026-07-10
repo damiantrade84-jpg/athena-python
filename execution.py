@@ -641,6 +641,71 @@ def _engine_b_execution_tp_side_ok(
     return tp_f < px
 
 
+def _apply_scale_out_tp_split(sig: dict, source: dict | None, levels: dict) -> None:
+    """Upgrade collapsed tp1/tp2 to the resolver's dual-TP scale-out plan.
+
+    Gated on the same ENGINE_B_LIVE_SCALE_OUT_ENABLED flag the executors honour
+    (Bybit reduce-only TP1 partial + runner TP; MT5 volume split). Default off
+    keeps today's behavior: tp1 == tp2 == execution_tp (single runner bracket).
+    Fail-closed: any missing, malformed, or mis-ordered field leaves the
+    collapsed levels untouched. 2026-07-10 audit — without this, the scale-out
+    plan the RR/space gates approved and the backtest models never reached the
+    executors (they always saw tp1 == tp2 and fell back to single-TP).
+    """
+    if not isinstance(source, dict) or not isinstance(levels, dict):
+        return
+    try:
+        if not bool(rt().CONFIG.get("ENGINE_B_LIVE_SCALE_OUT_ENABLED", False)):
+            return
+    except Exception:
+        return
+    strategy_raw = str(
+        source.get("exit_strategy")
+        or source.get("engine_b_exit_strategy")
+        or sig.get("engine_b_exit_strategy")
+        or ""
+    )
+    try:
+        import exit_policy
+
+        is_scale_out = (
+            exit_policy.normalize_exit_strategy(strategy_raw)
+            == exit_policy.EXIT_STRATEGY_SCALE_OUT
+        )
+    except Exception:
+        is_scale_out = strategy_raw == "scale_out_structural_tp1_fallback_tp2"
+    if not is_scale_out:
+        return
+    tp1_raw = source.get("execution_tp1")
+    if tp1_raw is None:
+        tp1_raw = source.get("engine_b_execution_tp1")
+    tp2_raw = source.get("execution_tp2")
+    if tp2_raw is None:
+        tp2_raw = source.get("engine_b_execution_tp2")
+    try:
+        tp1 = float(tp1_raw)
+        tp2 = float(tp2_raw)
+    except (TypeError, ValueError):
+        return
+    if tp1 <= 0 or tp2 <= 0 or tp1 == tp2:
+        return
+    if not _engine_b_execution_tp_side_ok(sig, tp1):
+        return
+    if not _engine_b_execution_tp_side_ok(sig, tp2):
+        return
+    direction = str(sig.get("direction") or "").upper()
+    if direction == "LONG":
+        if not tp2 > tp1:
+            return
+    elif direction == "SHORT":
+        if not tp2 < tp1:
+            return
+    else:
+        return
+    levels["tp1"] = tp1
+    levels["tp2"] = tp2
+
+
 def _extract_engine_b_execution_levels(
     sig: dict,
     engine_b: dict | None = None,
@@ -688,7 +753,12 @@ def _extract_engine_b_execution_levels(
         if sl_f > 0 and tp_f > 0:
             if not _engine_b_execution_tp_side_ok(sig, tp_f):
                 return None
-            return {"sl": sl_f, "tp1": tp_f, "tp2": tp_f}
+            levels = {"sl": sl_f, "tp1": tp_f, "tp2": tp_f}
+            # Config-gated scale-out upgrade (no-op unless
+            # ENGINE_B_LIVE_SCALE_OUT_ENABLED and the source carries a valid
+            # dual-TP plan) — see _apply_scale_out_tp_split.
+            _apply_scale_out_tp_split(sig, source, levels)
+            return levels
         return None
 
     candidates: list[tuple[str, dict | None, bool, bool, bool]] = []
@@ -1062,7 +1132,10 @@ def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) ->
     levels = _extract_engine_b_execution_levels(sig, engine_b)
     if not levels:
         return False
-    if not _engine_b_execution_tp_side_ok(sig, levels["tp1"]):
+    if not _engine_b_execution_tp_side_ok(sig, levels["tp1"]) or not (
+        levels["tp2"] == levels["tp1"]
+        or _engine_b_execution_tp_side_ok(sig, levels["tp2"])
+    ):
         sig["_engine_b_apply_error"] = "INVALID_TP_SIDE"
         return False
     try:
@@ -1073,6 +1146,12 @@ def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) ->
         _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
             _entry_px, levels["tp1"], _asset, rt().CONFIG
         )
+        # Scale-out plans carry a farther runner TP2 — it must clear exchange
+        # bounds too (it is the level the position TP is actually parked at).
+        if _bounds_ok and levels["tp2"] != levels["tp1"]:
+            _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
+                _entry_px, levels["tp2"], _asset, rt().CONFIG
+            )
     except Exception:
         _bounds_ok, _bounds_err = True, None
     if not _bounds_ok:
@@ -1178,6 +1257,14 @@ def _refresh_engine_b_execution_context(
     sig["sl"] = sl
     sig["tp1"] = tp
     sig["tp2"] = tp
+    if refreshed.get("exit_strategy"):
+        sig["engine_b_exit_strategy"] = refreshed.get("exit_strategy")
+    # Config-gated scale-out upgrade from the refreshed resolver payload
+    # (no-op unless ENGINE_B_LIVE_SCALE_OUT_ENABLED and the plan is valid).
+    _refresh_levels = {"sl": sl, "tp1": tp, "tp2": tp}
+    _apply_scale_out_tp_split(sig, refreshed, _refresh_levels)
+    sig["tp1"] = _refresh_levels["tp1"]
+    sig["tp2"] = _refresh_levels["tp2"]
     return refreshed, None
 
 

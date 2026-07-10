@@ -218,8 +218,9 @@ def test_engine_c_bt_selects_engine_b_direction_independent_from_engine_a_hint()
     selected = _engine_c_select_engine_b_bt_candidate(
         naked_engine=FakeNakedEngine(),
         d1_ctx=[],
-        zone_ctx=[],
-        h1_window=[],
+        h4_ctx=[],
+        h1_ctx=[],
+        entry_ctx=[],
         current_price=100.0,
         atr=1.0,
         regime_label="RANGING",
