@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 import execution
 import execution_lifecycle
 import mt5_executor
@@ -34,6 +36,7 @@ def _signal(**overrides) -> dict:
         "decision": "TRADE",
         "qualified": True,
         "engineATradeEnabled": True,
+        "signalTier": "trade",
         "direction": "LONG",
         "decisionTime": "2026-06-13T10:00:00+00:00",
         "lastConfirmedCandleTs": "2026-06-13T10:00:00+00:00",
@@ -107,6 +110,17 @@ def test_refresh_requires_same_setup_direction_horizon_and_trade_eligibility():
         original,
         _signal(scoringProfile={"profileId": "changed", "profileSha256": "b" * 64}),
     )[0] is False
+
+
+@pytest.mark.parametrize("original_tier", [None, "watchlist", "skip"])
+def test_refresh_cannot_promote_missing_or_nontrade_original_scanner_tier(original_tier):
+    original = _signal(signalTier=original_tier)
+    refreshed = _signal(signalId="signal-2", signalTier="trade")
+
+    assert verify_refreshed_signal(original, refreshed) == (
+        False,
+        "ENGINE_A_V3_REFRESH_ORIGINAL_SCAN_TIER_NOT_TRADE",
+    )
 
 
 def test_refreshed_signal_replaces_authoritative_contract_and_levels():

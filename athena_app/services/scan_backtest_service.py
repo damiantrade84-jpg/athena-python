@@ -27,6 +27,12 @@ def handle_backtest_request(
     """Run pair or full backtest with unchanged output semantics."""
     bt_style = normalize_style(payload.get("style", "auto"))
     _vm = str(payload.get("validation_mode") or "standard").strip().lower()
+    if _vm not in {"", "standard"}:
+        return {
+            "error": "ENGINE_A_V3_VALIDATION_MODE_UNSUPPORTED",
+            "status": 422,
+            "validation_mode": _vm,
+        }
     try:
         _pg = int(payload.get("purge_gap", 200))
     except (TypeError, ValueError):
@@ -66,6 +72,17 @@ def handle_backtest_request(
             purge_gap=_pg,
             folds=max(1, _fd),
         )
+        if isinstance(result, dict) and result.get("error"):
+            try:
+                status = int(result.get("status", 400))
+            except (TypeError, ValueError):
+                status = 400
+            if status >= 400:
+                return {
+                    key: value
+                    for key, value in result.items()
+                    if key != "data"
+                }
         if allow_auto_toggle:
             toggle = auto_toggle_pair(pair, result)
             if toggle:

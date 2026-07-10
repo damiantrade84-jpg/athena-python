@@ -1,5 +1,11 @@
 """Tests for TF/entry path audit trade diagnostics."""
 
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import athena_research.tf_entry_path_audit.diagnostic_v3 as diagnostic_v3
+from engine_a_v3.contract import PriceZone
+
 from athena_research.tf_entry_path_audit.trade_path import (
     EntryQualityClass,
     IntrabarExitClass,
@@ -73,3 +79,64 @@ def test_enrich_trade_record_fields():
     assert rec["engine"] == "ENGINE_B"
     assert rec["signal_timeframe"] == "H4"
     assert rec["entry_quality_class"] in {c.value for c in EntryQualityClass}
+
+
+def _timed_bars(timeframe: str, count: int, *, price: float = 100.0) -> list[dict]:
+    step = {"D1": timedelta(days=1), "H4": timedelta(hours=4), "H1": timedelta(hours=1)}[
+        timeframe
+    ]
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    return [
+        {
+            "time": (start + index * step).isoformat(),
+            "open": price,
+            "high": price + 1.0,
+            "low": price - 1.0,
+            "close": price,
+            "vol": 1_000.0,
+        }
+        for index in range(count)
+    ]
+
+
+def test_v3_diagnostic_entry_starts_after_h4_decision_bar_closes():
+    entry_rows = _timed_bars("H1", 8)
+    start_epoch = int(datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp())
+
+    assert diagnostic_v3._find_entry_index(entry_rows, start_epoch + 4 * 60 * 60) == 5
+
+
+def test_v3_diagnostic_skips_entry_bar_that_does_not_touch_zone(monkeypatch):
+    signal = SimpleNamespace(
+        decision="TRADE",
+        qualified=True,
+        entryZone=PriceZone(low=90.0, high=91.0),
+        direction="LONG",
+        sl=89.0,
+        tp1=93.0,
+        tp2=94.0,
+        exitPolicy="SINGLE_TP1",
+        decisionTime="2025-01-01T00:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        diagnostic_v3,
+        "evaluate_engine_a_v3",
+        lambda *_args, **_kwargs: signal,
+    )
+    candles = {
+        "D1": _timed_bars("D1", 100),
+        "H4": _timed_bars("H4", 100),
+        "H1": _timed_bars("H1", 500),
+    }
+
+    result = diagnostic_v3.run_diagnostic_v3_backtest(
+        {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"},
+        signal_tf="H4",
+        entry_tf="H1",
+        exit_tf="H1",
+        execution_tf="H1",
+        horizon="intraday",
+        candles=candles,
+    )
+
+    assert result["trades"] == []

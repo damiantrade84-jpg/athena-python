@@ -2980,12 +2980,6 @@ def validate_config(cfg: dict) -> None:
             log.warning(
                 f"[CFG] PAIR_PROFILES[{profile_name!r}] unknown disabled_votes: {unknown_votes}"
             )
-        disabled_filters = set(profile.get("disable_filters", []) or [])
-        unknown_filters = sorted(disabled_filters - PAIR_PROFILE_FILTERS)
-        if unknown_filters:
-            log.warning(
-                f"[CFG] PAIR_PROFILES[{profile_name!r}] unknown disable_filters: {unknown_filters}"
-            )
         weight_overrides = profile.get("weight_overrides", {}) or {}
         if not isinstance(weight_overrides, dict):
             log.warning(
@@ -3343,6 +3337,10 @@ def _fatal_config_validation(cfg: dict) -> None:
     for profile_name, profile in _pair_profiles.items():
         if not isinstance(profile, dict):
             continue
+        if "disable_filters" in profile:
+            errors.append(
+                f"PAIR_PROFILES[{profile_name!r}].disable_filters is inactive in Engine A V3"
+            )
         for inactive_key in ("weight_overrides", "bt_min"):
             if inactive_key in profile:
                 errors.append(

@@ -23,11 +23,18 @@ export function backtestEndpointForEngine(engine: BacktestEngineKey): string {
   return '/api/backtest';
 }
 
+export function normalizeBacktestValidationMode(
+  engine: BacktestEngineKey,
+  validationMode: string,
+): string {
+  return engine === 'A' ? 'standard' : validationMode;
+}
+
 export function buildBacktestRequest(input: BacktestRequestInput): BacktestRequest {
   const endpoint = backtestEndpointForEngine(input.engine);
   const payload: Record<string, unknown> = {
     pair: input.pair,
-    validation_mode: input.validationMode,
+    validation_mode: normalizeBacktestValidationMode(input.engine, input.validationMode),
   };
 
   if (input.engine === 'ASE') {

@@ -19,6 +19,7 @@ from engine_a_v3.promotion import (
 )
 from engine_a_v3.routing import route_specialist
 from engine_a_v3.profile import EngineAV3Profile, baseline_profile, scorer_sha256
+from engine_a_v3.timeframes import resolve_v3_entry_timeframe
 
 
 def _profile_ttl_days() -> int:
@@ -27,6 +28,18 @@ def _profile_ttl_days() -> int:
     if not 1 <= value <= 365:
         raise ValueError("engine_a_v3_profile_ttl_invalid")
     return value
+
+
+def _validation_primary_timeframe(pair: dict[str, Any], horizon: str) -> str:
+    route = route_specialist(pair)
+    primary_tf = resolve_v3_entry_timeframe(
+        route.score_group,
+        str(pair.get("type") or pair.get("asset_type") or "other"),
+        horizon,
+    )
+    if primary_tf is None:
+        raise ValueError("validation_entry_timeframe_invalid")
+    return primary_tf
 
 
 @dataclass(frozen=True)
@@ -219,7 +232,7 @@ def _validation_results(
     purge_bars: int = 5,
     max_hold_bars: int = 24,
 ) -> tuple[list[list[float]], list[float]]:
-    primary_tf = "H1" if horizon == "intraday" else "H4"
+    primary_tf = _validation_primary_timeframe(pair, horizon)
     primary = list(candles.get(primary_tf) or [])
     windows, holdout = build_validation_windows(
         len(primary),
@@ -364,7 +377,6 @@ def validate_specialist_cohort(
         raise ValueError("validation_cohort_incomplete")
 
     first_route = route_specialist(datasets[0]["pair"])
-    primary_tf = "H1" if horizon == "intraday" else "H4"
     pooled_folds: list[list[float]] = [[], [], [], []]
     pooled_holdout: list[float] = []
     pair_metrics: dict[str, Any] = {}
@@ -393,6 +405,7 @@ def validate_specialist_cohort(
         pooled_holdout.extend(holdout_results)
         pair_metrics[symbol] = _summary_metrics(fold_results, holdout_results)
         dataset_hashes[symbol] = provenance_sha256(candles)
+        primary_tf = _validation_primary_timeframe(pair, horizon)
         primary_rows = candles.get(primary_tf) or []
         if primary_rows:
             dataset_spans[symbol] = {

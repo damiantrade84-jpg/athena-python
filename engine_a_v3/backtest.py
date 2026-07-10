@@ -13,7 +13,9 @@ from engine_a_v3.contract import CONTRACT_VERSION
 from engine_a_v3.diagnostics import reverse_direction_result_r, trade_path_diagnostics
 from engine_a_v3.evaluator import evaluate_engine_a_v3
 from engine_a_v3.promotion import PromotionRegistry
+from engine_a_v3.routing import route_specialist
 from engine_a_v3.setups import _efficiency_ratio
+from engine_a_v3.timeframes import resolve_v3_entry_timeframe
 
 _TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
 
@@ -259,6 +261,34 @@ def _intermarket_confirmation_for_bar(
         return None
 
 
+def _v3_backtest_comparability() -> dict[str, Any]:
+    """Describe live inputs this historical runner does not replay."""
+    return {
+        "liveComparable": False,
+        "promotionEligible": False,
+        "unreplayedInputs": ["live_context", "live_scan_gates"],
+        "unreplayedScanGates": [
+            "exchangeClosed",
+            "eventRisk",
+            "macroEventRisk",
+            "directionConflicted",
+        ],
+    }
+
+
+def _classify_backtest_signal(signal: Any, pair: dict) -> tuple[str, str]:
+    """Use the scan tier only when the V3 contract can be serialized."""
+    try:
+        from athena_app.services.engine_a_v3_classify import classify_engine_a_v3_signal
+
+        payload = signal.to_dict()
+        if not isinstance(payload, dict):
+            return "watchlist", "V3 signal contract serialization invalid"
+        return classify_engine_a_v3_signal(payload, pair)
+    except Exception:
+        return "watchlist", "V3 scan eligibility unavailable"
+
+
 def run_v3_backtest(
     pair: dict,
     candles: dict[str, list[dict]],
@@ -274,7 +304,21 @@ def run_v3_backtest(
     collect_funnel: bool = False,
     intermarket_context_provider: Callable[[Any], dict | None] | None = None,
 ) -> dict:
-    primary_tf = "H1" if horizon == "intraday" else "H4"
+    route = route_specialist(pair)
+    primary_tf = resolve_v3_entry_timeframe(
+        route.score_group,
+        str(pair.get("type") or pair.get("asset_type") or "other"),
+        horizon,
+    )
+    comparability = _v3_backtest_comparability()
+    if primary_tf is None:
+        return {
+            "error": "ENGINE_A_V3_INVALID_ENTRY_TIMEFRAME",
+            "engine": "ENGINE_A_V3",
+            "contractVersion": CONTRACT_VERSION,
+            "entryTimeframe": None,
+            "comparability": comparability,
+        }
     primary = list(candles.get(primary_tf) or [])
     min_index = max(80, int(start_index or 80))
     trades: list[dict] = []
@@ -355,7 +399,9 @@ def run_v3_backtest(
                 )
             except Exception:
                 _im_confirmation = None
-        if signal.decision != "TRADE" or not signal.qualified:
+        raw_qualified = signal.decision == "TRADE" and signal.qualified
+        signal_tier, _signal_tier_reason = _classify_backtest_signal(signal, pair)
+        if not raw_qualified or signal_tier != "trade":
             continue
         entry_bar = primary[index + 1]
         if signal.entryZone is None:
@@ -419,13 +465,13 @@ def run_v3_backtest(
             tp1=tp1,
             tp2=tp2,
         )
-        h4_prefix = prefix.get("H4") or []
+        primary_prefix = prefix.get(primary_tf) or []
         regime_label = "unknown"
-        if len(h4_prefix) >= 20:
-            h4_eff, _ = _efficiency_ratio(h4_prefix, 20)
-            if h4_eff >= 0.3:
+        if len(primary_prefix) >= 20:
+            primary_eff, _ = _efficiency_ratio(primary_prefix, 20)
+            if primary_eff >= 0.3:
                 regime_label = "trending"
-            elif h4_eff <= 0.2:
+            elif primary_eff <= 0.2:
                 regime_label = "ranging"
             else:
                 regime_label = "neutral"
@@ -455,6 +501,8 @@ def run_v3_backtest(
                 "regime": regime_label,
                 "efficiencyAtEntry": round(efficiency_at_entry, 4),
                 "signalId": signal.signalId,
+                "signalTier": signal_tier,
+                "signalTierReason": _signal_tier_reason,
                 "oos": True,
             }
         )
@@ -463,18 +511,29 @@ def run_v3_backtest(
         next_available_index = exit_index + 1
 
     result = _summarize(pair, horizon, trades, same_bar, oos_frac=_oos_frac)
+    result["entryTimeframe"] = primary_tf
+    result["comparability"] = comparability
     if collect_funnel:
         # Diagnostic: re-walk every bar (ignoring the post-trade cooldown) to attribute
         # why trades are scarce — data depth vs decision distribution vs which gate fires.
         decisions = {"TRADE": 0, "WATCH": 0, "NO_SIGNAL": 0}
         qualified = 0
+        raw_qualified = 0
+        scan_eligible = 0
         reasons: dict[str, int] = {}
+        scan_reasons: dict[str, int] = {}
         evaluated = 0
         for index in range(min_index, len(primary) - 1):
             prefix = _build_prefix_at(_primary_open_epochs[index])
             sig = evaluate_engine_a_v3(pair, prefix, horizon=horizon, registry=registry, snapshot_cache=snapshot_cache)
             decisions[sig.decision] = decisions.get(sig.decision, 0) + 1
             qualified += 1 if sig.qualified else 0
+            is_raw_qualified = sig.decision == "TRADE" and sig.qualified
+            raw_qualified += 1 if is_raw_qualified else 0
+            tier, tier_reason = _classify_backtest_signal(sig, pair)
+            scan_eligible += 1 if tier == "trade" else 0
+            if is_raw_qualified and tier != "trade":
+                scan_reasons[tier_reason] = scan_reasons.get(tier_reason, 0) + 1
             for reason in sig.rejectionReasons:
                 reasons[reason] = reasons.get(reason, 0) + 1
             evaluated += 1
@@ -485,7 +544,13 @@ def run_v3_backtest(
             "barsEvaluated": evaluated,
             "decisions": decisions,
             "qualified": qualified,
+            "rawQualified": raw_qualified,
+            "scanEligible": scan_eligible,
             "tradesTaken": len(trades),
             "topRejectionReasons": dict(sorted(reasons.items(), key=lambda kv: -kv[1])[:15]),
+            "topScanEligibilityReasons": dict(
+                sorted(scan_reasons.items(), key=lambda kv: -kv[1])[:15]
+            ),
+            "unreplayedScanGates": list(comparability["unreplayedScanGates"]),
         }
     return result

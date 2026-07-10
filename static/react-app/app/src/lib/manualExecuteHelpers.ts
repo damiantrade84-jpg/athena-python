@@ -459,17 +459,18 @@ function reviewContextFromAiReview(review: AIChartReviewResponse | null): {
 
 export function canExecuteEngineASignalTier(signal: EngineASignal | null): boolean {
   if (!signal) return false;
-  if (isEngineAV3Signal(signal)) {
-    const resolved = resolveEngineAV3Signal(signal);
-    return resolved.decision === 'TRADE'
-      && resolved.qualified === true
-      && resolved.engineATradeEnabled === true;
-  }
-  if (signal.engineATradeEnabled === false) return false;
   const tier = String(
     signal.signalTier || signal.scan_tier || signal.signalClass || '',
   ).toLowerCase();
   if (tier.includes('watch') || tier === 'skip' || tier === 'blocked') return false;
+  if (isEngineAV3Signal(signal)) {
+    const resolved = resolveEngineAV3Signal(signal);
+    return tier === 'trade'
+      && resolved.decision === 'TRADE'
+      && resolved.qualified === true
+      && resolved.engineATradeEnabled === true;
+  }
+  if (signal.engineATradeEnabled === false) return false;
   return tier === 'trade' || tier === 'criteria' || signal.trade === true;
 }
 

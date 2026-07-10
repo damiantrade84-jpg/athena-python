@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from engine_a_v3.levels import build_structural_levels
 from engine_a_v3.profile import baseline_profile
@@ -117,6 +121,67 @@ def test_setup_primary_tf_follows_execution_tf_override(monkeypatch):
     # detect_setup must not crash and must use the resolved frames internally.
     detect_setup(exotic, "intraday", candles)
     detect_setup(crypto, "intraday", candles)
+
+
+@pytest.mark.parametrize(
+    ("score_group", "asset_type", "horizon", "expected"),
+    [
+        ("forex_majors", "forex", "intraday", "H1"),
+        ("forex_exotics", "forex", "intraday", "H4"),
+        ("crypto_other", "crypto", "intraday", "H4"),
+    ],
+)
+def test_public_v3_entry_timeframe_resolver_is_group_aware(
+    score_group, asset_type, horizon, expected
+):
+    assert importlib.util.find_spec("engine_a_v3.timeframes") is not None
+    resolver = importlib.import_module(
+        "engine_a_v3.timeframes"
+    ).resolve_v3_entry_timeframe
+    assert resolver(score_group, asset_type, horizon) == expected
+
+
+def test_invalid_v3_entry_timeframe_override_fails_closed(monkeypatch):
+    from config import CONFIG
+
+    by_group = dict(
+        ((CONFIG.get("ENGINE_A_SCORING_PROFILE") or {}).get("BY_SCORE_GROUP") or {})
+    )
+    by_group["forex_exotics"] = {
+        **dict(by_group.get("forex_exotics") or {}),
+        "execution_tf": "M15",
+    }
+    monkeypatch.setitem(
+        CONFIG.setdefault("ENGINE_A_SCORING_PROFILE", {}), "BY_SCORE_GROUP", by_group
+    )
+
+    assert _resolve_v3_entry_tf("forex_exotics", "forex", "intraday") is None
+
+
+@pytest.mark.parametrize(
+    ("display", "symbol", "asset_type"),
+    [
+        ("USD/ZAR", "USDZAR", "forex"),
+        ("USD/MXN", "USDMXN", "forex"),
+        ("USD/BRL", "USDBRL", "forex"),
+        ("USD/INR", "USDINR", "forex"),
+        ("AAVE/USDT", "AAVEUSDT", "crypto"),
+        ("ALGO/USDT", "ALGOUSDT", "crypto"),
+        ("ATOM/USDT", "ATOMUSDT", "crypto"),
+        ("BCH/USDT", "BCHUSDT", "crypto"),
+        ("ETC/USDT", "ETCUSDT", "crypto"),
+        ("TRX/USDT", "TRXUSDT", "crypto"),
+        ("XLM/USDT", "XLMUSDT", "crypto"),
+        ("FIL/USDT", "FILUSDT", "crypto"),
+        ("ICP/USDT", "ICPUSDT", "crypto"),
+        ("HBAR/USDT", "HBARUSDT", "crypto"),
+        ("SEI/USDT", "SEIUSDT", "crypto"),
+    ],
+)
+def test_configured_h4_entry_pairs_route_to_h4(display, symbol, asset_type):
+    route = route_specialist({"display": display, "symbol": symbol, "type": asset_type})
+    assert route.score_group in {"forex_exotics", "crypto_other"}
+    assert _resolve_v3_entry_tf(route.score_group, asset_type, "intraday") == "H4"
 
 
 def test_setup_uses_group_ema_periods_forex_vs_crypto():

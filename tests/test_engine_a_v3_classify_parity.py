@@ -62,6 +62,34 @@ def test_direction_conflict_demotes_via_classify(monkeypatch):
     assert "conflict" in reason.lower() or "direction" in reason.lower()
 
 
+@pytest.mark.parametrize(
+    ("risk_field", "risk_payload", "expected_reason"),
+    [
+        (
+            "eventRisk",
+            {"hardBlock": True, "reason": "earnings_within_one_day"},
+            "earnings_within_one_day",
+        ),
+        (
+            "macroEventRisk",
+            {"blocked": True, "reason": "high_impact_macro"},
+            "high_impact_macro",
+        ),
+    ],
+)
+def test_v3_hard_risk_annotations_demote_trade(
+    monkeypatch, risk_field, risk_payload, expected_reason
+):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", False)
+    signal = _v3_trade_signal(**{risk_field: risk_payload})
+    pair = {"display": "EUR/USD", "type": "forex", "enabled": True}
+
+    tier, reason = classify_engine_a_v3_signal(signal, pair)
+
+    assert tier == "watchlist"
+    assert expected_reason in reason
+
+
 def test_scanner_v3_min_confidence_matches_scoring(monkeypatch):
     monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", True)
     monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_MIN_CONFIDENCE", 0.60)

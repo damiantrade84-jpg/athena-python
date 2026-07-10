@@ -5,6 +5,18 @@ from __future__ import annotations
 from typing import Any
 
 
+def _risk_reason(payload: dict[str, Any], fallback: str) -> str:
+    reason = str(payload.get("reason") or "").strip()
+    if reason:
+        return reason
+    reasons = payload.get("reasons")
+    if isinstance(reasons, (list, tuple)):
+        joined = "; ".join(str(value).strip() for value in reasons if str(value).strip())
+        if joined:
+            return joined
+    return fallback
+
+
 def classify_engine_a_v3_signal(signal: dict[str, Any], pair: dict[str, Any]) -> tuple[str, str]:
     """Return (tier, reason) where tier is 'trade' | 'watchlist' | 'skip'."""
     decision = str(signal.get("decision") or "NO_SIGNAL").upper()
@@ -24,6 +36,19 @@ def classify_engine_a_v3_signal(signal: dict[str, Any], pair: dict[str, Any]) ->
         return "watchlist", reason or "Exchange closed"
     if signal.get("directionConflicted") is True:
         return "watchlist", reason or "V3 direction conflicted with intermarket/BTC"
+
+    event_risk = signal.get("eventRisk")
+    if event_risk:
+        if not isinstance(event_risk, dict):
+            return "watchlist", "V3 event-risk payload invalid"
+        if bool(event_risk.get("hardBlock")):
+            return "watchlist", _risk_reason(event_risk, "V3 event-risk hard block")
+    macro_event_risk = signal.get("macroEventRisk")
+    if macro_event_risk:
+        if not isinstance(macro_event_risk, dict):
+            return "watchlist", "V3 macro-event-risk payload invalid"
+        if bool(macro_event_risk.get("blocked")):
+            return "watchlist", _risk_reason(macro_event_risk, "V3 macro-event hard block")
 
     try:
         from config import CONFIG

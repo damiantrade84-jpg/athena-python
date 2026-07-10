@@ -3219,43 +3219,9 @@ SHADOW_LEDGER_ENABLED: true
 
 # funding, session, h4_fib, h1_bb, weinstein, divergence
 
-# Valid filter keys: weinstein, session, regime_transition, obv, funding,
-
-# squeeze, mean_revert, btc_bias, divergence_warning
+# Per-pair filter overrides are unsupported in Engine A V3.
 
 PAIR_PROFILES:
-
-  XAU/USD:
-
-    disable_filters: [obv, session]
-
-  XAG/USD:
-
-    disable_filters: [obv, session]
-
-  LINK/USDT:
-
-    disable_filters: [mean_revert]
-
-  SUI/USDT:
-
-    disable_filters: [mean_revert]
-
-  APT/USDT:
-
-    disable_filters: [mean_revert]
-
-  LTC/USDT:
-
-    disable_filters: [mean_revert]
-
-  USD/CHF:
-
-    disable_filters: [obv]
-
-  USD/MXN:
-
-    disable_filters: [obv]
 
   # Currency basket indices — forex-grade scoring (audit: split from index_other).
   USDX:

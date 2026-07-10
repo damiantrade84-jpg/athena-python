@@ -1782,6 +1782,14 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     if effective_style not in ("swing", "intraday"):
         return {"error": f"Unsupported backtest style: {requested_style}"}
 
+    _v3_validation_mode = str(validation_mode or "standard").strip().lower()
+    if _v3_validation_mode not in {"", "standard"}:
+        return {
+            "error": "ENGINE_A_V3_VALIDATION_MODE_UNSUPPORTED",
+            "status": 422,
+            "validation_mode": _v3_validation_mode,
+        }
+
     log.info(
         f"[BT] {pair['display']} fetching data... style={requested_style}->{effective_style}"
     )

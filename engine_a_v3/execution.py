@@ -119,6 +119,11 @@ def _parse_timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _has_trade_scan_tier(signal: dict[str, Any]) -> bool:
+    tier = str(signal.get("signalTier") or signal.get("scan_tier") or "").strip().lower()
+    return tier in {"trade", "criteria"}
+
+
 def verify_refreshed_signal(
     original: dict[str, Any],
     refreshed: dict[str, Any] | None,
@@ -128,6 +133,10 @@ def verify_refreshed_signal(
     if not is_engine_a_v3_signal(original) or not is_engine_a_v3_signal(refreshed):
         return False, "ENGINE_A_V3_REFRESH_CONTRACT_INVALID"
     assert refreshed is not None
+    if not _has_trade_scan_tier(original):
+        return False, "ENGINE_A_V3_REFRESH_ORIGINAL_SCAN_TIER_NOT_TRADE"
+    if not _has_trade_scan_tier(refreshed):
+        return False, "ENGINE_A_V3_REFRESH_SCAN_TIER_NOT_TRADE"
     for field in ("setupId", "direction", "horizon"):
         if str(refreshed.get(field) or "") != str(original.get(field) or ""):
             return False, f"ENGINE_A_V3_REFRESH_{field.upper()}_CHANGED"

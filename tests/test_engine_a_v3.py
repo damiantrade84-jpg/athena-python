@@ -262,6 +262,19 @@ def test_contract_evaluation_covers_all_groups_and_both_horizons(tmp_path):
             assert signal.scoringProfile is not None
 
 
+def test_v3_signal_serializes_resolved_entry_timeframe(tmp_path):
+    pair = REPRESENTATIVE_PAIRS["forex_exotics"]
+    signal = evaluate_engine_a_v3(
+        pair,
+        _trend_pullback_candles(),
+        horizon="intraday",
+        registry=_registry(tmp_path, pair, "intraday"),
+    )
+
+    assert getattr(signal, "entryTimeframe", None) == "H4"
+    assert signal.to_dict().get("entryTimeframe") == "H4"
+
+
 def test_demo_research_missing_promotion_artifact_keeps_trade_signal(monkeypatch, tmp_path):
     from config import CONFIG
 

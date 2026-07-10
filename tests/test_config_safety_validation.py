@@ -11,8 +11,10 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import (
+    CONFIG,
     _REAL_ORDER_CONFIRM_ENV,
     _REAL_ORDER_CONFIRM_TOKEN,
+    _fatal_config_validation,
     _unknown_top_level_config_keys,
     _validate_critical_safety_config,
     ConfigValidationError,
@@ -28,11 +30,19 @@ def _base_safety_config() -> dict:
         },
         "EXECUTOR_MODE": "paper",
         "EXECUTION_ENABLED": True,
+        "EXECUTION_SINGLE_LEG_ONLY": True,
         "AUTO_EXECUTE": False,
         "AUTO_TRADE_ENABLED": False,
         "RISK_ENGINE_ENABLED": True,
         "MT5_EXECUTION_ENABLED": True,
         "BYBIT_EXECUTION_ENABLED": True,
+        "FX_FACTOR_SCANNER_ENABLED": True,
+        "FX_FACTOR_EXECUTION_ENABLED": True,
+        "FX_FACTOR_ALLOW_LIVE_EXECUTION": True,
+        "FX_FACTOR_REQUIRE_VALIDATION_FOR_EXECUTION": True,
+        "FX_FACTOR_STRICT_DATA_DEFAULT": True,
+        "FX_FACTOR_SCAN_INCLUDE_BLOCKED_DEFAULT": True,
+        "FX_FACTOR_SCAN_REFRESH_DECISIONS_DEFAULT": True,
         "BYBIT_LEVERAGE": 1,
         "RISK_PCT": 0.01,
         "MAX_RISK_PER_TRADE": 0.03,
@@ -104,3 +114,24 @@ def test_drawdown_stop_enabled_false_rejected():
 
     with pytest.raises(ConfigValidationError):
         _validate_critical_safety_config(cfg, env={})
+
+
+def test_pair_profile_disable_filters_is_fatally_rejected(monkeypatch):
+    import config as config_module
+
+    cfg = copy.deepcopy(CONFIG)
+    cfg["PAIR_PROFILES"] = {"USD/MXN": {"disable_filters": ["obv"]}}
+    messages: list[str] = []
+    monkeypatch.setattr(
+        config_module.log,
+        "critical",
+        lambda template, *args: messages.append(template % args if args else template),
+    )
+
+    with pytest.raises(ConfigValidationError):
+        _fatal_config_validation(cfg)
+
+    assert any(
+        "PAIR_PROFILES['USD/MXN'].disable_filters is inactive in Engine A V3" in message
+        for message in messages
+    )

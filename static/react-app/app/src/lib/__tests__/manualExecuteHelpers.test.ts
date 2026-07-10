@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   aiLevelOverrideFromReview,
   buildQuickExecutePayload,
+  canExecuteEngineASignalTier,
   canExecuteEngineBSignal,
   computeLevelOverrideRR,
   engineBExecuteBlockReason,
@@ -143,5 +144,55 @@ describe('engine B execute gating', () => {
     } as EngineASignal;
     expect(canExecuteEngineBSignal(actionable)).toBe(true);
     expect(engineBExecuteBlockReason(actionable)).toBeNull();
+  });
+});
+
+describe('Engine A V3 scanner tier gating', () => {
+  it('blocks raw V3 TRADE fields when the scanner tier is watchlist', () => {
+    const signal = {
+      engine: 'ENGINE_A_V3',
+      contractVersion: '3.1.0',
+      decision: 'TRADE',
+      qualified: true,
+      engineATradeEnabled: true,
+      signalTier: 'watchlist',
+    } as EngineASignal;
+
+    expect(canExecuteEngineASignalTier(signal)).toBe(false);
+  });
+
+  it('routes a V3 chart review to the signal entry timeframe', async () => {
+    const panel = await import('../../components/panels/SignalsPanel') as {
+      preferredTvChartTf?: (signal: EngineASignal) => string;
+    };
+    const signal = {
+      engine: 'ENGINE_A_V3',
+      contractVersion: '3.1.0',
+      entryTimeframe: 'H4',
+      style: 'intraday',
+    } as EngineASignal;
+
+    expect(typeof panel.preferredTvChartTf).toBe('function');
+    expect(panel.preferredTvChartTf?.(signal)).toBe('H4');
+  });
+
+  it('blocks a V3 Signals-panel row when its scanner tier is missing', async () => {
+    const panel = await import('../../components/panels/SignalsPanel') as {
+      canExecuteRow?: (row: unknown, feed?: 'A' | 'B') => boolean;
+    };
+    const row = {
+      engines: new Set(['A']),
+      signal: {
+        engine: 'ENGINE_A_V3',
+        contractVersion: '3.1.0',
+        decision: 'TRADE',
+        qualified: true,
+        engineATradeEnabled: true,
+        trade: true,
+      },
+    };
+
+    expect(typeof panel.canExecuteRow).toBe('function');
+    expect(panel.canExecuteRow?.(row)).toBe(false);
   });
 });
