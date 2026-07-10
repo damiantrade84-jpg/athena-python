@@ -4975,7 +4975,25 @@ TIMED_EXIT:
   # clear the fixed broker TP so the trail is the only profit-side exit.
   # Without this the original TP caps the winner before the trail can run.
   # Set to false to revert to legacy behavior (fixed TP stays as a hard cap).
+  # A failed/skipped broker clear is retried every ratchet tick until the
+  # broker confirms it (2026-07-10; previously one-shot — a single failed
+  # call left the fixed TP silently capping the runner).
   trail_clear_broker_tp_on_activation: true
+
+  # ── Fakeout hardening (2026-07-10) ───────────────────────────────────────
+  # The broker SL used to ratchet exactly onto the chandelier line, so a
+  # single stop-run wick executed the hard stop before any software
+  # confirmation could run. The broker SL now trails a wick-buffer beyond the
+  # software line — buffer = frac x (trail_atr_mult x ATR), i.e. 0.25 of the
+  # rope — and serves purely as disconnect/gap protection. Software closes
+  # still fire at the true chandelier line. 0 = legacy (SL on the line).
+  trail_broker_sl_buffer_frac_of_rope: 0.25
+
+  # Software closes (trail breach, peak give-back, profit roundtrip) must
+  # hold for this many consecutive monitor ticks (~30s apart) before the
+  # position is closed. Filters single-tick spike/wick fakeouts on both
+  # venues. 1 = legacy close-on-first-tick. Clamped to [1, 5].
+  trail_close_confirm_ticks: 2
 
   trail_lookback: 14           # bars of execution TF for highest_high/lowest_low lookback
 

@@ -1,8 +1,11 @@
 """Targeted tests for the broker-TP-clear signal emitted by _evaluate_trail.
 
-When the chandelier first activates on a ticket, _evaluate_trail must emit
-clear_broker_tp=True exactly once so the handler can drop the fixed broker
-TP. Subsequent ratchet ticks must not re-clear (one-shot per ticket).
+When the chandelier first activates on a ticket, _evaluate_trail emits
+clear_broker_tp=True so the handler can drop the fixed broker TP. The flag
+keeps re-emitting until the handler confirms the broker call succeeded and
+marks the state via _mark_tp_cleared (2026-07-10 retry contract — previously
+one-shot at evaluate time, which let a single failed broker call leave the
+fixed TP silently capping the runner).
 """
 
 import types
@@ -83,7 +86,7 @@ class TestClearBrokerTpSignal:
         assert res["action"] == "ratchet"
         assert res["clear_broker_tp"] is True
 
-    def test_subsequent_ratchets_do_not_reclear(self, monkeypatch):
+    def test_clear_reemits_until_handler_marks_success(self, monkeypatch):
         monkeypatch.setattr(tem, "_compute_chandelier_trail", lambda *a, **kw: 95.0)
         tcfg = _cfg()
         row = {"pair": "EURUSD", "ticket": 2, "audit_id": "tp2"}
@@ -91,10 +94,17 @@ class TestClearBrokerTpSignal:
         first = _evaluate_trail(row, "intraday", "LONG", 100.0, 90.0, 112.0, tcfg,
                                 state_key="tp_repeat", venue="mt5")
         assert first["clear_broker_tp"] is True
+        # Handler has not confirmed the broker call — the clear must retry.
         second = _evaluate_trail(row, "intraday", "LONG", 100.0, 90.0, 114.0, tcfg,
                                  state_key="tp_repeat", venue="mt5")
         assert second["action"] == "ratchet"
-        assert second["clear_broker_tp"] is False
+        assert second["clear_broker_tp"] is True
+        # Broker success confirmed — no further clears.
+        tem._mark_tp_cleared("tp_repeat")
+        third = _evaluate_trail(row, "intraday", "LONG", 100.0, 90.0, 116.0, tcfg,
+                                state_key="tp_repeat", venue="mt5")
+        assert third["action"] == "ratchet"
+        assert third["clear_broker_tp"] is False
 
     def test_below_activation_does_not_emit_clear(self, monkeypatch):
         # Don't even reach activation_r — must not emit clear.

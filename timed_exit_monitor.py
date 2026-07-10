@@ -46,9 +46,20 @@ _trail_state: dict = {}
 # Peak R-multiple reached per ticket while chandelier is active. Used by the
 # give-back close to fire when current_r drops below peak by giveback_r.
 _peak_r_state: dict[str, float] = {}
-# Set of state_keys for which the fixed broker TP has already been cleared
-# (one-shot per ticket — avoids re-sending clear-TP on every ratchet tick).
+# Set of state_keys whose fixed broker TP is confirmed cleared. The venue
+# handlers mark this only after a successful broker call, so a failed or
+# skipped clear is retried on the next ratchet tick instead of silently
+# leaving the fixed TP capping the runner.
 _tp_cleared_state: set[str] = set()
+# Last chandelier ATR per state_key (in-memory only). Used to offset the
+# broker SL a wick-buffer beyond the software trail line; when unknown
+# (e.g. right after a restart) the broker SL falls back to the raw trail
+# line — the legacy, tighter, fail-safe placement.
+_trail_atr_state: dict[str, float] = {}
+# Pending software-close confirmations: state_key -> {"reason", "count"}.
+# A spike filter: a close condition must hold for trail_close_confirm_ticks
+# consecutive monitor ticks before the position is actually closed.
+_close_pending_state: dict[str, dict] = {}
 # Engine A/B style=scalp: last applied lock_r tier (0.0 = fallback BE only). Upgrades only.
 _scalp_profit_lock_state: dict[str, float] = {}
 # Per-process flag: True once the in-memory state has been hydrated from SQLite.
@@ -88,6 +99,15 @@ _DEFAULT_CFG: dict = {
     # (fixed trail_giveback_r then applies). Enabled via config.yaml.
     "trail_giveback_frac_of_peak": {"scalp": 0.0, "intraday": 0.0, "swing": 0.0},
     "trail_giveback_min_r": 0.30,
+    # Broker SL wick buffer: fraction of the chandelier rope (mult * ATR) the
+    # broker SL sits beyond the software trail line. 0 = broker SL exactly on
+    # the line (legacy — a single wick through the line fires the hard stop
+    # before any software confirmation can run).
+    "trail_broker_sl_buffer_frac_of_rope": 0.0,
+    # Consecutive monitor ticks a software close condition (trail breach,
+    # peak give-back, profit roundtrip) must hold before closing. 1 = legacy
+    # close-on-first-tick.
+    "trail_close_confirm_ticks": 1,
     "pre_activation_profit_protect_enabled": False,
     "pre_activation_profit_arm_r": {"scalp": 0.20, "intraday": 0.25, "swing": 0.35},
     "pre_activation_profit_close_r": {"scalp": 0.0, "intraday": 0.0, "swing": 0.0},
@@ -743,6 +763,23 @@ def _get_timed_cfg(config_fn) -> dict:
     merged["trail_clear_broker_tp_on_activation"] = bool(
         raw.get("trail_clear_broker_tp_on_activation", True)
     )
+    try:
+        _buf_frac = float(
+            raw.get(
+                "trail_broker_sl_buffer_frac_of_rope",
+                _DEFAULT_CFG["trail_broker_sl_buffer_frac_of_rope"],
+            )
+        )
+    except (TypeError, ValueError):
+        _buf_frac = 0.0
+    merged["trail_broker_sl_buffer_frac_of_rope"] = min(max(_buf_frac, 0.0), 0.9)
+    try:
+        _confirm_ticks = int(
+            raw.get("trail_close_confirm_ticks", _DEFAULT_CFG["trail_close_confirm_ticks"])
+        )
+    except (TypeError, ValueError):
+        _confirm_ticks = 1
+    merged["trail_close_confirm_ticks"] = min(max(_confirm_ticks, 1), 5)
     merged["trail_lookback"] = int(raw.get("trail_lookback", _DEFAULT_CFG["trail_lookback"]))
     trail_tf_raw = raw.get("trail_timeframe") or {}
     merged["trail_timeframe"] = {
@@ -1427,6 +1464,7 @@ def _compute_chandelier_trail(
     atr_val = next((v for v in reversed(atr_series) if v is not None), None)
     if atr_val is None or atr_val <= 0:
         return _fail("ATR not computable")
+    _trail_atr_state[ticket_key] = float(atr_val)
 
     tf_minutes = _timeframe_minutes(tf)
     try:
@@ -1602,6 +1640,12 @@ def _evaluate_trail(
                 and (peak_r_pre - current_r) >= giveback_r_pre
             )
             if current_r < activation_r and (roundtrip_close or giveback_close_pre):
+                if not _close_confirmed(state_key, "profit_roundtrip", tcfg):
+                    return {
+                        "action": "none",
+                        "reason": "profit_roundtrip_pending_confirm",
+                        "current_r": current_r,
+                    }
                 log.info(
                     f"[TIMED_EXIT] PROFIT ROUNDTRIP close: {pair} style={style} dir={direction} "
                     f"peak_r={peak_r_pre:.2f} current_r={current_r:.2f} "
@@ -1658,6 +1702,12 @@ def _evaluate_trail(
         ):
             giveback_r = _giveback_budget_r_for(tcfg, style, venue, peak_watch)
             if giveback_r > 0 and (peak_watch - current_r) >= giveback_r:
+                if not _close_confirmed(state_key, "peak_giveback", tcfg):
+                    return {
+                        "action": "none",
+                        "reason": "peak_giveback_pending_confirm",
+                        "current_r": current_r,
+                    }
                 log.info(
                     f"[TIMED_EXIT] PEAK GIVE-BACK close (below activation): {pair} "
                     f"style={style} dir={direction} peak_r={peak_watch:.2f} "
@@ -1677,6 +1727,8 @@ def _evaluate_trail(
                 f"current_r={current_r:.2f} peak_r={peak_watch} activation_r={activation_r:.2f} "
                 f"mode={trail_mode}"
             )
+        # No close condition this tick — reset any pending close confirmation.
+        _clear_close_pending(state_key)
         return {"action": "none", "reason": "below_activation", "current_r": current_r}
 
     if trail_mode == "pre_activation_only":
@@ -1732,18 +1784,32 @@ def _evaluate_trail(
         or (direction == "SHORT" and cur_price > trail_level)
     )
 
-    # Whether to signal the broker TP drop. One-shot per ticket; gated by config.
+    # Whether to signal the broker TP drop. Gated by config; the handler marks
+    # _tp_cleared_state only after the broker call is confirmed, so a failed
+    # or skipped clear is re-emitted (retried) on subsequent ticks.
     clear_broker_tp = bool(
         tcfg.get("trail_clear_broker_tp_on_activation", True)
         and state_key not in _tp_cleared_state
     )
-    if clear_broker_tp:
-        # Mark as cleared *before* returning so a subsequent tick in the same
-        # process doesn't re-send the clear if the handler ignored it.
-        _tp_cleared_state.add(state_key)
-        _persist_tp_cleared(state_key)
+
+    # Broker SL target: software line minus a wick buffer (falls back to the
+    # line itself when disabled or ATR unknown). Software closes still compare
+    # cur_price against the true trail_level.
+    broker_sl = _broker_sl_for_trail(
+        trail_level, direction, state_key, tcfg, style, venue
+    )
 
     if giveback_close:
+        if not _close_confirmed(state_key, "peak_giveback", tcfg):
+            return {
+                "action": "ratchet",
+                "new_sl": broker_sl,
+                "trail_level": trail_level,
+                "current_r": current_r,
+                "peak_r": peak_r,
+                "clear_broker_tp": clear_broker_tp,
+                "reason": "peak_giveback_pending_confirm",
+            }
         log.info(
             f"[TIMED_EXIT] PEAK GIVE-BACK close: {pair} style={style} dir={direction} "
             f"peak_r={peak_r:.2f} current_r={current_r:.2f} giveback_r={giveback_r:.2f}"
@@ -1758,9 +1824,11 @@ def _evaluate_trail(
         }
 
     if not breached:
+        # No close condition this tick — reset any pending close confirmation.
+        _clear_close_pending(state_key)
         return {
             "action": "ratchet",
-            "new_sl": trail_level,
+            "new_sl": broker_sl,
             "trail_level": trail_level,
             "current_r": current_r,
             "peak_r": peak_r,
@@ -1776,12 +1844,23 @@ def _evaluate_trail(
         # Breach without confirmation — keep ratcheting; do not close.
         return {
             "action": "ratchet",
-            "new_sl": trail_level,
+            "new_sl": broker_sl,
             "trail_level": trail_level,
             "current_r": current_r,
             "peak_r": peak_r,
             "clear_broker_tp": clear_broker_tp,
             "reason": "breach_no_confirm",
+        }
+
+    if not _close_confirmed(state_key, "breach_confirmed", tcfg):
+        return {
+            "action": "ratchet",
+            "new_sl": broker_sl,
+            "trail_level": trail_level,
+            "current_r": current_r,
+            "peak_r": peak_r,
+            "clear_broker_tp": clear_broker_tp,
+            "reason": "breach_pending_confirm",
         }
 
     log.info(
@@ -1795,6 +1874,86 @@ def _evaluate_trail(
         "peak_r": peak_r,
         "reason": "breach_confirmed",
     }
+
+
+def _close_confirmed(state_key: str, reason: str, tcfg: dict) -> bool:
+    """Spike filter for software closes.
+
+    Requires the close condition (identified by ``reason``) to hold for
+    trail_close_confirm_ticks consecutive monitor ticks. Default 1 keeps the
+    legacy close-on-first-tick behavior. A different reason on the next tick
+    resets the counter; the broker SL keeps protecting while a close is
+    pending.
+    """
+    ticks = int(tcfg.get("trail_close_confirm_ticks", 1) or 1)
+    if ticks <= 1:
+        _close_pending_state.pop(state_key, None)
+        return True
+    pend = _close_pending_state.get(state_key)
+    if pend and pend.get("reason") == reason:
+        pend["count"] = int(pend.get("count", 0)) + 1
+    else:
+        pend = {"reason": reason, "count": 1}
+        _close_pending_state[state_key] = pend
+    if pend["count"] >= ticks:
+        _close_pending_state.pop(state_key, None)
+        return True
+    log.info(
+        f"[TIMED_EXIT] close pending confirmation ({reason}): key={state_key} "
+        f"tick {pend['count']}/{ticks}"
+    )
+    return False
+
+
+def _clear_close_pending(state_key: str) -> None:
+    _close_pending_state.pop(state_key, None)
+
+
+def _broker_sl_for_trail(
+    trail_level: float,
+    direction: str,
+    state_key: str,
+    tcfg: dict,
+    style: str,
+    venue: str | None,
+) -> float:
+    """Broker SL target for a trail ratchet: the software line minus a wick buffer.
+
+    Buffer = frac_of_rope * (trail ATR mult * last chandelier ATR), placed on
+    the far side of the trail line so stop-run wicks through the line hit the
+    software close (which can require confirmation) instead of the hard broker
+    stop. Falls back to the raw trail line when the buffer is disabled or no
+    ATR is known yet (legacy, tighter, fail-safe).
+    """
+    frac = _safe_float(tcfg.get("trail_broker_sl_buffer_frac_of_rope", 0.0))
+    atr = _safe_float(_trail_atr_state.get(state_key))
+    if frac <= 0 or atr <= 0:
+        return trail_level
+    buf = frac * _trail_atr_mult_for(tcfg, style, venue) * atr
+    if str(direction).upper() == "LONG":
+        return trail_level - buf
+    return trail_level + buf
+
+
+def _mark_tp_cleared(state_key: str) -> None:
+    """Record a confirmed broker-TP clear (memory + db)."""
+    _tp_cleared_state.add(state_key)
+    _persist_tp_cleared(state_key)
+
+
+def _tp_clear_succeeded(res: dict) -> bool:
+    """True when a clear_tp broker call left the position with no fixed TP.
+
+    MT5 reports ``skipped=True, reason='no change'`` when SL and TP are already
+    at target (TP already 0) — that counts as cleared. Bybit's skipped results
+    (``sl_not_tighter`` / ``sl_not_protective``) mean the request was never
+    sent, so the TP survives and the clear must be retried.
+    """
+    if not res.get("success"):
+        return False
+    if not res.get("skipped"):
+        return True
+    return str(res.get("reason") or "") == "no change"
 
 
 def _should_trail_close(
@@ -2058,11 +2217,20 @@ def _handle_mt5_row(
                     sl=new_sl if sl_tightens else None,
                     clear_tp=clear_tp,
                 )
-                if clear_tp and ratchet_res.get("success"):
-                    log.info(
-                        f"[TIMED_EXIT] Broker TP cleared (chandelier active): "
-                        f"{row['pair']} ticket={ticket} style={style} R={cr:.2f}"
-                    )
+                if clear_tp:
+                    if _tp_clear_succeeded(ratchet_res):
+                        _mark_tp_cleared(state_key)
+                        log.info(
+                            f"[TIMED_EXIT] Broker TP cleared (chandelier active): "
+                            f"{row['pair']} ticket={ticket} style={style} R={cr:.2f}"
+                        )
+                    else:
+                        log.warning(
+                            f"[TIMED_EXIT] Broker TP clear not confirmed — will retry: "
+                            f"{row['pair']} ticket={ticket} style={style} "
+                            f"error={ratchet_res.get('error')!r} "
+                            f"reason={ratchet_res.get('reason')!r}"
+                        )
                 _log_trail_ratchet_broker_outcome(
                     venue="MT5",
                     pair=str(row.get("pair") or ""),
@@ -2493,11 +2661,20 @@ def _handle_bybit_row(
                     entry=entry,
                     clear_tp=clear_tp,
                 )
-                if clear_tp and ratchet_res.get("success"):
-                    log.info(
-                        f"[TIMED_EXIT] Broker TP cleared (chandelier active): "
-                        f"{pair} symbol={ccxt_sym} style={style} R={cr:.2f}"
-                    )
+                if clear_tp:
+                    if _tp_clear_succeeded(ratchet_res):
+                        _mark_tp_cleared(state_key)
+                        log.info(
+                            f"[TIMED_EXIT] Broker TP cleared (chandelier active): "
+                            f"{pair} symbol={ccxt_sym} style={style} R={cr:.2f}"
+                        )
+                    else:
+                        log.warning(
+                            f"[TIMED_EXIT] Broker TP clear not confirmed — will retry: "
+                            f"{pair} symbol={ccxt_sym} style={style} "
+                            f"error={ratchet_res.get('error')!r} "
+                            f"reason={ratchet_res.get('reason')!r}"
+                        )
                 _log_trail_ratchet_broker_outcome(
                     venue="BYBIT",
                     pair=str(pair),
