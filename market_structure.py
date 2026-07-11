@@ -2308,6 +2308,13 @@ def resolve_engine_b_execution_levels(
         _atr_reject = "no_atr_config_or_zero_atr"
 
     _enforce_max_sl = bool(config.CONFIG.get("ENGINE_B_ENFORCE_MAX_SL_PCT", True))
+    try:
+        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+        if tp_sl_rr_gates_disabled(config.CONFIG):
+            _enforce_max_sl = False
+    except Exception:
+        pass
     _max_sl_pct = None
     _max_sl_source = None
     if _enforce_max_sl and _entry > 0:
@@ -2783,6 +2790,15 @@ def resolve_engine_b_execution_levels(
     )
     _rr_required = _safe_float(min_rr)
     _rr_passed = bool(_exec_valid and (_rr_required is None or _exec_rr >= _rr_required))
+    try:
+        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+        if tp_sl_rr_gates_disabled(config.CONFIG) and _exec_sl is not None and _exec_tp is not None:
+            _exec_valid = True
+            _exec_reject = None
+            _rr_passed = True
+    except Exception:
+        pass
     _level_cohort = engine_b_level_cohort(_level_mode)
 
     return {
@@ -5384,6 +5400,17 @@ class NakedEngine:
         rr = _exec_lvl["rr_used_for_gate"]
         rr_ok = bool(_exec_lvl["execution_levels_valid"]) and rr >= min_rr
 
+        try:
+            from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+            if tp_sl_rr_gates_disabled(
+                config.CONFIG,
+                historical=bool(res.get("historical_mode")),
+            ):
+                rr_ok = _exec_lvl.get("execution_sl") is not None and _exec_lvl.get("execution_tp") is not None
+        except Exception:
+            pass
+
         # FIX 7: Apply contextual room gate after rr is computed
         _effective_min_room_atr = _get_min_room_atr(rr, bool(res.get("bos_confirmed")), asset_type_lower, exec_style)
         if config.CONFIG.get("ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE", True):
@@ -5602,6 +5629,18 @@ class NakedEngine:
             if rr_space_gate_enabled
             else (room_ok or _scale_out_space_ok)
         ) and (_tp1_path_clear or not _tp1_path_gate_enabled)
+
+        try:
+            from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+            if tp_sl_rr_gates_disabled(
+                config.CONFIG,
+                historical=bool(res.get("historical_mode")),
+            ):
+                space_gate_ok = True
+                room_ok = True
+        except Exception:
+            pass
 
         # Stage 2.8: Optional volume confirmation gate.
         # Contributes to gate_score (+1 bonus) but is NOT mandatory for pass.

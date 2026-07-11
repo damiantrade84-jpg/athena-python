@@ -1207,6 +1207,13 @@ def _sync_engine_b_execution_price(sig: dict, engine_b: dict | None = None) -> N
 
 def _engine_b_execution_sl_exceeds_max(sig: dict, sl: float) -> bool:
     try:
+        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+        if tp_sl_rr_gates_disabled(rt().CONFIG, signal=sig):
+            return False
+    except Exception:
+        pass
+    try:
         entry = float(sig.get("price") or sig.get("entry") or 0)
         sl_f = float(sl)
     except (TypeError, ValueError):
@@ -1260,31 +1267,42 @@ def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) ->
     levels = _extract_engine_b_execution_levels(sig, engine_b)
     if not levels:
         return False
-    if not _engine_b_execution_tp_side_ok(sig, levels["tp1"]) or not (
-        levels["tp2"] == levels["tp1"]
-        or _engine_b_execution_tp_side_ok(sig, levels["tp2"])
+    _tp_sl_rr_relaxed = False
+    try:
+        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+        _tp_sl_rr_relaxed = tp_sl_rr_gates_disabled(rt().CONFIG, signal=sig)
+    except Exception:
+        _tp_sl_rr_relaxed = False
+    if not _tp_sl_rr_relaxed and (
+        not _engine_b_execution_tp_side_ok(sig, levels["tp1"])
+        or not (
+            levels["tp2"] == levels["tp1"]
+            or _engine_b_execution_tp_side_ok(sig, levels["tp2"])
+        )
     ):
         sig["_engine_b_apply_error"] = "INVALID_TP_SIDE"
         return False
-    try:
-        from risk_engine import validate_tp_exchange_bounds
+    if not _tp_sl_rr_relaxed:
+        try:
+            from risk_engine import validate_tp_exchange_bounds
 
-        _entry_px = float(sig.get("price") or sig.get("entry") or 0)
-        _asset = str(sig.get("type") or sig.get("asset_type") or "").lower()
-        _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
-            _entry_px, levels["tp1"], _asset, rt().CONFIG
-        )
-        # Scale-out plans carry a farther runner TP2 — it must clear exchange
-        # bounds too (it is the level the position TP is actually parked at).
-        if _bounds_ok and levels["tp2"] != levels["tp1"]:
+            _entry_px = float(sig.get("price") or sig.get("entry") or 0)
+            _asset = str(sig.get("type") or sig.get("asset_type") or "").lower()
             _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
-                _entry_px, levels["tp2"], _asset, rt().CONFIG
+                _entry_px, levels["tp1"], _asset, rt().CONFIG
             )
-    except Exception:
-        _bounds_ok, _bounds_err = True, None
-    if not _bounds_ok:
-        sig["_engine_b_apply_error"] = "INVALID_TP_BOUNDS"
-        return False
+            # Scale-out plans carry a farther runner TP2 — it must clear exchange
+            # bounds too (it is the level the position TP is actually parked at).
+            if _bounds_ok and levels["tp2"] != levels["tp1"]:
+                _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
+                    _entry_px, levels["tp2"], _asset, rt().CONFIG
+                )
+        except Exception:
+            _bounds_ok, _bounds_err = True, None
+        if not _bounds_ok:
+            sig["_engine_b_apply_error"] = "INVALID_TP_BOUNDS"
+            return False
     if _engine_b_execution_sl_exceeds_max(sig, levels["sl"]):
         sig["_engine_b_apply_error"] = "MAX_SL_EXCEEDED"
         return False

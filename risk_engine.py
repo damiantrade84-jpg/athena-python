@@ -103,6 +103,13 @@ def clamp_execution_sl_to_max_sl_pct(signal: dict, cfg: dict | None = None) -> b
     signal = signal or {}
     cfg = cfg or CONFIG
     try:
+        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+        if tp_sl_rr_gates_disabled(cfg, signal=signal):
+            return False
+    except Exception:
+        pass
+    try:
         entry = float(signal.get("price") or 0.0)
         sl = float(signal.get("sl") or 0.0)
     except (TypeError, ValueError):
@@ -1028,6 +1035,13 @@ def validate_tp_exchange_bounds(
     """Fail closed when TP violates Bybit absolute floor or max distance caps."""
     cfg = cfg or CONFIG
     try:
+        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+        if tp_sl_rr_gates_disabled(cfg):
+            return True, None
+    except Exception:
+        pass
+    try:
         entry_f = float(entry)
         tp_f = float(tp)
     except (TypeError, ValueError):
@@ -1376,36 +1390,45 @@ def risk_check(
     # ── Check 5: Calculate position size ────────────────────────────────────
     entry = float(signal.get("price") or signal.get("livePrice") or 0)
     sl = float(signal.get("sl") or 0)
+    _tp_sl_rr_relaxed = False
+    try:
+        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+        _tp_sl_rr_relaxed = tp_sl_rr_gates_disabled(CONFIG, signal=signal)
+    except Exception:
+        _tp_sl_rr_relaxed = False
     if clamp_execution_sl_to_max_sl_pct(signal, CONFIG):
         sl = float(signal.get("sl") or 0)
     if not entry or not sl or entry == sl:
         log.warning(f"{prefix} REJECTED: invalid entry={entry} or sl={sl}")
         return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
-    if direction == "LONG" and sl >= entry:
-        log.warning(f"{prefix} REJECTED: LONG stop {sl} must be below entry {entry}")
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
-    if direction == "SHORT" and sl <= entry:
-        log.warning(f"{prefix} REJECTED: SHORT stop {sl} must be above entry {entry}")
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
+    if not _tp_sl_rr_relaxed:
+        if direction == "LONG" and sl >= entry:
+            log.warning(f"{prefix} REJECTED: LONG stop {sl} must be below entry {entry}")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
+        if direction == "SHORT" and sl <= entry:
+            log.warning(f"{prefix} REJECTED: SHORT stop {sl} must be above entry {entry}")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
 
     # TP validation
     tp1 = float(signal.get("tp1") or 0)
-    if direction == "LONG" and tp1 > 0 and tp1 <= entry:
-        log.warning(f"{prefix} REJECTED: LONG tp1 {tp1} must be above entry {entry}")
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
-    if direction == "SHORT" and tp1 > 0 and tp1 >= entry:
-        log.warning(f"{prefix} REJECTED: SHORT tp1 {tp1} must be below entry {entry}")
-        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
+    if not _tp_sl_rr_relaxed:
+        if direction == "LONG" and tp1 > 0 and tp1 <= entry:
+            log.warning(f"{prefix} REJECTED: LONG tp1 {tp1} must be above entry {entry}")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
+        if direction == "SHORT" and tp1 > 0 and tp1 >= entry:
+            log.warning(f"{prefix} REJECTED: SHORT tp1 {tp1} must be below entry {entry}")
+            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "INVALID_LEVELS")
 
-    if tp1 > 0:
-        _tp_bounds_ok, _tp_bounds_err = validate_tp_exchange_bounds(
-            entry, tp1, asset_type, CONFIG
-        )
-        if not _tp_bounds_ok:
-            log.warning(f"{prefix} REJECTED: {_tp_bounds_err}")
-            return RiskApproval(
-                False, 0.0, 0.0, 0.0, 0.0, dd, _tp_bounds_err or "INVALID_LEVELS"
+        if tp1 > 0:
+            _tp_bounds_ok, _tp_bounds_err = validate_tp_exchange_bounds(
+                entry, tp1, asset_type, CONFIG
             )
+            if not _tp_bounds_ok:
+                log.warning(f"{prefix} REJECTED: {_tp_bounds_err}")
+                return RiskApproval(
+                    False, 0.0, 0.0, 0.0, 0.0, dd, _tp_bounds_err or "INVALID_LEVELS"
+                )
 
     # Engine C / consensus minimum R:R from geometry (defense in depth)
     try:
@@ -1445,7 +1468,7 @@ def risk_check(
     # signal, not only consensus/Engine B. Pure Engine A signals (no verdict,
     # no components) previously bypassed this and could execute with RR < 1
     # (SL further than TP) as long as SL/TP were on the correct side.
-    if _min_exec_rr > 0 and tp1 > 0:
+    if not _tp_sl_rr_relaxed and _min_exec_rr > 0 and tp1 > 0:
         risk_abs = abs(entry - sl)
         if risk_abs > 0:
             rr_geom = abs(tp1 - entry) / risk_abs
@@ -1462,7 +1485,7 @@ def risk_check(
     # Matches implementation in executors to prevent late-stage rejections.
     max_sl_pct, max_sl_source = resolve_max_sl_pct(signal, asset_type, CONFIG)
 
-    if entry != 0:
+    if not _tp_sl_rr_relaxed and entry != 0:
         sl_pct = abs(entry - sl) / abs(entry)
         if sl_pct > max_sl_pct + 1e-9:
             log.warning(

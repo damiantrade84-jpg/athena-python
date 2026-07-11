@@ -180,12 +180,22 @@ def _build_levels(
     if direction not in {"LONG", "SHORT"}:
         return None
     if level_style == "mean_reversion":
+        _mr_min_rr = 1.0
+        try:
+            from config import CONFIG
+            from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+            if tp_sl_rr_gates_disabled(CONFIG):
+                _mr_min_rr = 0.0
+        except Exception:
+            _mr_min_rr = 1.0
         return build_mean_reversion_levels(
             primary,
             direction=direction,
             atr_period=atr_period,
             ema_period=ema_period,
             current_price=current_price,
+            min_rr=_mr_min_rr,
         )
     if level_style == "london_open":
         return build_london_open_breakout_levels(

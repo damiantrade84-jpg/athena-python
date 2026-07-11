@@ -616,6 +616,15 @@ def _bt_freshness_passes(bar_time: str | None) -> tuple[bool, str]:
     return True, "ok"
 
 
+def _bt_tp_sl_rr_gates_relaxed() -> bool:
+    try:
+        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+        return tp_sl_rr_gates_disabled(CONFIG, backtest=True)
+    except Exception:
+        return False
+
+
 def _bt_pre_trade_invariants(
     pair: dict,
     *,
@@ -632,6 +641,8 @@ def _bt_pre_trade_invariants(
     geometry, MAX_SL_PCT) inside BT loops. Mirrors the live execution
     contract so geometry / scoring bugs are surfaced in BT just as in live.
     """
+    if _bt_tp_sl_rr_gates_relaxed():
+        return True, "tp_sl_rr_gates_relaxed"
     try:
         from guardian import pre_trade_invariants
     except Exception:
@@ -2663,7 +2674,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     effective_style, {}).get(_ptype, {}).get("tp1", 1.5)) / float(
                     CONFIG.get("STYLE_ATR_MULTS", {}).get(
                     effective_style, {}).get(_ptype, {}).get("sl", 1.0))
-                if rr1 < max(0.8, _min_rr * 0.7):   # allow 30% degradation before skipping
+                if not _bt_tp_sl_rr_gates_relaxed() and rr1 < max(0.8, _min_rr * 0.7):   # allow 30% degradation before skipping
                     funnel["fail_score"] += 1
                     i += 1
                     continue
@@ -2671,7 +2682,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
             _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
             _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
-            if _sl_dist_pct > _max_sl_pct:
+            if not _bt_tp_sl_rr_gates_relaxed() and _sl_dist_pct > _max_sl_pct:
                 log.debug(
                     f"[SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
                     f"exceeds cap {_max_sl_pct:.1%} — REJECTED"
@@ -2852,6 +2863,10 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             trades.append(
                 {
                     "date": entry_bar["time"][:10],
+                    "signal_timestamp_utc": entry_bar.get("time"),
+                    "entry_timestamp_utc": entry_bar.get("time"),
+                    "exit_timestamp_utc": (h1_raw[exit_bar].get("time") if 0 <= exit_bar < len(h1_raw) else None),
+                    "entry_timeframe": "H1",
                     "pair": pair["display"],
                     "direction": direction,
                     "score": res["score"],
@@ -3291,7 +3306,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     effective_style, {}).get(_ptype, {}).get("tp1", 1.5)) / float(
                     CONFIG.get("STYLE_ATR_MULTS", {}).get(
                     effective_style, {}).get(_ptype, {}).get("sl", 1.0))
-                if rr1 < max(0.8, _min_rr * 0.7):   # allow 30% degradation before skipping
+                if not _bt_tp_sl_rr_gates_relaxed() and rr1 < max(0.8, _min_rr * 0.7):   # allow 30% degradation before skipping
                     funnel["fail_score"] += 1
                     i += 1
                     continue
@@ -3299,7 +3314,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
             _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
             _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
-            if _sl_dist_pct > _max_sl_pct:
+            if not _bt_tp_sl_rr_gates_relaxed() and _sl_dist_pct > _max_sl_pct:
                 log.debug(
                     f"[SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
                     f"exceeds cap {_max_sl_pct:.1%} — REJECTED"
@@ -3901,7 +3916,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                     effective_style, {}).get(_ptype, {}).get("tp1", 1.5)) / float(
                     CONFIG.get("STYLE_ATR_MULTS", {}).get(
                     effective_style, {}).get(_ptype, {}).get("sl", 1.0))
-                if rr1 < max(0.8, _min_rr * 0.7):   # allow 30% degradation before skipping
+                if not _bt_tp_sl_rr_gates_relaxed() and rr1 < max(0.8, _min_rr * 0.7):   # allow 30% degradation before skipping
                     funnel["fail_score"] += 1
                     i += 1
                     continue
@@ -3909,7 +3924,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
             _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
             _sl_dist_pct = abs(float(entry) - float(sl)) / float(entry)
-            if _sl_dist_pct > _max_sl_pct:
+            if not _bt_tp_sl_rr_gates_relaxed() and _sl_dist_pct > _max_sl_pct:
                 log.debug(
                     f"[SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct:.1%} "
                     f"exceeds cap {_max_sl_pct:.1%} — REJECTED"
@@ -5247,7 +5262,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         if len(d1_ctx) < 20 or len(h4_ctx) < 20 or len(h1_ctx) < 20 or len(entry_ctx) < 20:
             i += 1
             continue
-        current_price = float(entry_raw[i]["close"])
+        # Live-parity acting price: the signal is decided from candles through i,
+        # then becomes actionable at the next bar open.  Confirmed close[i]
+        # remains evidence only; all Engine B geometry uses next-open price.
+        entry_bar = entry_raw[i + 1]
+        current_price = float(entry_bar.get("open", entry_bar["close"]))
         
         # O(1) ATR LOOKUP: Select precomputed ATR value based on the current bar and _atr_tf
         _atr_full = atr_map.get(_atr_tf, atr_map["H4"])
@@ -5428,7 +5447,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             _rr_sl_dist = abs(entry - sl)
             _rr_tp_dist = abs(tp - entry)
             rr = (_rr_tp_dist / _rr_sl_dist) if _rr_sl_dist > 0 else 0.0
-            if rr <= 0 or rr < float(style_profile.get("min_rr", 1.0)):
+            if not _bt_tp_sl_rr_gates_relaxed() and (rr <= 0 or rr < float(style_profile.get("min_rr", 1.0))):
                 continue
 
             candidates.append(
@@ -5482,7 +5501,6 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
 
         # Execute at the open of the very next candle in the entry timeframe.
         # This matches live discovery where fill is immediate, not delayed to next H4.
-        entry_bar = entry_raw[i + 1]
         raw_entry = float(entry_bar.get("open", entry_bar["close"]))
         _ptype = pair.get("type", "stock")
         _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
@@ -5553,7 +5571,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         if target_rr <= 0:
             i += 1
             continue
-        if target_rr < float(style_profile.get("min_rr", 1.0)):
+        if not _bt_tp_sl_rr_gates_relaxed() and target_rr < float(style_profile.get("min_rr", 1.0)):
             i += 1
             continue
 
@@ -5565,7 +5583,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         # MAX_SL_PCT rejection — Ensuring backtest results reflect the same risk thresholds as live trading.
         _max_sl_pct_b = CONFIG.get("MAX_SL_PCT", {}).get(_ptype, 0.05)
         _sl_dist_pct_b = abs(float(entry) - float(sl)) / float(entry)
-        if _sl_dist_pct_b > _max_sl_pct_b:
+        if not _bt_tp_sl_rr_gates_relaxed() and _sl_dist_pct_b > _max_sl_pct_b:
             log.debug(
                 f"[SL-CAP] {pair['display']} {direction} SL {_sl_dist_pct_b:.1%} "
                 f"exceeds cap {_max_sl_pct_b:.1%} — REJECTED"
@@ -5904,6 +5922,10 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         trades.append(
             {
                 "date": bar_date,
+                "signal_timestamp_utc": (entry_raw[i].get("time") if 0 <= i < len(entry_raw) else None),
+                "entry_timestamp_utc": entry_bar.get("time"),
+                "exit_timestamp_utc": (candles_h1[_monitor_fill_index + exit_bar_offset].get("time") if _monitor_tf == "H1" and _monitor_fill_index + exit_bar_offset < len(candles_h1) else None),
+                "entry_timeframe": _entry_tf,
                 "pair": pair["display"],
                 "direction": direction,
                 "score": best["score"],
@@ -6472,7 +6494,10 @@ def backtest_pair_consensus(
             i += 1
             continue
 
-        current_price = float(candles_h4[i]["close"])
+        # Signal evidence ends at h4_window[-1] (bar i-1).  The historical
+        # equivalent of a live scan tick is bar i's open, not bar i's close.
+        entry_bar = candles_h4[i]
+        current_price = float(entry_bar.get("open", entry_bar["close"]))
 
         signal_atr, atr_list_50, _atr_idx = _engine_b_indexed_atr(
             atr_map,
@@ -6550,6 +6575,7 @@ def backtest_pair_consensus(
                 pair,
                 {"D1": d1_ctx, "H4": h4_window, "H1": h1_window},
                 horizon="intraday",
+                current_price=current_price,
             ).to_dict()
             _attach_bt_intermarket_to_v3_signal(
                 signal_a,
@@ -6658,7 +6684,6 @@ def backtest_pair_consensus(
             i += 1
             continue
 
-        entry_bar = candles_h4[i + 1]
         raw_entry = float(entry_bar.get("open", entry_bar["close"]))
         _slip_mult = 3.0 if _canonical_vm == "live_parity" else 1.0
         slip = raw_entry * _get_slippage_for_bar(
@@ -6688,7 +6713,7 @@ def backtest_pair_consensus(
             _c_funnel["invalid_bt_levels"] += 1
             i += 1
             continue
-        if abs(entry - sl) / entry > _max_sl_pct:
+        if not _bt_tp_sl_rr_gates_relaxed() and abs(entry - sl) / entry > _max_sl_pct:
             i += 1
             continue
 
@@ -6729,8 +6754,8 @@ def backtest_pair_consensus(
         _monitor_times = h1_times if _monitor_tf == "H1" else h4_times
         _monitor_fill_index = 0
         if _monitor_tf == "H4":
-            # entry_bar is candles_h4[i + 1] in this loop, so monitoring starts there directly.
-            _monitor_fill_index = i + 1
+            # entry_bar is candles_h4[i] in this loop, so monitoring starts there directly.
+            _monitor_fill_index = i
         elif h1_times is not None and len(h1_times) > 0:
             _entry_bar_ts = pd.Timestamp(entry_bar["time"])
             if pd.notna(_entry_bar_ts):

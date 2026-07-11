@@ -401,16 +401,26 @@ def pre_trade_invariants(signal: dict) -> tuple[bool, str]:
     if price <= 0 or sl <= 0 or tp1 <= 0:
         return False, f"INVALID_LEVELS: price={price}, sl={sl}, tp1={tp1}"
 
-    if direction == "LONG":
-        if sl >= price:
-            return False, f"LONG_SL_ABOVE_ENTRY: sl={sl} >= price={price}"
-        if tp1 <= price:
-            return False, f"LONG_TP_BELOW_ENTRY: tp1={tp1} <= price={price}"
-    else:
-        if sl <= price:
-            return False, f"SHORT_SL_BELOW_ENTRY: sl={sl} <= price={price}"
-        if tp1 >= price:
-            return False, f"SHORT_TP_ABOVE_ENTRY: tp1={tp1} >= price={price}"
+    _tp_sl_rr_relaxed = False
+    try:
+        from config import CONFIG
+        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+        _tp_sl_rr_relaxed = tp_sl_rr_gates_disabled(CONFIG, signal=signal)
+    except Exception:
+        _tp_sl_rr_relaxed = False
+
+    if not _tp_sl_rr_relaxed:
+        if direction == "LONG":
+            if sl >= price:
+                return False, f"LONG_SL_ABOVE_ENTRY: sl={sl} >= price={price}"
+            if tp1 <= price:
+                return False, f"LONG_TP_BELOW_ENTRY: tp1={tp1} <= price={price}"
+        else:
+            if sl <= price:
+                return False, f"SHORT_SL_BELOW_ENTRY: sl={sl} <= price={price}"
+            if tp1 >= price:
+                return False, f"SHORT_TP_ABOVE_ENTRY: tp1={tp1} >= price={price}"
 
     dir_score = (signal.get("factorDiagnostics") or {}).get("directionalScore")
     if dir_score is not None and dir_score != 0:
@@ -430,7 +440,7 @@ def pre_trade_invariants(signal: dict) -> tuple[bool, str]:
 
         asset_type = signal.get("type") or signal.get("pairType") or ""
         max_sl_pct, max_sl_source = resolve_max_sl_pct(signal, asset_type, CONFIG)
-        if price > 0:
+        if price > 0 and not _tp_sl_rr_relaxed:
             sl_dist_pct = abs(price - sl) / price
             if sl_dist_pct > max_sl_pct * 1.05:  # 5% tolerance for rounding
                 return False, (
@@ -529,7 +539,7 @@ def pre_trade_check(
         max_sl_pct, max_sl_source = resolve_max_sl_pct(signal, asset_type, CONFIG)
     except Exception:
         max_sl_pct = None  # resolver unavailable — risk_check remains authoritative
-    if max_sl_pct is not None and price > 0:
+    if max_sl_pct is not None and price > 0 and not _tp_sl_rr_relaxed:
         sl_dist_pct = abs(price - sl) / price
         if sl_dist_pct > max_sl_pct * 1.05:  # 5% tolerance for rounding
             return False, (

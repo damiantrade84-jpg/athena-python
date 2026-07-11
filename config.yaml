@@ -2368,6 +2368,11 @@ BACKTEST_SENTIMENT_GATING: false
 
 BACKTEST_DISABLE_HURST_GATE: false  # Measurement complete 2026-04-18: disabling added +2 trades / +1.6pp WR on GBP/USD - within noise. Hurst gate is not the edge problem.
 
+# Demo/backtest only: bypass TP/SL/RR gates (min_rr, max_sl, tp bounds, room/space).
+# Active when EXECUTOR_MODE is demo/paper or RESEARCH_MODE/BACKTEST_RUNNING. Never
+# applies when EXECUTOR_MODE is live. Enable in config.local.yaml for research runs.
+DISABLE_TP_SL_RR_GATES: false
+
 
 
 # ── Adaptive Kelly Position Sizing ────────────────────────
