@@ -505,16 +505,26 @@ def pre_trade_check(
     if price <= 0 or sl <= 0 or tp1 <= 0:
         return False, f"INVALID_LEVELS: price={price}, sl={sl}, tp1={tp1}"
 
-    if direction == "LONG":
-        if sl >= price:
-            return False, f"LONG_SL_ABOVE_ENTRY: sl={sl} >= price={price}"
-        if tp1 <= price:
-            return False, f"LONG_TP_BELOW_ENTRY: tp1={tp1} <= price={price}"
-    else:
-        if sl <= price:
-            return False, f"SHORT_SL_BELOW_ENTRY: sl={sl} <= price={price}"
-        if tp1 >= price:
-            return False, f"SHORT_TP_ABOVE_ENTRY: tp1={tp1} >= price={price}"
+    _tp_sl_rr_relaxed = False
+    try:
+        from config import CONFIG
+        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+        _tp_sl_rr_relaxed = tp_sl_rr_gates_disabled(CONFIG, signal=signal)
+    except Exception:
+        _tp_sl_rr_relaxed = False
+
+    if not _tp_sl_rr_relaxed:
+        if direction == "LONG":
+            if sl >= price:
+                return False, f"LONG_SL_ABOVE_ENTRY: sl={sl} >= price={price}"
+            if tp1 <= price:
+                return False, f"LONG_TP_BELOW_ENTRY: tp1={tp1} <= price={price}"
+        else:
+            if sl <= price:
+                return False, f"SHORT_SL_BELOW_ENTRY: sl={sl} <= price={price}"
+            if tp1 >= price:
+                return False, f"SHORT_TP_ABOVE_ENTRY: tp1={tp1} >= price={price}"
 
     # ── Check 4: Direction matches directional score sign ──────────────
     dir_score = (signal.get("factorDiagnostics") or {}).get("directionalScore")

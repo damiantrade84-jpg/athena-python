@@ -42,3 +42,55 @@ def test_guardian_skips_sl_tp_geometry_when_relaxed():
         ok, reason = pre_trade_invariants(signal)
     assert ok is True
     assert reason == "OK"
+
+
+def test_pre_trade_check_does_not_raise_name_error():
+    from config import CONFIG
+    from guardian import pre_trade_check
+
+    signal = {
+        "pair": "BTC/USDT",
+        "direction": "LONG",
+        "type": "crypto",
+        "price": 95000.0,
+        "sl": 90000.0,
+        "tp1": 100000.0,
+    }
+    account = {"balance": 10000.0, "equity": 10000.0}
+    with patch.dict(
+        CONFIG,
+        {
+            "DISABLE_TP_SL_RR_GATES": False,
+            "EXECUTOR_MODE": "demo",
+            "ENGINE_A_STALE_CANDLE_GUARD": False,
+        },
+    ):
+        ok, reason = pre_trade_check(signal, [], account)
+    assert ok is True
+    assert reason == "OK"
+
+
+def test_pre_trade_check_blocks_bad_geometry_when_gates_enabled():
+    from config import CONFIG
+    from guardian import pre_trade_check
+
+    signal = {
+        "pair": "BTC/USDT",
+        "direction": "LONG",
+        "type": "crypto",
+        "price": 95000.0,
+        "sl": 98000.0,
+        "tp1": 100000.0,
+    }
+    account = {"balance": 10000.0, "equity": 10000.0}
+    with patch.dict(
+        CONFIG,
+        {
+            "DISABLE_TP_SL_RR_GATES": False,
+            "EXECUTOR_MODE": "demo",
+            "ENGINE_A_STALE_CANDLE_GUARD": False,
+        },
+    ):
+        ok, reason = pre_trade_check(signal, [], account)
+    assert ok is False
+    assert "LONG_SL_ABOVE_ENTRY" in reason
