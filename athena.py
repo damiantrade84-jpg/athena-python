@@ -7578,6 +7578,7 @@ def api_scan_naked():
         "passed": 0,
         "insufficient_candles": 0,
         "freshness_gate": 0,
+        "live_quote_freshness_gate": 0,
         "bybit_atr_unavailable": 0,
         "invalid_atr": 0,
         "volatility_gate": 0,
@@ -7621,6 +7622,8 @@ def api_scan_naked():
                 engine_b_funnel["insufficient_candles"] += 1
             elif reason == "freshness_gate":
                 engine_b_funnel["freshness_gate"] += 1
+            elif reason == "live_quote_freshness_gate":
+                engine_b_funnel["live_quote_freshness_gate"] += 1
             elif reason == "bybit_atr_unavailable":
                 engine_b_funnel["bybit_atr_unavailable"] += 1
             elif reason == "invalid_atr":
@@ -7857,12 +7860,27 @@ def api_scan_naked():
                         return {"debug": debug_row}
                     return []
 
-            from athena_app.services.engine_b_market_state import engine_b_gate_current_price
+            from athena_app.services.engine_b_market_state import engine_b_live_gate_quote
 
-            current_price = engine_b_gate_current_price(
-                structure_entry_candles=structure_entry_candles,
-                trigger_entry_candles=entry_candles,
-            )
+            try:
+                with _live_prices_lock:
+                    _engine_b_live_prices = dict(_live_prices)
+                current_price, _live_quote_diag = engine_b_live_gate_quote(
+                    pair,
+                    _engine_b_live_prices,
+                    CONFIG,
+                )
+            except ValueError as _live_quote_err:
+                debug_row["final_reject_reason"] = "live_quote_freshness_gate"
+                debug_row["live_quote_error"] = str(_live_quote_err)
+                log.warning(
+                    "[NAKED-SCAN] %s live quote block: %s",
+                    pair.get("display", "?"),
+                    _live_quote_err,
+                )
+                if debug_mode:
+                    return {"debug": debug_row}
+                return []
 
             # analyze_structure expects canonical D1/H4/H1 candle series
             regime_label = _engine_b_regime_label(zone_candles, pair.get("type", "stock"))
@@ -8176,6 +8194,9 @@ def api_scan_naked():
                     "scoreGroup": _pair_score_group,
                     "direction": direction,
                     "price": current_price,
+                    "quoteAgeSec": _live_quote_diag["ageSec"],
+                    "quoteTimestamp": _live_quote_diag["timestamp"],
+                    "engine_b_price_source": "fresh_live_quote",
                     "confluenceScore": conf_data["score"],
                     # Headline pct must be the graded total (score/max). gate_pct
                     # is always 100 here: emission requires every mandatory gate.
@@ -14418,6 +14439,40 @@ def analyze_pair(
                 intermarket_snapshot=intermarket_snapshot,
             )
 
+    # Scoring remains confirmed-only, but executable geometry must be anchored
+    # to a fresh quote. A confirmed H4 close may be hours behind the market and
+    # is not acceptable as an entry/SL/TP price source.
+    from athena_app.services.engine_b_market_state import fresh_live_gate_quote
+    try:
+        with _live_prices_lock:
+            _engine_a_live_prices = dict(_live_prices)
+        _engine_a_live_price, _engine_a_quote_diag = fresh_live_gate_quote(
+            pair,
+            _engine_a_live_prices,
+            CONFIG,
+        )
+    except ValueError as _engine_a_quote_err:
+        from engine_a_v3.evaluator import evaluate_engine_a_v3
+
+        _reason = f"ENGINE_A_LIVE_QUOTE_BLOCK:{_engine_a_quote_err}"
+        log.warning("[ANALYZE] %s %s", pair.get("display", "?"), _reason)
+        _blocked = evaluate_engine_a_v3(
+            pair,
+            {"D1": d1, "H4": h4, "H1": h1},
+            horizon=style,
+            blocked_reasons=(_reason,),
+        ).to_dict()
+        _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
+        _blocked["quoteFreshness"] = {
+            "allowed": False,
+            "reason": str(_engine_a_quote_err),
+        }
+        return _attach_v3_intermarket_confirmation(
+            _blocked,
+            pair,
+            intermarket_snapshot=intermarket_snapshot,
+        )
+
     from engine_a_v3.evaluator import evaluate_engine_a_v3
     from engine_a_v3.quant_context import build_quant_context, resolve_live_microstructure_metrics
 
@@ -14444,7 +14499,12 @@ def analyze_pair(
         {"D1": d1, "H4": h4, "H1": h1},
         horizon=style,
         context=_v3_ctx,
+        current_price=_engine_a_live_price,
     ).to_dict()
+    _v3_signal["quoteAgeSec"] = _engine_a_quote_diag["ageSec"]
+    _v3_signal["quoteTimestamp"] = _engine_a_quote_diag["timestamp"]
+    _v3_signal["priceSource"] = "fresh_live_quote"
+    _v3_signal["quoteFreshness"] = _engine_a_quote_diag
     _v3_signal["dataFreshness"]["diagnostics"] = _freshness_diag
     _v3_signal["candleFetchMeta"] = {
         "D1": preloaded_fetch_meta.get("D1") or _freshness_diag.get("D1"),
@@ -16416,6 +16476,8 @@ set_runtime(
         max_score_for_pair=_max_score_for_pair,
         NON_WS_EODHD=_NON_WS_EODHD,
         CRYPTO_PAIRS=CRYPTO_PAIRS,
+        live_prices=_live_prices,
+        live_prices_lock=_live_prices_lock,
         eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
         get_eodhd_client=_get_eodhd_client,
         fetch_eodhd_volume_only=_fetch_eodhd_volume_only,

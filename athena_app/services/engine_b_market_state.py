@@ -6,7 +6,79 @@ sites use identical confirmed/forming candle discipline.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import time
+from typing import Any, Callable, Mapping
+
+
+def fresh_live_gate_quote(
+    pair: dict[str, Any],
+    live_prices: Mapping[str, Any] | None,
+    config: dict[str, Any] | None,
+    *,
+    time_now: float | None = None,
+) -> tuple[float, dict[str, Any]]:
+    """Return a fresh live quote for Engine B gate/level geometry.
+
+    Confirmed candles remain authoritative for structure and indicators.  This
+    quote is a separate, fail-closed executable-price input: missing timestamps,
+    stale quotes, and invalid prices are never replaced by a candle close.
+    """
+    def _key(value: Any) -> str:
+        return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+    wanted = {_key(pair.get("display")), _key(pair.get("symbol")), _key(pair.get("pair"))}
+    wanted.discard("")
+    entry: dict[str, Any] | None = None
+    matched_key: str | None = None
+    for raw_key, raw_entry in (live_prices or {}).items():
+        if _key(raw_key) in wanted and isinstance(raw_entry, dict):
+            entry = dict(raw_entry)
+            matched_key = str(raw_key)
+            break
+    if entry is None:
+        raise ValueError("ENGINE_B_LIVE_QUOTE_MISSING")
+
+    try:
+        price = float(entry.get("price"))
+    except (TypeError, ValueError):
+        price = 0.0
+    if price <= 0:
+        raise ValueError("ENGINE_B_LIVE_QUOTE_INVALID_PRICE")
+
+    try:
+        timestamp = float(entry.get("ts"))
+        if timestamp > 1e12:
+            timestamp /= 1000.0
+    except (TypeError, ValueError):
+        timestamp = 0.0
+    if timestamp <= 0:
+        raise ValueError("ENGINE_B_LIVE_QUOTE_AGE_UNKNOWN")
+
+    now_s = float(time_now if time_now is not None else time.time())
+    age_sec = max(0.0, now_s - timestamp)
+    asset_type = str(pair.get("type") or "").strip().lower()
+    age_cfg = (config or {}).get("LIVE_PRICE_MAX_AGE_SEC") or {}
+    try:
+        max_age_sec = float(age_cfg.get(asset_type))
+    except (AttributeError, TypeError, ValueError):
+        max_age_sec = 0.0
+    if max_age_sec <= 0:
+        raise ValueError(f"ENGINE_B_LIVE_QUOTE_MAX_AGE_UNCONFIGURED:{asset_type or 'unknown'}")
+    if age_sec > max_age_sec:
+        raise ValueError(f"ENGINE_B_LIVE_QUOTE_STALE:{age_sec:.3f}s>{max_age_sec:.3f}s")
+
+    return price, {
+        "source": entry.get("source"),
+        "matchedKey": matched_key,
+        "timestamp": timestamp,
+        "ageSec": round(age_sec, 3),
+        "maxAgeSec": max_age_sec,
+        "fresh": True,
+    }
+
+
+# Backward-compatible Engine B name; Engine A uses the same quote contract.
+engine_b_live_gate_quote = fresh_live_gate_quote
 
 
 def engine_b_live_market_state(

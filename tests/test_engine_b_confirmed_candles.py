@@ -67,3 +67,37 @@ def test_naked_scan_current_price_matches_full_scan_confirmed_close():
 
     assert gate_px == full_scan_px == 101.0
     assert gate_px != float(trigger[-1]["close"])
+
+
+def test_engine_b_live_gate_quote_uses_fresh_quote_not_confirmed_close():
+    from athena_app.services.engine_b_market_state import engine_b_live_gate_quote
+
+    pair = {"type": "forex", "display": "EUR/USD", "symbol": "EURUSD=X"}
+    price, diag = engine_b_live_gate_quote(
+        pair,
+        {"EUR/USD": {"price": 1.125, "ts": 1_000.0, "source": "mt5"}},
+        {"LIVE_PRICE_MAX_AGE_SEC": {"forex": 5}},
+        time_now=1_003.0,
+    )
+
+    assert price == 1.125
+    assert diag["ageSec"] == 3.0
+    assert diag["fresh"] is True
+
+
+def test_engine_b_live_gate_quote_rejects_stale_and_unknown_age():
+    import pytest
+    from athena_app.services.engine_b_market_state import engine_b_live_gate_quote
+
+    pair = {"type": "crypto", "display": "HBAR/USDT", "symbol": "HBARUSDT"}
+    config = {"LIVE_PRICE_MAX_AGE_SEC": {"crypto": 5}}
+
+    with pytest.raises(ValueError, match="ENGINE_B_LIVE_QUOTE_STALE"):
+        engine_b_live_gate_quote(
+            pair,
+            {"HBARUSDT": {"price": 0.0687, "ts": 1_000.0}},
+            config,
+            time_now=1_006.0,
+        )
+    with pytest.raises(ValueError, match="ENGINE_B_LIVE_QUOTE_AGE_UNKNOWN"):
+        engine_b_live_gate_quote(pair, {"HBARUSDT": {"price": 0.0687}}, config, time_now=1_001.0)

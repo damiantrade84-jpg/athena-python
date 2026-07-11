@@ -174,6 +174,7 @@ def _build_levels(
     atr_pct: float | None = None,
     atr_period: int = 14,
     ema_period: int = 20,
+    current_price: float | None = None,
 ) -> StructuralLevels | None:
     """Route to the correct level builder by style."""
     if direction not in {"LONG", "SHORT"}:
@@ -184,11 +185,18 @@ def _build_levels(
             direction=direction,
             atr_period=atr_period,
             ema_period=ema_period,
+            current_price=current_price,
         )
     if level_style == "london_open":
-        return build_london_open_breakout_levels(primary, direction=direction)
+        return build_london_open_breakout_levels(
+            primary, direction=direction, current_price=current_price
+        )
     return build_structural_levels(
-        primary, direction=direction, atr_pct=atr_pct, atr_period=atr_period
+        primary,
+        direction=direction,
+        atr_pct=atr_pct,
+        atr_period=atr_period,
+        current_price=current_price,
     )
 
 
@@ -201,6 +209,7 @@ def evaluate_engine_a_v3(
     blocked_reasons: tuple[str, ...] = (),
     context: Mapping[str, Any] | None = None,
     snapshot_cache: dict | None = None,
+    current_price: float | None = None,
 ) -> EngineASetupSignal:
     route = route_specialist(pair)
     normalized_horizon = _horizon(horizon)
@@ -428,6 +437,7 @@ def evaluate_engine_a_v3(
             atr_pct=atr_pct,
             atr_period=atr_period,
             ema_period=ema_period,
+            current_price=current_price,
         )
 
     # The quant model never emits NO_SIGNAL. Missing levels caps TRADE -> WATCH

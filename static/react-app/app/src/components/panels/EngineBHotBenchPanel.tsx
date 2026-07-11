@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch';
 import CompactSuggestedWatchStatus from '@/components/athena/CompactSuggestedWatchStatus';
 import { ErrorBanner, RefreshButton } from '@/components/shared';
 import { useStore } from '@/hooks/useStore';
+import { useLivePrices } from '@/hooks/useLivePrices';
 import apiClient from '@/lib/apiClient';
 import { fmtPrice } from '@/lib/athenaFormat';
 import { cn, fmtNum, toNum } from '@/lib/utils';
@@ -163,8 +164,9 @@ function deriveCardState(args: {
   row: LdSymbolRow | null;
   watch: SuggestedTradeWatch | null;
   outcome: { status: 'AI_ENTRY_NOW' | 'AI_WAIT' | 'AI_SKIP' } | null;
+  livePrice?: number;
 }): EngineBHotBenchCardState {
-  const { candidate, row, watch, outcome } = args;
+  const { candidate, row, watch, outcome, livePrice } = args;
   if (!candidate) {
     return { status: 'MISSING', reason: 'Hotlist did not return a winner for this group' };
   }
@@ -188,7 +190,7 @@ function deriveCardState(args: {
   }
   const direction = directionForRow(row);
   const zone = actionableZone(row, direction);
-  const latestPrice = firstNumber(row.latest_price, candidate.latest_price);
+  const latestPrice = firstNumber(livePrice, row.latest_price, candidate.latest_price);
   if (priceInsideZone(latestPrice, zone)) {
     return { status: 'NEAR_ZONE', reason: 'Live price is inside the current Engine B zone' };
   }
@@ -292,6 +294,7 @@ function Sparkline({
 
 export default function EngineBHotBenchPanel() {
   const { showToast, setActivePanel, setTvChartIntent, chartReviewOutcomes } = useStore();
+  const { priceFor, ageSecFor, sourceFor } = useLivePrices();
   const [timeframe, setTimeframe] = useState<'H1' | 'M15'>('H1');
   const [hotlist, setHotlist] = useState<EngineBHotlistResponse | null>(null);
   const [snapshot, setSnapshot] = useState<LdSnapshot | null>(null);
@@ -454,12 +457,16 @@ export default function EngineBHotBenchPanel() {
       const symbolWatches = relevantWatches(watches, candidate);
       const primaryWatch = symbolWatches[0] || null;
       const outcome = candidate ? chartReviewOutcomes[symbolKey(candidate.symbol)] ?? null : null;
+      const livePrice = candidate ? priceFor(candidate) : undefined;
+      const livePriceAgeSec = candidate ? ageSecFor(candidate) : undefined;
+      const livePriceSource = candidate ? sourceFor(candidate) : undefined;
       const watchPlan = buildWatchPlan(candidate, row, timeframe);
       const state = deriveCardState({
         candidate,
         row,
         watch: primaryWatch,
         outcome,
+        livePrice,
       });
       return {
         group,
@@ -471,9 +478,12 @@ export default function EngineBHotBenchPanel() {
         primaryWatch,
         watchPlan,
         state,
+        livePrice,
+        livePriceAgeSec,
+        livePriceSource,
       };
     });
-  }, [chartReviewOutcomes, hotlist, snapshot?.symbols, timeframe, watches]);
+  }, [ageSecFor, chartReviewOutcomes, hotlist, priceFor, snapshot?.symbols, sourceFor, timeframe, watches]);
 
   const primeSymbols = useCallback(async (symbols: string[], key: string) => {
     if (symbols.length === 0) {
@@ -626,7 +636,7 @@ export default function EngineBHotBenchPanel() {
       {error && <ErrorBanner message={error} onRetry={() => void refreshAll()} />}
 
       <div className="grid gap-4 xl:grid-cols-2">
-        {cards.map(({ group, candidate, slot, alternates, row, symbolWatches, primaryWatch, watchPlan, state }) => {
+        {cards.map(({ group, candidate, slot, alternates, row, symbolWatches, primaryWatch, watchPlan, state, livePrice, livePriceAgeSec, livePriceSource }) => {
           const direction = directionForRow(row);
           const zone = actionableZone(row, direction);
           const weakSlot = slot?.status === 'WEAK_SCOUT' || slot?.status === 'NO_HOT_SETUP';
@@ -680,12 +690,18 @@ export default function EngineBHotBenchPanel() {
                 {candidate && (
                   <>
                     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                      <Metric label="Latest" value={priceOrFallback(firstNumber(row?.latest_price, candidate.latest_price), candidate.display, candidate.asset_type, 'missing')} />
+                      <Metric label="Latest (live)" value={priceOrFallback(firstNumber(livePrice, row?.latest_price, candidate.latest_price), candidate.display, candidate.asset_type, 'missing')} />
                       <Metric label="Bid / Ask" value={`${priceOrFallback(firstNumber(candidate.bid, row?.bid), candidate.display, candidate.asset_type, 'N/A')} / ${priceOrFallback(firstNumber(candidate.ask, row?.ask), candidate.display, candidate.asset_type, 'N/A')}`} />
                       <Metric label="Spread" value={fmtNum(firstNumber(candidate.spread, row?.spread), 5, 'N/A')} />
                       <Metric label="Strength" value={fmtNum(candidate.strength_score, 1, 'missing')} accent="long" />
                       <Metric label="Move %" value={fmtNum(firstNumber(candidate.change_pct, row?.change_pct), 2, 'missing')} />
-                      <Metric label="Freshness" value={candidate.freshness_status || row?.freshness?.gateDecision || 'missing'} />
+                      <Metric
+                        label="Live quote"
+                        value={livePriceAgeSec == null
+                          ? 'age unknown'
+                          : `${livePriceAgeSec.toFixed(1)}s · ${livePriceSource || 'unknown source'}`}
+                        accent={livePriceAgeSec == null ? 'short' : undefined}
+                      />
                     </div>
 
                     <div className="rounded-md border border-border/60 bg-muted/15 p-3">
@@ -703,7 +719,7 @@ export default function EngineBHotBenchPanel() {
                         value={state.status === 'SCOUTING' ? 'SCOUTING' : row?.engineB.confidencePassed ? 'PASS' : 'PRIMED'}
                         accent={row?.engineB.confidencePassed ? 'long' : undefined}
                       />
-                      <Metric label="Entry" value={priceOrFallback(firstNumber(row?.levels?.entry, row?.engineB.entry), candidate.display, candidate.asset_type, 'missing')} />
+                      <Metric label="Signal entry" value={priceOrFallback(firstNumber(row?.levels?.entry, row?.engineB.entry), candidate.display, candidate.asset_type, 'missing')} />
                       <Metric label="SL" value={priceOrFallback(firstNumber(row?.levels?.sl, row?.engineB.sl), candidate.display, candidate.asset_type, 'missing')} accent="short" />
                       <Metric label="TP" value={priceOrFallback(firstNumber(row?.levels?.tp1, row?.levels?.tp, row?.engineB.tp), candidate.display, candidate.asset_type, 'missing')} accent="long" />
                       <Metric label="R:R" value={fmtNum(firstNumber(row?.levels?.rr, row?.engineB.rr), 2, 'missing')} />

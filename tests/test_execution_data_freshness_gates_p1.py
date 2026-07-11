@@ -76,6 +76,26 @@ def test_risk_rejects_stale_live_quote(monkeypatch):
     assert result.reason.startswith("STALE_LIVE_QUOTE:")
 
 
+def test_risk_recomputes_live_quote_age_at_execution(monkeypatch):
+    monkeypatch.setitem(risk_engine.CONFIG, "LIVE_PRICE_MAX_AGE_SEC", {"crypto": 15})
+    monkeypatch.setitem(risk_engine.CONFIG, "LIVE_PRICE_BLOCK_EXECUTION", True)
+    monkeypatch.setattr(risk_engine._time, "time", lambda: 1_020.0)
+
+    result = risk_check(
+        _fresh_signal(
+            quoteAgeSec=1.0,
+            quoteTimestamp=1_000.0,
+            quoteAgeEval={"would_block": False, "reason": "FRESH"},
+        ),
+        10000,
+        10000,
+        [],
+    )
+
+    assert result.approved is False
+    assert result.reason == "STALE_LIVE_QUOTE:STALE"
+
+
 def test_risk_rejects_unknown_live_quote_age_when_configured(monkeypatch):
     monkeypatch.setitem(
         risk_engine.CONFIG,

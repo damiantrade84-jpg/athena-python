@@ -2331,13 +2331,36 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             elif not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
                                 atr = 0.0
                                 sig_a["engine_b_error"] = "bybit_atr_unavailable"
-                        from athena_app.services.engine_b_market_state import (
-                            engine_b_gate_current_price,
-                        )
+                        from athena_app.services.engine_b_market_state import engine_b_live_gate_quote
 
-                        current_price = engine_b_gate_current_price(
-                            structure_entry_candles=entry_candles_b,
-                        )
+                        try:
+                            with r.live_prices_lock:
+                                _engine_b_live_prices = dict(r.live_prices)
+                            current_price, _live_quote_diag = engine_b_live_gate_quote(
+                                pair,
+                                _engine_b_live_prices,
+                                CONFIG,
+                            )
+                        except (AttributeError, ValueError) as _live_quote_err:
+                            _fresh_reason = str(_live_quote_err)
+                            sig_a["engine_b_error"] = _fresh_reason
+                            sig_a["engine_b_freshness_blocked"] = True
+                            _eb_funnel_extras["engine_b_skip_stage"] = "live_quote_freshness_gate"
+                            _attach_engine_b_scan_gate_funnel(
+                                sig=sig_a,
+                                pair=pair,
+                                score_group=_pair_score_group,
+                                resolved_style=resolved_style_b,
+                                style_profile_b=style_profile_b,
+                                conf_b=_eb_snap["conf"],
+                                res_b=_eb_snap["res"],
+                                extras=dict(_eb_funnel_extras),
+                            )
+                            log.warning("[SCAN+B] %s live quote block: %s", pair.get("display", "?"), _fresh_reason)
+                            return pair, sig_a, None
+                        sig_a["quoteAgeSec"] = _live_quote_diag["ageSec"]
+                        sig_a["quoteTimestamp"] = _live_quote_diag["timestamp"]
+                        sig_a["engine_b_price_source"] = "fresh_live_quote"
                         _eb_funnel_extras["entry_price"] = current_price
 
                         if atr and atr > 0:

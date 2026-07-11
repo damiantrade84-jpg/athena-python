@@ -44,10 +44,11 @@ def build_structural_levels(
     direction: str,
     atr_pct: float | None = None,
     atr_period: int = 14,
+    current_price: float | None = None,
 ) -> StructuralLevels | None:
     if len(primary) < 20 or direction not in {"LONG", "SHORT"}:
         return None
-    current = float(primary[-1]["close"])
+    current = float(current_price if current_price is not None else primary[-1]["close"])
     atr = atr_for_levels(primary, atr_period)
     if current <= 0 or atr <= 0:
         return None
@@ -107,6 +108,7 @@ def build_mean_reversion_levels(
     min_rr: float = 1.0,
     atr_period: int = 14,
     ema_period: int = 20,
+    current_price: float | None = None,
 ) -> StructuralLevels | None:
     """Range-fade levels: stop just beyond the LOCAL swing being faded, target back
     at the EMA mean (TP2). Opposite geometry to build_structural_levels — reward
@@ -116,7 +118,7 @@ def build_mean_reversion_levels(
     if len(primary) < 20 or direction not in {"LONG", "SHORT"}:
         return None
     closes = [float(candle["close"]) for candle in primary]
-    current = closes[-1]
+    current = float(current_price if current_price is not None else closes[-1])
     atr = atr_for_levels(primary, atr_period)
     if current <= 0 or atr <= 0:
         return None
@@ -162,11 +164,12 @@ def build_london_open_breakout_levels(
     primary: list[dict],
     *,
     direction: str,
+    current_price: float | None = None,
 ) -> StructuralLevels | None:
     """Intraday London-open breakout: SL/TP sized from Asian session range."""
     if len(primary) < 20 or direction not in {"LONG", "SHORT"}:
         return None
-    current = float(primary[-1]["close"])
+    current = float(current_price if current_price is not None else primary[-1]["close"])
     as_of = parse_utc(primary[-1].get("time") or primary[-1].get("datetime"))
     if as_of is None:
         return None

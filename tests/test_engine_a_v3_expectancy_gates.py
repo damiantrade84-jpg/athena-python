@@ -50,6 +50,25 @@ def test_structural_sl_floor_enforced(monkeypatch):
     assert risk + 1e-9 >= 0.35 * atr
 
 
+def test_structural_levels_anchor_to_live_price_without_forming_candle():
+    rows = _rows(40, timedelta(hours=4))
+    confirmed_close = float(rows[-1]["close"])
+    live_price = confirmed_close + 3.0
+
+    levels = build_structural_levels(
+        rows,
+        direction="LONG",
+        atr_period=14,
+        current_price=live_price,
+    )
+
+    assert levels is not None
+    assert levels.price == live_price
+    assert levels.entry_zone.low < live_price < levels.entry_zone.high
+    assert levels.invalidation < live_price < levels.targets[0].price
+    assert levels.price != confirmed_close
+
+
 def test_directional_ramp_aborts_weak_dir_sum(monkeypatch):
     monkeypatch.setitem(
         CONFIG,

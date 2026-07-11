@@ -1227,7 +1227,22 @@ def risk_check(
 
     # ── Live-quote age (config-gated; paper defaults enable block) ─────────
     quote_eval = signal.get("quoteAgeEval")
-    if not isinstance(quote_eval, dict):
+    quote_ts = signal.get("quoteTimestamp") or signal.get("quote_timestamp")
+    if quote_ts is not None:
+        try:
+            quote_ts_f = float(quote_ts)
+            if quote_ts_f > 1e12:
+                quote_ts_f /= 1000.0
+            current_quote_age = max(0.0, _time.time() - quote_ts_f) if quote_ts_f > 0 else None
+        except (TypeError, ValueError):
+            current_quote_age = None
+        pair_proxy = {
+            "type": signal.get("type") or signal.get("asset_type") or asset_type
+        }
+        quote_eval = evaluate_live_quote_age(pair_proxy, current_quote_age, CONFIG)
+        signal["quoteAgeSec"] = current_quote_age
+        signal["quoteAgeEval"] = quote_eval
+    elif not isinstance(quote_eval, dict):
         pair_proxy = {
             "type": signal.get("type") or signal.get("asset_type") or asset_type
         }
