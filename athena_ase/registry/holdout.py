@@ -28,6 +28,8 @@ class HoldoutRecord:
     passed: bool
     metrics: dict[str, Any] = field(default_factory=dict)
     operator: str = "system"
+    artifact_version: str = ""
+    artifact_hash: str = ""
 
 
 class HoldoutRegistry:
@@ -65,6 +67,8 @@ class HoldoutRegistry:
         passed: bool,
         metrics: dict[str, Any] | None = None,
         operator: str = "system",
+        artifact_version: str = "",
+        artifact_hash: str = "",
     ) -> HoldoutRecord:
         key = self._key(family, horizon)
         if key in self.holdout:
@@ -76,6 +80,8 @@ class HoldoutRegistry:
             passed=passed,
             metrics=metrics or {},
             operator=operator,
+            artifact_version=str(artifact_version or ""),
+            artifact_hash=str(artifact_hash or "").lower(),
         )
         self.holdout[key] = rec
         return rec

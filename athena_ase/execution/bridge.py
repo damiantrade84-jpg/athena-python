@@ -12,6 +12,7 @@ from athena_ase.contracts import ASESignal
 from athena_ase.execution.journal import append_execution_outcome, append_trade_signals
 from athena_ase.gates.demo_only import assert_demo
 from athena_ase.instruments import instrument_by_symbol
+from athena_ase.registry.promotion import execution_binding_check
 
 log = logging.getLogger("ase.execution.bridge")
 
@@ -271,6 +272,15 @@ def execute_trade_signal(
 
     if signal.decisionStatus != "TRADE":
         return {"executed": False, "reason": "not_trade_status"}
+
+    promoted, promotion_reason = execution_binding_check(
+        family=signal.modelFamily,
+        horizon=signal.horizon,
+        version=signal.modelVersion,
+        artifact_hash=str(signal.modelHealth.get("artifactHash") or ""),
+    )
+    if not promoted:
+        return _reject("promotion", promotion_reason)
 
     gate = assert_demo(
         executor_mode=deps.get_executor_mode(),

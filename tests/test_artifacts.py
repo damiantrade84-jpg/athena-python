@@ -6,9 +6,11 @@ import json
 from pathlib import Path
 
 import pytest
+import numpy as np
 
 from athena_ase.artifacts.manifest import ArtifactError, dataset_hash_from_bytes, verify_manifest
 from athena_ase.registry.artifacts import (
+    activate_artifact_version,
     freeze_artifact_bundle,
     load_artifact_bundle,
     load_manifest,
@@ -60,6 +62,74 @@ def test_registry_manifest_hashes_every_model_and_rejects_tampering(tmp_path: Pa
     (out / "model_core.pkl").write_bytes(b"tampered")
     with pytest.raises(ValueError, match="hash mismatch: model_core.pkl"):
         load_artifact_bundle("forex", "intraday", "fixture", root=tmp_path)
+
+
+def test_registry_loader_skips_hashed_non_pickle_monitor_reference(tmp_path: Path):
+    out = freeze_artifact_bundle(
+        family="forex",
+        horizon="intraday",
+        version="with-monitor",
+        models={"model_core.pkl": {"route": "core"}},
+        dataset_hash="dataset-sha256",
+        monitor_reference={"ret_z_1": np.linspace(-1.0, 1.0, 20)},
+        root=tmp_path,
+    )
+
+    manifest, models = load_artifact_bundle(
+        "forex", "intraday", "with-monitor", root=tmp_path
+    )
+
+    assert "monitor_reference.npz" in manifest.file_hashes
+    assert (out / "monitor_reference.npz").exists()
+    assert models == {"model_core.pkl": {"route": "core"}}
+
+
+def test_runtime_loader_honors_active_version_and_fails_closed_when_missing(
+    tmp_path: Path, monkeypatch
+):
+    from athena_ase.artifacts.loader import _resolve_version_dir
+
+    monkeypatch.setenv("ATHENA_ASE_MODELS_ROOT", str(tmp_path))
+    (tmp_path / "forex" / "intraday" / "v1").mkdir(parents=True)
+    (tmp_path / "forex" / "intraday" / "v2-integrity").mkdir()
+    (tmp_path / "equity" / "intraday" / "v1").mkdir(parents=True)
+    activate_artifact_version("v2-integrity", root=tmp_path)
+
+    selected = _resolve_version_dir("forex", "intraday")
+    assert selected is not None
+    assert selected.name == "v2-integrity"
+    assert _resolve_version_dir("equity", "intraday") is None
+
+
+def test_runtime_loader_rejects_active_bundle_that_fails_provisional_gate(
+    tmp_path: Path, monkeypatch
+):
+    from athena_ase.artifacts.loader import load_artifact_bundle as load_runtime_bundle
+
+    monkeypatch.setenv("ATHENA_ASE_MODELS_ROOT", str(tmp_path))
+    freeze_artifact_bundle(
+        family="forex",
+        horizon="intraday",
+        version="v2-integrity",
+        models={"model_core.pkl": {"route": "core"}},
+        dataset_hash="dataset-sha256",
+        validation_report={
+            "metrics": {
+                "holdout_gate_metrics": {
+                    "oos_trades": 10,
+                    "instruments": 4,
+                    "folds_nonneg": 0,
+                    "max_instrument_profit_share": 1.0,
+                    "max_dd_R": 3.0,
+                    "brier_skill": -0.1,
+                }
+            }
+        },
+        root=tmp_path,
+    )
+    activate_artifact_version("v2-integrity", root=tmp_path)
+
+    assert load_runtime_bundle("forex", "intraday") is None
 
 
 def test_threshold_defaults_and_flags_when_eval_has_fewer_than_40_rows():

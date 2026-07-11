@@ -478,7 +478,10 @@ def train_family_horizon(
     fold_details: list[dict[str, Any]] = []
     folds_nonneg = 0
     folds_with_evidence = 0
-    fold_frame = labeled.sort_values(
+    # The final holdout (eval_frame) must stay outside walk-forward folds —
+    # folding over the full labeled set would reuse the holdout window as CV
+    # test evidence and void its "untouched" status at promotion time.
+    fold_frame = train_frame.sort_values(
         "decision_time_ms",
         kind="stable",
     ).reset_index(drop=True)
@@ -699,15 +702,16 @@ def train_all(
     version: str = "v1",
     events_path: Path | None = None,
     report_path: Path | None = None,
-    trainer: Callable[..., dict[str, Any]] = train_family_horizon,
+    trainer: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    trainer_fn = trainer or train_family_horizon
     trained: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
     for family in MODEL_FAMILIES:
         for horizon in MODEL_HORIZONS:
             try:
                 trained.append(
-                    trainer(
+                    trainer_fn(
                         family,
                         horizon,
                         events_path=events_path,

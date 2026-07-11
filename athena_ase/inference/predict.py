@@ -20,14 +20,14 @@ from athena_ase.features.build import (
     categorical_code,
     cot_asset_for_symbol,
 )
-from athena_ase.gates.demo_only import GateResult, assert_demo
+from athena_ase.gates.demo_only import assert_demo
 from athena_ase.horizon import Horizon, K_TP
 from athena_ase.inference.decision import (
     apply_decision_rule,
     legacy_expected_r_strength,
     signal_strength as compute_signal_strength,
 )
-from athena_ase.inference.monitor import apply_watch_max_cap, evaluate_monitor
+from athena_ase.inference.monitor import DECISION_TIME_KEY, apply_watch_max_cap, evaluate_monitor
 from athena_ase.instruments import Instrument
 from athena_ase.levels.brackets import compute_brackets
 from athena_ase.registry.promotion import is_watch_max, set_watch_max
@@ -43,6 +43,7 @@ from athena_ase.inference.realized_payoff import (
     journal_calibration_snapshot,
     realized_exit_payoff,
 )
+from athena_ase.inference.routing import route_for_feeds
 from athena_ase.signals.arbitrate import Candidate
 from athena_ase.signals.common import live_bars_stale, load_bar_series
 
@@ -189,15 +190,6 @@ def _row_to_vector(row: dict[str, Any], schema: tuple[str, ...]) -> np.ndarray:
     return vec
 
 
-def _enriched_ok(row: dict[str, Any], missing: list[str]) -> bool:
-    if missing:
-        return False
-    for key in ("cot_pct", "funding_z", "oi_delta_z"):
-        if key in row and row[key] == row[key]:
-            return True
-    return False
-
-
 def _build_context(candidate: Candidate, instrument: Instrument) -> FeatureBuildContext:
     return FeatureBuildContext(
         symbol=instrument.symbol,
@@ -228,14 +220,11 @@ def predict_one(
     bundle: ArtifactBundle | None = None,
     monitor_reference: dict[str, np.ndarray] | None = None,
     live_feature_rows: list[dict[str, float]] | None = None,
-    skip_demo_gate: bool = False,
+    feature_audit_rows: list[dict[str, Any]] | None = None,
 ) -> ASESignal:
     family = instrument.family
     horizon: Horizon = candidate.horizon
-    if skip_demo_gate:
-        gate = GateResult(ok=True, reason="backtest", checks={"backtest": True})
-    else:
-        gate = assert_demo()
+    gate = assert_demo()
     if not gate.ok:
         return error_signal(
             instrument=candidate.instrument,
@@ -285,9 +274,20 @@ def predict_one(
         )
 
     ctx = _build_context(candidate, instrument)
-    row_probe = build_features_for_candidate(ctx, enriched=True)
-    route = "enriched" if bundle.model_enriched is not None and _enriched_ok(row_probe, ctx.missing_feeds) else "core"
-    row = build_features_for_candidate(ctx, enriched=(route == "enriched"))
+    has_enriched_model = bundle.model_enriched is not None
+    row_probe = build_features_for_candidate(
+        ctx, enriched=has_enriched_model, store=store
+    )
+    routing = route_for_feeds(
+        core_missing=ctx.missing_feeds,
+        enriched_missing=ctx.enriched_missing_feeds,
+    )
+    route = "enriched" if has_enriched_model and routing["route"] == "enriched" else "core"
+    row = (
+        row_probe
+        if has_enriched_model and route == "enriched"
+        else build_features_for_candidate(ctx, enriched=False, store=store)
+    )
     schema: tuple[str, ...] = FEATURE_SCHEMA_ENRICHED if route == "enriched" else FEATURE_SCHEMA_CORE
     route_schema = (bundle.manifest.feature_schemas or {}).get(route)
     if route_schema:
@@ -295,15 +295,43 @@ def predict_one(
     elif bundle.feature_names:
         schema = tuple(bundle.feature_names)
     features = _row_to_vector(row, schema)
+    if feature_audit_rows is not None:
+        feature_audit_rows.append(
+            {
+                "instrument": candidate.instrument,
+                "decisionTimeMs": candidate.decision_time_ms,
+                "route": route,
+                "schema": list(schema),
+                "values": [float(value) if math.isfinite(float(value)) else None for value in features],
+            }
+        )
 
-    core_ok = route == "core" and len(ctx.missing_feeds) <= 6
-    if route == "enriched":
-        core_ok = len(ctx.missing_feeds) == 0
+    core_ok = bool(routing.get("coreOk"))
+    missing_feeds = list(dict.fromkeys(ctx.missing_feeds + ctx.enriched_missing_feeds))
     data_quality = {
         "coreOk": core_ok,
         "route": route,
-        "missingFeeds": list(ctx.missing_feeds),
+        "missingFeeds": missing_feeds,
     }
+    if not core_ok:
+        data_quality["blocker"] = "missing_core_feeds"
+        return flat_signal(
+            instrument=candidate.instrument,
+            family=family,
+            horizon=horizon,
+            model_version=bundle.version,
+            gate_result=gate.to_dict(),
+            data_quality=data_quality,
+            model_health={
+                "artifactHash": bundle.artifact_hash,
+                "trainedAt": bundle.manifest.trained_at,
+                "brier": None,
+                "driftScore": 0.0,
+                "gateResult": gate.to_dict(),
+                "blocker": "missing_core_feeds",
+            },
+            primary_signals=list(candidate.signals),
+        )
 
     model = bundle.model_enriched if route == "enriched" else bundle.model_core
     calibrator = bundle.calibrator_enriched if route == "enriched" else bundle.calibrator
@@ -376,6 +404,7 @@ def predict_one(
         status = "WATCH"
 
     feat_row = {k: float(v) for k, v in row.items() if isinstance(v, (int, float))}
+    feat_row[DECISION_TIME_KEY] = float(candidate.decision_time_ms)
     if live_feature_rows is not None:
         live_feature_rows.append(feat_row)
         monitor_rows = live_feature_rows
@@ -456,7 +485,7 @@ def predict_batch(
     instruments: dict[str, Instrument],
     *,
     monitor_reference: dict[str, np.ndarray] | None = None,
-    skip_demo_gate: bool = False,
+    feature_audit_rows: list[dict[str, Any]] | None = None,
 ) -> list[ASESignal]:
     """Single inference path for scan, shadow, backtest parity, and chart review."""
     bundle_cache: dict[tuple[str, Horizon], ArtifactBundle | None] = {}
@@ -489,7 +518,7 @@ def predict_batch(
             bundle=bundle,
             monitor_reference=ref,
             live_feature_rows=live_buf,
-            skip_demo_gate=skip_demo_gate,
+            feature_audit_rows=feature_audit_rows,
         )
         if len(live_buf) > max_live:
             del live_buf[: len(live_buf) - max_live]

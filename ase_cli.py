@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from athena_ase.data.ingest.runner import ALL_SOURCES, run_ingest
@@ -14,8 +15,14 @@ from athena_ase.data.ptis import PTISStore, default_ptis_root
 from athena_ase.exceptions import HoldoutAlreadyEvaluated
 from athena_ase.inference.monitor import drift_score, should_auto_demote
 from athena_ase.inference.parity import check_parity, parity_hash
+from athena_ase.registry.artifacts import (
+    artifact_content_hash,
+    artifact_dir,
+    load_manifest,
+    verify_manifest,
+)
 from athena_ase.registry.holdout import HoldoutRegistry
-from athena_ase.registry.promotion import demote_family, get_family_state, promote_family
+from athena_ase.registry.promotion import demote_family, promote_family
 from athena_ase.shadow.journal import shadow_summary
 from athena_ase.validation.holdout import run_holdout_eval
 from athena_ase.validation.promotion import promotion_requirements
@@ -112,10 +119,16 @@ def _cmd_freeze(args: argparse.Namespace) -> int:
 def _cmd_export_holdout_metrics(args: argparse.Namespace) -> int:
     from athena_research.ase.train import train_family_horizon
 
-    result = train_family_horizon(args.family, args.horizon)
+    version = str(args.version or "").strip()
+    if not version:
+        version = "cand-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    result = train_family_horizon(args.family, args.horizon, version=version)
     gate_metrics = dict(result["metrics"]["holdout_gate_metrics"])
+    manifest = load_manifest(Path(result["artifact_path"]) / "manifest.json")
     gate_metrics["family"] = args.family
     gate_metrics["horizon"] = args.horizon
+    gate_metrics["artifact_version"] = manifest.version
+    gate_metrics["artifact_hash"] = artifact_content_hash(manifest)
     out_path = (
         Path(args.out)
         if args.out
@@ -140,7 +153,22 @@ def _cmd_export_holdout_metrics(args: argparse.Namespace) -> int:
 
 
 def _cmd_holdout_eval(args: argparse.Namespace) -> int:
-    metrics = _load_metrics_file(args.metrics_file)
+    payload = _load_metrics_file(args.metrics_file)
+    file_family = str(payload.get("family") or args.family)
+    file_horizon = str(payload.get("horizon") or args.horizon)
+    if file_family != args.family or file_horizon != args.horizon:
+        print(json.dumps({"error": "metrics_identity_mismatch"}, indent=2))
+        return 1
+    artifact_version = str(args.artifact_version or payload.get("artifact_version") or "")
+    artifact_hash = str(args.artifact_hash or payload.get("artifact_hash") or "").lower()
+    if not artifact_version or not artifact_hash:
+        print(json.dumps({"error": "artifact_identity_required"}, indent=2))
+        return 1
+    metrics = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"family", "horizon", "artifact_version", "artifact_hash"}
+    }
     reg_path = Path(args.registry) if args.registry else None
     reg = HoldoutRegistry.load(reg_path)
     try:
@@ -152,6 +180,8 @@ def _cmd_holdout_eval(args: argparse.Namespace) -> int:
             registry=reg,
             registry_path=reg_path,
             save=not args.dry_run,
+            artifact_version=artifact_version,
+            artifact_hash=artifact_hash,
         )
     except HoldoutAlreadyEvaluated as exc:
         print(json.dumps({"error": str(exc)}, indent=2))
@@ -161,23 +191,78 @@ def _cmd_holdout_eval(args: argparse.Namespace) -> int:
 
 
 def _cmd_promote(args: argparse.Namespace) -> int:
-    metrics = _load_metrics_file(args.metrics_file)
+    supplied_metrics = _load_metrics_file(args.metrics_file)
+    root = artifact_dir(args.family, args.horizon, args.artifact_version)
+    try:
+        manifest = load_manifest(root / "manifest.json")
+        integrity_failures = verify_manifest(manifest, root)
+    except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(json.dumps({"promoted": False, "failures": [f"artifact_invalid:{exc}"]}, indent=2))
+        return 1
+    if integrity_failures:
+        print(json.dumps({"promoted": False, "failures": integrity_failures}, indent=2))
+        return 1
+    if (
+        manifest.family != args.family
+        or manifest.horizon != args.horizon
+        or manifest.version != args.artifact_version
+    ):
+        print(json.dumps({"promoted": False, "failures": ["artifact_identity_mismatch"]}, indent=2))
+        return 1
+
+    digest = artifact_content_hash(manifest)
+    claimed_hash = str(args.artifact_hash or "").strip().lower()
+    if claimed_hash and claimed_hash != digest:
+        print(json.dumps({"promoted": False, "failures": ["artifact_hash_mismatch"]}, indent=2))
+        return 1
+
+    manifest_metrics = (
+        ((manifest.validation_report or {}).get("metrics") or {}).get("holdout_gate_metrics")
+        or {}
+    )
+    comparable_supplied = {
+        key: value
+        for key, value in supplied_metrics.items()
+        if key not in {"family", "horizon", "artifact_version", "artifact_hash"}
+    }
+    if comparable_supplied != manifest_metrics:
+        print(json.dumps({"promoted": False, "failures": ["metrics_artifact_mismatch"]}, indent=2))
+        return 1
+
     reg_path = Path(args.registry) if args.registry else None
     holdout = HoldoutRegistry.load(reg_path)
     ok, failures = promotion_requirements(
         family=args.family,
         horizon=args.horizon,
-        metrics=metrics,
+        metrics=manifest_metrics,
         holdout=holdout,
+        artifact_version=manifest.version,
+        artifact_hash=digest,
     )
     if not ok:
         print(json.dumps({"promoted": False, "failures": failures}, indent=2))
         return 1
     if args.dry_run:
-        print(json.dumps({"promoted": True, "dry_run": True}, indent=2))
+        print(json.dumps({"promoted": True, "dry_run": True, "artifact_hash": digest}, indent=2))
         return 0
-    state = promote_family(args.family, operator=args.operator)
-    print(json.dumps({"promoted": True, "state": state, "artifact_version": args.artifact_version}, indent=2))
+    state = promote_family(
+        args.family,
+        horizon=args.horizon,
+        version=args.artifact_version,
+        artifact_hash=digest,
+        operator=args.operator,
+    )
+    print(
+        json.dumps(
+            {
+                "promoted": True,
+                "state": state,
+                "artifact_version": args.artifact_version,
+                "artifact_hash": digest,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -257,6 +342,8 @@ def build_parser() -> argparse.ArgumentParser:
     holdout.add_argument("--family", required=True)
     holdout.add_argument("--horizon", required=True, choices=["intraday", "swing"])
     holdout.add_argument("--metrics-file", required=True)
+    holdout.add_argument("--artifact-version", default="")
+    holdout.add_argument("--artifact-hash", default="")
     holdout.add_argument("--operator", default="cli")
     holdout.add_argument("--registry", default="")
     holdout.add_argument("--dry-run", action="store_true")
@@ -274,6 +361,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["intraday", "swing"],
     )
     export_metrics.add_argument("--out", default="")
+    export_metrics.add_argument(
+        "--version",
+        default="",
+        help="Unique artifact version for this candidate (default: cand-<UTC timestamp>)",
+    )
     export_metrics.set_defaults(func=_cmd_export_holdout_metrics)
 
     promote = sub.add_parser("promote", help="Manually promote a passing family to demo")

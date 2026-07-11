@@ -7,11 +7,11 @@ import json
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal, Sequence
+from typing import Any, Sequence
 
 import numpy as np
 
-from athena_ase.data.ptis import asof
+from athena_ase.data.ptis import PTISStore, asof
 from athena_ase.horizon import HORIZONS, Horizon
 from athena_ase.settings import features_v2_enabled, microstructure_enabled
 
@@ -188,9 +188,23 @@ def _ewma_vol(logret: np.ndarray, span: int) -> np.ndarray:
     return np.sqrt(var)
 
 
-def _asof_values(series_id: str, decision_time_ms: int, n: int) -> np.ndarray:
+def _read_asof(
+    store: PTISStore | Any | None, series_id: str, decision_time_ms: int, n: int
+) -> np.ndarray:
+    return store.asof(series_id, decision_time_ms, n) if store is not None else asof(
+        series_id, decision_time_ms, n
+    )
+
+
+def _asof_values(
+    series_id: str,
+    decision_time_ms: int,
+    n: int,
+    *,
+    store: PTISStore | Any | None = None,
+) -> np.ndarray:
     try:
-        rows = asof(series_id, decision_time_ms, n)
+        rows = _read_asof(store, series_id, decision_time_ms, n)
     except KeyError:
         return np.array([], dtype=float)
     if len(rows) == 0:
@@ -199,7 +213,11 @@ def _asof_values(series_id: str, decision_time_ms: int, n: int) -> np.ndarray:
 
 
 def _asof_values_freshest(
-    series_ids: Sequence[str], decision_time_ms: int, n: int
+    series_ids: Sequence[str],
+    decision_time_ms: int,
+    n: int,
+    *,
+    store: PTISStore | Any | None = None,
 ) -> np.ndarray:
     """Values from the source whose last row is newest at decision time.
 
@@ -210,7 +228,7 @@ def _asof_values_freshest(
     best_t = -1
     for series_id in series_ids:
         try:
-            rows = asof(series_id, decision_time_ms, n)
+            rows = _read_asof(store, series_id, decision_time_ms, n)
         except KeyError:
             continue
         if len(rows) == 0:
@@ -222,8 +240,20 @@ def _asof_values_freshest(
     return best_vals
 
 
-def _asof_close_log(symbol: str, tf: str, decision_time_ms: int, n: int) -> np.ndarray:
-    vals = _asof_values_freshest(_price_series_ids(symbol, tf, "close"), decision_time_ms, n)
+def _asof_close_log(
+    symbol: str,
+    tf: str,
+    decision_time_ms: int,
+    n: int,
+    *,
+    store: PTISStore | Any | None = None,
+) -> np.ndarray:
+    vals = _asof_values_freshest(
+        _price_series_ids(symbol, tf, "close"),
+        decision_time_ms,
+        n,
+        store=store,
+    )
     if len(vals) == 0:
         return vals
     return np.log(np.maximum(vals, 1e-12))
@@ -331,21 +361,31 @@ class FeatureBuildContext:
     cot_asset: str = ""
     cot_verified: bool = True
     missing_feeds: list[str] = field(default_factory=list)
+    enriched_missing_feeds: list[str] = field(default_factory=list)
+
+
+def _mark_missing(target: list[str], name: str) -> None:
+    if name not in target:
+        target.append(name)
 
 
 def build_features_for_candidate(
     ctx: FeatureBuildContext,
     *,
     enriched: bool = False,
+    store: PTISStore | Any | None = None,
 ) -> dict[str, Any]:
     """Build one feature row for a candidate event at decision time."""
     cfg = HORIZONS[ctx.horizon]
     tf = cfg.tf
     need_bars = max(280, cfg.sigma_long_span + 32, 64 + 5)
-    close_log = _asof_close_log(ctx.symbol, tf, ctx.decision_time_ms, need_bars)
+    close_log = _asof_close_log(
+        ctx.symbol, tf, ctx.decision_time_ms, need_bars, store=store
+    )
     out: dict[str, Any] = {name: float("nan") for name in FEATURE_SCHEMA_ENRICHED}
 
     if len(close_log) < 32:
+        _mark_missing(ctx.missing_feeds, "price_history")
         out["instrument_id"] = ctx.symbol
         out["subclass"] = ctx.subclass
         out["candidate_dir"] = float(ctx.direction)
@@ -390,13 +430,24 @@ def build_features_for_candidate(
         out["range_pos"] = (float(tail[-1]) - lo) / (hi - lo) if hi > lo else 0.5
 
     if ctx.family == "forex":
-        vol_rows = _asof_values(_duka_series_id(ctx.symbol, tf), ctx.decision_time_ms, 64)
+        vol_rows = _asof_values_freshest(
+            (
+                _duka_series_id(ctx.symbol, tf),
+                *_price_series_ids(ctx.symbol, tf, "volume"),
+            ),
+            ctx.decision_time_ms,
+            64,
+            store=store,
+        )
     else:
         vol_rows = _asof_values_freshest(
-            _price_series_ids(ctx.symbol, tf, "volume"), ctx.decision_time_ms, 64
+            _price_series_ids(ctx.symbol, tf, "volume"),
+            ctx.decision_time_ms,
+            64,
+            store=store,
         )
     if len(vol_rows) == 0:
-        ctx.missing_feeds.append("volume")
+        _mark_missing(ctx.missing_feeds, "volume")
         out["volu_z"] = float("nan")
     else:
         out["volu_z"] = _zscore_log_volume(vol_rows)
@@ -404,11 +455,13 @@ def build_features_for_candidate(
     out["xsec_pct"] = ctx.xsec_pct
     out["family_dispersion"] = ctx.family_dispersion
 
-    bench_log = _asof_close_log(ctx.benchmark_symbol, tf, ctx.decision_time_ms, need_bars)
+    bench_log = _asof_close_log(
+        ctx.benchmark_symbol, tf, ctx.decision_time_ms, need_bars, store=store
+    )
     if len(bench_log) >= 64:
         out["beta_bench"] = _rolling_beta(close_log, bench_log)
     else:
-        ctx.missing_feeds.append("benchmark")
+        _mark_missing(ctx.missing_feeds, "benchmark")
 
     out["sig_tsmom"] = float(ctx.sig_tsmom)
     out["sig_carry"] = float(ctx.sig_carry)
@@ -434,44 +487,66 @@ def build_features_for_candidate(
     out["subclass"] = ctx.subclass
 
     if enriched and ctx.cot_asset and ctx.cot_verified:
-        cot_rows = asof(_cot_series_id(ctx.cot_asset), ctx.decision_time_ms, 160)
+        cot_rows = _read_asof(
+            store, _cot_series_id(ctx.cot_asset), ctx.decision_time_ms, 160
+        )
         pct, delta, n_weeks = _cot_percentile(cot_rows)
         if n_weeks >= COT_MIN_WEEKS:
             out["cot_pct"] = pct
             out["cot_delta_4w"] = delta
         else:
-            ctx.missing_feeds.append("cot_history")
+            _mark_missing(ctx.enriched_missing_feeds, "cot_history")
     elif enriched and ctx.family in ("forex", "commodity"):
-        ctx.missing_feeds.append("cot")
+        _mark_missing(ctx.enriched_missing_feeds, "cot")
 
     if enriched and ctx.family == "crypto":
-        fund = _asof_values(_bybit_series_id(ctx.symbol, "funding"), ctx.decision_time_ms, 64)
-        oi = _asof_values(_bybit_series_id(ctx.symbol, "oi"), ctx.decision_time_ms, 64)
+        fund = _asof_values(
+            _bybit_series_id(ctx.symbol, "funding"),
+            ctx.decision_time_ms,
+            64,
+            store=store,
+        )
+        oi = _asof_values(
+            _bybit_series_id(ctx.symbol, "oi"),
+            ctx.decision_time_ms,
+            64,
+            store=store,
+        )
         if len(fund) >= 8:
             mu = float(np.mean(fund))
             sd = float(np.std(fund))
             out["funding_z"] = (float(fund[-1]) - mu) / sd if sd > 0 else 0.0
         else:
-            ctx.missing_feeds.append("funding")
+            _mark_missing(ctx.enriched_missing_feeds, "funding")
         if len(oi) >= 8:
             oi_ret = np.diff(np.log(np.maximum(oi, 1.0)))
             mu = float(np.mean(oi_ret))
             sd = float(np.std(oi_ret))
             out["oi_delta_z"] = (float(oi_ret[-1]) - mu) / sd if sd > 0 else 0.0
         else:
-            ctx.missing_feeds.append("open_interest")
+            _mark_missing(ctx.enriched_missing_feeds, "open_interest")
 
     if microstructure_enabled() and ctx.family == "crypto":
-        imb = _asof_values(_bybit_series_id(ctx.symbol, "trade_imbalance_z"), ctx.decision_time_ms, 1)
-        delta = _asof_values(_bybit_series_id(ctx.symbol, "bucket_delta_z"), ctx.decision_time_ms, 1)
+        imb = _asof_values(
+            _bybit_series_id(ctx.symbol, "trade_imbalance_z"),
+            ctx.decision_time_ms,
+            1,
+            store=store,
+        )
+        delta = _asof_values(
+            _bybit_series_id(ctx.symbol, "bucket_delta_z"),
+            ctx.decision_time_ms,
+            1,
+            store=store,
+        )
         if len(imb) >= 1:
             out["trade_imbalance_z"] = float(imb[-1])
         else:
-            ctx.missing_feeds.append("trade_imbalance")
+            _mark_missing(ctx.enriched_missing_feeds, "trade_imbalance")
         if len(delta) >= 1:
             out["bucket_delta_z"] = float(delta[-1])
         else:
-            ctx.missing_feeds.append("bucket_delta")
+            _mark_missing(ctx.enriched_missing_feeds, "bucket_delta")
 
     return _select_schema(out, enriched)
 
@@ -485,12 +560,13 @@ def build_feature_matrix(
     contexts: Sequence[FeatureBuildContext],
     *,
     enriched: bool = False,
+    store: PTISStore | Any | None = None,
 ) -> tuple[np.ndarray, list[str], list[dict[str, Any]]]:
     """Build feature matrix aligned to schema column order."""
     schema = active_feature_schema(enriched=enriched)
     rows: list[dict[str, Any]] = []
     for ctx in contexts:
-        rows.append(build_features_for_candidate(ctx, enriched=enriched))
+        rows.append(build_features_for_candidate(ctx, enriched=enriched, store=store))
 
     matrix = np.empty((len(rows), len(schema)), dtype=float)
     for i, row in enumerate(rows):

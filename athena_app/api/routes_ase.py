@@ -13,8 +13,15 @@ from flask import jsonify, request
 from athena_ase.execution.journal import load_trade_journal, trade_journal_summary
 from athena_ase.horizon import Horizon
 from athena_ase.instruments import instrument_by_symbol
-from athena_ase.registry.artifacts import default_artifacts_root, load_manifest
+from athena_ase.registry.artifacts import (
+    active_artifact_version,
+    artifact_content_hash,
+    default_artifacts_root,
+    load_manifest,
+)
+from athena_ase.registry.promotion import get_deployment_binding
 from athena_ase.runtime.health import ase_health
+from athena_ase.validation.gates import check_provisional
 from athena_ase.runtime.scan import run_ase_dual_horizon_scan, run_ase_scan
 from athena_research.ase.training_report import write_training_report
 
@@ -59,18 +66,40 @@ def _training_report_summary() -> dict[str, Any]:
 def _model_provenance() -> list[dict[str, Any]]:
     """Read latest frozen manifest metadata without loading model pickle files."""
     root = default_artifacts_root()
+    active_version = active_artifact_version(root=root)
     rows: list[dict[str, Any]] = []
     for family in _MODEL_FAMILIES:
         for horizon in _MODEL_HORIZONS:
             base = root / family / horizon
             if not base.exists():
                 continue
-            versions = sorted(
-                (path for path in base.iterdir() if path.is_dir()),
-                key=lambda path: path.name,
-                reverse=True,
+            binding = get_deployment_binding(family, horizon)
+            selected_version = binding.version if binding is not None else active_version
+            versions = (
+                [base / selected_version]
+                if selected_version
+                else sorted(
+                    (path for path in base.iterdir() if path.is_dir()),
+                    key=lambda path: path.name,
+                    reverse=True,
+                )
             )
+            versions = [path for path in versions if path.is_dir()]
             if not versions:
+                if selected_version:
+                    rows.append(
+                        {
+                            "family": family,
+                            "horizon": horizon,
+                            "version": selected_version,
+                            "available": False,
+                            "threshold": None,
+                            "thresholdSource": "no trained artifact (FLAT-only)",
+                            "thresholdFallback": False,
+                            "datasetHash": "",
+                            "trainedAt": None,
+                        }
+                    )
                 continue
             manifest_path = versions[0] / "manifest.json"
             if not manifest_path.exists():
@@ -82,11 +111,26 @@ def _model_provenance() -> list[dict[str, Any]]:
                 continue
             eval_summary = manifest.eval_summary or {}
             validation_metrics = (manifest.validation_report or {}).get("metrics") or {}
+            provisional_ok, promotion_failures = check_provisional(
+                validation_metrics.get("holdout_gate_metrics") or {}
+            )
+            digest = artifact_content_hash(manifest)
+            binding_matches = bool(
+                binding is not None
+                and binding.version == manifest.version
+                and binding.artifact_hash == digest
+            )
+            if not binding_matches:
+                promotion_failures = [*promotion_failures, "not_exactly_promoted"]
             rows.append(
                 {
                     "family": manifest.family,
                     "horizon": manifest.horizon,
                     "version": manifest.version,
+                    "artifactHash": digest,
+                    "available": True,
+                    "runtimeEligible": provisional_ok and binding_matches,
+                    "promotionFailures": promotion_failures,
                     "threshold": float(manifest.thr_family),
                     "thresholdSource": (
                         eval_summary.get("threshold_source")

@@ -16,6 +16,7 @@ from athena_ase.execution.journal import (
     append_trade_signals,
     load_trade_journal,
 )
+from athena_ase.registry.promotion import promote_family
 
 
 @dataclass
@@ -23,6 +24,18 @@ class _Approval:
     approved: bool
     volume: float = 0.1
     reason: str = "OK"
+
+
+@pytest.fixture(autouse=True)
+def _promoted_forex_binding(tmp_path, monkeypatch):
+    monkeypatch.setenv("ATHENA_ASE_STATE_ROOT", str(tmp_path / "state"))
+    promote_family(
+        "forex",
+        horizon="intraday",
+        version="v1",
+        artifact_hash="test-artifact",
+        operator="test",
+    )
 
 
 def _trade_signal(**overrides) -> ASESignal:
@@ -51,7 +64,7 @@ def _trade_signal(**overrides) -> ASESignal:
         primarySignals=[{"name": "tsmom", "direction": 1, "rawStrength": 0.7}],
         predictionDiagnostics={},
         dataQuality={"coreOk": True, "route": "core", "missingFeeds": []},
-        modelHealth={"gateResult": {"ok": True}},
+        modelHealth={"artifactHash": "test-artifact", "gateResult": {"ok": True}},
         instrument="EURUSD",
         decisionTimeMs=1_700_000_000_000,
     )

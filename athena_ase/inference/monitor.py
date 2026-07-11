@@ -12,6 +12,9 @@ from athena_ase.settings import monitor_min_samples
 
 log = logging.getLogger("ase.monitor")
 
+# Reserved per-row key carrying the scan decision time; never a PSI feature.
+DECISION_TIME_KEY = "_decision_time_ms"
+
 
 def population_stability_index(expected: np.ndarray, actual: np.ndarray, *, bins: int = 10) -> float:
     expected = np.asarray(expected, dtype=float)
@@ -88,20 +91,28 @@ def evaluate_monitor(
     live_feature_rows = live_feature_rows or []
     min_n = monitor_min_samples() if min_samples is None else max(1, int(min_samples))
     if live_feature_rows and reference_features:
-        live_df = {k: [] for k in reference_features}
-        for row in live_feature_rows:
+        live_df: dict[str, list[float]] = {k: [] for k in reference_features}
+        live_times: dict[str, set[Any]] = {k: set() for k in reference_features}
+        for i, row in enumerate(live_feature_rows):
+            when = row.get(DECISION_TIME_KEY)
+            # Rows from one scan share a decision time and are cross-sectional,
+            # not independent time samples; untagged rows keep legacy counting.
+            time_marker: Any = float(when) if isinstance(when, (int, float)) else ("row", i)
             for key in reference_features:
                 val = row.get(key)
                 if isinstance(val, (int, float)):
                     live_df[key].append(float(val))
+                    live_times[key].add(time_marker)
         for key, ref in reference_features.items():
             live_vals = live_df.get(key) or []
-            if len(live_vals) < min_n or len(ref) < min_n:
+            effective_n = len(live_times.get(key) or ())
+            if effective_n < min_n or len(ref) < min_n:
                 insufficient.append(key)
                 log.debug(
-                    "ASE monitor skip PSI %s: live=%d ref=%d need>=%d",
+                    "ASE monitor skip PSI %s: live=%d distinct_times=%d ref=%d need>=%d",
                     key,
                     len(live_vals),
+                    effective_n,
                     len(ref),
                     min_n,
                 )

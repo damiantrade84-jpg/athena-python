@@ -119,7 +119,6 @@ def run_ase_pair_backtest(
     horizon: str = "both",
     lookback_days: int | None = None,
     ptis_root: str | None = None,
-    skip_demo_gate: bool = True,
 ) -> dict[str, Any]:
     """Run ASE Layer-1 + predict_batch backtest for one instrument across horizons."""
     if not bool(CONFIG.get("ASE_BT_ENABLED", True)):
@@ -165,7 +164,6 @@ def run_ase_pair_backtest(
             candidates,
             store,
             {inst.symbol: inst},
-            skip_demo_gate=skip_demo_gate,
         )
         for cand, sig in zip(candidates, signals):
             status = str(sig.decisionStatus or "FLAT")

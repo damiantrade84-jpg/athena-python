@@ -21,6 +21,7 @@ from athena_ase.execution.bridge import (
 )
 from athena_ase.inference.decision import MIN_TRADE_EXPECTED_R, apply_decision_rule
 from athena_ase.levels.brackets import compute_brackets
+from athena_ase.registry.promotion import promote_family
 from athena_ase.signals.common import (
     BarSeries,
     live_bars_stale,
@@ -29,6 +30,19 @@ from athena_ase.signals.common import (
 
 _HOUR = 3_600_000
 _DAY = 86_400_000
+
+
+@pytest.fixture(autouse=True)
+def _promoted_execution_bindings(tmp_path, monkeypatch):
+    monkeypatch.setenv("ATHENA_ASE_STATE_ROOT", str(tmp_path / "state"))
+    for family in ("forex", "crypto"):
+        promote_family(
+            family,
+            horizon="intraday",
+            version="v1",
+            artifact_hash="test-artifact",
+            operator="test",
+        )
 
 
 # ── decision floor ────────────────────────────────────────────────────────────
@@ -161,7 +175,7 @@ def _trade_signal(instrument: str = "EURUSD", family: str = "forex") -> ASESigna
         primarySignals=[],
         predictionDiagnostics={},
         dataQuality={"coreOk": True, "route": "core", "missingFeeds": []},
-        modelHealth={"gateResult": {"ok": True}},
+        modelHealth={"artifactHash": "test-artifact", "gateResult": {"ok": True}},
         instrument=instrument,
         decisionTimeMs=1_700_000_000_000,
     )
@@ -359,6 +373,35 @@ def test_evaluate_monitor_detects_shifted_distribution():
     assert result.watch_max is True
 
 
+def test_evaluate_monitor_one_scan_is_one_time_sample():
+    """Five symbols from a single scan tick must not satisfy MIN_SAMPLES."""
+    import numpy as np
+
+    from athena_ase.inference.monitor import DECISION_TIME_KEY, evaluate_monitor
+
+    ref = {"ret_z_1": np.linspace(-2, 2, 50)}
+    same_tick = [
+        {"ret_z_1": float(x), DECISION_TIME_KEY: 1_700_000_000_000.0}
+        for x in np.linspace(1.0, 3.0, 5)
+    ]
+    result = evaluate_monitor(
+        reference_features=ref, live_feature_rows=same_tick, min_samples=5
+    )
+    assert result.psi == {}
+    assert result.watch_max is False
+    assert "ret_z_1" in result.insufficient_samples
+
+    distinct_ticks = [
+        {"ret_z_1": float(x), DECISION_TIME_KEY: 1_700_000_000_000.0 + i * 60_000}
+        for i, x in enumerate(np.linspace(1.0, 3.0, 5))
+    ]
+    result = evaluate_monitor(
+        reference_features=ref, live_feature_rows=distinct_ticks, min_samples=5
+    )
+    assert result.psi["ret_z_1"] > 0.0
+    assert result.watch_max is True
+
+
 def test_predict_one_appends_live_feature_buffer(monkeypatch):
     import numpy as np
     from unittest.mock import MagicMock
@@ -438,7 +481,6 @@ def test_predict_one_appends_live_feature_buffer(monkeypatch):
         inst,
         bundle=bundle,
         live_feature_rows=live_buf,
-        skip_demo_gate=True,
     )
     assert len(live_buf) == 1
     assert "ret_z_1" in live_buf[0]

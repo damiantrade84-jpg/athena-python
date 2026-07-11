@@ -13,11 +13,15 @@ from athena_ase.horizon import Horizon
 from athena_ase.artifacts.monitor_ref import MONITOR_REFERENCE_FILE, load_monitor_reference
 from athena_ase.registry.artifacts import (
     ArtifactManifest,
+    active_artifact_version,
+    artifact_content_hash,
     default_artifacts_root,
     load_artifact_bundle as _load_bundle,
     load_manifest,
     verify_manifest,
 )
+from athena_ase.registry.promotion import get_deployment_binding
+from athena_ase.validation.gates import check_provisional
 
 log = logging.getLogger("ase.artifacts")
 
@@ -41,13 +45,16 @@ class ArtifactBundle:
 
     @property
     def artifact_hash(self) -> str:
-        return self.manifest.feature_schema_hash
+        return artifact_content_hash(self.manifest)
 
 
 def _resolve_version_dir(family: str, horizon: Horizon, version: str | None = None) -> Path | None:
     base = default_artifacts_root() / family / horizon
     if not base.exists():
         return None
+    if version is None:
+        binding = get_deployment_binding(family, horizon)
+        version = binding.version if binding is not None else active_artifact_version() or None
     if version:
         candidate = base / version
         return candidate if candidate.is_dir() else None
@@ -61,9 +68,38 @@ def load_artifact_bundle(
     *,
     version: str | None = None,
 ) -> ArtifactBundle | None:
+    runtime_load = version is None
     root = _resolve_version_dir(family, horizon, version)
     if root is None:
         return None
+    if runtime_load:
+        try:
+            preview = load_manifest(root / "manifest.json")
+        except (FileNotFoundError, TypeError, ValueError) as exc:
+            log.warning("ASE artifact manifest read failed for %s/%s: %s", family, horizon, exc)
+            return None
+        metrics = (preview.validation_report or {}).get("metrics") or {}
+        holdout_metrics = metrics.get("holdout_gate_metrics") or {}
+        promoted, failures = check_provisional(holdout_metrics)
+        if not promoted:
+            log.warning(
+                "ASE artifact remains research-only for %s/%s: %s",
+                family,
+                horizon,
+                ",".join(failures) or "provisional_gate_missing",
+            )
+            return None
+        binding = get_deployment_binding(family, horizon)
+        if binding is not None and (
+            binding.version != root.name
+            or binding.artifact_hash != artifact_content_hash(preview)
+        ):
+            log.warning(
+                "ASE promoted artifact binding mismatch for %s/%s",
+                family,
+                horizon,
+            )
+            return None
     try:
         manifest, models = _load_bundle(family, horizon, root.name, verify=True)
     except (FileNotFoundError, ValueError) as exc:

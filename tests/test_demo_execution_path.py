@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from athena_ase.contracts import ASESignal
 from athena_ase.execution.bridge import ASEExecutionDeps, execute_trade_signal
+from athena_ase.registry.promotion import promote_family
 
 
 @dataclass
@@ -13,6 +16,18 @@ class _Approval:
     approved: bool
     volume: float = 0.1
     reason: str = "OK"
+
+
+@pytest.fixture(autouse=True)
+def _promoted_forex_binding(tmp_path, monkeypatch):
+    monkeypatch.setenv("ATHENA_ASE_STATE_ROOT", str(tmp_path))
+    promote_family(
+        "forex",
+        horizon="intraday",
+        version="v1",
+        artifact_hash="test-artifact",
+        operator="test",
+    )
 
 
 def _trade_signal() -> ASESignal:
@@ -41,7 +56,7 @@ def _trade_signal() -> ASESignal:
         primarySignals=[{"name": "tsmom", "direction": 1, "rawStrength": 0.7}],
         predictionDiagnostics={},
         dataQuality={"coreOk": True, "route": "core", "missingFeeds": []},
-        modelHealth={"gateResult": {"ok": True}},
+        modelHealth={"artifactHash": "test-artifact", "gateResult": {"ok": True}},
         instrument="EURUSD",
         decisionTimeMs=1_700_000_000_000,
     )

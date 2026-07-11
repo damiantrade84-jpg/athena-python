@@ -16,6 +16,8 @@ import sklearn
 from athena_ase.features.build import FEATURE_SCHEMA_CORE, FEATURE_SCHEMA_ENRICHED, schema_hash
 from athena_research.ase.trials_registry import registry_hash
 
+ACTIVE_VERSION_FILE = "ACTIVE_VERSION"
+
 
 def default_artifacts_root() -> Path:
     override = os.environ.get("ATHENA_ASE_MODELS_ROOT", "").strip()
@@ -27,12 +29,42 @@ def default_artifacts_root() -> Path:
     return Path(local) / "Athena" / "models" / "ase"
 
 
+def active_artifact_version(*, root: Path | None = None) -> str:
+    marker = (root or default_artifacts_root()) / ACTIVE_VERSION_FILE
+    if not marker.exists():
+        return ""
+    try:
+        return marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def activate_artifact_version(version: str, *, root: Path | None = None) -> Path:
+    """Atomically pin runtime loading to one train-all artifact version."""
+    clean = str(version or "").strip()
+    if not clean or Path(clean).name != clean or "/" in clean or "\\" in clean:
+        raise ValueError(f"invalid artifact version: {version!r}")
+    artifacts_root = root or default_artifacts_root()
+    artifacts_root.mkdir(parents=True, exist_ok=True)
+    marker = artifacts_root / ACTIVE_VERSION_FILE
+    pending = artifacts_root / f".{ACTIVE_VERSION_FILE}.tmp"
+    pending.write_text(clean + "\n", encoding="utf-8")
+    pending.replace(marker)
+    return marker
+
+
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
 def _sha256_file(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
+
+
+def artifact_content_hash(manifest: ArtifactManifest) -> str:
+    """Stable identity for the exact manifest and hashed artifact contents."""
+    payload = json.dumps(asdict(manifest), sort_keys=True, separators=(",", ":"))
+    return _sha256_bytes(payload.encode("utf-8"))
 
 
 def _now_iso() -> str:
@@ -207,6 +239,8 @@ def load_artifact_bundle(
 
     models: dict[str, Any] = {}
     for fname in manifest.file_hashes:
+        if not fname.endswith(".pkl"):
+            continue
         with (out_dir / fname).open("rb") as fh:
             models[fname] = pickle.load(fh)
     return manifest, models
