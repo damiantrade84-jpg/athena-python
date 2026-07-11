@@ -40,9 +40,9 @@ def scan_duplicate_top_level_yaml_keys(yaml_text: str) -> dict[str, list[int]]:
 AI_API_KEY_PLACEHOLDER = "YOUR_XAI_API_KEY"
 _LEGACY_AI_API_KEY_PLACEHOLDER = "YOUR_MOONSHOT_API_KEY"
 _AI_BASE_URL_DEFAULT = "https://api.x.ai/v1"
-_AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "gpt-5.5")
+_AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "gpt-5.6-sol")
 _OPENAI_BASE_URL_DEFAULT = "https://api.openai.com/v1"
-_OPENAI_REVIEW_MODEL_DEFAULT = "gpt-5.5"
+_OPENAI_REVIEW_MODEL_DEFAULT = "gpt-5.6-sol"
 _AI_REVIEW_PROVIDER_DEFAULT = "openai"
 _CLAUDE_REVIEW_MODEL_DEFAULT = "claude-opus-4-7"
 _AI_REVIEW_PROVIDER_ALIASES = {
@@ -574,8 +574,8 @@ class _OpenAIResponsesCompatClient:
         self.model = get_ai_model(cfg, provider="openai")
         self.reasoning_effort = str(
             os.environ.get("OPENAI_REVIEW_REASONING_EFFORT", "")
-            or cfg.get("OPENAI_REVIEW_REASONING_EFFORT", "high")
-            or "high"
+            or cfg.get("OPENAI_REVIEW_REASONING_EFFORT", "low")
+            or "low"
         ).strip().lower()
         self.max_output_tokens = int(
             os.environ.get("OPENAI_REVIEW_MAX_OUTPUT_TOKENS", "")
@@ -892,7 +892,7 @@ CONFIG: dict = {
         "OPENAI_REVIEW_MODEL", _OPENAI_REVIEW_MODEL_DEFAULT
     ),
     "OPENAI_REVIEW_REASONING_EFFORT": os.environ.get(
-        "OPENAI_REVIEW_REASONING_EFFORT", "high"
+        "OPENAI_REVIEW_REASONING_EFFORT", "low"
     ),
     "OPENAI_REVIEW_MAX_OUTPUT_TOKENS": _env_int(
         "OPENAI_REVIEW_MAX_OUTPUT_TOKENS", 12000

@@ -2379,7 +2379,7 @@ AI_REVIEW_FALLBACK_PROVIDERS: "claude"
 # TV Chart candidate source + /api/ai/chart-review primary engine: A | B (default A)
 AI_CHART_REVIEW:
   PRIMARY_ENGINE: "A"
-  OPENAI_MODEL: "gpt-5.5"
+  OPENAI_MODEL: "gpt-5.6-sol"
 
 AI_CHART_REVIEW_XAI_MODEL: "grok-4.5"  # xAI-only when provider=grok; unused with openai primary
 
@@ -2394,9 +2394,9 @@ OPENAI_BASE_URL: "https://api.openai.com/v1"
 
 OPENAI_REVIEW_ENABLED: true
 
-OPENAI_REVIEW_MODEL: "gpt-5.5"
+OPENAI_REVIEW_MODEL: "gpt-5.6-sol"
 
-OPENAI_REVIEW_REASONING_EFFORT: "high"
+OPENAI_REVIEW_REASONING_EFFORT: "low"
 
 OPENAI_REVIEW_MAX_OUTPUT_TOKENS: 12000
 
@@ -2404,7 +2404,7 @@ OPENAI_REVIEW_TIMEOUT_SECONDS: 240
 
 OPENAI_REVIEW_SDK_MAX_RETRIES: 0
 
-AI_MODEL: "gpt-5.5"
+AI_MODEL: "gpt-5.6-sol"
 
 XAI_MODEL: "grok-4.3"  # xAI-only legacy alias; unused when providers are openai.
 
@@ -2413,22 +2413,22 @@ LOTTERY_AI_PROVIDER: "openai"
 LOTTERY_AI_MAX_TOKENS: 4000
 LOTTERY_AI_REASONING_EFFORT: "low"   # OpenAI Responses path only
 # LOTTERY_AI_TIMEOUT_SEC: 30         # optional; falls back to AI_REQUEST_TIMEOUT_SEC
-# LOTTERY_AI_MODEL: "gpt-5.5"         # optional; defaults to AI_MODEL for selected provider
+# LOTTERY_AI_MODEL: "gpt-5.6-sol"         # optional; defaults to AI_MODEL for selected provider
 
-DEBATE_MODEL: "gpt-5.5"
+DEBATE_MODEL: "gpt-5.6-sol"
 
-VISION_MODEL: "gpt-5.5"          # /api/chart-analysis
+VISION_MODEL: "gpt-5.6-sol"          # /api/chart-analysis
 
 NEWS_SENTIMENT_AI_PROVIDER: "openai"
 
-NEWS_SENTIMENT_MODEL: "gpt-5.5"  # News AI text; defaults to AI_MODEL if empty
+NEWS_SENTIMENT_MODEL: "gpt-5.6-sol"  # News AI text; defaults to AI_MODEL if empty
 
 # Default OpenAI-compatible SDK read timeout is much longer; keep advisory AI bounded.
 AI_REQUEST_TIMEOUT_SEC: 30
 # Bull/Bear/Judge debate uses this (falls back to AI_REQUEST_TIMEOUT_SEC if unset).
 DEBATE_AI_TIMEOUT_SEC: 30
 MARCUS_AI_PROVIDER: "openai"  # Marcus Reid text review (/api/analyze); independent of AI_REVIEW_PROVIDER.
-MARCUS_MODEL: "gpt-5.5"  # Marcus Reid model; falls back to AI_MODEL if unset.
+MARCUS_MODEL: "gpt-5.6-sol"  # Marcus Reid model; falls back to AI_MODEL if unset.
 
 MARCUS_AI_TIMEOUT_SEC: 90
 # Marcus output budget. On OpenAI Responses, reasoning tokens share this budget;
