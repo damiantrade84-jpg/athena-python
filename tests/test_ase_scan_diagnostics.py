@@ -13,7 +13,7 @@ from athena_ase.data.ptis import PTISStore, build_row
 from athena_ase.inference.predict import predict_no_candidate
 from athena_ase.instruments import instrument_by_symbol
 from athena_ase.runtime.health import ase_health, scan_diagnostics
-from athena_ase.runtime.scan import DEFAULT_SCAN_INGEST_SOURCES, run_ase_scan
+from athena_ase.runtime.scan import run_ase_scan
 from athena_ase.data.ingest.common import eodhd_series_id
 
 
@@ -119,7 +119,7 @@ def test_ase_health_reports_blockers(ptis: PTISStore):
     assert diag["ptisSeriesCount"] >= 3
 
 
-def test_scan_runs_ingest_by_default(ptis: PTISStore, monkeypatch):
+def test_forex_symbol_scan_runs_mt5_live_ingest_by_default(ptis: PTISStore, monkeypatch):
     calls: list[dict[str, Any]] = []
 
     def fake_run_ingest(*, store, sources, write_audit, bybit_lookback_days):
@@ -142,7 +142,7 @@ def test_scan_runs_ingest_by_default(ptis: PTISStore, monkeypatch):
         ptis_root=str(ptis.root),
     )
     assert len(calls) == 1
-    assert calls[0]["sources"] == DEFAULT_SCAN_INGEST_SOURCES
+    assert calls[0]["sources"] == ("mt5_live",)
     assert calls[0]["write_audit"] is False
     assert calls[0]["bybit_lookback_days"] == scan_module.DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS
     assert result["ingestResult"]["result"] == {"mt5_live": {"inserted": 5}}
@@ -153,12 +153,13 @@ def test_crypto_only_scan_ingests_bybit_only(ptis: PTISStore, monkeypatch):
     # scans must keep the bybit leg and drop only the MT5 leg.
     calls: list[dict[str, Any]] = []
 
-    def fake_run_ingest(*, store, sources, bybit_lookback_days, write_audit):
+    def fake_run_ingest(*, store, sources, bybit_lookback_days, write_audit, bybit_symbols):
         calls.append(
             {
                 "sources": tuple(sources),
                 "lookback": bybit_lookback_days,
                 "write_audit": write_audit,
+                "bybit_symbols": bybit_symbols,
             }
         )
         return {"bybit": {"inserted": 5}}
@@ -174,9 +175,58 @@ def test_crypto_only_scan_ingests_bybit_only(ptis: PTISStore, monkeypatch):
 
     assert len(calls) == 1
     assert calls[0]["sources"] == ("bybit",)
+    assert calls[0]["bybit_symbols"]
     assert result["ingestResult"] == {"result": {"bybit": {"inserted": 5}}}
     assert result["instrumentCount"] > 0
     assert result["signalCount"] == result["instrumentCount"]
+
+
+def test_non_crypto_scan_default_ingest_skips_bybit(ptis: PTISStore, monkeypatch):
+    calls: list[dict[str, Any]] = []
+
+    def fake_run_ingest(**kwargs):
+        calls.append(kwargs)
+        return {"mt5_live": {"inserted": 5}}
+
+    monkeypatch.setattr(scan_module, "run_ingest", fake_run_ingest)
+    monkeypatch.setattr(scan_module, "trade_journal_summary", lambda: {})
+
+    result = run_ase_scan(
+        family="forex",
+        horizon="intraday",
+        write_journal=False,
+        ptis_root=str(ptis.root),
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["sources"] == ("mt5_live",)
+    assert "bybit_symbols" not in calls[0]
+    assert result["ingestResult"] == {"result": {"mt5_live": {"inserted": 5}}}
+
+
+def test_crypto_symbol_scan_limits_bybit_ingest_to_requested_symbols(
+    ptis: PTISStore, monkeypatch
+):
+    calls: list[dict[str, Any]] = []
+
+    def fake_run_ingest(**kwargs):
+        calls.append(kwargs)
+        return {"bybit": {"inserted": 5}}
+
+    monkeypatch.setattr(scan_module, "run_ingest", fake_run_ingest)
+    monkeypatch.setattr(scan_module, "trade_journal_summary", lambda: {})
+
+    result = run_ase_scan(
+        symbols=["BTCUSDT"],
+        horizon="intraday",
+        write_journal=False,
+        ptis_root=str(ptis.root),
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["sources"] == ("bybit",)
+    assert calls[0]["bybit_symbols"] == ["BTCUSDT"]
+    assert result["ingestResult"] == {"result": {"bybit": {"inserted": 5}}}
 
 
 def test_scan_skips_ingest_when_sources_empty(ptis: PTISStore, monkeypatch):
