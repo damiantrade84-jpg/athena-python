@@ -467,17 +467,33 @@ export default function ASEPanel() {
       {backtestAllError && <ErrorBanner message={backtestAllError} />}
 
       {provenanceRows.length > 0 && (
-        <div className="shrink-0 min-w-0 max-w-full overflow-hidden rounded-lg border px-3 py-2" style={{ borderColor: CYAN_DIM, background: 'hsl(200 30% 6%)' }}>
+        <div className="shrink-0 min-w-0 w-full max-w-full overflow-hidden rounded-lg border px-3 py-2" style={{ borderColor: CYAN_DIM, background: 'hsl(200 30% 6%)' }}>
           <div className="text-[9px] uppercase tracking-wider text-muted-foreground mb-1">Frozen model provenance</div>
-          <div className="flex gap-3 overflow-x-auto font-mono text-[10px]">
+          <div className="grid min-w-0 grid-cols-1 gap-1.5 font-mono text-[10px] md:grid-cols-2 2xl:grid-cols-5">
             {provenanceRows.map((row) => (
-              <div key={`${row.family}-${row.horizon}`} className="min-w-max">
-                <span style={{ color: CYAN }}>{row.family}/{row.horizon}</span>
-                {' '}<span>v:{row.version || '—'}</span>
-                {' '}<span>thr:{fmtNum(row.threshold, 3)}</span>
-                {row.thresholdFallback && <span className="text-amber-400"> fallback</span>}
-                {' '}<span className="text-muted-foreground">{row.thresholdSource || 'source not recorded'}</span>
-                {' '}<span className="text-muted-foreground">ds:{row.datasetHash ? row.datasetHash.slice(0, 8) : '—'}</span>
+              <div
+                key={`${row.family}-${row.horizon}`}
+                className="min-w-0 rounded border px-2 py-1"
+                style={{ borderColor: 'hsl(185 40% 16%)' }}
+              >
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate" style={{ color: CYAN }}>{row.family}/{row.horizon}</span>
+                  <span className="shrink-0">v:{row.version || '—'}</span>
+                  {row.available === false ? (
+                    <span className="shrink-0 text-amber-400">FLAT-only</span>
+                  ) : row.runtimeEligible === false ? (
+                    <span className="shrink-0 text-amber-400">RESEARCH-only</span>
+                  ) : (
+                    <span className="shrink-0">thr:{fmtNum(row.threshold, 3)}</span>
+                  )}
+                  {row.thresholdFallback && <span className="shrink-0 text-amber-400">fallback</span>}
+                </div>
+                <div
+                  className="truncate text-muted-foreground"
+                  title={`${row.thresholdSource || 'source not recorded'} · dataset ${row.datasetHash || 'not recorded'}${row.promotionFailures?.length ? ` · gate failures: ${row.promotionFailures.join(', ')}` : ''}`}
+                >
+                  {row.thresholdSource || 'source not recorded'} · ds:{row.datasetHash ? row.datasetHash.slice(0, 8) : '—'}
+                </div>
               </div>
             ))}
           </div>

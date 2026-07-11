@@ -1280,6 +1280,9 @@ export interface ASEModelProvenance {
   family?: string;
   horizon?: string;
   version?: string;
+  available?: boolean;
+  runtimeEligible?: boolean;
+  promotionFailures?: string[];
   threshold?: number;
   thresholdSource?: string | null;
   thresholdFallback?: boolean;
