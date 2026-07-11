@@ -2292,6 +2292,14 @@ CONFIG: dict = {
         "etf": 0.003,
         "crypto": 0.005,
     },
+    "MAX_SIGNAL_DRIFT_ATR_MULT": {
+        "forex": 0.25,
+        "commodity": 0.25,
+        "index": 0.25,
+        "stock": 0.25,
+        "etf": 0.25,
+        "crypto": 0.25,
+    },
     "ATR_FRESHNESS": {
         "ENABLED": True,
         "BLOCK_EXECUTION_ON_STALE_ATR": True,

@@ -586,6 +586,126 @@ def _is_structural_engine_b_execution(sig: dict, engine_b: dict | None = None) -
     return False
 
 
+def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[str | None, dict]:
+    """Validate structural Engine B drift before risk sizing and anchor risk to broker price."""
+    if not _is_structural_engine_b_execution(sig):
+        return None, {}
+    direction = str(sig.get("direction") or "").upper()
+    if direction not in ("LONG", "SHORT"):
+        return "INVALID_DIRECTION", {}
+    try:
+        signal_price = float(sig.get("price") or sig.get("entry") or 0)
+    except (TypeError, ValueError):
+        signal_price = 0.0
+    if signal_price <= 0:
+        return "SIGNAL_PRICE_MISSING", {}
+
+    try:
+        if venue == "bybit":
+            from bybit_executor import (
+                _bybit_execution_side_price,
+                _bybit_max_tick_age_sec,
+                _bybit_ticker_age_seconds,
+                _get_exchange,
+                bybit_map_symbol,
+            )
+
+            exchange = _get_exchange()
+            symbol = bybit_map_symbol(sig.get("pair", "")) or bybit_map_symbol(sig.get("symbol", ""))
+            if exchange is None or not symbol:
+                return "BROKER_QUOTE_UNAVAILABLE", {}
+            ticker = exchange.fetch_ticker(symbol)
+            broker_price = _bybit_execution_side_price(ticker, direction)
+            broker_quote_age = _bybit_ticker_age_seconds(ticker)
+            broker_quote_age_limit = _bybit_max_tick_age_sec()
+        else:
+            from mt5_executor import (
+                _get_mt5,
+                _mt5_max_tick_age_sec,
+                _mt5_tick_age_seconds,
+                mt5_connect,
+                mt5_map_symbol,
+            )
+
+            mt5 = _get_mt5()
+            symbol = mt5_map_symbol(sig.get("pair") or sig.get("display") or sig.get("symbol") or "")
+            if mt5 is None or not symbol or not mt5_connect():
+                return "BROKER_QUOTE_UNAVAILABLE", {}
+            tick = mt5.symbol_info_tick(symbol)
+            broker_price = (tick.ask if direction == "LONG" else tick.bid) if tick else None
+            broker_quote_age = _mt5_tick_age_seconds(tick) if tick else None
+            broker_quote_age_limit = _mt5_max_tick_age_sec()
+    except Exception as exc:
+        return f"BROKER_QUOTE_ERROR:{type(exc).__name__}", {}
+
+    try:
+        broker_price_f = float(broker_price)
+    except (TypeError, ValueError):
+        broker_price_f = 0.0
+    if broker_price_f <= 0:
+        return "BROKER_QUOTE_INVALID", {}
+    if broker_quote_age is None:
+        return "BROKER_TICK_TIMESTAMP_MISSING", {}
+    if broker_quote_age_limit is not None and broker_quote_age > broker_quote_age_limit:
+        return "BROKER_TICK_STALE", {
+            "tickAgeSec": round(float(broker_quote_age), 3),
+            "tickAgeLimitSec": float(broker_quote_age_limit),
+        }
+
+    asset_type = str(sig.get("type") or sig.get("asset_type") or "").lower()
+    threshold_type = "etf" if asset_type == "etf_bond" else asset_type
+    pct_cfg = cfg.get("MAX_SIGNAL_DRIFT_PCT") or {}
+    atr_cfg = cfg.get("MAX_SIGNAL_DRIFT_ATR_MULT") or {}
+    try:
+        pct_limit = float(pct_cfg.get(threshold_type))
+    except (AttributeError, TypeError, ValueError):
+        pct_limit = 0.0
+    nested = sig.get("naked_data") if isinstance(sig.get("naked_data"), dict) else sig.get("engine_b")
+    nested = nested if isinstance(nested, dict) else {}
+    try:
+        atr = float(sig.get("atr") or nested.get("atr") or 0)
+        atr_mult = float(atr_cfg.get(threshold_type))
+    except (AttributeError, TypeError, ValueError):
+        atr = 0.0
+        atr_mult = 0.0
+    if pct_limit <= 0 or atr <= 0 or atr_mult <= 0:
+        return "ENGINE_B_DRIFT_LIMIT_UNAVAILABLE", {}
+
+    pct_drift = abs(broker_price_f - signal_price) / signal_price
+    atr_drift = abs(broker_price_f - signal_price) / atr
+    if pct_drift > pct_limit or atr_drift > atr_mult:
+        return "ENGINE_B_BROKER_DRIFT_TOO_LARGE", {
+            "signalPrice": signal_price,
+            "brokerPrice": broker_price_f,
+            "driftPct": round(pct_drift, 6),
+            "driftAtr": round(atr_drift, 4),
+            "maxDriftPct": pct_limit,
+            "maxDriftAtr": atr_mult,
+        }
+
+    sig.setdefault("signalPriceRef", signal_price)
+    sig["price"] = broker_price_f
+    sig["entry"] = broker_price_f
+    sig["brokerPreflightPrice"] = broker_price_f
+    broker_quote_ts = time.time() - max(0.0, float(broker_quote_age))
+    sig["quoteTimestamp"] = broker_quote_ts
+    sig["quoteAgeSec"] = max(0.0, float(broker_quote_age))
+    sig.pop("quoteAgeEval", None)
+    sig["quoteFreshness"] = {
+        "source": f"{venue}_broker_preflight",
+        "timestamp": broker_quote_ts,
+        "ageSec": round(max(0.0, float(broker_quote_age)), 3),
+        "fresh": True,
+    }
+    return None, {
+        "signalPrice": signal_price,
+        "brokerPrice": broker_price_f,
+        "driftPct": round(pct_drift, 6),
+        "driftAtr": round(atr_drift, 4),
+        "tickAgeSec": round(max(0.0, float(broker_quote_age)), 3),
+    }
+
+
 def _signal_has_engine_b_context(sig: dict, engine_b: dict | None = None) -> bool:
     return _is_structural_engine_b_execution(sig, engine_b)
 
@@ -1636,6 +1756,14 @@ def api_quick_execute():
             apply_engine_a_exit_mode(
                 sig, _audit_engine_from_signal(sig), symbol_info, _r.CONFIG, level_override
             )
+
+        _drift_error, _drift_diag = _engine_b_pre_risk_broker_price(
+            sig, _exec_venue, _r.CONFIG
+        )
+        if _drift_error:
+            return jsonify({"error": _drift_error, "brokerDrift": _drift_diag}), 409
+        if _drift_diag:
+            sig["brokerDriftPreRisk"] = _drift_diag
 
         approval = risk_check(
             signal=sig,
@@ -2731,6 +2859,14 @@ def api_execute():
             apply_engine_a_exit_mode(
                 sig, _audit_engine_from_signal(sig), symbol_info, _r.CONFIG, level_override
             )
+
+        _drift_error, _drift_diag = _engine_b_pre_risk_broker_price(
+            sig, _exec_venue, _r.CONFIG
+        )
+        if _drift_error:
+            return jsonify({"error": _drift_error, "brokerDrift": _drift_diag}), 409
+        if _drift_diag:
+            sig["brokerDriftPreRisk"] = _drift_diag
 
         approval = risk_check(
             signal=sig,

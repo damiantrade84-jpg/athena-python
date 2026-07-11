@@ -2242,6 +2242,16 @@ MAX_SIGNAL_DRIFT_PCT:
   etf: 0.003
   crypto: 0.005
 
+# Structural Engine B pre-risk drift cap in ATR units. Effective allowance is
+# the stricter of this and MAX_SIGNAL_DRIFT_PCT.
+MAX_SIGNAL_DRIFT_ATR_MULT:
+  forex: 0.25
+  commodity: 0.25
+  index: 0.25
+  stock: 0.25
+  etf: 0.25
+  crypto: 0.25
+
 DATA_FRESHNESS_GATES:
   WARN_ON_STALE_SCAN: true
   BLOCK_EXECUTION_ON_STALE: true

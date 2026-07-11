@@ -65,3 +65,50 @@ def test_config_block_structural_rebase_defaults_false():
     # BLOCK_STRUCTURAL_REBASE is intentionally absent (default false via .get).
     # If it ever ships true by default this test should fail loudly.
     assert "BLOCK_STRUCTURAL_REBASE: true" not in text
+
+
+def test_engine_b_broker_drift_blocks_before_risk_and_uses_atr(monkeypatch):
+    import execution
+    import sys
+    from types import SimpleNamespace
+
+    ticker_price = {"value": 101.0}
+    fake_exchange = SimpleNamespace(
+        fetch_ticker=lambda _symbol: {"ask": ticker_price["value"], "bid": ticker_price["value"]}
+    )
+    fake_bybit = SimpleNamespace(
+        _get_exchange=lambda: fake_exchange,
+        bybit_map_symbol=lambda _value: "BTC/USDT:USDT",
+        _bybit_execution_side_price=lambda ticker, _direction: ticker["ask"],
+        _bybit_ticker_age_seconds=lambda _ticker: 0.2,
+        _bybit_max_tick_age_sec=lambda: 3.0,
+    )
+    monkeypatch.setitem(sys.modules, "bybit_executor", fake_bybit)
+    cfg = {
+        "MAX_SIGNAL_DRIFT_PCT": {"crypto": 0.05},
+        "MAX_SIGNAL_DRIFT_ATR_MULT": {"crypto": 0.25},
+    }
+    signal = {
+        "is_naked": True,
+        "pair": "BTC/USDT",
+        "type": "crypto",
+        "direction": "LONG",
+        "price": 100.0,
+        "atr": 2.0,
+        "sl": 98.0,
+        "tp1": 104.0,
+    }
+
+    error, diag = execution._engine_b_pre_risk_broker_price(signal, "bybit", cfg)
+    assert error == "ENGINE_B_BROKER_DRIFT_TOO_LARGE"
+    assert diag["driftAtr"] == 0.5
+    assert signal["price"] == 100.0
+
+    ticker_price["value"] = 100.4
+    error, diag = execution._engine_b_pre_risk_broker_price(signal, "bybit", cfg)
+    assert error is None
+    assert signal["signalPriceRef"] == 100.0
+    assert signal["price"] == 100.4
+    assert signal["tp1"] == 104.0  # structural target remains absolute
+    assert signal["quoteAgeSec"] == 0.2
+    assert signal["quoteFreshness"]["source"] == "bybit_broker_preflight"
