@@ -82,6 +82,7 @@ def test_engine_b_broker_drift_blocks_before_risk_and_uses_atr(monkeypatch):
         _bybit_execution_side_price=lambda ticker, _direction: ticker["ask"],
         _bybit_ticker_age_seconds=lambda _ticker: 0.2,
         _bybit_max_tick_age_sec=lambda: 3.0,
+        _fetch_bybit_ticker=lambda _symbol, category: {"timestamp": 1, "category": category},
     )
     monkeypatch.setitem(sys.modules, "bybit_executor", fake_bybit)
     cfg = {
@@ -112,3 +113,46 @@ def test_engine_b_broker_drift_blocks_before_risk_and_uses_atr(monkeypatch):
     assert signal["tp1"] == 104.0  # structural target remains absolute
     assert signal["quoteAgeSec"] == 0.2
     assert signal["quoteFreshness"]["source"] == "bybit_broker_preflight"
+
+
+def test_engine_b_broker_preflight_uses_bybit_rest_timestamp_fallback(monkeypatch):
+    import execution
+    import sys
+    from types import SimpleNamespace
+
+    fake_exchange = SimpleNamespace(fetch_ticker=lambda _symbol: {"ask": 100.1, "bid": 100.0})
+
+    def _age(ticker):
+        return 0.4 if ticker.get("timestamp") else None
+
+    fake_bybit = SimpleNamespace(
+        _get_exchange=lambda: fake_exchange,
+        bybit_map_symbol=lambda _value: "BTC/USDT:USDT",
+        _bybit_execution_side_price=lambda ticker, _direction: ticker["ask"],
+        _bybit_ticker_age_seconds=_age,
+        _bybit_max_tick_age_sec=lambda: 3.0,
+        _fetch_bybit_ticker=lambda symbol, category: {
+            "symbol": symbol,
+            "category": category,
+            "timestamp": 1_000_000,
+        },
+    )
+    monkeypatch.setitem(sys.modules, "bybit_executor", fake_bybit)
+    signal = {
+        "is_naked": True,
+        "pair": "BTC/USDT",
+        "type": "crypto",
+        "direction": "LONG",
+        "price": 100.0,
+        "atr": 2.0,
+    }
+    cfg = {
+        "MAX_SIGNAL_DRIFT_PCT": {"crypto": 0.05},
+        "MAX_SIGNAL_DRIFT_ATR_MULT": {"crypto": 0.25},
+    }
+
+    error, diag = execution._engine_b_pre_risk_broker_price(signal, "bybit", cfg)
+
+    assert error is None
+    assert diag["tickAgeSec"] == 0.4
+    assert signal["quoteAgeSec"] == 0.4

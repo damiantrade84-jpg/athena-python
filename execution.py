@@ -606,6 +606,7 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
                 _bybit_execution_side_price,
                 _bybit_max_tick_age_sec,
                 _bybit_ticker_age_seconds,
+                _fetch_bybit_ticker,
                 _get_exchange,
                 bybit_map_symbol,
             )
@@ -617,6 +618,13 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
             ticker = exchange.fetch_ticker(symbol)
             broker_price = _bybit_execution_side_price(ticker, direction)
             broker_quote_age = _bybit_ticker_age_seconds(ticker)
+            if broker_quote_age is None:
+                raw_symbol = symbol.split(":")[0].replace("/", "")
+                rest_tick = _fetch_bybit_ticker(raw_symbol, category="linear")
+                if isinstance(rest_tick, dict) and rest_tick.get("timestamp"):
+                    broker_quote_age = _bybit_ticker_age_seconds(
+                        {"timestamp": rest_tick["timestamp"]}
+                    )
             broker_quote_age_limit = _bybit_max_tick_age_sec()
         else:
             from mt5_executor import (
