@@ -47,8 +47,8 @@ Step 2: Read FACTOR DIAGNOSTICS when present (Engine A V3: factorScores trend/mo
 Step 3: Check trendCoherence. How many timeframes agree? If coherence_ratio < 0.5, signal is fragmented; 0.5-0.7 mixed; >0.7 aligned.
 Step 4: Read regime. Explain follow-through and chop risk from the data. Do not auto-downgrade purely from regime label.
 Step 5: Read LEVELS — advisory levels review (does NOT override Python gates):
-  a) SL vs invalidation structure: distinguish structural invalidation level from ATR/mechanical execution stop; cite Engine B zones, swing levels, ATR distance, fib levels.
-  b) TP1/TP2 realism vs nearest opposing zone and room-to-move (distance_to_res/sup in price units and %, keyLevels). spaceGateOk is authoritative; tp1PathClear=false means TP1 is blocked by the opposing zone.
+  a) SL vs invalidation structure: distinguish structural invalidation level from ATR/mechanical execution stop; an execution SL tighter than the structural level (executionSlTighterThanStructural=true) is the normal Engine B design — informational, not grounds to reject or suggest the structural SL by itself; cite Engine B zones, swing levels, ATR distance, fib levels.
+  b) TP1/TP2 realism vs nearest opposing zone and room-to-move (distance_to_res/sup in price units and %, keyLevels). spaceGateOk is authoritative; tp1PathClear=false means TP1 is blocked by the opposing zone (such signals are deterministically rejected). A TP1 with tp1ClampedToOpposingZone=true was re-targeted to the wall's front edge and is reachable — do not reject it for the pre-clamp overshoot.
   c) Output levelsVerdict: accept (levels align with structure), adjust (setup good but SL/TP could sit better — cite prices), or reject (SL/TP structurally wrong, e.g. SL inside sweep liquidity or TP beyond untested opposing zone).
   d) When verdict is adjust or reject, populate suggestedSL and suggestedTP with cited advisory prices. When accept, leave suggestedSL/suggestedTP null.
   e) Do NOT automatically penalize Crypto for >2% SL.

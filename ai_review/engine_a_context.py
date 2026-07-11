@@ -944,6 +944,11 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         ),
         "tp1PathClear": conf.get("tp1_path_clear", struct.get("tp1_path_clear")),
         "tp1PathBlockReason": conf.get("tp1_path_block_reason") or struct.get("tp1_path_block_reason"),
+        "tp1ClampedToOpposingZone": conf.get(
+            "tp1_clamped_to_opposing_zone", struct.get("tp1_clamped_to_opposing_zone")
+        ),
+        "tp1ClampRejectReason": conf.get("tp1_clamp_reject_reason")
+        or struct.get("tp1_clamp_reject_reason"),
         "distanceToSupport": _first_float(conf.get("distance_to_sup"), struct.get("distance_to_sup")),
         "distanceToSupportPct": _first_float(
             conf.get("distance_to_sup_pct"), struct.get("distance_to_sup_pct")
@@ -961,9 +966,9 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "executionLevelsValid": conf.get(
             "execution_levels_valid", struct.get("execution_levels_valid")
         ),
-        "executionSlInsideStructuralInvalidation": conf.get(
-            "execution_sl_inside_structural_invalidation",
-            struct.get("execution_sl_inside_structural_invalidation"),
+        "executionSlTighterThanStructural": conf.get(
+            "execution_sl_tighter_than_structural",
+            struct.get("execution_sl_tighter_than_structural"),
         ),
         "rr": _first_float(
             conf.get("rr_used_for_gate"),

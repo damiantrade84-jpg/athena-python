@@ -1247,3 +1247,172 @@ def test_engine_b_tp1_path_clear_short_exact_geometry():
     assert diag["tp1_before_opposing_zone"] is False
     assert diag["tp1_path_clear"] is False
     assert diag["tp1_path_block_reason"] == ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE
+
+
+def _short_tp1_clampable_res() -> dict:
+    """SHORT entry above the opposing support zone; TP1 overshoots the wall."""
+    return {
+        "atr": 0.4,
+        "asset_type": "crypto",
+        "current_swing_sequence": "LH_LL",
+        "macro_swing_sequence": "LH_LL",
+        "bos_confirmed": True,
+        "trigger_ok": True,
+        "zone_touched": True,
+        "near_active_zone": True,
+        "structural_verdict": "CLEAR",
+        "nearest_support_zone": {"lower": 7.4, "upper": 7.7},
+        "distance_to_sup": 0.3,
+        "recommended_stop_loss": 8.5,
+        "recommended_take_profit": 7.3,
+    }
+
+
+def _short_tp1_clampable_exec_levels(**overrides):
+    base = {
+        "entry": 8.0,
+        "structural_sl": 8.5,
+        "structural_tp": 7.3,
+        "execution_sl": 8.36,
+        "execution_tp": 7.28,
+        "execution_tp1": 7.3,
+        "execution_tp2": 7.28,
+        "execution_rr": 2.0,
+        "execution_rr1": 1.9444,
+        "execution_rr2": 2.0,
+        "rr_used_for_gate": 2.0,
+    }
+    base.update(overrides)
+    return _short_tp1_blocked_exec_levels(**base)
+
+
+def test_short_scale_out_tp1_clamped_to_opposing_wall(monkeypatch):
+    """Overshooting scale-out TP1 is re-targeted to the wall front edge when
+    the clamped RR1 still clears ENGINE_B_TP1_MIN_RR."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TP1_MIN_RR", {"default": 0.3})
+    monkeypatch.setitem(
+        config.CONFIG,
+        "NAKED_ENGINE",
+        {**(config.CONFIG.get("NAKED_ENGINE") or {}), "structural_tp_buffer_atr_mult": 0.25},
+    )
+    monkeypatch.setattr(
+        "market_structure.resolve_engine_b_execution_levels",
+        lambda **kwargs: _short_tp1_clampable_exec_levels(),
+    )
+
+    engine = NakedEngine()
+    out = engine.calculate_confidence(
+        _short_tp1_clampable_res(),
+        current_price=8.0,
+        direction="SHORT",
+        entry_candles=[],
+        style_profile={
+            "style": "intraday",
+            "min_score": 3.0,
+            "min_rr": 1.4,
+            "fallback_rr": 2.0,
+            "min_room_atr": 0.25,
+            "require_macro_align": False,
+        },
+    )
+
+    # clamp = zone upper 7.7 + atr 0.4 * buffer 0.25 = 7.8; rr1 = 0.2 / 0.36
+    assert out["tp1_clamped_to_opposing_zone"] is True
+    assert out["tp1_clamp_reject_reason"] is None
+    assert out["execution_tp1"] == pytest.approx(7.8)
+    assert out["execution_rr1"] == pytest.approx(0.5556, rel=1e-3)
+    assert out["execution_tp2"] == pytest.approx(7.28)  # runner untouched
+    assert out["rr_used_for_gate"] == pytest.approx(2.0)  # gate RR untouched
+    assert out["tp1_path_clear"] is True
+    assert out["scale_out_active"] is True
+    assert out["scale_out_space_ok"] is True
+    assert out["space_gate_ok"] is True
+
+
+def test_short_tp1_clamp_rejected_blocks_space_gate_despite_room_ok(monkeypatch):
+    """When the clamped RR1 cannot clear the TP1 floor, plain room_ok must not
+    rescue the space gate (the emitted TP1 would be unreachable)."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TP1_MIN_RR", {"default": 0.8})
+    monkeypatch.setitem(
+        config.CONFIG,
+        "NAKED_ENGINE",
+        {**(config.CONFIG.get("NAKED_ENGINE") or {}), "structural_tp_buffer_atr_mult": 0.25},
+    )
+    monkeypatch.setattr(
+        "market_structure.resolve_engine_b_execution_levels",
+        lambda **kwargs: _short_tp1_clampable_exec_levels(),
+    )
+
+    engine = NakedEngine()
+    out = engine.calculate_confidence(
+        _short_tp1_clampable_res(),
+        current_price=8.0,
+        direction="SHORT",
+        entry_candles=[],
+        style_profile={
+            "style": "intraday",
+            "min_score": 3.0,
+            "min_rr": 1.4,
+            "fallback_rr": 2.0,
+            "min_room_atr": 0.25,
+            "require_macro_align": False,
+        },
+    )
+
+    assert out["tp1_clamped_to_opposing_zone"] is False
+    assert out["tp1_clamp_reject_reason"] == "clamped_rr1_below_tp1_min_rr"
+    assert out["execution_tp1"] == pytest.approx(7.3)  # unchanged
+    assert out["tp1_path_clear"] is False
+    assert out["room_ok"] is True  # distance 0.3 >= 0.25 * atr 0.4
+    assert out["space_gate_ok"] is False
+    assert out["passed"] is False
+    assert ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE in (
+        out.get("engine_b_diagnostics", {}).get("reason_codes") or []
+    )
+
+
+def test_short_single_tp_clamped_to_wall_replaces_trade_tp(monkeypatch):
+    """Single-TP plan: the clamped wall TP replaces the trade TP and the gate
+    RR when it still clears min_rr."""
+    monkeypatch.setitem(
+        config.CONFIG,
+        "NAKED_ENGINE",
+        {**(config.CONFIG.get("NAKED_ENGINE") or {}), "structural_tp_buffer_atr_mult": 0.25},
+    )
+    monkeypatch.setattr(
+        "market_structure.resolve_engine_b_execution_levels",
+        lambda **kwargs: _short_tp1_clampable_exec_levels(
+            exit_strategy="single_fallback_rr_tp",
+            runner_tp_requires_structural_break=False,
+            tp1_source="fallback_rr",
+            tp2_source="fallback_rr",
+            execution_tp=7.3,
+            execution_tp2=7.3,
+        ),
+    )
+
+    engine = NakedEngine()
+    out = engine.calculate_confidence(
+        _short_tp1_clampable_res(),
+        current_price=8.0,
+        direction="SHORT",
+        entry_candles=[],
+        style_profile={
+            "style": "intraday",
+            "min_score": 3.0,
+            "min_rr": 0.5,
+            "fallback_rr": 2.0,
+            "min_room_atr": 0.25,
+            "require_macro_align": False,
+        },
+    )
+
+    assert out["tp1_clamped_to_opposing_zone"] is True
+    assert out["execution_tp"] == pytest.approx(7.8)
+    assert out["execution_tp1"] == pytest.approx(7.8)
+    assert out["rr_used_for_gate"] == pytest.approx(0.5556, abs=0.01)
+    assert out["rr_ok"] is True  # 0.5556 >= min_rr 0.5
+    assert str(out["level_mode"]).endswith("_sl_structural_tp")
+    assert out["exit_strategy"] == "single_structural_tp"
+    assert out["tp1_path_clear"] is True
+    assert out["space_gate_ok"] is True

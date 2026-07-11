@@ -769,10 +769,12 @@ def reconcile_engine_b_actionability(
         "structural_tp_too_close": structural_tp_too_close,
         "tp1_path_clear": tp1_path_clear,
         "tp1_path_block_reason": conf.get("tp1_path_block_reason"),
+        "tp1_clamped_to_opposing_zone": conf.get("tp1_clamped_to_opposing_zone"),
+        "tp1_clamp_reject_reason": conf.get("tp1_clamp_reject_reason"),
         "entry_inside_opposing_zone": conf.get("entry_inside_opposing_zone"),
         "tp1_before_opposing_zone": conf.get("tp1_before_opposing_zone"),
-        "execution_sl_inside_structural_invalidation": conf.get(
-            "execution_sl_inside_structural_invalidation"
+        "execution_sl_tighter_than_structural": conf.get(
+            "execution_sl_tighter_than_structural"
         ),
         "no_trigger_pattern": no_trigger_pattern,
         "partial_target_quality_fail": partial_rr_fail,

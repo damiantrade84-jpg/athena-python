@@ -292,6 +292,8 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "tp1_before_opposing_zone": engine_b_data.get("tp1_before_opposing_zone"),
         "tp1_path_clear": engine_b_data.get("tp1_path_clear"),
         "tp1_path_block_reason": engine_b_data.get("tp1_path_block_reason"),
+        "tp1_clamped_to_opposing_zone": engine_b_data.get("tp1_clamped_to_opposing_zone"),
+        "tp1_clamp_reject_reason": engine_b_data.get("tp1_clamp_reject_reason"),
         "nearest_support_zone": engine_b_data.get("nearest_support_zone"),
         "nearest_resistance_zone": engine_b_data.get("nearest_resistance_zone"),
         "distance_to_resistance": engine_b_data.get("distance_to_res"),
@@ -301,8 +303,8 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "distance_to_support_pct": engine_b_data.get("distance_to_sup_pct"),
         "distance_to_support_atr": engine_b_data.get("distance_to_sup_atr"),
         "execution_levels_valid": engine_b_data.get("execution_levels_valid"),
-        "execution_sl_inside_structural_invalidation": engine_b_data.get(
-            "execution_sl_inside_structural_invalidation"
+        "execution_sl_tighter_than_structural": engine_b_data.get(
+            "execution_sl_tighter_than_structural"
         ),
         "d1_adx": engine_b_data.get("d1_adx"),
         "h4_adx": engine_b_data.get("h4_adx"),
@@ -474,15 +476,29 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
                 "Engine B TP1 path: "
                 f"clear={engine_b.get('tp1_path_clear')} "
                 f"entry_inside_opposing_zone={engine_b.get('entry_inside_opposing_zone')} "
-                f"block_reason={engine_b.get('tp1_path_block_reason')}"
+                f"block_reason={engine_b.get('tp1_path_block_reason')} "
+                f"clamped_to_opposing_zone={engine_b.get('tp1_clamped_to_opposing_zone')}"
             )
+            if engine_b.get("tp1_clamped_to_opposing_zone"):
+                lines.append(
+                    "Engine B TP1 clamp note: TP1 was re-targeted to the opposing zone's front "
+                    "edge and is reachable before the wall — do not reject levels for the "
+                    "original overshoot."
+                )
         if engine_b.get("structural_sl") is not None or engine_b.get("execution_sl") is not None:
             lines.append(
                 "Engine B SL levels: "
                 f"structural={engine_b.get('structural_sl')} "
                 f"execution={engine_b.get('execution_sl')} "
-                f"execution_inside_structural_invalidation={engine_b.get('execution_sl_inside_structural_invalidation')}"
+                f"execution_sl_tighter_than_structural={engine_b.get('execution_sl_tighter_than_structural')}"
             )
+            if engine_b.get("execution_sl_tighter_than_structural"):
+                lines.append(
+                    "Engine B SL note: an execution SL tighter than the structural invalidation "
+                    "level is the normal Engine B design (mechanical stop inside structure for RR) "
+                    "— informational, not a levels defect; do not reject or suggest the structural "
+                    "SL solely because of it."
+                )
         if engine_b.get("execution_tp1") is not None or engine_b.get("execution_tp2") is not None:
             lines.append(
                 "Engine B TP levels: "

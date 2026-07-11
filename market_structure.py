@@ -830,10 +830,14 @@ def _engine_b_structural_target_price(
     return float(zone["upper"]) + (float(atr) * buffer_mult)
 
 
-def _engine_b_exec_sl_inside_struct_invalidation(
+def _engine_b_exec_sl_tighter_than_structural(
     direction: str, structural_sl, execution_sl, structural_sl_valid
 ) -> bool | None:
     """True when the execution SL is tighter than the structural SL.
+
+    This is the normal Engine B design (the ATR/mechanical execution stop sits
+    inside the structural invalidation level for RR) — informational, not a
+    defect indicator.
 
     LONG:  execution_sl > structural_sl  (closer to entry from below)
     SHORT: execution_sl < structural_sl  (closer to entry from above)
@@ -933,6 +937,127 @@ def _engine_b_tp1_path_clear(
         "opposing_zone_distance": opposing_zone_distance,
         "tp1_distance": _tp1_distance,
     }
+
+
+def _engine_b_clamp_tp1_to_opposing_zone(
+    exec_lvl: dict,
+    *,
+    direction: str,
+    entry,
+    opposing_zone: dict | None,
+    opposing_zone_distance,
+    atr,
+    min_rr,
+    exec_style: str,
+    asset_class: str | None,
+) -> dict:
+    """Re-target a TP1 that overshoots the nearest opposing wall to the wall's
+    front edge (standard structural target price with the TP buffer).
+
+    The target selector can skip a near zone (structural TP too close or
+    wrong-side) and pick a deeper target whose TP1 sits beyond the nearer
+    opposing wall. Instead of emitting an unreachable TP1, try the wall first:
+    - scale-out plans: clamp execution_tp1 only; keep when the clamped RR1
+      still clears ENGINE_B_TP1_MIN_RR (TP2/runner and the gate RR are untouched).
+    - single-TP plans: clamp the trade TP; keep when the clamped RR still
+      clears min_rr and exchange TP bounds pass.
+    When the clamped target cannot clear its RR floor the levels are left
+    unchanged and the TP1-path space gate blocks the signal.
+
+    Mutates exec_lvl in place; returns {"tp1_clamped_to_opposing_zone",
+    "tp1_clamp_reject_reason"}.
+    """
+    diag = {"tp1_clamped_to_opposing_zone": False, "tp1_clamp_reject_reason": None}
+    _path = _engine_b_tp1_path_clear(
+        direction=direction,
+        entry=entry,
+        tp1=exec_lvl.get("execution_tp1"),
+        opposing_zone=opposing_zone,
+        opposing_zone_distance=opposing_zone_distance,
+    )
+    if _path.get("tp1_path_clear"):
+        return diag
+    if not bool(exec_lvl.get("execution_levels_valid")):
+        diag["tp1_clamp_reject_reason"] = "execution_levels_invalid"
+        return diag
+    try:
+        _entry = float(entry)
+        _sl = float(exec_lvl.get("execution_sl"))
+        _atr = float(atr)
+    except (TypeError, ValueError):
+        diag["tp1_clamp_reject_reason"] = "levels_missing"
+        return diag
+    _risk = abs(_entry - _sl)
+    if _risk <= 0 or _atr <= 0:
+        diag["tp1_clamp_reject_reason"] = "zero_risk_or_atr"
+        return diag
+    try:
+        _clamp_tp = _engine_b_structural_target_price(
+            opposing_zone, direction, _atr, _engine_b_structural_tp_buffer_atr_mult()
+        )
+    except (TypeError, KeyError, ValueError):
+        diag["tp1_clamp_reject_reason"] = "opposing_zone_malformed"
+        return diag
+    _side_ok = _clamp_tp > _entry if direction == "LONG" else _clamp_tp < _entry
+    if not _side_ok:
+        diag["tp1_clamp_reject_reason"] = "clamp_tp_wrong_side"
+        return diag
+    _clamp_rr = abs(_clamp_tp - _entry) / _risk
+    _scale_out = (
+        exec_lvl.get("exit_strategy") == "scale_out_structural_tp1_fallback_tp2"
+        and exec_lvl.get("scale_out_guard_reason") is None
+    )
+    if _scale_out:
+        _floor = _engine_b_style_threshold(
+            config.CONFIG.get("ENGINE_B_TP1_MIN_RR"), exec_style
+        )
+        if _floor > 0 and _clamp_rr + 1e-12 < _floor:
+            diag["tp1_clamp_reject_reason"] = "clamped_rr1_below_tp1_min_rr"
+            return diag
+    else:
+        try:
+            _min_rr = float(min_rr) if min_rr is not None else None
+        except (TypeError, ValueError):
+            _min_rr = None
+        if _min_rr is not None and _clamp_rr + 1e-12 < _min_rr:
+            diag["tp1_clamp_reject_reason"] = "clamped_rr_below_min_rr"
+            return diag
+    _ac = str(asset_class or "").lower()
+    if _ac:
+        try:
+            from risk_engine import validate_tp_exchange_bounds
+
+            _bounds_ok, _ = validate_tp_exchange_bounds(_entry, _clamp_tp, _ac, config.CONFIG)
+        except Exception:
+            _bounds_ok = True
+        if not _bounds_ok:
+            diag["tp1_clamp_reject_reason"] = "clamp_tp_exchange_bounds"
+            return diag
+    _clamp_rr_rounded = round(_clamp_rr, 4)
+    if _scale_out:
+        exec_lvl["execution_tp1"] = _clamp_tp
+        exec_lvl["execution_rr1"] = _clamp_rr_rounded
+    else:
+        _mode = f"{exec_lvl.get('sl_source') or 'unknown'}_sl_structural_tp"
+        exec_lvl["execution_tp"] = _clamp_tp
+        exec_lvl["execution_tp1"] = _clamp_tp
+        exec_lvl["execution_tp2"] = _clamp_tp
+        exec_lvl["execution_rr"] = _clamp_rr_rounded
+        exec_lvl["execution_rr1"] = _clamp_rr_rounded
+        exec_lvl["execution_rr2"] = _clamp_rr_rounded
+        exec_lvl["rr_used_for_gate"] = _clamp_rr_rounded
+        exec_lvl["rr_actual"] = _clamp_rr_rounded
+        exec_lvl["rr_passed"] = True
+        exec_lvl["tp_source"] = "structural"
+        exec_lvl["tp1_source"] = "structural"
+        exec_lvl["tp2_source"] = "structural"
+        exec_lvl["level_mode"] = _mode
+        exec_lvl["rr_source"] = _mode
+        exec_lvl["level_cohort"] = engine_b_level_cohort(_mode)
+        exec_lvl["exit_strategy"] = "single_structural_tp"
+        exec_lvl["synthetic_rr_tp_used"] = False
+    diag["tp1_clamped_to_opposing_zone"] = True
+    return diag
 
 
 def _adx_from_indicator_snap(snap: dict | None) -> float | None:
@@ -5237,6 +5362,22 @@ class NakedEngine:
             pair=res.get("pair_display") or res.get("pair") or res.get("display") or res.get("symbol"),
             score_group=profile.get("score_group"),
         )
+        # TP1 wall clamp: when the selected TP1 overshoots the nearest opposing
+        # zone, re-target it to the wall's front edge if the clamped RR still
+        # clears its floor. Runs before rr/rr_ok extraction so all downstream
+        # gates and the emitted payload see the clamped levels.
+        _tp1_opposing_zone = nearest_res if direction == "LONG" else nearest_sup
+        _tp1_clamp_diag = _engine_b_clamp_tp1_to_opposing_zone(
+            _exec_lvl,
+            direction=direction,
+            entry=current_price,
+            opposing_zone=_tp1_opposing_zone,
+            opposing_zone_distance=room_dist,
+            atr=atr_val,
+            min_rr=min_rr,
+            exec_style=exec_style,
+            asset_class=_exec_asset_class,
+        )
         # Structural TP side check — kept for diagnostics / ENGINE_B_REASON_TP_WRONG_SIDE
         sl = _exec_lvl["execution_sl"]
         tp = _exec_lvl["execution_tp"]
@@ -5342,11 +5483,10 @@ class NakedEngine:
             "_fallback_rr_tp"
         )
         # TP1 path geometry: prove TP1 is reachable before the nearest opposing
-        # zone. The target selector can skip a near zone whose structural TP is
-        # too close or wrong-side and select a deeper zone — but that deeper TP
-        # may sit beyond the nearer opposing wall, making it unreachable without
-        # a structural break.
-        _tp1_opposing_zone = nearest_res if direction == "LONG" else nearest_sup
+        # zone. Runs on post-clamp levels — a TP1 re-targeted to the wall's
+        # front edge by _engine_b_clamp_tp1_to_opposing_zone reads as clear;
+        # only unclampable overshoots (RR floor / wrong side / bounds) stay
+        # blocked here.
         _tp1_path_diag = _engine_b_tp1_path_clear(
             direction=direction,
             entry=current_price,
@@ -5447,11 +5587,21 @@ class NakedEngine:
         _space_rr_substitute_active = _space_rr_substitute_override is not None
         if _space_rr_substitute_active:
             rr_space_gate_enabled = bool(_space_rr_substitute_override)
+        # A blocked TP1 fails the space gate on every path (room, substitution,
+        # scale-out): plain room distance must not emit a trade whose TP1 sits
+        # beyond the nearest opposing wall. _tp1_path_clear is True when no
+        # wall/TP1 data exists (no-wall behaviour preserved) and after a
+        # successful wall clamp, so this only blocks unclampable overshoots.
+        # The capped-structural-TP block flag doubles as the legacy escape
+        # hatch: disabling it restores pre-TP1-path space-gate semantics.
+        _tp1_path_gate_enabled = bool(
+            config.CONFIG.get("ENGINE_B_SPACE_RR_SUBSTITUTE_BLOCK_CAPPED_STRUCTURAL_TP", True)
+        )
         space_gate_ok = (
             space_ok
             if rr_space_gate_enabled
             else (room_ok or _scale_out_space_ok)
-        )
+        ) and (_tp1_path_clear or not _tp1_path_gate_enabled)
 
         # Stage 2.8: Optional volume confirmation gate.
         # Contributes to gate_score (+1 bonus) but is NOT mandatory for pass.
@@ -5885,7 +6035,7 @@ class NakedEngine:
             "execution_rr": _exec_lvl["execution_rr"],
             "execution_rr1": _exec_lvl.get("execution_rr1"),
             "execution_rr2": _exec_lvl.get("execution_rr2"),
-            "execution_sl_inside_structural_invalidation": _engine_b_exec_sl_inside_struct_invalidation(
+            "execution_sl_tighter_than_structural": _engine_b_exec_sl_tighter_than_structural(
                 direction,
                 _exec_lvl.get("structural_sl"),
                 _exec_lvl.get("execution_sl"),
@@ -5936,6 +6086,8 @@ class NakedEngine:
             "scale_out_space_ok": _scale_out_space_ok,
             "tp1_path_clear": _tp1_path_clear,
             "tp1_path_diag": _tp1_path_diag,
+            "tp1_clamped_to_opposing_zone": _tp1_clamp_diag.get("tp1_clamped_to_opposing_zone"),
+            "tp1_clamp_reject_reason": _tp1_clamp_diag.get("tp1_clamp_reject_reason"),
             "entry_inside_opposing_zone": _tp1_path_diag.get("entry_inside_opposing_zone"),
             "tp1_before_opposing_zone": _tp1_path_diag.get("tp1_before_opposing_zone"),
             "tp1_path_block_reason": _tp1_path_diag.get("tp1_path_block_reason"),
