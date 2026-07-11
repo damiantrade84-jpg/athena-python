@@ -381,6 +381,7 @@ def test_calibration_context_string_injects_engine_b_native_diagnostics():
     assert "Engine B swing sequence: HH_HL | Macro: HH_HL" in text
     assert "Engine B score: 6.0 / 8.0 (75.0%)" in text
     assert "Engine B actionable: False | RR gate: 3.37 | room_ok: False" in text
+    assert "space_gate_ok" in text or "Engine B canonical status: REJECT_NO_ROOM" in text
     assert "Engine B canonical status: REJECT_NO_ROOM" in text
 
 
@@ -435,6 +436,79 @@ def test_engine_b_prompt_prefix_uses_config_rr_not_hardcoded_swing_three():
     prompt = _read_repo_prompt("prompts/engine_b_v2.md")
     assert "RR >= 3.0" not in prompt
     assert "Style min RR (config)" in prompt
+    assert "spaceGateOk is the authoritative deterministic room gate" in prompt
+    assert "do NOT compare RR1 to style min RR" in prompt
+
+
+def test_engine_b_calibration_context_includes_scale_out_and_path_fields():
+    signal = {
+        "pair": "TEST/USDT",
+        "type": "crypto",
+        "style": "intraday",
+        "engine_source": "engine_b",
+        "is_naked": True,
+        "direction": "SHORT",
+        "price": 6.705,
+        "naked_data": {
+            "structural_verdict": "CLEAR",
+            "score": 4.0,
+            "max_possible": 8.0,
+            "space_gate_ok": False,
+            "room_ok": False,
+            "rr_ok": True,
+            "execution_tp1": 6.592244191324525,
+            "execution_tp2": 6.415925468206346,
+            "execution_rr1": 0.7021,
+            "execution_rr2": 1.8,
+            "tp1_min_rr": 0.3,
+            "style_min_rr": 1.4,
+            "exit_strategy": "scale_out_structural_tp1_fallback_tp2",
+            "runner_tp_requires_structural_break": True,
+            "scale_out_active": True,
+            "scale_out_space_ok": False,
+            "tp1_path_clear": False,
+            "nearest_support_zone": {"lower": 6.6525, "upper": 6.8345},
+            "nearest_resistance_zone": {"lower": 6.9, "upper": 7.0},
+            "distance_to_sup": -0.1295,
+            "distance_to_sup_pct": -1.9314,
+            "engine_b_diagnostics": {
+                "reason_codes": ["tp1_blocked_by_opposing_zone", "support_too_close"]
+            },
+        },
+    }
+
+    ctx = build_ai_calibration_context(signal, "Engine B naked market structure", "intraday")
+    eb = ctx["engine_b"]
+    assert eb["space_gate_ok"] is False
+    assert eb["execution_tp1"] == pytest.approx(6.592244191324525)
+    assert eb["execution_tp2"] == pytest.approx(6.415925468206346)
+    assert eb["execution_rr1"] == pytest.approx(0.7021)
+    assert eb["execution_rr2"] == pytest.approx(1.8)
+    assert eb["tp1_min_rr"] == pytest.approx(0.3)
+    assert eb["exit_strategy"] == "scale_out_structural_tp1_fallback_tp2"
+    assert eb["runner_tp_requires_structural_break"] is True
+    assert eb["tp1_path_clear"] is False
+    assert eb["nearest_support_zone"]["lower"] == pytest.approx(6.6525)
+    assert eb["nearest_support_zone"]["upper"] == pytest.approx(6.8345)
+
+    text = build_ai_calibration_context_string(signal, "Engine B naked market structure", "intraday")
+    assert "space_gate_ok is the authoritative deterministic room gate" in text
+    assert "RR1 is checked against Engine B TP1 minimum RR" in text
+    assert "-0.1295 price units" in text
+
+
+def test_engine_b_playbook_space_gate_authoritative():
+    from ai_playbooks.engine_b_playbook import get_engine_b_playbook
+
+    playbook = get_engine_b_playbook()
+    joined = " ".join(
+        list(playbook.get("principles", []))
+        + list(playbook.get("mustRejectIf", []))
+        + [str(v) for v in (playbook.get("structureUsage") or {}).values()]
+    )
+    assert "spaceGateOk" in joined
+    assert "authoritative" in joined.lower()
+    assert "roomOk=false alone is NOT an automatic reject" in joined or "roomOk=false is NOT an automatic reject" in joined
 
 
 def test_engine_a_response_parses_with_and_without_levels_fields():

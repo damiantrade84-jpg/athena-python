@@ -4535,8 +4535,17 @@ def _build_signal_message(
                 f"  Nearest Sup Zone: {_num(sz.get('lower')):.4f} - {_num(sz.get('upper')):.4f}"
             )
 
-        lines.append(f"  Distance to Res: {_num(eng_b.get('distance_to_res')):.2f}%")
-        lines.append(f"  Distance to Sup: {_num(eng_b.get('distance_to_sup')):.2f}%")
+        _dist_res = eng_b.get('distance_to_res')
+        _dist_sup = eng_b.get('distance_to_sup')
+        _entry_for_pct = _num(eng_b.get('current_price') or eng_b.get('entry'))
+        _dist_res_pct = eng_b.get('distance_to_res_pct')
+        _dist_sup_pct = eng_b.get('distance_to_sup_pct')
+        if _dist_res_pct is None and _dist_res is not None and _entry_for_pct and _entry_for_pct > 0:
+            _dist_res_pct = float(_dist_res) / _entry_for_pct * 100.0
+        if _dist_sup_pct is None and _dist_sup is not None and _entry_for_pct and _entry_for_pct > 0:
+            _dist_sup_pct = float(_dist_sup) / _entry_for_pct * 100.0
+        lines.append(f"  Distance to Resistance: {_num(_dist_res):.6f} price units ({_num(_dist_res_pct):.2f}%)" if _dist_res_pct is not None else f"  Distance to Resistance: {_num(_dist_res):.6f} price units")
+        lines.append(f"  Distance to Support: {_num(_dist_sup):.6f} price units ({_num(_dist_sup_pct):.2f}%)" if _dist_sup_pct is not None else f"  Distance to Support: {_num(_dist_sup):.6f} price units")
         lines.append(f"  Room to Move Bonus: {eng_b.get('room_to_move_bonus', 0)}")
         lines.append(f"  Catalyst Bonus: {eng_b.get('catalyst_bonus', 0)}")
         lines.append(f"  AI Stats Adjustment: {_num(eng_b.get('ai_adjustment')):.2f}")

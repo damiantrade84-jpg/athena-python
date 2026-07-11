@@ -36,6 +36,7 @@ from market_structure import (
     ENGINE_B_REASON_RESISTANCE_TOO_CLOSE,
     ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE,
     ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
+    ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE,
 )
 
 
@@ -723,6 +724,44 @@ def test_rejected_setup_canonical_badge_state_not_all_pass():
     assert badge["location"] == "PASS"
     assert badge["room_rr"] == "FAIL"
     assert badge["confidence"] == "PASSED_GATE_FAILED"
+
+
+def test_tp1_blocked_by_opposing_zone_rejects_no_room_not_partial_rr():
+    out = reconcile_engine_b_actionability(
+        direction="SHORT",
+        entry=6.705,
+        sl=6.865596962107586,
+        tp1=6.592244191324525,
+        conf=_base_conf(
+            structure_ok=True,
+            location_ok=True,
+            entry_ok=True,
+            room_ok=False,
+            space_gate_ok=False,
+            rr_ok=True,
+            passed=False,
+            execution_rr1=0.7021,
+            execution_rr2=1.8,
+            rr_used_for_gate=1.8,
+            tp1_path_clear=False,
+            tp1_path_block_reason=ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE,
+            engine_b_diagnostics={
+                "reason_codes": [
+                    ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
+                    ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE,
+                ]
+            },
+        ),
+        res={
+            "nearest_support_zone": {"lower": 6.6525, "upper": 6.8345},
+            "nearest_resistance_zone": {"lower": 6.9, "upper": 7.0},
+        },
+        style_profile={"min_rr": 1.4},
+    )
+    assert out["engine_b_canonical_status"] == STATUS_REJECT_NO_ROOM
+    assert ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE in out["engine_b_rejection_reasons"]
+    assert REASON_PARTIAL_RR in out["engine_b_canonical_diagnostics"]
+    assert out["engine_b_canonical_actionable"] is False
 
 
 def test_apply_to_naked_signal_marks_executable_false_when_canonical_trade_false():

@@ -2017,6 +2017,49 @@ def test_build_engine_b_prompt_context_includes_ob_fvg_gates():
     assert eb_ctx["rr"] == 1.8
 
 
+def test_build_engine_b_prompt_context_includes_geometry_and_scale_out_fields():
+    from ai_review.engine_a_context import build_engine_b_prompt_context
+
+    ctx = {
+        "direction": "SHORT",
+        "structure_context": {
+            "structural_verdict": "CLEAR",
+            "nearest_support_zone": {"lower": 6.6525, "upper": 6.8345},
+            "nearest_resistance_zone": {"lower": 6.9, "upper": 7.0},
+            "distance_to_sup": -0.1295,
+            "distance_to_sup_pct": -1.9314,
+        },
+        "engine_b_confidence": {
+            "space_gate_ok": False,
+            "room_ok": False,
+            "execution_tp1": 6.592244191324525,
+            "execution_tp2": 6.415925468206346,
+            "execution_rr1": 0.7021,
+            "execution_rr2": 1.8,
+            "tp1_min_rr": 0.3,
+            "style_min_rr": 1.4,
+            "exit_strategy": "scale_out_structural_tp1_fallback_tp2",
+            "runner_tp_requires_structural_break": True,
+            "tp1_path_clear": False,
+            "scale_out_active": True,
+            "scale_out_space_ok": False,
+        },
+        "engine_snapshots": {"engineB": {"passed": False, "direction": "SHORT"}},
+    }
+    eb_ctx = build_engine_b_prompt_context(ctx)
+    assert eb_ctx["spaceGateOk"] is False
+    assert eb_ctx["executionTp1"] == pytest.approx(6.592244191324525)
+    assert eb_ctx["executionTp2"] == pytest.approx(6.415925468206346)
+    assert eb_ctx["executionRr1"] == pytest.approx(0.7021)
+    assert eb_ctx["executionRr2"] == pytest.approx(1.8)
+    assert eb_ctx["tp1MinRr"] == pytest.approx(0.3)
+    assert eb_ctx["exitStrategy"] == "scale_out_structural_tp1_fallback_tp2"
+    assert eb_ctx["runnerTpRequiresStructuralBreak"] is True
+    assert eb_ctx["tp1PathClear"] is False
+    assert eb_ctx["nearestSupportZone"]["lower"] == pytest.approx(6.6525)
+    assert eb_ctx["nearestSupportZone"]["upper"] == pytest.approx(6.8345)
+
+
 def test_default_resolve_pair_unknown_symbol_returns_none(monkeypatch):
     fake_athena = ModuleType("athena")
     fake_athena.ALL_PAIRS = []

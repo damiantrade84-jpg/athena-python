@@ -253,12 +253,57 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "room_to_support": _first_not_none(engine_b_data.get("room_to_support"), engine_b_data.get("distance_to_sup")),
         "recommended_sl": _first_not_none(engine_b_data.get("recommended_sl"), engine_b_data.get("recommended_stop_loss")),
         "recommended_tp": _first_not_none(engine_b_data.get("recommended_tp"), engine_b_data.get("recommended_take_profit")),
+        "structural_sl": engine_b_data.get("structural_sl"),
+        "structural_tp": engine_b_data.get("structural_tp"),
+        "structural_rr": engine_b_data.get("structural_rr"),
+        "structural_sl_valid": engine_b_data.get("structural_sl_valid"),
+        "execution_sl": engine_b_data.get("execution_sl"),
+        "execution_tp": engine_b_data.get("execution_tp"),
+        "execution_tp1": engine_b_data.get("execution_tp1"),
+        "execution_tp2": engine_b_data.get("execution_tp2"),
+        "execution_rr": engine_b_data.get("execution_rr"),
+        "execution_rr1": engine_b_data.get("execution_rr1"),
+        "execution_rr2": engine_b_data.get("execution_rr2"),
         "rr_used_for_gate": _first_not_none(
             engine_b_data.get("rr_used_for_gate"),
             engine_b_data.get("execution_rr"),
             engine_b_data.get("rr"),
         ),
+        "rr_required": engine_b_data.get("rr_required"),
+        "sl_source": engine_b_data.get("sl_source"),
+        "tp_source": engine_b_data.get("tp_source"),
+        "tp1_source": engine_b_data.get("tp1_source"),
+        "tp2_source": engine_b_data.get("tp2_source"),
+        "level_mode": engine_b_data.get("level_mode"),
+        "exit_strategy": engine_b_data.get("exit_strategy"),
+        "fallback_tp_applied": engine_b_data.get("fallback_tp_applied"),
+        "fallback_tp_reason": engine_b_data.get("fallback_tp_reason"),
+        "synthetic_rr_tp_used": engine_b_data.get("synthetic_rr_tp_used"),
+        "runner_tp_requires_structural_break": engine_b_data.get("runner_tp_requires_structural_break"),
+        "scale_out_active": engine_b_data.get("scale_out_active"),
+        "scale_out_space_ok": engine_b_data.get("scale_out_space_ok"),
+        "scale_out_guard_reason": engine_b_data.get("scale_out_guard_reason"),
         "room_ok": _first_not_none(engine_b_data.get("room_ok"), engine_b_data.get("room_rr_ok")),
+        "space_gate_ok": engine_b_data.get("space_gate_ok"),
+        "rr_ok": engine_b_data.get("rr_ok"),
+        "tp1_min_rr": engine_b_data.get("tp1_min_rr"),
+        "style_min_rr": engine_b_data.get("style_min_rr"),
+        "entry_inside_opposing_zone": engine_b_data.get("entry_inside_opposing_zone"),
+        "tp1_before_opposing_zone": engine_b_data.get("tp1_before_opposing_zone"),
+        "tp1_path_clear": engine_b_data.get("tp1_path_clear"),
+        "tp1_path_block_reason": engine_b_data.get("tp1_path_block_reason"),
+        "nearest_support_zone": engine_b_data.get("nearest_support_zone"),
+        "nearest_resistance_zone": engine_b_data.get("nearest_resistance_zone"),
+        "distance_to_resistance": engine_b_data.get("distance_to_res"),
+        "distance_to_resistance_pct": engine_b_data.get("distance_to_res_pct"),
+        "distance_to_resistance_atr": engine_b_data.get("distance_to_res_atr"),
+        "distance_to_support": engine_b_data.get("distance_to_sup"),
+        "distance_to_support_pct": engine_b_data.get("distance_to_sup_pct"),
+        "distance_to_support_atr": engine_b_data.get("distance_to_sup_atr"),
+        "execution_levels_valid": engine_b_data.get("execution_levels_valid"),
+        "execution_sl_inside_structural_invalidation": engine_b_data.get(
+            "execution_sl_inside_structural_invalidation"
+        ),
         "d1_adx": engine_b_data.get("d1_adx"),
         "h4_adx": engine_b_data.get("h4_adx"),
         "adx_derived_regime": _first_not_none(
@@ -409,8 +454,79 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
         lines.append(
             "Engine B actionable: "
             f"{engine_b.get('is_actionable')} | RR gate: {engine_b.get('rr_used_for_gate')} "
-            f"| room_ok: {engine_b.get('room_ok')}"
+            f"| room_ok: {engine_b.get('room_ok')} | space_gate_ok: {engine_b.get('space_gate_ok')}"
         )
+        if engine_b.get("space_gate_ok") is not None:
+            lines.append(
+                "Engine B space gate note: space_gate_ok is the authoritative deterministic room gate; "
+                "room_ok=false alone is not an automatic reject when space_gate_ok=true via an approved "
+                "and geometrically valid substitution or scale-out plan."
+            )
+        if engine_b.get("scale_out_active") is not None:
+            lines.append(
+                "Engine B scale-out: "
+                f"active={engine_b.get('scale_out_active')} "
+                f"space_ok={engine_b.get('scale_out_space_ok')} "
+                f"guard={engine_b.get('scale_out_guard_reason')}"
+            )
+        if engine_b.get("tp1_path_clear") is not None:
+            lines.append(
+                "Engine B TP1 path: "
+                f"clear={engine_b.get('tp1_path_clear')} "
+                f"entry_inside_opposing_zone={engine_b.get('entry_inside_opposing_zone')} "
+                f"block_reason={engine_b.get('tp1_path_block_reason')}"
+            )
+        if engine_b.get("structural_sl") is not None or engine_b.get("execution_sl") is not None:
+            lines.append(
+                "Engine B SL levels: "
+                f"structural={engine_b.get('structural_sl')} "
+                f"execution={engine_b.get('execution_sl')} "
+                f"execution_inside_structural_invalidation={engine_b.get('execution_sl_inside_structural_invalidation')}"
+            )
+        if engine_b.get("execution_tp1") is not None or engine_b.get("execution_tp2") is not None:
+            lines.append(
+                "Engine B TP levels: "
+                f"structural={engine_b.get('structural_tp')} "
+                f"execution={engine_b.get('execution_tp')} "
+                f"tp1={engine_b.get('execution_tp1')} "
+                f"tp2={engine_b.get('execution_tp2')}"
+            )
+        if engine_b.get("execution_rr1") is not None or engine_b.get("execution_rr2") is not None:
+            lines.append(
+                "Engine B RR levels: "
+                f"rr1={engine_b.get('execution_rr1')} (tp1_min_rr={engine_b.get('tp1_min_rr')}) "
+                f"rr2/gate={engine_b.get('execution_rr2') or engine_b.get('rr_used_for_gate')} "
+                f"(style_min_rr={engine_b.get('style_min_rr')})"
+            )
+            lines.append(
+                "Engine B RR note: for scale-out, RR1 is checked against Engine B TP1 minimum RR; "
+                "RR2 / rr_used_for_gate is checked against style min RR. "
+                "Do not reject solely because RR1 is below style min RR when RR1 passes TP1 minimum "
+                "and TP1 has a clear path."
+            )
+        if engine_b.get("distance_to_support") is not None or engine_b.get("distance_to_resistance") is not None:
+            lines.append(
+                "Engine B distance to support: "
+                f"{engine_b.get('distance_to_support')} price units "
+                f"({engine_b.get('distance_to_support_pct')}%)"
+            )
+            lines.append(
+                "Engine B distance to resistance: "
+                f"{engine_b.get('distance_to_resistance')} price units "
+                f"({engine_b.get('distance_to_resistance_pct')}%)"
+            )
+        if engine_b.get("nearest_support_zone"):
+            sup = engine_b.get("nearest_support_zone") or {}
+            if isinstance(sup, dict):
+                lines.append(
+                    f"Engine B nearest support zone: {sup.get('lower')} - {sup.get('upper')}"
+                )
+        if engine_b.get("nearest_resistance_zone"):
+            res_zone = engine_b.get("nearest_resistance_zone") or {}
+            if isinstance(res_zone, dict):
+                lines.append(
+                    f"Engine B nearest resistance zone: {res_zone.get('lower')} - {res_zone.get('upper')}"
+                )
         if engine_b.get("engine_b_canonical_status"):
             lines.append(f"Engine B canonical status: {engine_b.get('engine_b_canonical_status')}")
         if engine_b.get("canonical_primary_reject_reason"):

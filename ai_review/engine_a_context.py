@@ -804,6 +804,25 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             )
         return _to_float(zone)
 
+    def _zone_bounds(zone: Any) -> dict[str, float | None] | None:
+        if not isinstance(zone, dict):
+            return None
+        return {
+            "lower": _to_float(zone.get("lower")),
+            "upper": _to_float(zone.get("upper")),
+            "center": _to_float(zone.get("center") or zone.get("mid")),
+        }
+
+    def _first_float(*values: Any) -> float | None:
+        for value in values:
+            parsed = _to_float(value)
+            if parsed is not None:
+                return parsed
+        return None
+
+    nearest_support_zone = struct.get("nearest_support_zone") or conf.get("nearest_support_zone")
+    nearest_resistance_zone = struct.get("nearest_resistance_zone") or conf.get("nearest_resistance_zone")
+
     active_fvgs = struct.get("active_fvgs") or struct.get("activeFvgs") or []
     if not isinstance(active_fvgs, list):
         active_fvgs = []
@@ -855,8 +874,10 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "fvgOverlap": struct.get("fvg_overlap") if "fvg_overlap" in struct else struct.get("fvgOverlap"),
         "activeFvgCount": len(active_fvgs),
         "nearestFvgMid": nearest_fvg_mid,
-        "nearestSupport": _zone_level(struct.get("nearest_support_zone")),
-        "nearestResistance": _zone_level(struct.get("nearest_resistance_zone")),
+        "nearestSupport": _zone_level(nearest_support_zone),
+        "nearestResistance": _zone_level(nearest_resistance_zone),
+        "nearestSupportZone": _zone_bounds(nearest_support_zone),
+        "nearestResistanceZone": _zone_bounds(nearest_resistance_zone),
         "breakerLevel": _to_float(
             (struct.get("breaker_block") or {}).get("level")
             if isinstance(struct.get("breaker_block"), dict)
@@ -868,24 +889,88 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "roomOk": conf.get("room_ok", struct.get("room_ok")),
         "rrOk": conf.get("rr_ok", struct.get("rr_ok")),
         "spaceGateOk": conf.get("space_gate_ok", struct.get("space_gate_ok")),
-        "executionSl": _to_float(
-            conf.get("execution_sl")
-            or struct.get("execution_sl")
-            or struct.get("recommended_stop_loss")
-            or geometry.get("stop_loss")
+        "structuralSl": _first_float(conf.get("structural_sl"), struct.get("structural_sl")),
+        "structuralTp": _first_float(conf.get("structural_tp"), struct.get("structural_tp")),
+        "structuralRr": _first_float(conf.get("structural_rr"), struct.get("structural_rr")),
+        "structuralSlValid": conf.get("structural_sl_valid", struct.get("structural_sl_valid")),
+        "executionSl": _first_float(
+            conf.get("execution_sl"),
+            struct.get("execution_sl"),
+            struct.get("recommended_stop_loss"),
+            geometry.get("stop_loss"),
         ),
-        "executionTp": _to_float(
-            conf.get("execution_tp")
-            or struct.get("execution_tp")
-            or struct.get("recommended_take_profit")
-            or geometry.get("take_profit")
+        "executionTp": _first_float(
+            conf.get("execution_tp"),
+            struct.get("execution_tp"),
+            struct.get("recommended_take_profit"),
+            geometry.get("take_profit"),
         ),
-        "rr": _to_float(
-            conf.get("rr_used_for_gate")
-            or conf.get("rr")
-            or struct.get("rr_used_for_gate")
-            or struct.get("rr")
-            or geometry.get("rr")
+        "executionTp1": _first_float(conf.get("execution_tp1"), struct.get("execution_tp1")),
+        "executionTp2": _first_float(conf.get("execution_tp2"), struct.get("execution_tp2")),
+        "executionRr": _first_float(conf.get("execution_rr"), struct.get("execution_rr")),
+        "executionRr1": _first_float(conf.get("execution_rr1"), struct.get("execution_rr1")),
+        "executionRr2": _first_float(conf.get("execution_rr2"), struct.get("execution_rr2")),
+        "rrUsedForGate": _first_float(
+            conf.get("rr_used_for_gate"),
+            conf.get("rr"),
+            struct.get("rr_used_for_gate"),
+            struct.get("rr"),
+            geometry.get("rr"),
+        ),
+        "rrRequired": _first_float(conf.get("rr_required"), struct.get("rr_required")),
+        "slSource": conf.get("sl_source") or struct.get("sl_source"),
+        "tpSource": conf.get("tp_source") or struct.get("tp_source"),
+        "tp1Source": conf.get("tp1_source") or struct.get("tp1_source"),
+        "tp2Source": conf.get("tp2_source") or struct.get("tp2_source"),
+        "levelMode": conf.get("level_mode") or struct.get("level_mode"),
+        "exitStrategy": conf.get("exit_strategy") or struct.get("exit_strategy"),
+        "fallbackTpApplied": conf.get("fallback_tp_applied", struct.get("fallback_tp_applied")),
+        "fallbackTpReason": conf.get("fallback_tp_reason") or struct.get("fallback_tp_reason"),
+        "syntheticRrTpUsed": conf.get("synthetic_rr_tp_used", struct.get("synthetic_rr_tp_used")),
+        "runnerTpRequiresStructuralBreak": conf.get(
+            "runner_tp_requires_structural_break",
+            struct.get("runner_tp_requires_structural_break"),
+        ),
+        "scaleOutActive": conf.get("scale_out_active", struct.get("scale_out_active")),
+        "scaleOutSpaceOk": conf.get("scale_out_space_ok", struct.get("scale_out_space_ok")),
+        "scaleOutGuardReason": conf.get("scale_out_guard_reason") or struct.get("scale_out_guard_reason"),
+        "tp1MinRr": _first_float(conf.get("tp1_min_rr"), struct.get("tp1_min_rr")),
+        "styleMinRr": _first_float(conf.get("style_min_rr"), struct.get("style_min_rr")),
+        "entryInsideOpposingZone": conf.get(
+            "entry_inside_opposing_zone", struct.get("entry_inside_opposing_zone")
+        ),
+        "tp1BeforeOpposingZone": conf.get(
+            "tp1_before_opposing_zone", struct.get("tp1_before_opposing_zone")
+        ),
+        "tp1PathClear": conf.get("tp1_path_clear", struct.get("tp1_path_clear")),
+        "tp1PathBlockReason": conf.get("tp1_path_block_reason") or struct.get("tp1_path_block_reason"),
+        "distanceToSupport": _first_float(conf.get("distance_to_sup"), struct.get("distance_to_sup")),
+        "distanceToSupportPct": _first_float(
+            conf.get("distance_to_sup_pct"), struct.get("distance_to_sup_pct")
+        ),
+        "distanceToSupportAtr": _first_float(
+            conf.get("distance_to_sup_atr"), struct.get("distance_to_sup_atr")
+        ),
+        "distanceToResistance": _first_float(conf.get("distance_to_res"), struct.get("distance_to_res")),
+        "distanceToResistancePct": _first_float(
+            conf.get("distance_to_res_pct"), struct.get("distance_to_res_pct")
+        ),
+        "distanceToResistanceAtr": _first_float(
+            conf.get("distance_to_res_atr"), struct.get("distance_to_res_atr")
+        ),
+        "executionLevelsValid": conf.get(
+            "execution_levels_valid", struct.get("execution_levels_valid")
+        ),
+        "executionSlInsideStructuralInvalidation": conf.get(
+            "execution_sl_inside_structural_invalidation",
+            struct.get("execution_sl_inside_structural_invalidation"),
+        ),
+        "rr": _first_float(
+            conf.get("rr_used_for_gate"),
+            conf.get("rr"),
+            struct.get("rr_used_for_gate"),
+            struct.get("rr"),
+            geometry.get("rr"),
         ),
         "volumeProfileContext": struct.get("profile_vp_context")
         or build_engine_b_profile_vp_context(str(engine_a_ctx.get("asset_class") or "")),

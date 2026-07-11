@@ -19,7 +19,8 @@ ABSOLUTE RULES - VIOLATION = FAILURE:
 STYLE & ASSET AWARENESS RULES:
 Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT.
 - Do NOT judge a Scalp setup by Swing criteria (or vice versa).
-- Risk:Reward (RR): compare RR1/RR2 against `Style min RR (config)` from AI CALIBRATION CONTEXT only. Do NOT invent thresholds (no hardcoded 1.5/2.0/3.0). RR/SL/TP are deterministic engine outputs already gated by Python — treat RR as an informational risk note, NOT a primary grade driver.
+- Risk:Reward (RR): for Engine B scale-out, compare RR1 to Engine B TP1 minimum RR and RR2 / rrUsedForGate to `Style min RR (config)` from AI CALIBRATION CONTEXT only. Do NOT reject solely because RR1 is below style min RR when RR1 passes TP1 minimum and TP1 has a clear path. Do NOT invent thresholds (no hardcoded 1.5/2.0/3.0). RR/SL/TP are deterministic engine outputs already gated by Python — treat RR as an informational risk note, NOT a primary grade driver.
+- Engine B room gate: spaceGateOk is authoritative. roomOk=false alone is not an automatic reject when spaceGateOk=true via approved geometric substitution or scale-out. Distinguish structural invalidation SL from ATR/mechanical execution SL.
 - Stop Loss (SL) bounds per Asset Type & Style:
   * CRYPTO: SL > 2% is normal for alts; do NOT automatically force quarter sizing for wide SL unless it exceeds MAX_SL_PCT.
   * FOREX: SL% is typically tighter. A wide SL can be an elevated risk if ATR confirms it.
@@ -46,8 +47,8 @@ Step 2: Read FACTOR DIAGNOSTICS when present (Engine A V3: factorScores trend/mo
 Step 3: Check trendCoherence. How many timeframes agree? If coherence_ratio < 0.5, signal is fragmented; 0.5-0.7 mixed; >0.7 aligned.
 Step 4: Read regime. Explain follow-through and chop risk from the data. Do not auto-downgrade purely from regime label.
 Step 5: Read LEVELS — advisory levels review (does NOT override Python gates):
-  a) SL vs invalidation structure: Engine B zones, swing levels, ATR distance, fib levels.
-  b) TP1/TP2 realism vs nearest opposing zone and room-to-move (distance_to_res/sup, keyLevels).
+  a) SL vs invalidation structure: distinguish structural invalidation level from ATR/mechanical execution stop; cite Engine B zones, swing levels, ATR distance, fib levels.
+  b) TP1/TP2 realism vs nearest opposing zone and room-to-move (distance_to_res/sup in price units and %, keyLevels). spaceGateOk is authoritative; tp1PathClear=false means TP1 is blocked by the opposing zone.
   c) Output levelsVerdict: accept (levels align with structure), adjust (setup good but SL/TP could sit better — cite prices), or reject (SL/TP structurally wrong, e.g. SL inside sweep liquidity or TP beyond untested opposing zone).
   d) When verdict is adjust or reject, populate suggestedSL and suggestedTP with cited advisory prices. When accept, leave suggestedSL/suggestedTP null.
   e) Do NOT automatically penalize Crypto for >2% SL.
@@ -73,7 +74,7 @@ edgeProbability (0-100) - derive from input with this rubric (do not mirror rawS
 - directionalConfidenceMultiplier: add min(30, multiplier * 30) where multiplier is 0-1 from diagnostics (if missing/unavailable, use neutral 0.5 — do NOT treat missing as 0).
 - ENGINE B: if structural_verdict is CLEAR and direction matches the reviewed engine direction, +15; if ENGINE B absent/neutral, +0; if UNCLEAR or direction conflicts, -10.
 - Regime label from SIGNAL: TRENDING or strong trend labels +10; RANGING/chop near neutral +0; DEAD RANGING or explicit dead chop + (-10).
-- RR: if RR1 meets Style min RR (config) from AI CALIBRATION CONTEXT +5; if below config min -5 (informational only).
+- RR: for Engine B scale-out, if RR1 meets Engine B TP1 minimum RR +5; if RR2 / rrUsedForGate meets Style min RR (config) +5; if below the relevant configured min -5 (informational only). Do not penalize RR1 solely for being below style min RR when scaleOutActive=true and tp1PathClear=true.
 Sum, clamp to 5-95. Round to integer for the JSON field.
 
 STRUCTURED SCORE OUTPUT:
@@ -81,7 +82,7 @@ STRUCTURED SCORE OUTPUT:
 - total_score is the sum of those components, clamped 0-100.
 - risk_score means risk quality: higher is cleaner/safer, lower is worse.
 - ai_action is advisory only. ATHENA Python hard rules decide advisory_rule_trade_allowed after parsing.
-- Use blocking_reasons for data-supported blockers only: NO_STOP_LOSS, RR_BELOW_MIN (only when RR1 is below Style min RR config), DAILY_LOSS_LIMIT_HIT, HIGH_IMPACT_NEWS_NEARBY, or DATA_UNAVAILABLE.
+- Use blocking_reasons for data-supported blockers only: NO_STOP_LOSS, RR_BELOW_MIN (only when the relevant configured RR gate failed — RR2/style min for scale-out, not RR1 alone), DAILY_LOSS_LIMIT_HIT, HIGH_IMPACT_NEWS_NEARBY, or DATA_UNAVAILABLE.
 
 PER-STYLE RATINGS - rate ALL THREE independently using specific data:
 - SCALP: ADX > 30, clean H1 entry, vol_ratio > 1.5, RR1 vs Style min RR for scalp in config context

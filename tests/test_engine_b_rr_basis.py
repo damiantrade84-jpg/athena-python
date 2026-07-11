@@ -15,6 +15,8 @@ from market_structure import (
     engine_b_confidence_passes,
     engine_b_level_cohort,
     resolve_engine_b_execution_levels,
+    ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE,
+    _engine_b_tp1_path_clear,
 )
 from scanner import _apply_engine_b_scan_levels
 
@@ -387,6 +389,7 @@ def test_tp1_too_close_with_no_sane_sl_falls_back_to_single_tp(monkeypatch):
 def test_engine_b_scan_levels_use_reachable_tp1_and_runner_tp2(monkeypatch):
     signal = {"engine": "engine_b"}
     conf_b = {
+        "passed": True,
         "execution_levels_valid": True,
         "execution_sl": 98.5,
         "execution_tp": 103.0,
@@ -731,9 +734,10 @@ def _capped_structural_tp_res() -> dict:
         "near_active_zone": True,
         # Tight room — fails the room_ok gate
         "distance_to_res": 0.05,
+        "nearest_resistance_zone": {"lower": 100.05, "upper": 100.20},
         "recommended_stop_loss": 90.0,
-        # Structural TP below min_rr — forces synthetic fallback
-        "recommended_take_profit": 101.0,
+        # Structural TP at the resistance wall — reachable TP1 before opposing zone
+        "recommended_take_profit": 100.05,
         "structural_verdict": "CLEAR",
     }
 
@@ -747,9 +751,10 @@ _CAPPED_TP_STYLE_PROFILE = {
 }
 
 
-def test_scale_out_plan_satisfies_space_gate_when_structural_tp_capped():
+def test_scale_out_plan_satisfies_space_gate_when_structural_tp_capped(monkeypatch):
     """Active dual-TP scale-out: structural wall is TP1, so space passes even
     when room_ok is false and synthetic TP2 would have been capped-blocked."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TP1_MIN_RR", {"default": 0.0})
     engine = NakedEngine()
     out = engine.calculate_confidence(
         _capped_structural_tp_res(),
@@ -1031,3 +1036,214 @@ def test_engine_b_confidence_passes_blocks_when_gate_score_below_floor():
 
     assert effective_min == pytest.approx(5.0)
     assert gate_ok is False
+
+
+def _short_tp1_blocked_exec_levels(**overrides):
+    base = {
+        "entry": 6.705,
+        "structural_sl": 6.938064641405058,
+        "structural_tp": 6.592244191324525,
+        "structural_rr": 0.7021,
+        "structural_sl_valid": True,
+        "structural_tp_valid": True,
+        "structural_tp_available": True,
+        "execution_sl": 6.865596962107586,
+        "execution_tp": 6.415925468206346,
+        "execution_tp1": 6.592244191324525,
+        "execution_tp2": 6.415925468206346,
+        "execution_rr": 1.8,
+        "execution_rr1": 0.7021,
+        "execution_rr2": 1.8,
+        "rr_used_for_gate": 1.8,
+        "rr_source": "structural_sl_sl_structural_tp_tp",
+        "level_mode": "structural_sl_sl_structural_tp_tp",
+        "level_cohort": "structural",
+        "sl_source": "structural",
+        "tp_source": "fallback_rr",
+        "tp1_source": "structural",
+        "tp2_source": "fallback_rr",
+        "exit_strategy": "scale_out_structural_tp1_fallback_tp2",
+        "runner_tp_requires_structural_break": True,
+        "scale_out_guard_reason": None,
+        "tp1_sl_retry_applied": False,
+        "execution_levels_valid": True,
+        "execution_level_reject_reason": None,
+        "execution_tp_side_ok": True,
+        "fallback_tp_applied": True,
+        "fallback_tp_reason": "structural_tp_below_min_rr",
+        "synthetic_rr_tp_used": True,
+        "atr_sl_clamp_applied": False,
+        "rr_required": 1.4,
+        "rr_actual": 1.8,
+        "rr_passed": True,
+        "structural_target_distance_atr": None,
+        "stop_distance_atr": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def _short_tp1_blocked_res() -> dict:
+    return {
+        "atr": 0.16,
+        "asset_type": "crypto",
+        "current_swing_sequence": "LH_LL",
+        "macro_swing_sequence": "LH_LL",
+        "bos_confirmed": True,
+        "trigger_ok": True,
+        "zone_touched": True,
+        "near_active_zone": True,
+        "structural_verdict": "CLEAR",
+        "nearest_support_zone": {"lower": 6.6525, "upper": 6.8345},
+        "distance_to_sup": -0.1295,
+        "distance_to_sup_pct": pytest.approx(-1.9314, rel=1e-2),
+        "recommended_stop_loss": 6.938064641405058,
+        "recommended_take_profit": 6.592244191324525,
+    }
+
+
+def test_short_tp1_blocked_by_opposing_zone_regression(monkeypatch):
+    """Exact SHORT scenario: entry inside support, TP1 below support upper edge."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TP1_MIN_RR", {"default": 0.3})
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_SPACE_RR_SUBSTITUTE_BLOCK_CAPPED_STRUCTURAL_TP",
+        True,
+    )
+    monkeypatch.setattr(
+        "market_structure.resolve_engine_b_execution_levels",
+        lambda **kwargs: _short_tp1_blocked_exec_levels(),
+    )
+
+    engine = NakedEngine()
+    out = engine.calculate_confidence(
+        _short_tp1_blocked_res(),
+        current_price=6.705,
+        direction="SHORT",
+        entry_candles=[],
+        style_profile={
+            "style": "intraday",
+            "min_score": 3.0,
+            "min_rr": 1.4,
+            "fallback_rr": 2.0,
+            "min_room_atr": 0.25,
+            "require_macro_align": False,
+        },
+    )
+
+    assert out["entry_inside_opposing_zone"] is True
+    assert out["tp1_before_opposing_zone"] is False
+    assert out["tp1_path_clear"] is False
+    assert out["scale_out_active"] is True
+    assert out["scale_out_space_ok"] is False
+    assert out["rr_can_satisfy_space_gate"] is False
+    assert out["space_gate_ok"] is False
+    assert out["passed"] is False
+    assert out["rr_ok"] is True
+    assert ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE in (
+        out.get("engine_b_diagnostics", {}).get("reason_codes") or []
+    )
+
+
+def test_long_tp1_blocked_by_opposing_zone_mirrors_short(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TP1_MIN_RR", {"default": 0.3})
+    monkeypatch.setattr(
+        "market_structure.resolve_engine_b_execution_levels",
+        lambda **kwargs: _short_tp1_blocked_exec_levels(
+            entry=100.75,
+            structural_sl=94.0,
+            structural_tp=101.5,
+            execution_sl=95.0,
+            execution_tp=103.0,
+            execution_tp1=101.5,
+            execution_tp2=103.0,
+            execution_rr=1.8,
+            execution_rr1=0.7,
+            execution_rr2=1.8,
+            rr_used_for_gate=1.8,
+        ),
+    )
+
+    engine = NakedEngine()
+    out = engine.calculate_confidence(
+        {
+            "atr": 2.0,
+            "asset_type": "crypto",
+            "current_swing_sequence": "HH_HL",
+            "macro_swing_sequence": "HH_HL",
+            "bos_confirmed": True,
+            "trigger_ok": True,
+            "zone_touched": True,
+            "near_active_zone": True,
+            "structural_verdict": "CLEAR",
+            "nearest_resistance_zone": {"lower": 100.5, "upper": 101.0},
+            "distance_to_res": -0.25,
+            "recommended_stop_loss": 94.0,
+            "recommended_take_profit": 101.5,
+        },
+        current_price=100.75,
+        direction="LONG",
+        entry_candles=[],
+        style_profile={
+            "style": "intraday",
+            "min_score": 3.0,
+            "min_rr": 1.4,
+            "fallback_rr": 2.0,
+            "min_room_atr": 0.25,
+            "require_macro_align": False,
+        },
+    )
+
+    assert out["entry_inside_opposing_zone"] is True
+    assert out["tp1_before_opposing_zone"] is False
+    assert out["tp1_path_clear"] is False
+    assert out["scale_out_space_ok"] is False
+    assert out["space_gate_ok"] is False
+    assert out["passed"] is False
+
+
+def test_scale_out_space_ok_when_tp1_before_opposing_zone_despite_low_room(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TP1_MIN_RR", {"default": 0.0})
+    monkeypatch.setattr(
+        "market_structure.resolve_engine_b_execution_levels",
+        lambda **kwargs: _short_tp1_blocked_exec_levels(
+            execution_tp1=100.04,
+            structural_tp=100.04,
+            execution_rr1=0.8,
+            execution_rr2=2.0,
+            execution_rr=2.0,
+            rr_used_for_gate=2.0,
+            rr_passed=True,
+            fallback_tp_reason="structural_tp_below_min_rr",
+        ),
+    )
+
+    engine = NakedEngine()
+    out = engine.calculate_confidence(
+        _capped_structural_tp_res(),
+        current_price=100.0,
+        direction="LONG",
+        entry_candles=[],
+        style_profile=dict(_CAPPED_TP_STYLE_PROFILE),
+    )
+
+    assert out["tp1_path_clear"] is True
+    assert out["scale_out_active"] is True
+    assert out["scale_out_space_ok"] is True
+    assert out["room_ok"] is False
+    assert out["space_gate_ok"] is True
+    assert out["passed"] is True
+
+
+def test_engine_b_tp1_path_clear_short_exact_geometry():
+    diag = _engine_b_tp1_path_clear(
+        direction="SHORT",
+        entry=6.705,
+        tp1=6.592244191324525,
+        opposing_zone={"lower": 6.6525, "upper": 6.8345},
+        opposing_zone_distance=-0.1295,
+    )
+    assert diag["entry_inside_opposing_zone"] is True
+    assert diag["tp1_before_opposing_zone"] is False
+    assert diag["tp1_path_clear"] is False
+    assert diag["tp1_path_block_reason"] == ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE

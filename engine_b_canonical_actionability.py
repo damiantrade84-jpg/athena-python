@@ -17,6 +17,7 @@ from market_structure import (
     ENGINE_B_REASON_RESISTANCE_TOO_CLOSE,
     ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE,
     ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
+    ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE,
 )
 
 STATUS_ACTIONABLE = "ACTIONABLE"
@@ -599,6 +600,7 @@ def reconcile_engine_b_actionability(
     rr2 = _float(conf.get("execution_rr2")) or _float(conf.get("rr2")) or _float(conf.get("rr_used_for_gate"))
     gate_rr_used = _float(conf.get("rr_used_for_gate")) or rr2
     style_min_rr = _style_min_rr(style_profile, conf)
+    tp1_path_clear = _bool(conf.get("tp1_path_clear"))
 
     playbook_raw = _playbook_actionable_raw(conf)
     ai_raw = _legacy_ai_calibration_actionable(conf)
@@ -637,7 +639,9 @@ def reconcile_engine_b_actionability(
             _add(STATUS_REJECT_ENTRY_LOCATION, "LOCATION_GATE_FAILED")
 
     if space_gate_ok is False:
-        if direction == "SHORT" and support_too_close:
+        if tp1_path_clear is False:
+            _add(STATUS_REJECT_NO_ROOM, ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE)
+        elif direction == "SHORT" and support_too_close:
             _add(STATUS_REJECT_NO_ROOM, ENGINE_B_REASON_SUPPORT_TOO_CLOSE)
         elif direction == "LONG" and resistance_too_close:
             _add(STATUS_REJECT_NO_ROOM, ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
@@ -681,6 +685,8 @@ def reconcile_engine_b_actionability(
         diagnostics.append(ENGINE_B_REASON_SUPPORT_TOO_CLOSE)
     if resistance_too_close and space_gate_ok is not False:
         diagnostics.append(ENGINE_B_REASON_RESISTANCE_TOO_CLOSE)
+    if tp1_path_clear is False:
+        diagnostics.append(ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE)
 
     allow_rr1_below = bool(_cfg().get("ALLOW_RR1_BELOW_MIN_IN_RESEARCH", False))
     partial_rr_fail = False
@@ -761,6 +767,13 @@ def reconcile_engine_b_actionability(
         "support_too_close": support_too_close,
         "resistance_too_close": resistance_too_close,
         "structural_tp_too_close": structural_tp_too_close,
+        "tp1_path_clear": tp1_path_clear,
+        "tp1_path_block_reason": conf.get("tp1_path_block_reason"),
+        "entry_inside_opposing_zone": conf.get("entry_inside_opposing_zone"),
+        "tp1_before_opposing_zone": conf.get("tp1_before_opposing_zone"),
+        "execution_sl_inside_structural_invalidation": conf.get(
+            "execution_sl_inside_structural_invalidation"
+        ),
         "no_trigger_pattern": no_trigger_pattern,
         "partial_target_quality_fail": partial_rr_fail,
         "rr1": rr1,

@@ -563,6 +563,7 @@ ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT = "d1_pd_array_conflict"
 ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE = "structural_tp_too_close"
 ENGINE_B_REASON_AGGTRADE_REQUIRED = "aggtrade_required_for_crypto"
 ENGINE_B_REASON_AGGTRADE_CVD_OPPOSED = "aggtrade_cvd_opposed"
+ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE = "tp1_blocked_by_opposing_zone"
 
 
 def _float_cfg(key: str, default: float) -> float:
@@ -827,6 +828,111 @@ def _engine_b_structural_target_price(
     if direction == "LONG":
         return float(zone["lower"]) - (float(atr) * buffer_mult)
     return float(zone["upper"]) + (float(atr) * buffer_mult)
+
+
+def _engine_b_exec_sl_inside_struct_invalidation(
+    direction: str, structural_sl, execution_sl, structural_sl_valid
+) -> bool | None:
+    """True when the execution SL is tighter than the structural SL.
+
+    LONG:  execution_sl > structural_sl  (closer to entry from below)
+    SHORT: execution_sl < structural_sl  (closer to entry from above)
+
+    Returns None when either level is missing or the structural SL is invalid.
+    """
+    if not bool(structural_sl_valid):
+        return None
+    try:
+        _ss = float(structural_sl)
+        _es = float(execution_sl)
+    except (TypeError, ValueError):
+        return None
+    _dir = str(direction or "").upper()
+    if _dir == "LONG":
+        return _es > _ss
+    if _dir == "SHORT":
+        return _es < _ss
+    return None
+
+
+def _engine_b_tp1_path_clear(
+    *,
+    direction: str,
+    entry: float | None,
+    tp1: float | None,
+    opposing_zone: dict | None,
+    opposing_zone_distance: float | None,
+    tol: float = 1e-9,
+) -> dict:
+    """Check whether TP1 is reachable before the nearest opposing zone.
+
+    For LONG the opposing zone is nearest resistance; TP1 is blocked when it
+    lies above the resistance lower edge (reward exceeds available room).
+    For SHORT the opposing zone is nearest support; TP1 is blocked when it
+    lies below the support upper edge.
+
+    When no opposing zone or distance is available the current no-wall
+    behaviour is preserved (path clear).
+    """
+    _direction = str(direction or "").upper()
+
+    def _sf(v):
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    _entry = _sf(entry)
+    _tp1 = _sf(tp1)
+    _zone_lower = _sf(opposing_zone.get("lower")) if isinstance(opposing_zone, dict) else None
+    _zone_upper = _sf(opposing_zone.get("upper")) if isinstance(opposing_zone, dict) else None
+
+    _entry_inside = False
+    if _entry is not None and _zone_lower is not None and _zone_upper is not None:
+        lo, hi = (_zone_lower, _zone_upper) if _zone_lower <= _zone_upper else (_zone_upper, _zone_lower)
+        _entry_inside = lo - tol <= _entry <= hi + tol
+
+    _tp1_distance = abs(_tp1 - _entry) if (_tp1 is not None and _entry is not None) else None
+
+    # No opposing zone or no usable distance → preserve no-wall behaviour.
+    if (
+        opposing_zone is None
+        or opposing_zone_distance is None
+        or _tp1 is None
+        or _entry is None
+    ):
+        return {
+            "entry_inside_opposing_zone": _entry_inside,
+            "tp1_before_opposing_zone": None,
+            "tp1_path_clear": True,
+            "tp1_path_block_reason": None,
+            "opposing_zone_distance": opposing_zone_distance,
+            "tp1_distance": _tp1_distance,
+        }
+
+    if _direction == "LONG":
+        _tp1_before = _zone_lower is not None and _tp1 <= _zone_lower + tol
+    else:
+        _tp1_before = _zone_upper is not None and _tp1 >= _zone_upper - tol
+
+    if _tp1_before:
+        return {
+            "entry_inside_opposing_zone": _entry_inside,
+            "tp1_before_opposing_zone": True,
+            "tp1_path_clear": True,
+            "tp1_path_block_reason": None,
+            "opposing_zone_distance": opposing_zone_distance,
+            "tp1_distance": _tp1_distance,
+        }
+
+    return {
+        "entry_inside_opposing_zone": _entry_inside,
+        "tp1_before_opposing_zone": False,
+        "tp1_path_clear": False,
+        "tp1_path_block_reason": ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE,
+        "opposing_zone_distance": opposing_zone_distance,
+        "tp1_distance": _tp1_distance,
+    }
 
 
 def _adx_from_indicator_snap(snap: dict | None) -> float | None:
@@ -4641,6 +4747,22 @@ class NakedEngine:
             "nearest_target_price": (selected_structural_target or {}).get("target_price"),
             "distance_to_res": (nearest_res["lower"] - current_price) if nearest_res else None,
             "distance_to_sup": (current_price - nearest_sup["upper"]) if nearest_sup else None,
+            "distance_to_res_pct": (
+                ((nearest_res["lower"] - current_price) / current_price * 100.0)
+                if nearest_res and current_price > 0 else None
+            ),
+            "distance_to_sup_pct": (
+                ((current_price - nearest_sup["upper"]) / current_price * 100.0)
+                if nearest_sup and current_price > 0 else None
+            ),
+            "distance_to_res_atr": (
+                ((nearest_res["lower"] - current_price) / atr)
+                if nearest_res and atr > 0 else None
+            ),
+            "distance_to_sup_atr": (
+                ((current_price - nearest_sup["upper"]) / atr)
+                if nearest_sup and atr > 0 else None
+            ),
             "atr": atr,
             "d1_atr": d1_atr,
             "struct_atr": struct_atr,
@@ -5064,6 +5186,8 @@ class NakedEngine:
             except (TypeError, ValueError):
                 location_distance_atr = None
         room_dist = res.get("distance_to_res") if direction == "LONG" else res.get("distance_to_sup")
+        nearest_res = res.get("nearest_resistance_zone")
+        nearest_sup = res.get("nearest_support_zone")
 
         # Contextual Room Gate helper (called after rr is known).
         # Crypto and indices trade with tighter swings → smaller min_room.
@@ -5217,6 +5341,20 @@ class NakedEngine:
         _rr_space_tp_qualified = _level_mode_str.endswith("_structural_tp") or _level_mode_str.endswith(
             "_fallback_rr_tp"
         )
+        # TP1 path geometry: prove TP1 is reachable before the nearest opposing
+        # zone. The target selector can skip a near zone whose structural TP is
+        # too close or wrong-side and select a deeper zone — but that deeper TP
+        # may sit beyond the nearer opposing wall, making it unreachable without
+        # a structural break.
+        _tp1_opposing_zone = nearest_res if direction == "LONG" else nearest_sup
+        _tp1_path_diag = _engine_b_tp1_path_clear(
+            direction=direction,
+            entry=current_price,
+            tp1=_exec_lvl.get("execution_tp1"),
+            opposing_zone=_tp1_opposing_zone,
+            opposing_zone_distance=room_dist,
+        )
+        _tp1_path_clear = bool(_tp1_path_diag.get("tp1_path_clear"))
         # Dual-TP scale-out keeps the structural wall as TP1; space at entry
         # is satisfied by the reachable partial target, not by synthetic TP2.
         _scale_out_active = (
@@ -5234,6 +5372,7 @@ class NakedEngine:
             _exec_rr1_for_space = None
         _scale_out_space_ok = bool(
             _scale_out_active
+            and _tp1_path_clear
             and _exec_rr1_for_space is not None
             and (
                 _tp1_min_rr_for_space <= 0
@@ -5246,13 +5385,14 @@ class NakedEngine:
         # synthetic target sits beyond it. Substitution stays valid for structural
         # TPs and for synthetic TPs created because no structural target existed
         # (missing/wrong-side TP — no opposing wall was mapped). Active scale-out
-        # plans are exempt: TP1 is the wall, TP2 is the runner beyond it.
+        # plans are exempt ONLY when TP1 has a clear path before the opposing
+        # zone; a blocked TP1 must not rescue the room gate.
         _rr_space_capped_tp_blocked = False
         if (
             _rr_space_tp_qualified
             and _level_mode_str.endswith("_fallback_rr_tp")
             and _exec_lvl.get("fallback_tp_reason") == "structural_tp_below_min_rr"
-            and not _scale_out_active
+            and (not _scale_out_active or not _tp1_path_clear)
             and bool(
                 config.CONFIG.get(
                     "ENGINE_B_SPACE_RR_SUBSTITUTE_BLOCK_CAPPED_STRUCTURAL_TP", True
@@ -5663,6 +5803,8 @@ class NakedEngine:
             _diag_codes.append(ENGINE_B_REASON_TP_WRONG_SIDE)
         if res.get("tp_structural_limited"):
             _diag_codes.append(ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE)
+        if not _tp1_path_clear:
+            _diag_codes.append(ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE)
         # Forex ADX now derives regime only; do not emit the old block-style
         # diagnostic because low ADX is no longer a structure gate failure.
 
@@ -5734,6 +5876,7 @@ class NakedEngine:
             "structural_sl": _exec_lvl["structural_sl"],
             "structural_tp": _exec_lvl["structural_tp"],
             "structural_rr": _exec_lvl["structural_rr"],
+            "structural_sl_valid": _exec_lvl.get("structural_sl_valid"),
             "structural_tp_available": _exec_lvl.get("structural_tp_available"),
             "execution_sl": _exec_lvl["execution_sl"],
             "execution_tp": _exec_lvl["execution_tp"],
@@ -5742,6 +5885,12 @@ class NakedEngine:
             "execution_rr": _exec_lvl["execution_rr"],
             "execution_rr1": _exec_lvl.get("execution_rr1"),
             "execution_rr2": _exec_lvl.get("execution_rr2"),
+            "execution_sl_inside_structural_invalidation": _engine_b_exec_sl_inside_struct_invalidation(
+                direction,
+                _exec_lvl.get("structural_sl"),
+                _exec_lvl.get("execution_sl"),
+                _exec_lvl.get("structural_sl_valid"),
+            ),
             "level_mode": _exec_lvl["level_mode"],
             "level_cohort": _exec_lvl.get("level_cohort", engine_b_level_cohort(_exec_lvl.get("level_mode"))),
             "sl_source": _exec_lvl.get("sl_source"),
@@ -5785,6 +5934,21 @@ class NakedEngine:
             "rr_space_capped_tp_blocked": _rr_space_capped_tp_blocked,
             "scale_out_active": _scale_out_active,
             "scale_out_space_ok": _scale_out_space_ok,
+            "tp1_path_clear": _tp1_path_clear,
+            "tp1_path_diag": _tp1_path_diag,
+            "entry_inside_opposing_zone": _tp1_path_diag.get("entry_inside_opposing_zone"),
+            "tp1_before_opposing_zone": _tp1_path_diag.get("tp1_before_opposing_zone"),
+            "tp1_path_block_reason": _tp1_path_diag.get("tp1_path_block_reason"),
+            "tp1_min_rr": _tp1_min_rr_for_space,
+            "style_min_rr": min_rr,
+            "nearest_support_zone": res.get("nearest_support_zone"),
+            "nearest_resistance_zone": res.get("nearest_resistance_zone"),
+            "distance_to_res": res.get("distance_to_res"),
+            "distance_to_sup": res.get("distance_to_sup"),
+            "distance_to_res_pct": res.get("distance_to_res_pct"),
+            "distance_to_sup_pct": res.get("distance_to_sup_pct"),
+            "distance_to_res_atr": res.get("distance_to_res_atr"),
+            "distance_to_sup_atr": res.get("distance_to_sup_atr"),
             "rr_space_floor_atr": round(_rr_space_floor_atr, 4),
             "rr_space_floor_passed": bool(_rr_space_floor_ok),
             "min_room_atr_used": round(_effective_min_room_atr, 4),

@@ -101,3 +101,35 @@ def test_crypto_raw_header_uses_crypto_periods():
     assert "trend=18 momentum=40" in text
     assert "EMA18" in text
     assert "EMA40" in text
+
+
+def test_engine_b_distance_rendered_as_price_units_and_percent():
+    build_msg = _load_build_signal_message()
+    signal = {
+        "pair": "TEST/USDT",
+        "direction": "SHORT",
+        "price": 6.705,
+        "sl": 6.8656,
+        "tp1": 6.5922,
+        "tp2": 6.4159,
+        "rr1": 0.7,
+        "rr2": 1.8,
+        "confluenceScore": 4.0,
+        "maxScore": 8.0,
+        "type": "crypto",
+        "is_naked": True,
+        "naked_data": {
+            "structural_verdict": "CLEAR",
+            "current_swing_sequence": "LH_LL",
+            "macro_swing_sequence": "LH_LL",
+            "score": 4.0,
+            "max_possible": 8.0,
+            "current_price": 6.705,
+            "distance_to_sup": -0.1295,
+            "distance_to_sup_pct": -1.9314,
+            "nearest_support_zone": {"lower": 6.6525, "upper": 6.8345},
+        },
+    }
+    text = build_msg(signal, None, "intraday", {"intraday": "H4+H1"})
+    assert "Distance to Support: -0.129500 price units (-1.93%)" in text
+    assert "Distance to Support: -1.93% price units" not in text
