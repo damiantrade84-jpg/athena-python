@@ -20,6 +20,30 @@ export function canShowExecute(health: GhostHealth, signal: GhostSignal): boolea
     && signal.canExecute;
 }
 
+export function manualExecutionBlockReason(
+  health: GhostHealth,
+  signal: GhostSignal,
+): string | null {
+  if (health.mode === 'SHADOW') return 'shadow_mode';
+  if (health.executionStatus !== 'DEMO VERIFIED') return 'demo_account_not_verified';
+  if (signal.canExecute) return null;
+  const reasons = signal.reasons.filter((reason) => reason !== 'shadow_mode');
+  return reasons.join(' · ') || 'signal_not_execution_eligible';
+}
+
+export function confirmManualExecution(
+  signal: GhostSignal,
+  confirm: (message: string) => boolean,
+): boolean {
+  return confirm([
+    `Send DEMO order for ${signal.instrument.canonicalSymbol} ${signal.direction}?`,
+    `Entry: ${signal.entry ?? 'market'}`,
+    `Stop: ${signal.stop ?? 'unavailable'}`,
+    `Target: ${signal.target ?? 'unavailable'}`,
+    'The server will re-run demo attestation, sizing, risk, freshness, and guardian checks.',
+  ].join('\n'));
+}
+
 export function groupSignals(signals: GhostSignal[]): Record<GhostAssetGroup, GhostSignal[]> {
   const result: Record<GhostAssetGroup, GhostSignal[]> = {
     forex: [], crypto: [], metals: [], energy: [], commodities_other: [],

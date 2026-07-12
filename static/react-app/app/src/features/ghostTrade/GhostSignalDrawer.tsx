@@ -1,6 +1,8 @@
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { canShowExecute, pct } from './display';
+import {
+  canShowExecute, confirmManualExecution, manualExecutionBlockReason, pct,
+} from './display';
 import type { GhostHealth, GhostSignal } from './types';
 
 const labels: Record<string, string> = {
@@ -10,6 +12,8 @@ const labels: Record<string, string> = {
 };
 
 export function GhostSignalDrawer({ health, signal, onClose, onExecute, onDismiss }: { health: GhostHealth; signal: GhostSignal | null; onClose: () => void; onExecute: (id: string) => void; onDismiss: (id: string) => void }) {
+  const manualAllowed = signal ? canShowExecute(health, signal) : false;
+  const manualBlock = signal ? manualExecutionBlockReason(health, signal) : null;
   return (
     <Sheet open={Boolean(signal)} onOpenChange={(open) => { if (!open) onClose(); }}>
       {signal && (
@@ -39,8 +43,22 @@ export function GhostSignalDrawer({ health, signal, onClose, onExecute, onDismis
               <span>Freshness {signal.dataFreshness}</span><span>Spread {signal.spread ?? '—'}</span>
             </div>
             <div className="rounded-md border p-3 text-xs"><div className="font-semibold">Decision trace</div><ul className="mt-1 list-disc pl-4 text-muted-foreground">{signal.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>
+            {health.mode !== 'SHADOW' && manualBlock && (
+              <div className="text-xs text-amber-300">Blocked: {manualBlock}</div>
+            )}
             <div className="flex gap-2">
-              {canShowExecute(health, signal) && <Button onClick={() => onExecute(signal.signalId)}>Execute Demo</Button>}
+              {health.mode !== 'SHADOW' && (
+                <Button
+                  disabled={!manualAllowed}
+                  onClick={() => {
+                    if (confirmManualExecution(signal, (message) => window.confirm(message))) {
+                      onExecute(signal.signalId);
+                    }
+                  }}
+                >
+                  Execute Demo Manually
+                </Button>
+              )}
               <Button variant="outline" onClick={() => onDismiss(signal.signalId)}>Dismiss</Button>
             </div>
           </div>

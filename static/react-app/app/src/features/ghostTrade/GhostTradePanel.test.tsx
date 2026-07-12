@@ -2,8 +2,18 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/components/ui/sheet', () => ({
+  Sheet: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SheetContent: ({ children }: { children: React.ReactNode }) => <aside>{children}</aside>,
+  SheetDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
+  SheetHeader: ({ children }: { children: React.ReactNode }) => <header>{children}</header>,
+  SheetTitle: ({ children }: { children: React.ReactNode }) => <h3>{children}</h3>,
+}));
+
 import { GhostTradeView } from '@/components/panels/GhostTradePanel';
-import { bannerForHealth, canShowExecute, groupSignals, sortSignals } from './display';
+import {
+  bannerForHealth, canShowExecute, confirmManualExecution, groupSignals, sortSignals,
+} from './display';
 import type { GhostGroup, GhostHealth, GhostPerformance, GhostPosition, GhostSignal } from './types';
 
 
@@ -97,6 +107,47 @@ describe('Ghost Trade display contracts', () => {
     expect(canShowExecute(verified, { ...signal, canExecute: true })).toBe(true);
     expect(canShowExecute(health, { ...signal, canExecute: true })).toBe(false);
     expect(canShowExecute(verified, signal)).toBe(false);
+  });
+
+  it('always shows the manual demo control in demo mode but disables blocked signals', () => {
+    const verified = {
+      ...health,
+      mode: 'DEMO_MANUAL' as const,
+      executionStatus: 'DEMO VERIFIED' as const,
+    };
+    const blockedMarkup = renderToStaticMarkup(
+      <GhostTradeView
+        health={verified} groups={groups} signals={[signal]}
+        positions={[]} performance={performance} loading={false} error={null}
+        selectedSignal={{ ...signal, reasons: ['entry_quality_below_minimum'] }}
+        onSelectSignal={vi.fn()} onScan={vi.fn()} onExecute={vi.fn()}
+        onDismiss={vi.fn()} onClosePosition={vi.fn()} onToggleAuto={vi.fn()}
+      />,
+    );
+    const enabledMarkup = renderToStaticMarkup(
+      <GhostTradeView
+        health={verified} groups={groups} signals={[{ ...signal, canExecute: true }]}
+        positions={[]} performance={performance} loading={false} error={null}
+        selectedSignal={{ ...signal, canExecute: true, reasons: [] }}
+        onSelectSignal={vi.fn()} onScan={vi.fn()} onExecute={vi.fn()}
+        onDismiss={vi.fn()} onClosePosition={vi.fn()} onToggleAuto={vi.fn()}
+      />,
+    );
+
+    const blockedButton = blockedMarkup.match(/<button[^>]*>Execute Demo Manually<\/button>/)?.[0];
+    const enabledButton = enabledMarkup.match(/<button[^>]*>Execute Demo Manually<\/button>/)?.[0];
+    expect(blockedButton).toContain(' disabled=""');
+    expect(blockedMarkup).toContain('Blocked: entry_quality_below_minimum');
+    expect(enabledButton).not.toContain(' disabled=""');
+  });
+
+  it('requires explicit confirmation before manual demo execution', () => {
+    const confirm = vi.fn((_message: string) => true);
+
+    expect(confirmManualExecution(signal, confirm)).toBe(true);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm.mock.calls[0][0]).toContain('EUR/USD LONG');
+    expect(confirm.mock.calls[0][0]).toContain('Stop: 1.09');
   });
 
   it('groups and sorts signals without mixing asset classes', () => {
