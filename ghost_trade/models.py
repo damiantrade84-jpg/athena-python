@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -84,6 +85,140 @@ class DemoVerificationStatus(_StringEnum):
 
 class ExitStrategy(_StringEnum):
     STRUCTURAL = "STRUCTURAL"
+
+
+class SwingKind(_StringEnum):
+    HIGH = "HIGH"
+    LOW = "LOW"
+
+
+@dataclass(frozen=True, slots=True)
+class Candle:
+    open_time: datetime
+    close_time: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float | None = None
+
+    def __post_init__(self) -> None:
+        prices = tuple(float(value) for value in (self.open, self.high, self.low, self.close))
+        if any(value != value or value in (float("inf"), float("-inf")) for value in prices):
+            raise ValueError("candle prices must be finite")
+        if self.high < self.low:
+            raise ValueError("candle high cannot be below low")
+        if not self.low <= self.open <= self.high or not self.low <= self.close <= self.high:
+            raise ValueError("candle open and close must be inside its range")
+        if self.close_time <= self.open_time:
+            raise ValueError("candle close_time must be after open_time")
+
+
+@dataclass(frozen=True, slots=True)
+class Swing:
+    kind: SwingKind
+    center_index: int
+    confirmation_index: int
+    price: float
+    center_time: datetime
+    confirmation_time: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SwingSet:
+    highs: tuple[Swing, ...] = ()
+    lows: tuple[Swing, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class StructureDiagnostics:
+    direction: float
+    strength: float
+    last_swing_highs: tuple[float, ...]
+    last_swing_lows: tuple[float, ...]
+    bars_since_structure_event: int | None
+    ordered_fraction: float
+    displacement_atr: float
+
+
+@dataclass(frozen=True, slots=True)
+class MomentumDiagnostics:
+    direction: float
+    normalized_roc: float
+    normalized_pressure: float | None
+    roc_available: bool
+    pressure_available: bool
+    volume_quality: float
+    correlation: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class TradeGeometry:
+    direction: Direction
+    entry: float
+    unbuffered_stop: float
+    stop: float
+    target: float
+    risk_distance: float
+    target_distance: float
+    raw_rr: float
+    stop_swing_confirmation_index: int
+    target_swing_confirmation_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class GeometryResult:
+    geometry: TradeGeometry | None
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EntryQualityDiagnostics:
+    score: float
+    rr_score: float
+    room_score: float
+    pullback_score: float
+    trigger_score: float
+
+
+@dataclass(frozen=True, slots=True)
+class ExhaustionDiagnostics:
+    penalty: float
+    adverse_wick: bool
+    declining_participation: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LiveOverlay:
+    confirmed_score: float
+    adjustment: float
+    display_score: float
+
+
+@dataclass(frozen=True, slots=True)
+class VolatilityDiagnostics:
+    regime: VolatilityRegime
+    atr_percentile: float
+    bb_width_percentile: float
+    prior_bb_width_percentile: float | None
+    atr_rising: bool
+    bb_width_rising: bool
+    available: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmedScoreResult:
+    direction: Direction
+    direction_confidence: float
+    structure: StructureDiagnostics
+    momentum: MomentumDiagnostics
+    volatility: VolatilityDiagnostics
+    geometry: GeometryResult
+    entry_quality: EntryQualityDiagnostics
+    exhaustion: ExhaustionDiagnostics
+    confirmed_score: float
+    selected: bool
+    reasons: tuple[str, ...]
 
 
 def _immutable_mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
