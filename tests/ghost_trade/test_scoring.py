@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,7 @@ from ghost_trade.scoring import (
     entry_quality,
     pullback_score,
     score_confirmed,
+    score_live_overlay,
 )
 from ghost_trade.structure import confirmed_fractals, structure_from_swings
 from ghost_trade.volatility import classify_volatility, volatility_diagnostics
@@ -296,3 +298,37 @@ def test_top_down_scorer_fails_closed_with_explicit_missing_history_reasons():
     assert "insufficient_h4_history" in result.reasons
     assert "insufficient_h1_history" in result.reasons
     assert 0.0 <= result.confirmed_score <= 1.0
+
+
+def test_live_overlay_uses_forming_m15_without_mutating_confirmed_score():
+    confirmed_m15 = tuple(
+        candle(i, open_=100, high=101, low=99, close=100, hours=1)
+        for i in range(20)
+    )
+    forming = Candle(
+        open_time=BASE + timedelta(hours=20),
+        close_time=BASE + timedelta(hours=20, minutes=15),
+        open=100,
+        high=103,
+        low=99.8,
+        close=102.5,
+        volume=200,
+    )
+    bundle = CandleBundle(
+        d1=(), h4=(), h1=confirmed_m15, m15_confirmed=confirmed_m15,
+        m15_forming=forming, as_of=forming.open_time,
+    )
+    confirmed = SimpleNamespace(
+        direction=Direction.LONG,
+        confirmed_score=0.64,
+        geometry=SimpleNamespace(geometry=SimpleNamespace(
+            entry=100, stop=95, target=110, risk_distance=5,
+        )),
+    )
+
+    overlay = score_live_overlay(bundle, confirmed)
+
+    assert overlay.confirmed_score == 0.64
+    assert 0 < overlay.adjustment <= 0.10
+    assert overlay.display_score > overlay.confirmed_score
+    assert overlay.diagnostics["currentCandleState"] == "FORMING"

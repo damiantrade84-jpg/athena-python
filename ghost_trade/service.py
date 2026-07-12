@@ -5,10 +5,12 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+import math
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from statistics import fmean
+from statistics import fmean, median, pstdev
 from typing import Any, Callable, Mapping, Sequence
 
 from .config import GhostConfig
@@ -16,7 +18,7 @@ from .models import AssetGroup, Direction, GhostMode, GhostSignal, SignalStatus,
 from .persistence import GhostRepository, signal_id_for
 from .reconciliation import resolve_shadow_position
 from .scanner import json_safe_component
-from .scoring import score_confirmed
+from .scoring import score_confirmed, score_live_overlay
 
 
 class ScanAlreadyRunning(RuntimeError):
@@ -72,6 +74,8 @@ class GhostService:
         self._score_fn = score_fn
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._scan_lock = threading.Lock()
+        self._scan_trigger_lock = threading.Lock()
+        self._scan_thread: threading.Thread | None = None
         self._execution_coordinator: Any | None = None
         # Never restore this from persisted preferences. Every process start is OFF.
         self._demo_auto_effective = False
@@ -145,7 +149,7 @@ class GhostService:
             "executionStatus": execution_status,
             "liveTradingAllowed": False,
             "demoAutoEnabled": self._demo_auto_effective,
-            "scanRunning": self._scan_lock.locked(),
+            "scanRunning": self._scan_lock.locked() or self._scan_trigger_lock.locked(),
             "mt5Status": (
                 "SHADOW ONLY" if self.config.mode is GhostMode.SHADOW
                 else attestations.get(Venue.MT5).status.value
@@ -174,6 +178,7 @@ class GhostService:
             "maxRiskPerTrade": self.config.max_risk_per_trade,
             "maxTotalRisk": self.config.max_total_risk,
             "maxOpenPositions": self.config.max_open_positions,
+            "maxScanWorkers": self.config.max_scan_workers,
             "scanIntervalSeconds": self.config.scan_interval_seconds,
             "signalCooldownSeconds": self.config.signal_cooldown_seconds,
             "exitStrategy": self.config.exit_strategy.value,
@@ -191,6 +196,7 @@ class GhostService:
             "maxRiskPerTrade": "max_risk_per_trade",
             "maxTotalRisk": "max_total_risk",
             "maxOpenPositions": "max_open_positions",
+            "maxScanWorkers": "max_scan_workers",
             "scanIntervalSeconds": "scan_interval_seconds",
             "signalCooldownSeconds": "signal_cooldown_seconds",
         }
@@ -198,7 +204,7 @@ class GhostService:
             "enabled", "mode", "demo_auto_enabled", "minimum_confirmed_score",
             "minimum_entry_quality", "minimum_raw_rr", "risk_per_trade",
             "max_risk_per_trade", "max_total_risk", "max_open_positions",
-            "scan_interval_seconds", "signal_cooldown_seconds",
+            "max_scan_workers", "scan_interval_seconds", "signal_cooldown_seconds",
         }
         normalized: dict[str, Any] = {}
         for key, value in updates.items():
@@ -217,6 +223,7 @@ class GhostService:
             "max_risk_per_trade": self.config.max_risk_per_trade,
             "max_total_risk": self.config.max_total_risk,
             "max_open_positions": self.config.max_open_positions,
+            "max_scan_workers": self.config.max_scan_workers,
             "scan_interval_seconds": self.config.scan_interval_seconds,
             "signal_cooldown_seconds": self.config.signal_cooldown_seconds,
             "group_profiles": self.config.group_profiles,
@@ -265,13 +272,16 @@ class GhostService:
             raise ScanAlreadyRunning("scan_already_running")
         started = self._clock()
         scan_id = str(uuid.uuid4())
+        if not self.repository.acquire_scan_lease(scan_id):
+            self._scan_lock.release()
+            raise ScanAlreadyRunning("scan_already_running")
         source_names = [provider.__class__.__name__ for provider in self._universe_providers]
-        self.repository.create_scan(scan_id, started, source_names)
         discovered = scored = skipped = 0
         errors: list[str] = []
         signals: list[GhostSignal] = []
         started_monotonic = time.monotonic()
         try:
+            self.repository.create_scan(scan_id, started, source_names)
             instruments = []
             for provider in self._universe_providers:
                 universe = provider.discover()
@@ -279,11 +289,15 @@ class GhostService:
                 errors.extend(universe.errors)
             instruments.sort(key=lambda item: (item.canonical_symbol, item.broker_symbol))
             discovered = len(instruments)
+            eligible = []
             for item in instruments:
                 self.repository.upsert_instrument(item)
                 if not item.eligible_for_scoring:
                     skipped += 1
                     continue
+                eligible.append(item)
+
+            def analyse(item):
                 try:
                     bundle = self._candle_provider.load(item, style, started)
                     profile = self.config.group_profiles.get(item.asset_group.value, {})
@@ -295,18 +309,29 @@ class GhostService:
                         minimum_entry_quality=self.config.minimum_entry_quality,
                         minimum_raw_rr=self.config.minimum_raw_rr,
                     )
+                    return item, bundle, score, None
                 except Exception as exc:
-                    errors.append(f"candle_load_failed:{item.broker_symbol}:{exc}")
-                    continue
-                scored += 1
-                signal = self._signal_from_score(
-                    scan_id=scan_id,
-                    instrument=item,
-                    style=style,
-                    bundle=bundle,
-                    score=score,
-                )
-                signals.append(signal)
+                    return item, None, None, exc
+
+            workers = min(self.config.max_scan_workers, max(1, len(eligible)))
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ghost-score") as pool:
+                analysed = pool.map(analyse, eligible)
+                for item, bundle, score, error in analysed:
+                    if error is not None:
+                        errors.append(f"candle_load_failed:{item.broker_symbol}:{error}")
+                        continue
+                    if bundle is None or score is None:
+                        errors.append(f"candle_load_failed:{item.broker_symbol}:empty_analysis")
+                        continue
+                    scored += 1
+                    signal = self._signal_from_score(
+                        scan_id=scan_id,
+                        instrument=item,
+                        style=style,
+                        bundle=bundle,
+                        score=score,
+                    )
+                    signals.append(signal)
 
             ranked = self._rank_signals(signals)
             for signal in ranked:
@@ -346,7 +371,29 @@ class GhostService:
             )
             raise
         finally:
+            self.repository.release_scan_lease(scan_id)
             self._scan_lock.release()
+
+    def start_scan(self, *, style: Style = Style.INTRADAY) -> dict[str, str]:
+        """Start a scan without holding an API or scheduler request thread."""
+
+        if self._scan_lock.locked() or not self._scan_trigger_lock.acquire(blocking=False):
+            raise ScanAlreadyRunning("scan_already_running")
+        request_id = str(uuid.uuid4())
+
+        def run() -> None:
+            try:
+                self.scan(style=style)
+            finally:
+                self._scan_trigger_lock.release()
+
+        self._scan_thread = threading.Thread(
+            target=run,
+            name=f"ghost-scan-{request_id[:8]}",
+            daemon=True,
+        )
+        self._scan_thread.start()
+        return {"requestId": request_id, "status": "STARTED"}
 
     def _consume_demo_auto(self, signals: Sequence[GhostSignal]) -> tuple[str, ...]:
         if (
@@ -399,6 +446,7 @@ class GhostService:
             confirmed_times=confirmed_times,
         )
         geometry = score.geometry.geometry
+        live_overlay = score_live_overlay(bundle, score)
         reasons = list(score.reasons)
         if self.config.mode is GhostMode.SHADOW:
             reasons.append("shadow_mode")
@@ -408,6 +456,7 @@ class GhostService:
             "H4Volatility": json_safe_component(score.volatility),
             "H1EntryQuality": json_safe_component(score.entry_quality),
             "H1Exhaustion": json_safe_component(score.exhaustion),
+            "M15LiveTrigger": json_safe_component(live_overlay.diagnostics),
         }
         demo_verified = bool(
             self._execution_coordinator is not None
@@ -416,7 +465,7 @@ class GhostService:
         )
         if self.config.mode is not GhostMode.SHADOW and not demo_verified:
             reasons.append("demo_not_verified")
-        return GhostSignal(
+        candidate = GhostSignal(
             signal_id=signal_id,
             signal_version="ghost-v1",
             scan_id=scan_id,
@@ -425,8 +474,8 @@ class GhostService:
             direction=score.direction,
             decision_time=decision_time,
             confirmed_score=score.confirmed_score,
-            live_adjustment=0.0,
-            display_score=score.confirmed_score,
+            live_adjustment=live_overlay.adjustment,
+            display_score=live_overlay.display_score,
             direction_confidence=score.direction_confidence,
             entry_quality=score.entry_quality.score,
             entry=geometry.entry if geometry else None,
@@ -441,6 +490,24 @@ class GhostService:
             confirmed_times=confirmed_times,
             data_freshness="FRESH",
         )
+        if (
+            score.selected
+            and self.config.mode is not GhostMode.SHADOW
+            and self._execution_coordinator is not None
+        ):
+            preflight = self._execution_coordinator.preflight(candidate)
+            candidate = replace(
+                candidate,
+                can_execute=preflight.approved,
+                reasons=tuple(
+                    dict.fromkeys(
+                        list(candidate.reasons)
+                        + list(preflight.reasons)
+                        + list(preflight.warnings)
+                    )
+                ),
+            )
+        return candidate
 
     @staticmethod
     def _rank_signals(signals: list[GhostSignal]) -> list[GhostSignal]:
@@ -494,11 +561,91 @@ class GhostService:
         wins = [value for value in values if value > 0]
         losses = [value for value in values if value < 0]
         profit_factor = sum(wins) / abs(sum(losses)) if losses else None
+        equity = peak = maximum_drawdown = 0.0
+        for value in values:
+            equity += value
+            peak = max(peak, equity)
+            maximum_drawdown = max(maximum_drawdown, peak - equity)
+
+        def aggregate(group_rows):
+            group_values = [float(row["net_r"]) for row in group_rows]
+            group_wins = [value for value in group_values if value > 0]
+            group_losses = [value for value in group_values if value < 0]
+            return {
+                "trades": len(group_rows),
+                "meanR": fmean(group_values) if group_values else None,
+                "medianR": median(group_values) if group_values else None,
+                "totalR": sum(group_values),
+                "winRate": sum(value > 0 for value in group_values) / len(group_values) if group_values else None,
+                "profitFactor": (
+                    sum(group_wins) / abs(sum(group_losses))
+                    if group_losses else None
+                ),
+            }
+
+        def grouped(key_fn):
+            buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in rows:
+                buckets[str(key_fn(row))].append(row)
+            return {key: aggregate(bucket) for key, bucket in sorted(buckets.items())}
+
+        def score_band(row):
+            score = float(row["signal_score"])
+            if score >= 0.75:
+                return "VERY_STRONG"
+            if score >= 0.55:
+                return "STRONG"
+            if score >= 0.35:
+                return "MODERATE"
+            return "LOW"
+
+        def rr_bucket(row):
+            rr = float(row["raw_rr"] or 0.0)
+            if rr < 1.0:
+                return "BELOW_1R"
+            if rr < 1.5:
+                return "1_TO_1_5R"
+            if rr < 2.0:
+                return "1_5_TO_2R"
+            if rr < 3.0:
+                return "2_TO_3R"
+            return "ABOVE_3R"
+
+        by_symbol = grouped(lambda row: row["canonical_symbol"])
+        symbol_totals = {key: float(value["totalR"]) for key, value in by_symbol.items()}
+        absolute_total = sum(abs(value) for value in symbol_totals.values())
+        best_symbol = max(symbol_totals, key=symbol_totals.get) if symbol_totals else None
+        worst_symbol = min(symbol_totals, key=symbol_totals.get) if symbol_totals else None
+        sqn = (
+            math.sqrt(len(values)) * fmean(values) / pstdev(values)
+            if len(values) > 1 and pstdev(values) > 0 else None
+        )
         return {
             "totalClosedTrades": len(rows),
+            "currentOpenTrades": len(self.repository.list_positions(status="OPEN")),
             "meanR": fmean(values) if values else None,
-            "medianR": sorted(values)[len(values) // 2] if values else None,
+            "medianR": median(values) if values else None,
             "winRate": sum(value > 0 for value in values) / len(values) if values else None,
             "profitFactor": profit_factor if profit_factor is not None else (0.0 if losses else None),
             "totalR": sum(values),
+            "averageWinR": fmean(wins) if wins else None,
+            "averageLossR": fmean(losses) if losses else None,
+            "maximumDrawdownR": maximum_drawdown,
+            "recoveryFactor": sum(values) / maximum_drawdown if maximum_drawdown > 0 else None,
+            "sqn": sqn,
+            "byDirection": grouped(lambda row: row["direction"]),
+            "byAssetGroup": grouped(lambda row: row["asset_group"]),
+            "bySource": grouped(lambda row: row["venue"]),
+            "byRegime": grouped(lambda row: row["volatility_regime"]),
+            "byScoreBand": grouped(score_band),
+            "byStructuralRR": grouped(rr_bucket),
+            "bySymbol": by_symbol,
+            "shadowVsDemo": grouped(lambda row: row["mode"]),
+            "bestSymbol": best_symbol,
+            "worstSymbol": worst_symbol,
+            "bestSymbolPnlShare": (
+                abs(symbol_totals[best_symbol]) / absolute_total
+                if best_symbol is not None and absolute_total > 0 else None
+            ),
+            "smallSample": len(rows) < 30,
         }

@@ -6,6 +6,7 @@ from pathlib import Path
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
+import threading
 
 from .config import load_ghost_config
 from .market_data import SharedCandleProvider
@@ -24,15 +25,26 @@ from .execution.mt5_demo import MT5DemoAdapter
 class _LazyMT5Client:
     """Resolve Athena's existing MT5 client only when discovery is requested."""
 
-    def _client(self):
-        import mt5_executor
+    def __init__(self):
+        self._resolved = None
+        self._lock = threading.Lock()
 
-        if not mt5_executor.mt5_connect():
-            raise RuntimeError("MT5 not connected")
-        client = mt5_executor._get_mt5()
-        if client is None:
-            raise RuntimeError("MT5 client unavailable")
-        return client
+    def _client(self):
+        if self._resolved is not None:
+            return self._resolved
+        import mt5_executor
+        with self._lock:
+            if self._resolved is None:
+                if not mt5_executor.mt5_connect():
+                    raise RuntimeError("MT5 not connected")
+                client = mt5_executor._get_mt5()
+                if client is None:
+                    raise RuntimeError("MT5 client unavailable")
+                self._resolved = client
+        return self._resolved
+
+    def __getattr__(self, name):
+        return getattr(self._client(), name)
 
     @property
     def SYMBOL_TRADE_MODE_DISABLED(self):
@@ -104,16 +116,31 @@ def build_ghost_trade_service(runtime: Any) -> GhostService:
 
     def load_candles(instrument, timeframe: str, limit: int):
         if instrument.venue is Venue.MT5:
-            return runtime.fetch_mt5(
-                {
-                    "symbol": instrument.broker_symbol,
-                    "display": instrument.canonical_symbol,
-                    "type": _asset_type(instrument.asset_group),
-                    "source": "mt5",
-                },
-                timeframe,
-                limit,
+            timeframe_value = getattr(mt5_client, f"TIMEFRAME_{timeframe}")
+            rates = mt5_client.copy_rates_from_pos(
+                instrument.broker_symbol, timeframe_value, 0, limit
             )
+            if rates is None or len(rates) == 0:
+                raise RuntimeError(f"no MT5 candles:{instrument.broker_symbol}:{timeframe}")
+            rows = []
+            for rate in rates:
+                if isinstance(rate, dict):
+                    row = rate
+                elif hasattr(rate, "dtype") and getattr(rate.dtype, "names", None):
+                    row = {name: rate[name].item() if hasattr(rate[name], "item") else rate[name] for name in rate.dtype.names}
+                else:
+                    row = dict(rate)
+                rows.append(
+                    {
+                        "time": row.get("time"),
+                        "open": row.get("open"),
+                        "high": row.get("high"),
+                        "low": row.get("low"),
+                        "close": row.get("close"),
+                        "volume": row.get("real_volume") or row.get("tick_volume"),
+                    }
+                )
+            return rows
         return runtime.fetch_bybit_klines(
             instrument.broker_symbol,
             timeframe,

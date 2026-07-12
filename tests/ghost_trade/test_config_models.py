@@ -24,6 +24,7 @@ def test_committed_defaults_are_shadow_only_and_live_is_impossible():
     assert config.risk_per_trade == pytest.approx(0.0025)
     assert config.max_risk_per_trade == pytest.approx(0.005)
     assert config.max_total_risk == pytest.approx(0.02)
+    assert config.group_profiles["forex"]["maximum_spread_pct"] == pytest.approx(0.0005)
 
 
 def test_only_named_environment_overrides_are_applied():
@@ -124,3 +125,13 @@ def test_instrument_json_preserves_broker_and_canonical_identity():
 def test_nested_configuration_requires_mapping_values(unsafe):
     with pytest.raises(GhostConfigError):
         load_ghost_config({"ghost_trade": unsafe}, environ={})
+
+
+def test_runtime_loader_uses_process_environment_when_not_explicitly_supplied(monkeypatch):
+    monkeypatch.setenv("GHOST_TRADE_MODE", "DEMO_MANUAL")
+    monkeypatch.setenv("GHOST_TRADE_MAX_TOTAL_RISK", "0.015")
+
+    config = load_ghost_config({})
+
+    assert config.mode is GhostMode.DEMO_MANUAL
+    assert config.max_total_risk == pytest.approx(0.015)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -152,6 +153,7 @@ def test_shadow_scan_persists_all_instruments_scores_eligible_rows_and_never_exe
     assert len(signals) == 2
     assert all(signal.can_execute is False for signal in signals)
     assert {signal.status for signal in signals} == {SignalStatus.ELIGIBLE, SignalStatus.ANALYSED}
+    assert all("M15LiveTrigger" in signal.components for signal in signals)
     positions = repository.list_positions(status="OPEN")
     assert len(positions) == 1
     assert positions[0].mode == "SHADOW"
@@ -193,6 +195,60 @@ def test_second_scan_fails_fast_while_scan_lease_is_held(tmp_path):
     assert not thread.is_alive()
 
 
+def test_scan_lease_prevents_overlap_across_service_instances(tmp_path):
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_score(_bundle, **_kwargs):
+        entered.set()
+        release.wait(timeout=5)
+        return score()
+
+    first, _ = service(tmp_path, scorer=blocking_score)
+    second_repository = GhostRepository(tmp_path / "ghost.db")
+    second = GhostService(
+        config=GhostConfig(mode=GhostMode.SHADOW), repository=second_repository,
+        universe_providers=first._universe_providers,
+        candle_provider=CandleProvider(), score_fn=lambda *_args, **_kwargs: score(),
+        clock=lambda: NOW,
+    )
+    thread = threading.Thread(target=first.scan)
+    thread.start()
+    assert entered.wait(timeout=2)
+
+    with pytest.raises(ScanAlreadyRunning, match="scan_already_running"):
+        second.scan()
+
+    release.set()
+    thread.join(timeout=5)
+
+
+def test_scan_uses_bounded_symbol_concurrency(tmp_path):
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    class ConcurrentCandles(CandleProvider):
+        def load(self, item, style, as_of):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.03)
+            try:
+                return super().load(item, style, as_of)
+            finally:
+                with lock:
+                    active -= 1
+
+    ghost, _repository = service(tmp_path, candle_provider=ConcurrentCandles())
+    ghost.config = GhostConfig(mode=GhostMode.SHADOW, max_scan_workers=2)
+
+    ghost.scan()
+
+    assert peak == 2
+
+
 def test_shadow_reconciliation_is_stop_first_and_updates_ghost_only_performance(tmp_path):
     ghost, repository = service(tmp_path)
     ghost.scan()
@@ -215,6 +271,15 @@ def test_shadow_reconciliation_is_stop_first_and_updates_ghost_only_performance(
     assert performance["totalClosedTrades"] == 1
     assert performance["meanR"] == pytest.approx(-1.0)
     assert performance["profitFactor"] == 0.0
+    assert performance["maximumDrawdownR"] == pytest.approx(1.0)
+    assert performance["byDirection"]["LONG"]["trades"] == 1
+    assert performance["byAssetGroup"]["forex"]["meanR"] == pytest.approx(-1.0)
+    assert performance["bySource"]["MT5"]["trades"] == 1
+    assert performance["byRegime"]["NORMAL"]["trades"] == 1
+    assert performance["byScoreBand"]["STRONG"]["trades"] == 1
+    assert performance["shadowVsDemo"]["SHADOW"]["trades"] == 1
+    assert performance["bestSymbolPnlShare"] == pytest.approx(1.0)
+    assert performance["smallSample"] is True
 
 
 def test_shared_candle_provider_keeps_confirmed_and_forming_states_separate():

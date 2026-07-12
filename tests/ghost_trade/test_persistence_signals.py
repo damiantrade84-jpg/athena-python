@@ -89,7 +89,8 @@ def test_migration_creates_only_dedicated_ghost_tables(tmp_path):
         }
     assert tables == {
         "ghost_schema_version",
-        "ghost_scan_runs",
+            "ghost_scan_runs",
+            "ghost_scan_lease",
         "ghost_instruments",
         "ghost_signals",
         "ghost_signal_components",

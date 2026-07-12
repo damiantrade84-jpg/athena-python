@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -23,14 +24,14 @@ _ENV_KEYS = {
 }
 
 _DEFAULT_GROUP_PROFILES: dict[str, dict[str, Any]] = {
-    "forex": {"enabled": True, "default_style": "intraday", "volume_quality_mode": "tick_volume", "execution_source": "MT5"},
-    "crypto": {"enabled": True, "default_style": "intraday", "volume_quality_mode": "exchange_volume", "execution_source": "BYBIT"},
-    "metals": {"enabled": True, "default_style": "intraday", "volume_quality_mode": "broker_or_exchange", "execution_source": "MT5"},
-    "energy": {"enabled": True, "default_style": "intraday", "execution_source": "MT5"},
-    "commodities_other": {"enabled": True, "default_style": "intraday", "execution_source": "MT5"},
-    "indices": {"enabled": True, "default_style": "intraday", "execution_source": "MT5"},
-    "equities": {"enabled": True, "default_style": "swing", "execution_source": "MT5"},
-    "other": {"enabled": True, "default_style": "intraday"},
+    "forex": {"enabled": True, "default_style": "intraday", "volume_quality_mode": "tick_volume", "execution_source": "MT5", "maximum_spread_pct": 0.0005},
+    "crypto": {"enabled": True, "default_style": "intraday", "volume_quality_mode": "exchange_volume", "execution_source": "BYBIT", "maximum_spread_pct": 0.002},
+    "metals": {"enabled": True, "default_style": "intraday", "volume_quality_mode": "broker_or_exchange", "execution_source": "MT5", "maximum_spread_pct": 0.0015},
+    "energy": {"enabled": True, "default_style": "intraday", "execution_source": "MT5", "maximum_spread_pct": 0.0015},
+    "commodities_other": {"enabled": True, "default_style": "intraday", "execution_source": "MT5", "maximum_spread_pct": 0.0015},
+    "indices": {"enabled": True, "default_style": "intraday", "execution_source": "MT5", "maximum_spread_pct": 0.001},
+    "equities": {"enabled": True, "default_style": "swing", "execution_source": "MT5", "maximum_spread_pct": 0.002},
+    "other": {"enabled": True, "default_style": "intraday", "maximum_spread_pct": 0.001},
 }
 
 
@@ -90,6 +91,7 @@ class GhostConfig:
     max_risk_per_trade: float = 0.005
     max_total_risk: float = 0.02
     max_open_positions: int = 8
+    max_scan_workers: int = 8
     scan_interval_seconds: int = 3600
     signal_cooldown_seconds: int = 14400
     exit_strategy: ExitStrategy = ExitStrategy.STRUCTURAL
@@ -105,7 +107,9 @@ class GhostConfig:
         *,
         environ: Mapping[str, str] | None = None,
     ) -> "GhostConfig":
-        return _build_config(mapping or {}, environ or {})
+        return _build_config(
+            mapping or {}, os.environ if environ is None else environ
+        )
 
 
 def _build_config(mapping: Mapping[str, Any], environ: Mapping[str, str]) -> GhostConfig:
@@ -159,6 +163,11 @@ def _build_config(mapping: Mapping[str, Any], environ: Mapping[str, str]) -> Gho
     )
     if not 1 <= max_open_positions <= 100:
         raise GhostConfigError("max_open_positions must be in [1, 100]")
+    max_scan_workers = _strict_int(
+        values.get("max_scan_workers", 8), "max_scan_workers"
+    )
+    if not 1 <= max_scan_workers <= 32:
+        raise GhostConfigError("max_scan_workers must be in [1, 32]")
     cooldown = _strict_int(
         values.get("signal_cooldown_seconds", 14400), "signal_cooldown_seconds"
     )
@@ -193,6 +202,7 @@ def _build_config(mapping: Mapping[str, Any], environ: Mapping[str, str]) -> Gho
         max_risk_per_trade=floats["max_risk_per_trade"],
         max_total_risk=floats["max_total_risk"],
         max_open_positions=max_open_positions,
+        max_scan_workers=max_scan_workers,
         scan_interval_seconds=scan_interval,
         signal_cooldown_seconds=cooldown,
         exit_strategy=ExitStrategy.STRUCTURAL,
@@ -210,4 +220,4 @@ def load_ghost_config(
 ) -> GhostConfig:
     """Load Ghost config without mutating Athena's global configuration."""
 
-    return GhostConfig.from_mapping(root_config or {}, environ=environ or {})
+    return GhostConfig.from_mapping(root_config or {}, environ=environ)

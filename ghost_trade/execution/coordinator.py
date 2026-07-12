@@ -25,6 +25,14 @@ class CoordinatorResult:
     broker_position_id: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PreflightResult:
+    approved: bool
+    reasons: tuple[str, ...]
+    warnings: tuple[str, ...]
+    quantity: float | None
+
+
 class GhostExecutionCoordinator:
     def __init__(
         self,
@@ -59,6 +67,78 @@ class GhostExecutionCoordinator:
     def venue_verified(self, venue: Venue) -> bool:
         adapter = self.adapters.get(venue)
         return bool(adapter is not None and adapter.attest().verified)
+
+    def preflight(self, signal) -> PreflightResult:
+        reasons: list[str] = []
+        warnings: list[str] = []
+        adapter = self.adapters.get(signal.instrument.venue)
+        if adapter is None or not adapter.attest().verified:
+            return PreflightResult(False, ("demo_not_verified",), (), None)
+        if signal.data_freshness != "FRESH":
+            reasons.append("data_not_fresh")
+        open_positions = self.repository.list_positions(status="OPEN")
+        gate = self.risk_service.evaluate(signal, open_positions)
+        reasons.extend(gate.reasons)
+        warnings.extend(gate.warnings)
+        try:
+            account = dict(self._account_provider(signal.instrument.venue) or {})
+            provider_positions = list(self._positions_provider(signal.instrument.venue) or [])
+            symbol_info = dict(self._symbol_info_provider(signal) or {})
+        except Exception as exc:
+            return PreflightResult(
+                False, tuple(dict.fromkeys(reasons + [f"provider_state_unavailable:{exc}"])),
+                tuple(dict.fromkeys(warnings)), None,
+            )
+        bid = symbol_info.get("bid")
+        ask = symbol_info.get("ask")
+        try:
+            bid_value, ask_value = float(bid), float(ask)
+        except (TypeError, ValueError):
+            bid_value = ask_value = 0.0
+        if bid_value <= 0 or ask_value <= 0 or ask_value < bid_value:
+            reasons.append("executable_quote_unavailable")
+        else:
+            midpoint = (bid_value + ask_value) / 2.0
+            spread_pct = (ask_value - bid_value) / midpoint
+            profile = self.config.group_profiles.get(signal.instrument.asset_group.value, {})
+            try:
+                maximum_spread = float(profile.get("maximum_spread_pct", 0.01))
+            except (TypeError, ValueError):
+                maximum_spread = 0.0
+            if maximum_spread <= 0 or spread_pct > maximum_spread:
+                reasons.append("spread_too_wide")
+        try:
+            size = self._size_fn(signal, account, symbol_info)
+            if not size.approved or size.quantity is None:
+                reasons.append(f"sizing_rejected:{size.reason}")
+            payload = ghost_executor_payload(signal)
+            guardian_ok, guardian_reason = self._guardian(payload, provider_positions, account)
+            if not guardian_ok:
+                reasons.append(f"guardian_rejected:{guardian_reason}")
+            approval = self._approval(payload, account, provider_positions, symbol_info, size)
+            if not bool(getattr(approval, "approved", False)):
+                reasons.append(f"risk_rejected:{getattr(approval, 'reason', 'unknown')}")
+        except Exception as exc:
+            return PreflightResult(
+                False,
+                tuple(dict.fromkeys(reasons + [f"preflight_unavailable:{exc}"])),
+                tuple(dict.fromkeys(warnings)),
+                None,
+            )
+        try:
+            approved_volume = float(getattr(approval, "volume", 0) or 0)
+        except (TypeError, ValueError):
+            approved_volume = 0.0
+        if size.quantity is not None and (
+            approved_volume <= 0 or approved_volume > size.quantity + 1e-12
+        ):
+            reasons.append("risk_approval_exceeds_ghost_size")
+        return PreflightResult(
+            not reasons,
+            tuple(dict.fromkeys(reasons)),
+            tuple(dict.fromkeys(warnings)),
+            approved_volume if not reasons else None,
+        )
 
     def execute(
         self,

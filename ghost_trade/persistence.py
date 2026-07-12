@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -66,6 +67,11 @@ CREATE TABLE IF NOT EXISTS ghost_scan_runs (
     skipped_count INTEGER NOT NULL DEFAULT 0,
     errors_json TEXT NOT NULL DEFAULT '[]',
     duration_ms REAL
+);
+CREATE TABLE IF NOT EXISTS ghost_scan_lease (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    owner TEXT NOT NULL,
+    acquired_epoch REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ghost_instruments (
     venue TEXT NOT NULL,
@@ -350,6 +356,27 @@ class GhostRepository:
                     scan_id,started_at,status,sources_json
                 ) VALUES(?,?,?,?)""",
                 (scan_id, started_at.isoformat(), "RUNNING", _canonical_json(sources)),
+            )
+
+    def acquire_scan_lease(self, owner: str, *, stale_after_seconds: float = 1800.0) -> bool:
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT owner,acquired_epoch FROM ghost_scan_lease WHERE singleton=1"
+            ).fetchone()
+            if row is not None and now - float(row["acquired_epoch"]) < stale_after_seconds:
+                return False
+            connection.execute(
+                "INSERT OR REPLACE INTO ghost_scan_lease(singleton,owner,acquired_epoch) VALUES(1,?,?)",
+                (owner, now),
+            )
+            return True
+
+    def release_scan_lease(self, owner: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM ghost_scan_lease WHERE singleton=1 AND owner=?", (owner,)
             )
 
     def complete_scan(
@@ -687,9 +714,11 @@ class GhostRepository:
     def list_closed_trades(self) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
-                """SELECT c.*,p.direction,p.canonical_symbol,p.asset_group,
-                          p.volatility_regime,p.entry_quality,p.signal_score
-                   FROM ghost_closed_trades c JOIN ghost_positions p USING(position_id)
+                """SELECT c.*,p.direction,p.canonical_symbol,p.asset_group,p.mode,p.venue,
+                          p.volatility_regime,p.entry_quality,p.signal_score,s.raw_rr
+                   FROM ghost_closed_trades c
+                   JOIN ghost_positions p USING(position_id)
+                   JOIN ghost_signals s ON s.signal_id=p.signal_id
                    ORDER BY c.closed_at,c.position_id"""
             ).fetchall()
         return [dict(row) for row in rows]

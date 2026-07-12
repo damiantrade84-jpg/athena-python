@@ -70,11 +70,81 @@ def confirmed_score(
 
 
 def clamp_live_overlay(
-    *, confirmed_score_value: float, requested_adjustment: float
+    *,
+    confirmed_score_value: float,
+    requested_adjustment: float,
+    diagnostics=None,
 ) -> LiveOverlay:
     confirmed = _clip(confirmed_score_value)
     adjustment = _clip(requested_adjustment, -0.10, 0.10)
-    return LiveOverlay(confirmed, adjustment, _clip(confirmed + adjustment))
+    return LiveOverlay(
+        confirmed, adjustment, _clip(confirmed + adjustment), diagnostics or {}
+    )
+
+
+def score_live_overlay(bundle: CandleBundle, confirmed_result) -> LiveOverlay:
+    forming = bundle.m15_forming
+    direction = confirmed_result.direction
+    if forming is None or direction is Direction.NEUTRAL:
+        return clamp_live_overlay(
+            confirmed_score_value=confirmed_result.confirmed_score,
+            requested_adjustment=0.0,
+            diagnostics={"currentCandleState": "CONFIRMED_ONLY", "available": False},
+        )
+    candle_range = max(forming.high - forming.low, 1e-12)
+    signed_body = (forming.close - forming.open) / candle_range
+    if direction is Direction.SHORT:
+        signed_body *= -1.0
+    momentum_adjustment = max(-0.04, min(0.04, signed_body * 0.04))
+
+    recent = bundle.m15_confirmed[-20:]
+    trigger_adjustment = 0.0
+    if recent:
+        if direction is Direction.LONG and forming.close > max(item.high for item in recent):
+            trigger_adjustment = 0.03
+        elif direction is Direction.SHORT and forming.close < min(item.low for item in recent):
+            trigger_adjustment = 0.03
+
+    adverse_wick_adjustment = 0.0
+    if direction is Direction.LONG:
+        adverse_wick = forming.high - max(forming.open, forming.close)
+    else:
+        adverse_wick = min(forming.open, forming.close) - forming.low
+    execution_atr = latest_atr(bundle.m15_confirmed, 14) or latest_atr(bundle.h1, 14) or 0.0
+    if execution_atr > 0 and adverse_wick > execution_atr:
+        adverse_wick_adjustment = -0.03
+
+    room_adjustment = 0.0
+    geometry = confirmed_result.geometry.geometry
+    if geometry is not None:
+        if direction is Direction.LONG:
+            stop_breached = forming.low <= geometry.stop
+            target_passed = forming.high >= geometry.target
+            room = geometry.target - forming.close
+        else:
+            stop_breached = forming.high >= geometry.stop
+            target_passed = forming.low <= geometry.target
+            room = forming.close - geometry.target
+        if stop_breached:
+            room_adjustment = -0.10
+        elif target_passed:
+            room_adjustment = -0.05
+        elif room <= 0.25 * geometry.risk_distance:
+            room_adjustment = -0.02
+
+    requested = momentum_adjustment + trigger_adjustment + adverse_wick_adjustment + room_adjustment
+    return clamp_live_overlay(
+        confirmed_score_value=confirmed_result.confirmed_score,
+        requested_adjustment=requested,
+        diagnostics={
+            "currentCandleState": "FORMING",
+            "available": True,
+            "immediateMomentum": momentum_adjustment,
+            "liveTrigger": trigger_adjustment,
+            "adverseWick": adverse_wick_adjustment,
+            "targetRoom": room_adjustment,
+        },
+    )
 
 
 def score_confirmed(

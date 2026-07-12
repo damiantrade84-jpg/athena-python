@@ -7,7 +7,7 @@ import pytest
 
 from ghost_trade.config import GhostConfig
 from ghost_trade.execution.base import DemoAttestation
-from ghost_trade.execution.coordinator import CoordinatorResult
+from ghost_trade.execution.coordinator import CoordinatorResult, PreflightResult
 from ghost_trade.market_data import CandleBundle
 from ghost_trade.models import (
     AssetGroup,
@@ -76,6 +76,7 @@ class Coordinator:
         self.repository = repository
         self.verified = True
         self.calls = []
+        self.preflight_calls = []
         self.config = GhostConfig(mode=GhostMode.DEMO_AUTO)
         self.risk_service = SimpleNamespace(config=self.config)
 
@@ -96,6 +97,10 @@ class Coordinator:
         assert latest is not None and latest["status"] == "COMPLETED"
         self.calls.append((signal_id, expected_version, idempotency_key))
         return CoordinatorResult(True, "SUBMITTED", "exec-auto")
+
+    def preflight(self, signal):
+        self.preflight_calls.append(signal.signal_id)
+        return PreflightResult(True, (), (), 0.1)
 
 
 def build(tmp_path, *, configured_auto=True):
@@ -144,6 +149,7 @@ def test_auto_consumes_only_after_committed_scan_and_records_runtime_toggle(tmp_
     result = service.scan(style=Style.INTRADAY)
 
     assert result.auto_execution_ids == ("exec-auto",)
+    assert len(coordinator.preflight_calls) == 1
     assert len(coordinator.calls) == 1
     assert coordinator.calls[0][2].startswith("auto:")
     setting = repository.get_runtime_setting("demo_auto_effective")

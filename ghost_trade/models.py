@@ -193,6 +193,10 @@ class LiveOverlay:
     confirmed_score: float
     adjustment: float
     display_score: float
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "diagnostics", _immutable_mapping(self.diagnostics))
 
 
 @dataclass(frozen=True, slots=True)

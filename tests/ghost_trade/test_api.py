@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+import time
 
 from flask import Flask, jsonify
 
@@ -108,8 +109,13 @@ def test_scan_universe_current_and_provider_errors_are_explicit(tmp_path):
     current = client.get("/api/ghost-trade/scans/current")
     universe = client.get("/api/ghost-trade/universe")
 
-    assert scan.status_code == 200
-    assert scan.get_json()["discoveredCount"] == 0
+    assert scan.status_code == 202
+    assert scan.get_json()["status"] == "STARTED"
+    for _ in range(50):
+        current = client.get("/api/ghost-trade/scans/current")
+        if current.status_code == 200 and current.get_json()["status"] == "COMPLETED":
+            break
+        time.sleep(0.01)
     assert current.status_code == 200
     assert current.get_json()["status"] == "COMPLETED"
     assert universe.get_json() == {"instruments": [], "count": 0}
@@ -154,7 +160,7 @@ def test_positions_performance_and_groups_are_ghost_only(tmp_path):
 def test_scan_conflict_returns_409(tmp_path, monkeypatch):
     _app, client, service, _repository = app_client(tmp_path)
     monkeypatch.setattr(
-        service, "scan", lambda **_kwargs: (_ for _ in ()).throw(ScanAlreadyRunning())
+        service, "start_scan", lambda **_kwargs: (_ for _ in ()).throw(ScanAlreadyRunning())
     )
 
     response = client.post("/api/ghost-trade/scan", json={})
@@ -197,6 +203,38 @@ def test_runtime_builder_is_lazy_and_uses_dedicated_database(tmp_path):
     assert service.repository.db_path == tmp_path / "ghost_trade.db"
     assert service._execution_coordinator is not None
     assert calls == []
+
+
+def test_runtime_mt5_candles_use_exact_discovered_symbol_without_static_pair_allowlist(tmp_path):
+    calls = []
+
+    class MT5:
+        TIMEFRAME_D1 = 1
+        TIMEFRAME_H4 = 2
+        TIMEFRAME_H1 = 3
+        TIMEFRAME_M15 = 4
+
+        def copy_rates_from_pos(self, symbol, timeframe, start, limit):
+            calls.append((symbol, timeframe, start, limit))
+            return [
+                {"time": 1_700_000_000 + index * 86_400, "open": 100, "high": 101,
+                 "low": 99, "close": 100, "tick_volume": 10}
+                for index in range(20)
+            ]
+
+    runtime = SimpleNamespace(
+        CONFIG={"ghost_trade": {"mode": "SHADOW"}},
+        AUDIT_DB=str(tmp_path / "audit.db"),
+        fetch_mt5=lambda *_args: (_ for _ in ()).throw(AssertionError("static loader used")),
+        fetch_bybit_klines=lambda *_args: [],
+        mt5_client=MT5(), bybit_client=SimpleNamespace(),
+    )
+    service = build_ghost_trade_service(runtime)
+
+    loaded = service._candle_provider.load(stored_signal().instrument, Style.INTRADAY, NOW)
+
+    assert [call[0] for call in calls] == ["EURUSD.a"] * 4
+    assert len(loaded.d1) == len(loaded.h4) == len(loaded.h1) == 20
 
 
 def test_execute_demo_route_uses_coordinator_and_server_signal_version(tmp_path):

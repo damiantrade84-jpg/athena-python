@@ -14,14 +14,19 @@ class GhostScheduler:
         self._thread: threading.Thread | None = None
 
     def trigger_scan(self):
-        return self._service.scan()
+        return self._service.start_scan()
 
-    def start(self, interval_seconds: int) -> None:
+    def start(self, interval_seconds: int, *, run_immediately: bool = True) -> None:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
 
         def run() -> None:
+            if run_immediately:
+                try:
+                    self.trigger_scan()
+                except ScanAlreadyRunning:
+                    pass
             while not self._stop.wait(interval_seconds):
                 try:
                     self.trigger_scan()

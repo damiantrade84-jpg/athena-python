@@ -105,7 +105,7 @@ def register_ghost_trade_routes(app, runtime) -> GhostService:
         except ValueError:
             return _error("invalid_style", 400)
         try:
-            return jsonify(service.scan(style=style).to_dict())
+            return jsonify(service.start_scan(style=style)), 202
         except ScanAlreadyRunning:
             return _error("scan_already_running", 409)
         except Exception as exc:

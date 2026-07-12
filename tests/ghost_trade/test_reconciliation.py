@@ -75,7 +75,16 @@ class FakeAdapter:
         )
 
 
-def coordinator(tmp_path, *, adapter=None, guardian=lambda *_args: (True, "OK")):
+def coordinator(
+    tmp_path,
+    *,
+    adapter=None,
+    guardian=lambda *_args: (True, "OK"),
+    size_fn=lambda *_args, **_kwargs: SizeResult(True, 0.5, 25, 50, 25),
+    symbol_info_provider=lambda _signal: {
+        "trade_tick_size": 0.0001, "bid": 1.0999, "ask": 1.1001,
+    },
+):
     repository = GhostRepository(tmp_path / "ghost.db")
     repository.migrate()
     repository.upsert_signal(signal())
@@ -91,13 +100,25 @@ def coordinator(tmp_path, *, adapter=None, guardian=lambda *_args: (True, "OK"))
         adapters={Venue.MT5: fake},
         account_provider=lambda _venue: {"balance": 10_000, "equity": 10_000},
         positions_provider=lambda _venue: [],
-        symbol_info_provider=lambda _signal: {"trade_tick_size": 0.0001},
-        size_fn=lambda *_args, **_kwargs: SizeResult(True, 0.5, 25, 50, 25),
+        symbol_info_provider=symbol_info_provider,
+        size_fn=size_fn,
         guardian_fn=guardian,
         approval_fn=lambda *_args, **_kwargs: approval,
         clock=lambda: NOW,
     )
     return service, repository, fake
+
+
+def test_preflight_fails_closed_without_aborting_when_sizing_raises(tmp_path):
+    execution, repository, _adapter = coordinator(
+        tmp_path, size_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bad tick value"))
+    )
+
+    result = execution.preflight(repository.get_signal("signal-1"))
+
+    assert result.approved is False
+    assert result.quantity is None
+    assert any(reason.startswith("preflight_unavailable:") for reason in result.reasons)
 
 
 def test_verified_manual_execution_is_persisted_and_idempotent(tmp_path):

@@ -29,8 +29,8 @@ export async function getCurrentGhostScan(): Promise<GhostScan | null> {
     throw error;
   }
 }
-export async function runGhostScan(): Promise<GhostScan> {
-  return apiClient.post<GhostScan>('/api/ghost-trade/scan', { style: 'intraday' });
+export async function runGhostScan(): Promise<{ requestId: string; status: 'STARTED' }> {
+  return apiClient.post<{ requestId: string; status: 'STARTED' }>('/api/ghost-trade/scan', { style: 'intraday' });
 }
 export async function executeGhostSignal(signalId: string): Promise<Record<string, unknown>> {
   return apiClient.post(`/api/ghost-trade/signals/${encodeURIComponent(signalId)}/execute-demo`, {});
