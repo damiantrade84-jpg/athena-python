@@ -693,3 +693,39 @@ class GhostRepository:
                    ORDER BY c.closed_at,c.position_id"""
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def set_runtime_setting(
+        self,
+        key: str,
+        value: Any,
+        *,
+        operator_context: Mapping[str, Any] | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO ghost_runtime_settings(
+                    setting_key,value_json,updated_at,operator_context_json
+                ) VALUES(?,?,?,?)
+                ON CONFLICT(setting_key) DO UPDATE SET
+                    value_json=excluded.value_json,
+                    updated_at=excluded.updated_at,
+                    operator_context_json=excluded.operator_context_json""",
+                (
+                    key, _canonical_json(value), datetime.utcnow().isoformat() + "Z",
+                    _canonical_json(dict(operator_context or {})),
+                ),
+            )
+
+    def get_runtime_setting(self, key: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM ghost_runtime_settings WHERE setting_key=?", (key,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "key": row["setting_key"],
+            "value": json.loads(row["value_json"]),
+            "updated_at": row["updated_at"],
+            "operator_context": json.loads(row["operator_context_json"]),
+        }

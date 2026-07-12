@@ -48,3 +48,13 @@ export function scoreLabel(value: number): string {
 export function pct(value: number | null | undefined): string {
   return value == null ? '—' : `${Math.round(value * 100)}`;
 }
+
+export function confirmAutoToggle(
+  enabled: boolean,
+  confirm: (message: string) => boolean,
+): boolean {
+  if (!enabled) return true;
+  return confirm(
+    'Enable Ghost Trade DEMO_AUTO? Orders can be sent only to currently verified demo/testnet accounts.',
+  );
+}

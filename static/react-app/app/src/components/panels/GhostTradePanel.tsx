@@ -3,7 +3,7 @@ import { Ghost, RefreshCw, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import ErrorBanner from '@/components/shared/ErrorBanner';
-import { groupSignals, groupLabels } from '@/features/ghostTrade/display';
+import { confirmAutoToggle, groupSignals, groupLabels } from '@/features/ghostTrade/display';
 import { GhostGroupSection } from '@/features/ghostTrade/GhostGroupSection';
 import { GhostPerformancePanel } from '@/features/ghostTrade/GhostPerformance';
 import { GhostPositions } from '@/features/ghostTrade/GhostPositions';
@@ -44,6 +44,11 @@ export function GhostTradeView(props: ViewProps) {
   const orderedGroups = props.groups.length ? props.groups : (Object.keys(groupLabels) as Array<keyof typeof groupLabels>).map((assetGroup) => ({ assetGroup, instrumentsDiscovered: 0, instrumentsScored: 0, signals: 0, bullish: 0, bearish: 0, neutral: 0, executableDemo: 0, averageScore: null, highestScore: null }));
   const discovered = props.groups.reduce((sum, group) => sum + group.instrumentsDiscovered, 0);
   const scored = props.groups.reduce((sum, group) => sum + group.instrumentsScored, 0);
+  const handleAutoToggle = (enabled: boolean) => {
+    if (confirmAutoToggle(enabled, (message) => window.confirm(message))) {
+      props.onToggleAuto(enabled);
+    }
+  };
   return (
     <div className="space-y-4 p-4">
       <header className="flex flex-wrap items-center gap-3">
@@ -52,7 +57,7 @@ export function GhostTradeView(props: ViewProps) {
         <div className="ml-auto flex flex-wrap items-center gap-3 text-xs">
           <span>Discovered {discovered}</span><span>Scored {scored}</span><span>Eligible {props.signals.filter((signal) => signal.canExecute).length}</span><span>Open {props.positions.length}</span><span>Risk {props.positions.reduce((sum, position) => sum + position.initialRisk, 0).toFixed(4)}</span>
           <Button size="sm" variant="outline" onClick={props.onScan} disabled={props.loading || props.health.scanRunning}><RefreshCw className="mr-1 h-4 w-4" />Scan Now</Button>
-          <label className="flex items-center gap-2"><span>Demo auto</span><Switch checked={props.health.demoAutoEnabled} disabled={props.health.mode !== 'DEMO_AUTO' || props.health.executionStatus !== 'DEMO VERIFIED'} onCheckedChange={props.onToggleAuto} /></label>
+          <label className="flex items-center gap-2"><span>Demo auto</span><Switch checked={props.health.demoAutoEnabled} disabled={props.health.mode !== 'DEMO_AUTO' || props.health.executionStatus !== 'DEMO VERIFIED'} onCheckedChange={handleAutoToggle} /></label>
         </div>
       </header>
       <GhostSafetyBanner health={props.health} />

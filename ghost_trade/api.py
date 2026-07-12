@@ -73,7 +73,20 @@ def register_ghost_trade_routes(app, runtime) -> GhostService:
         if not isinstance(payload, dict):
             return _error("json_object_required", 400)
         try:
-            return jsonify(service.update_config(payload))
+            updates = dict(payload)
+            if "demoAutoEnabled" in updates:
+                service.set_demo_auto_enabled(
+                    bool(updates.pop("demoAutoEnabled")),
+                    operator_context={
+                        "source": "api",
+                        "remoteAddress": request.remote_addr or "unknown",
+                    },
+                )
+            if updates:
+                service.update_config(updates)
+            return jsonify(service.config_dict())
+        except PermissionError as exc:
+            return _error(str(exc), 403)
         except (ValueError, GhostConfigError) as exc:
             code = str(exc)
             return _error(code if code else "invalid_config", 400)

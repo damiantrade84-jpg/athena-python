@@ -33,6 +33,7 @@ class ScanResult:
     skipped_count: int
     errors: tuple[str, ...]
     signal_ids: tuple[str, ...]
+    auto_execution_ids: tuple[str, ...] = ()
 
     @property
     def error_count(self) -> int:
@@ -49,6 +50,7 @@ class ScanResult:
             "errorCount": self.error_count,
             "errors": list(self.errors),
             "signalIds": list(self.signal_ids),
+            "autoExecutionIds": list(self.auto_execution_ids),
         }
 
 
@@ -71,6 +73,8 @@ class GhostService:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._scan_lock = threading.Lock()
         self._execution_coordinator: Any | None = None
+        # Never restore this from persisted preferences. Every process start is OFF.
+        self._demo_auto_effective = False
 
     def set_execution_coordinator(self, coordinator: Any) -> None:
         self._execution_coordinator = coordinator
@@ -104,6 +108,29 @@ class GhostService:
             raise RuntimeError("demo_execution_not_configured")
         return self._execution_coordinator.close_all()
 
+    def set_demo_auto_enabled(
+        self,
+        enabled: bool,
+        *,
+        operator_context: Mapping[str, Any],
+    ) -> bool:
+        requested = bool(enabled)
+        if requested:
+            if self.config.mode is not GhostMode.DEMO_AUTO:
+                raise PermissionError("demo_auto_mode_required")
+            if self._execution_coordinator is None:
+                raise PermissionError("demo_not_verified")
+            attestations = self._execution_coordinator.attestations()
+            if not any(item.verified for item in attestations.values()):
+                raise PermissionError("demo_not_verified")
+        self._demo_auto_effective = requested
+        self.repository.set_runtime_setting(
+            "demo_auto_effective",
+            requested,
+            operator_context=operator_context,
+        )
+        return requested
+
     def health(self) -> dict[str, Any]:
         attestations = (
             self._execution_coordinator.attestations()
@@ -117,7 +144,7 @@ class GhostService:
             "mode": self.config.mode.value,
             "executionStatus": execution_status,
             "liveTradingAllowed": False,
-            "demoAutoEnabled": self.config.effective_demo_auto_enabled,
+            "demoAutoEnabled": self._demo_auto_effective,
             "scanRunning": self._scan_lock.locked(),
             "mt5Status": (
                 "SHADOW ONLY" if self.config.mode is GhostMode.SHADOW
@@ -139,7 +166,7 @@ class GhostService:
             "mode": self.config.mode.value,
             "liveTradingAllowed": False,
             "demoAutoEnabled": self.config.demo_auto_enabled,
-            "effectiveDemoAutoEnabled": self.config.effective_demo_auto_enabled,
+            "effectiveDemoAutoEnabled": self._demo_auto_effective,
             "minimumConfirmedScore": self.config.minimum_confirmed_score,
             "minimumEntryQuality": self.config.minimum_entry_quality,
             "minimumRawRR": self.config.minimum_raw_rr,
@@ -196,6 +223,8 @@ class GhostService:
             "symbol_overrides": self.config.symbol_overrides,
         }
         self.config = GhostConfig.from_mapping({**base, **normalized}, environ={})
+        if self.config.mode is not GhostMode.DEMO_AUTO:
+            self._demo_auto_effective = False
         if self._execution_coordinator is not None:
             self._execution_coordinator.config = self.config
             if getattr(self._execution_coordinator, "risk_service", None) is not None:
@@ -296,9 +325,11 @@ class GhostService:
                 errors=errors,
                 duration_ms=(time.monotonic() - started_monotonic) * 1000.0,
             )
+            auto_execution_ids = self._consume_demo_auto(ranked)
             return ScanResult(
                 scan_id, started, completed, discovered, scored, skipped,
                 tuple(errors), tuple(signal.signal_id for signal in ranked),
+                auto_execution_ids,
             )
         except Exception as exc:
             completed = self._clock()
@@ -316,6 +347,41 @@ class GhostService:
             raise
         finally:
             self._scan_lock.release()
+
+    def _consume_demo_auto(self, signals: Sequence[GhostSignal]) -> tuple[str, ...]:
+        if (
+            not self._demo_auto_effective
+            or self.config.mode is not GhostMode.DEMO_AUTO
+            or self._execution_coordinator is None
+        ):
+            return ()
+        attestations = self._execution_coordinator.attestations()
+        if not any(item.verified for item in attestations.values()):
+            self._demo_auto_effective = False
+            self.repository.set_runtime_setting(
+                "demo_auto_effective", False,
+                operator_context={"source": "system", "reason": "demo_verification_lost"},
+            )
+            return ()
+        execution_ids: list[str] = []
+        for signal in signals:
+            if signal.status is not SignalStatus.ELIGIBLE or not signal.can_execute:
+                continue
+            result = self._execution_coordinator.execute(
+                signal.signal_id,
+                expected_version=signal.signal_version,
+                idempotency_key=f"auto:{signal.signal_id}:{signal.signal_version}",
+            )
+            if result.execution_id:
+                execution_ids.append(result.execution_id)
+            if result.error_code and "not_verified" in result.error_code:
+                self._demo_auto_effective = False
+                self.repository.set_runtime_setting(
+                    "demo_auto_effective", False,
+                    operator_context={"source": "system", "reason": result.error_code},
+                )
+                break
+        return tuple(execution_ids)
 
     def _signal_from_score(self, *, scan_id, instrument, style, bundle, score) -> GhostSignal:
         confirmed_times = {
