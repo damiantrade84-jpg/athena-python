@@ -13,6 +13,7 @@ from .models import (
     AssetGroup,
     Direction,
     GhostInstrument,
+    GhostPosition,
     GhostSignal,
     SignalStatus,
     Style,
@@ -141,6 +142,8 @@ CREATE TABLE IF NOT EXISTS ghost_positions (
     position_id TEXT PRIMARY KEY,
     signal_id TEXT NOT NULL,
     venue TEXT NOT NULL,
+    canonical_symbol TEXT NOT NULL,
+    asset_group TEXT NOT NULL,
     broker_position_id TEXT,
     mode TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -152,6 +155,9 @@ CREATE TABLE IF NOT EXISTS ghost_positions (
     quantity REAL,
     opened_at TEXT,
     closed_at TEXT,
+    volatility_regime TEXT NOT NULL,
+    entry_quality REAL NOT NULL,
+    signal_score REAL NOT NULL,
     payload_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS ghost_position_events (
@@ -292,6 +298,90 @@ class GhostRepository:
                 ],
             )
 
+    def upsert_instrument(self, instrument: GhostInstrument) -> None:
+        now = datetime.utcnow().isoformat() + "Z"
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO ghost_instruments(
+                    venue,broker_symbol,canonical_symbol,asset_group,asset_subgroup,
+                    base_asset,quote_asset,metadata_json,trade_enabled,skip_reasons_json,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(venue,broker_symbol) DO UPDATE SET
+                    canonical_symbol=excluded.canonical_symbol,
+                    asset_group=excluded.asset_group,
+                    asset_subgroup=excluded.asset_subgroup,
+                    base_asset=excluded.base_asset,
+                    quote_asset=excluded.quote_asset,
+                    metadata_json=excluded.metadata_json,
+                    trade_enabled=excluded.trade_enabled,
+                    skip_reasons_json=excluded.skip_reasons_json,
+                    updated_at=excluded.updated_at""",
+                (
+                    instrument.venue.value, instrument.broker_symbol,
+                    instrument.canonical_symbol, instrument.asset_group.value,
+                    instrument.asset_subgroup, instrument.base_asset,
+                    instrument.quote_asset, _canonical_json(dict(instrument.metadata)),
+                    int(instrument.trade_enabled), _canonical_json(list(instrument.skip_reasons)), now,
+                ),
+            )
+
+    def list_instruments(self) -> list[GhostInstrument]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM ghost_instruments ORDER BY canonical_symbol,broker_symbol"
+            ).fetchall()
+        return [
+            GhostInstrument(
+                venue=Venue(row["venue"]), broker_symbol=row["broker_symbol"],
+                canonical_symbol=row["canonical_symbol"],
+                asset_group=AssetGroup(row["asset_group"]),
+                asset_subgroup=row["asset_subgroup"], base_asset=row["base_asset"],
+                quote_asset=row["quote_asset"], metadata=json.loads(row["metadata_json"]),
+                trade_enabled=bool(row["trade_enabled"]),
+                skip_reasons=tuple(json.loads(row["skip_reasons_json"])),
+            )
+            for row in rows
+        ]
+
+    def create_scan(self, scan_id: str, started_at: datetime, sources: list[str]) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO ghost_scan_runs(
+                    scan_id,started_at,status,sources_json
+                ) VALUES(?,?,?,?)""",
+                (scan_id, started_at.isoformat(), "RUNNING", _canonical_json(sources)),
+            )
+
+    def complete_scan(
+        self,
+        scan_id: str,
+        *,
+        completed_at: datetime,
+        status: str,
+        discovered_count: int,
+        scored_count: int,
+        skipped_count: int,
+        errors: list[str],
+        duration_ms: float,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE ghost_scan_runs SET
+                    completed_at=?,status=?,discovered_count=?,scored_count=?,
+                    skipped_count=?,errors_json=?,duration_ms=? WHERE scan_id=?""",
+                (
+                    completed_at.isoformat(), status, discovered_count, scored_count,
+                    skipped_count, _canonical_json(errors), duration_ms, scan_id,
+                ),
+            )
+
+    def latest_scan(self) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM ghost_scan_runs ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def _row_to_signal(self, row: sqlite3.Row) -> GhostSignal:
         instrument = GhostInstrument(
             venue=Venue(row["venue"]),
@@ -409,3 +499,106 @@ class GhostRepository:
                 ),
             )
         return execution_id
+
+    def open_shadow_position(self, signal: GhostSignal) -> GhostPosition | None:
+        if signal.entry is None or signal.stop is None or signal.target is None:
+            return None
+        position_id = hashlib.sha256(f"SHADOW|{signal.signal_id}".encode("utf-8")).hexdigest()
+        risk = abs(signal.entry - signal.stop)
+        if risk <= 0:
+            return None
+        with self._connect() as connection:
+            duplicate = connection.execute(
+                """SELECT position_id FROM ghost_positions
+                   WHERE canonical_symbol=? AND direction=? AND status='OPEN'""",
+                (signal.instrument.canonical_symbol, signal.direction.value),
+            ).fetchone()
+            if duplicate is not None:
+                return None
+            connection.execute(
+                """INSERT OR IGNORE INTO ghost_positions(
+                    position_id,signal_id,venue,canonical_symbol,asset_group,
+                    broker_position_id,mode,status,direction,entry,stop,target,
+                    initial_risk,quantity,opened_at,closed_at,volatility_regime,
+                    entry_quality,signal_score,payload_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    position_id, signal.signal_id, signal.instrument.venue.value,
+                    signal.instrument.canonical_symbol, signal.instrument.asset_group.value,
+                    None, "SHADOW", "OPEN", signal.direction.value, signal.entry,
+                    signal.stop, signal.target, risk, 1.0,
+                    signal.decision_time.isoformat(), None,
+                    signal.volatility_regime.value, signal.entry_quality,
+                    signal.confirmed_score, "{}",
+                ),
+            )
+        return self.get_position(position_id)
+
+    def _row_to_position(self, row: sqlite3.Row) -> GhostPosition:
+        return GhostPosition(
+            position_id=row["position_id"], signal_id=row["signal_id"],
+            venue=Venue(row["venue"]), canonical_symbol=row["canonical_symbol"],
+            asset_group=AssetGroup(row["asset_group"]), mode=row["mode"],
+            status=row["status"], direction=Direction(row["direction"]),
+            entry=row["entry"], stop=row["stop"], target=row["target"],
+            initial_risk=row["initial_risk"], quantity=row["quantity"],
+            opened_at=datetime.fromisoformat(row["opened_at"]) if row["opened_at"] else None,
+            closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None,
+            volatility_regime=VolatilityRegime(row["volatility_regime"]),
+            entry_quality=row["entry_quality"], signal_score=row["signal_score"],
+            payload=json.loads(row["payload_json"]),
+        )
+
+    def get_position(self, position_id: str) -> GhostPosition | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM ghost_positions WHERE position_id=?", (position_id,)
+            ).fetchone()
+        return self._row_to_position(row) if row is not None else None
+
+    def list_positions(self, *, status: str | None = None) -> list[GhostPosition]:
+        sql = "SELECT * FROM ghost_positions"
+        params: tuple[Any, ...] = ()
+        if status is not None:
+            sql += " WHERE status=?"
+            params = (status,)
+        sql += " ORDER BY opened_at DESC, position_id"
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        return [self._row_to_position(row) for row in rows]
+
+    def close_position(
+        self,
+        position: GhostPosition,
+        *,
+        closed_at: datetime,
+        exit_price: float,
+        gross_r: float,
+        exit_reason: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE ghost_positions SET status='CLOSED',closed_at=? WHERE position_id=? AND status='OPEN'",
+                (closed_at.isoformat(), position.position_id),
+            )
+            connection.execute(
+                """INSERT OR REPLACE INTO ghost_closed_trades(
+                    position_id,signal_id,closed_at,exit_price,gross_r,net_r,exit_reason,payload_json
+                ) VALUES(?,?,?,?,?,?,?,?)""",
+                (
+                    position.position_id, position.signal_id, closed_at.isoformat(),
+                    exit_price, gross_r, gross_r, exit_reason,
+                    _canonical_json(dict(payload or {})),
+                ),
+            )
+
+    def list_closed_trades(self) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT c.*,p.direction,p.canonical_symbol,p.asset_group,
+                          p.volatility_regime,p.entry_quality,p.signal_score
+                   FROM ghost_closed_trades c JOIN ghost_positions p USING(position_id)
+                   ORDER BY c.closed_at,c.position_id"""
+            ).fetchall()
+        return [dict(row) for row in rows]

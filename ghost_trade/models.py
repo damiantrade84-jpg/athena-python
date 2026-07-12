@@ -301,6 +301,32 @@ class GhostSignal:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class GhostPosition:
+    position_id: str
+    signal_id: str
+    venue: Venue
+    canonical_symbol: str
+    asset_group: AssetGroup
+    mode: str
+    status: str
+    direction: Direction
+    entry: float
+    stop: float
+    target: float
+    initial_risk: float
+    quantity: float | None
+    opened_at: datetime | None
+    closed_at: datetime | None
+    volatility_regime: VolatilityRegime
+    entry_quality: float
+    signal_score: float
+    payload: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "payload", _immutable_mapping(self.payload))
+
+
 def _immutable_mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return MappingProxyType(dict(value or {}))
 
