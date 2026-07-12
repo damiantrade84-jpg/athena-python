@@ -66,6 +66,11 @@ def _worker_init() -> None:
     import os
     import sys
 
+    # Backtest-only runtime: keep auto_trader.configure() from starting the
+    # TimedExitMonitor broker thread (guard at auto_trader.py). Without this,
+    # exec'ing athena.py here spins up a monitor that closes open broker tickets.
+    os.environ.setdefault("ATHENA_DIAGNOSTIC_MODE", "1")
+
     repo_root = os.path.dirname(os.path.abspath(__file__))
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)

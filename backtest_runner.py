@@ -4243,18 +4243,14 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         )
         return _empty_out
 
-    wins = [
-        t
-        for t in trades
-        if t["outcome"] in ("TP1", "TP2")
-        or (t["outcome"] == "TIMEOUT" and t["resultR"] > 0)
-    ]
+    # Sign-based win/loss classification (matches the resultR>0 convention used
+    # at lines ~1310 and in the per-trade "won" flags ~1713/1784). Label-based
+    # classification previously dropped positive-R BE exits from wins AND losses
+    # while leaving them in the denominator, deflating win rate and profit factor
+    # and making this surface's rates non-comparable to the others.
+    wins = [t for t in trades if float(t.get("resultR", 0) or 0) > 0]
 
-    losses = [
-        t
-        for t in trades
-        if t["outcome"] == "SL" or (t["outcome"] == "TIMEOUT" and t["resultR"] <= 0)
-    ]
+    losses = [t for t in trades if float(t.get("resultR", 0) or 0) <= 0]
 
     gross_profit = sum(t["resultR"] for t in wins)
 

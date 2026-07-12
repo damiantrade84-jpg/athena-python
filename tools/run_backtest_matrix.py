@@ -149,7 +149,12 @@ def _start_heartbeat(log: logging.Logger, interval: float = 30.0):
 # ---------------------------------------------------------------------------
 def _load_athena_module() -> Any:
     import importlib.util
+    import os
     import sys
+    # Backtest-only runtime: keep auto_trader.configure() from starting the
+    # TimedExitMonitor broker thread (guard at auto_trader.py). Without this,
+    # exec'ing athena.py here spins up a monitor that closes open broker tickets.
+    os.environ.setdefault("ATHENA_DIAGNOSTIC_MODE", "1")
     athena_path = Path("athena.py").resolve()
     if not athena_path.exists():
         raise FileNotFoundError(f"athena.py not found at {athena_path}")

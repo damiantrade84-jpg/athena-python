@@ -5569,7 +5569,7 @@ class NakedEngine:
             _rr_space_tp_qualified = False
             _rr_space_capped_tp_blocked = True
         _rr_space_floor_enabled = bool(
-            config.CONFIG.get("ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED", True)
+            config.CONFIG.get("ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED", False)
         )
         try:
             _rr_space_floor_atr = float(
