@@ -16423,6 +16423,9 @@ from athena_app.api.routes_tsmom import register_tsmom_routes  # noqa: E402
 from athena_app.api.routes_macro import register_macro_routes  # noqa: E402
 from athena_app.api.routes_forex_factor import register_forex_factor_routes  # noqa: E402
 from execution import register_execution_routes  # noqa: E402
+from ghost_trade.api import register_ghost_trade_routes  # noqa: E402
+from ghost_trade.runtime import build_ghost_trade_service  # noqa: E402
+from ghost_trade.scheduler import GhostScheduler  # noqa: E402
 
 set_runtime(
     SimpleNamespace(
@@ -16644,6 +16647,26 @@ register_status_routes(
         log=log,
     ),
 )
+
+# Ghost Trade is a standalone scanner with its own database and scheduler.  It
+# consumes shared candle functions but never imports another engine's scoring
+# or the existing auto-trader.  The committed mode is SHADOW.
+_ghost_trade_service = build_ghost_trade_service(
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        AUDIT_DB=_AUDIT_DB,
+        fetch_mt5=fetch_mt5,
+        fetch_bybit_klines=_fetch_bybit_klines,
+    )
+)
+register_ghost_trade_routes(
+    app,
+    SimpleNamespace(service=_ghost_trade_service),
+)
+_ghost_trade_scheduler = GhostScheduler(_ghost_trade_service)
+if _ghost_trade_service.config.enabled:
+    _ghost_trade_scheduler.start(_ghost_trade_service.config.scan_interval_seconds)
+
 register_ase_routes(app)
 register_tsmom_routes(app)
 register_macro_routes(app)

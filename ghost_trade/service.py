@@ -12,7 +12,7 @@ from statistics import fmean
 from typing import Any, Callable, Mapping, Sequence
 
 from .config import GhostConfig
-from .models import GhostMode, GhostSignal, SignalStatus, Style
+from .models import AssetGroup, Direction, GhostMode, GhostSignal, SignalStatus, Style
 from .persistence import GhostRepository, signal_id_for
 from .reconciliation import resolve_shadow_position
 from .scanner import json_safe_component
@@ -70,6 +70,111 @@ class GhostService:
         self._score_fn = score_fn
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._scan_lock = threading.Lock()
+
+    def health(self) -> dict[str, Any]:
+        execution_status = "SHADOW ONLY" if self.config.mode is GhostMode.SHADOW else "DEMO NOT VERIFIED"
+        return {
+            "enabled": self.config.enabled,
+            "mode": self.config.mode.value,
+            "executionStatus": execution_status,
+            "liveTradingAllowed": False,
+            "demoAutoEnabled": self.config.effective_demo_auto_enabled,
+            "scanRunning": self._scan_lock.locked(),
+        }
+
+    def config_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.config.enabled,
+            "mode": self.config.mode.value,
+            "liveTradingAllowed": False,
+            "demoAutoEnabled": self.config.demo_auto_enabled,
+            "effectiveDemoAutoEnabled": self.config.effective_demo_auto_enabled,
+            "minimumConfirmedScore": self.config.minimum_confirmed_score,
+            "minimumEntryQuality": self.config.minimum_entry_quality,
+            "minimumRawRR": self.config.minimum_raw_rr,
+            "riskPerTrade": self.config.risk_per_trade,
+            "maxRiskPerTrade": self.config.max_risk_per_trade,
+            "maxTotalRisk": self.config.max_total_risk,
+            "maxOpenPositions": self.config.max_open_positions,
+            "scanIntervalSeconds": self.config.scan_interval_seconds,
+            "signalCooldownSeconds": self.config.signal_cooldown_seconds,
+            "exitStrategy": self.config.exit_strategy.value,
+        }
+
+    def update_config(self, updates: Mapping[str, Any]) -> dict[str, Any]:
+        if updates.get("live_trading_allowed") or updates.get("liveTradingAllowed"):
+            raise ValueError("live_trading_prohibited")
+        aliases = {
+            "demoAutoEnabled": "demo_auto_enabled",
+            "minimumConfirmedScore": "minimum_confirmed_score",
+            "minimumEntryQuality": "minimum_entry_quality",
+            "minimumRawRR": "minimum_raw_rr",
+            "riskPerTrade": "risk_per_trade",
+            "maxRiskPerTrade": "max_risk_per_trade",
+            "maxTotalRisk": "max_total_risk",
+            "maxOpenPositions": "max_open_positions",
+            "scanIntervalSeconds": "scan_interval_seconds",
+            "signalCooldownSeconds": "signal_cooldown_seconds",
+        }
+        allowed = {
+            "enabled", "mode", "demo_auto_enabled", "minimum_confirmed_score",
+            "minimum_entry_quality", "minimum_raw_rr", "risk_per_trade",
+            "max_risk_per_trade", "max_total_risk", "max_open_positions",
+            "scan_interval_seconds", "signal_cooldown_seconds",
+        }
+        normalized: dict[str, Any] = {}
+        for key, value in updates.items():
+            normalized_key = aliases.get(key, key)
+            if normalized_key not in allowed:
+                raise ValueError(f"config_key_not_allowed:{key}")
+            normalized[normalized_key] = value
+        base = {
+            "enabled": self.config.enabled,
+            "mode": self.config.mode.value,
+            "demo_auto_enabled": self.config.demo_auto_enabled,
+            "minimum_confirmed_score": self.config.minimum_confirmed_score,
+            "minimum_entry_quality": self.config.minimum_entry_quality,
+            "minimum_raw_rr": self.config.minimum_raw_rr,
+            "risk_per_trade": self.config.risk_per_trade,
+            "max_risk_per_trade": self.config.max_risk_per_trade,
+            "max_total_risk": self.config.max_total_risk,
+            "max_open_positions": self.config.max_open_positions,
+            "scan_interval_seconds": self.config.scan_interval_seconds,
+            "signal_cooldown_seconds": self.config.signal_cooldown_seconds,
+            "group_profiles": self.config.group_profiles,
+            "symbol_overrides": self.config.symbol_overrides,
+        }
+        self.config = GhostConfig.from_mapping({**base, **normalized}, environ={})
+        return self.config_dict()
+
+    def groups(self) -> list[dict[str, Any]]:
+        instruments = self.repository.list_instruments()
+        signals = self.repository.list_signals(limit=1000)
+        order = (
+            AssetGroup.FOREX, AssetGroup.CRYPTO, AssetGroup.METALS,
+            AssetGroup.ENERGY, AssetGroup.COMMODITIES_OTHER, AssetGroup.INDICES,
+            AssetGroup.EQUITIES, AssetGroup.OTHER,
+        )
+        rows: list[dict[str, Any]] = []
+        for group in order:
+            group_instruments = [item for item in instruments if item.asset_group is group]
+            group_signals = [item for item in signals if item.instrument.asset_group is group]
+            scores = [item.confirmed_score for item in group_signals]
+            rows.append(
+                {
+                    "assetGroup": group.value,
+                    "instrumentsDiscovered": len(group_instruments),
+                    "instrumentsScored": len({item.instrument.broker_symbol for item in group_signals}),
+                    "signals": len(group_signals),
+                    "bullish": sum(item.direction is Direction.LONG for item in group_signals),
+                    "bearish": sum(item.direction is Direction.SHORT for item in group_signals),
+                    "neutral": sum(item.direction is Direction.NEUTRAL for item in group_signals),
+                    "executableDemo": sum(item.can_execute for item in group_signals),
+                    "averageScore": fmean(scores) if scores else None,
+                    "highestScore": max(scores) if scores else None,
+                }
+            )
+        return rows
 
     def scan(self, *, style: Style = Style.INTRADAY) -> ScanResult:
         if not self._scan_lock.acquire(blocking=False):
