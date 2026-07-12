@@ -42,6 +42,17 @@ def _position_dict(position) -> dict[str, Any]:
     }
 
 
+def _execution_dict(result) -> dict[str, Any]:
+    return {
+        "success": result.success,
+        "status": result.status,
+        "executionId": result.execution_id,
+        "error": result.error_code,
+        "brokerOrderId": result.broker_order_id,
+        "brokerPositionId": result.broker_position_id,
+    }
+
+
 def register_ghost_trade_routes(app, runtime) -> GhostService:
     service: GhostService = runtime.service
     existing = {rule.rule for rule in app.url_map.iter_rules()}
@@ -133,7 +144,23 @@ def register_ghost_trade_routes(app, runtime) -> GhostService:
             return _error("signal_not_found", 404)
         if service.config.mode is GhostMode.SHADOW:
             return _error("shadow_mode_execution_prohibited", 403)
-        return _error("demo_execution_not_configured", 503)
+        payload = request.get_json(silent=True) or {}
+        try:
+            result = service.execute_demo(
+                signal_id, idempotency_key=payload.get("idempotencyKey")
+            )
+        except PermissionError as exc:
+            return _error(str(exc), 403)
+        except LookupError as exc:
+            return _error(str(exc), 404)
+        except RuntimeError as exc:
+            return _error(str(exc), 503)
+        body = _execution_dict(result)
+        if result.success:
+            return jsonify(body)
+        error = str(result.error_code or "demo_execution_rejected")
+        status = 403 if any(token in error for token in ("not_verified", "risk_rejected", "guardian_rejected", "sizing_rejected")) else 409
+        return jsonify(body), status
 
     def dismiss(signal_id: str):
         return jsonify({"success": True, "signalId": signal_id}) if service.repository.dismiss_signal(signal_id) else _error("signal_not_found", 404)
@@ -152,12 +179,26 @@ def register_ghost_trade_routes(app, runtime) -> GhostService:
             return _error("position_not_found", 404)
         if position.mode == "SHADOW":
             return _error("shadow_manual_close_requires_price", 400)
-        return _error("demo_execution_not_configured", 503)
+        try:
+            result = service.close_demo_position(position_id)
+        except PermissionError as exc:
+            return _error(str(exc), 403)
+        except RuntimeError as exc:
+            return _error(str(exc), 503)
+        return jsonify(_execution_dict(result)), (200 if result.success else 409)
 
     def close_all():
         if service.config.mode is GhostMode.SHADOW:
             return _error("shadow_manual_close_requires_price", 400)
-        return _error("demo_execution_not_configured", 503)
+        try:
+            results = service.close_all_demo_positions()
+        except PermissionError as exc:
+            return _error(str(exc), 403)
+        except RuntimeError as exc:
+            return _error(str(exc), 503)
+        payload = [_execution_dict(result) for result in results]
+        status = 200 if all(result.success for result in results) else 409
+        return jsonify({"success": status == 200, "results": payload}), status
 
     def performance():
         return jsonify(service.performance())

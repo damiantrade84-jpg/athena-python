@@ -12,7 +12,7 @@ from statistics import fmean
 from typing import Any, Callable, Mapping, Sequence
 
 from .config import GhostConfig
-from .models import AssetGroup, Direction, GhostMode, GhostSignal, SignalStatus, Style
+from .models import AssetGroup, Direction, GhostMode, GhostSignal, SignalStatus, Style, Venue
 from .persistence import GhostRepository, signal_id_for
 from .reconciliation import resolve_shadow_position
 from .scanner import json_safe_component
@@ -70,9 +70,48 @@ class GhostService:
         self._score_fn = score_fn
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._scan_lock = threading.Lock()
+        self._execution_coordinator: Any | None = None
+
+    def set_execution_coordinator(self, coordinator: Any) -> None:
+        self._execution_coordinator = coordinator
+
+    def execute_demo(self, signal_id: str, *, idempotency_key: str | None = None):
+        if self.config.mode is GhostMode.SHADOW:
+            raise PermissionError("shadow_mode_execution_prohibited")
+        signal = self.repository.get_signal(signal_id)
+        if signal is None:
+            raise LookupError("signal_not_found")
+        if self._execution_coordinator is None:
+            raise RuntimeError("demo_execution_not_configured")
+        key = str(idempotency_key or f"manual:{signal.signal_id}:{signal.signal_version}")
+        return self._execution_coordinator.execute(
+            signal.signal_id,
+            expected_version=signal.signal_version,
+            idempotency_key=key,
+        )
+
+    def close_demo_position(self, position_id: str):
+        if self.config.mode is GhostMode.SHADOW:
+            raise PermissionError("shadow_mode_execution_prohibited")
+        if self._execution_coordinator is None:
+            raise RuntimeError("demo_execution_not_configured")
+        return self._execution_coordinator.close_position(position_id)
+
+    def close_all_demo_positions(self):
+        if self.config.mode is GhostMode.SHADOW:
+            raise PermissionError("shadow_mode_execution_prohibited")
+        if self._execution_coordinator is None:
+            raise RuntimeError("demo_execution_not_configured")
+        return self._execution_coordinator.close_all()
 
     def health(self) -> dict[str, Any]:
-        execution_status = "SHADOW ONLY" if self.config.mode is GhostMode.SHADOW else "DEMO NOT VERIFIED"
+        attestations = (
+            self._execution_coordinator.attestations()
+            if self._execution_coordinator is not None and self.config.mode is not GhostMode.SHADOW
+            else {}
+        )
+        verified = any(item.verified for item in attestations.values())
+        execution_status = "SHADOW ONLY" if self.config.mode is GhostMode.SHADOW else "DEMO VERIFIED" if verified else "DEMO NOT VERIFIED"
         return {
             "enabled": self.config.enabled,
             "mode": self.config.mode.value,
@@ -80,6 +119,18 @@ class GhostService:
             "liveTradingAllowed": False,
             "demoAutoEnabled": self.config.effective_demo_auto_enabled,
             "scanRunning": self._scan_lock.locked(),
+            "mt5Status": (
+                "SHADOW ONLY" if self.config.mode is GhostMode.SHADOW
+                else attestations.get(Venue.MT5).status.value
+                if attestations.get(Venue.MT5)
+                else "DEMO NOT VERIFIED"
+            ),
+            "bybitStatus": (
+                "SHADOW ONLY" if self.config.mode is GhostMode.SHADOW
+                else attestations.get(Venue.BYBIT).status.value
+                if attestations.get(Venue.BYBIT)
+                else "DEMO NOT VERIFIED"
+            ),
         }
 
     def config_dict(self) -> dict[str, Any]:
@@ -145,6 +196,10 @@ class GhostService:
             "symbol_overrides": self.config.symbol_overrides,
         }
         self.config = GhostConfig.from_mapping({**base, **normalized}, environ={})
+        if self._execution_coordinator is not None:
+            self._execution_coordinator.config = self.config
+            if getattr(self._execution_coordinator, "risk_service", None) is not None:
+                self._execution_coordinator.risk_service.config = self.config
         return self.config_dict()
 
     def groups(self) -> list[dict[str, Any]]:
@@ -288,6 +343,13 @@ class GhostService:
             "H1EntryQuality": json_safe_component(score.entry_quality),
             "H1Exhaustion": json_safe_component(score.exhaustion),
         }
+        demo_verified = bool(
+            self._execution_coordinator is not None
+            and self.config.mode is not GhostMode.SHADOW
+            and self._execution_coordinator.venue_verified(instrument.venue)
+        )
+        if self.config.mode is not GhostMode.SHADOW and not demo_verified:
+            reasons.append("demo_not_verified")
         return GhostSignal(
             signal_id=signal_id,
             signal_version="ghost-v1",
@@ -306,7 +368,7 @@ class GhostService:
             target=geometry.target if geometry else None,
             raw_rr=geometry.raw_rr if geometry else None,
             volatility_regime=score.volatility.regime,
-            can_execute=False,
+            can_execute=bool(score.selected and demo_verified),
             status=SignalStatus.ELIGIBLE if score.selected else SignalStatus.ANALYSED,
             reasons=tuple(dict.fromkeys(reasons)),
             components=components,

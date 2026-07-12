@@ -500,6 +500,38 @@ class GhostRepository:
             )
         return execution_id
 
+    def get_execution_attempt(self, execution_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM ghost_execution_attempts WHERE execution_id=?",
+                (execution_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["request"] = json.loads(result.pop("request_json"))
+        result["response"] = json.loads(result.pop("response_json"))
+        return result
+
+    def complete_execution(
+        self,
+        execution_id: str,
+        *,
+        status: str,
+        response: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE ghost_execution_attempts SET
+                    status=?,completed_at=?,response_json=?,error_code=?
+                   WHERE execution_id=?""",
+                (
+                    status, datetime.utcnow().isoformat() + "Z",
+                    _canonical_json(dict(response or {})), error_code, execution_id,
+                ),
+            )
+
     def open_shadow_position(self, signal: GhostSignal) -> GhostPosition | None:
         if signal.entry is None or signal.stop is None or signal.target is None:
             return None
@@ -534,6 +566,56 @@ class GhostRepository:
             )
         return self.get_position(position_id)
 
+    def open_demo_position(
+        self,
+        signal: GhostSignal,
+        *,
+        execution_id: str,
+        broker_order_id: str | None,
+        broker_position_id: str,
+        entry_price: float,
+        quantity: float,
+        payload: Mapping[str, Any] | None = None,
+    ) -> GhostPosition:
+        if signal.stop is None or signal.target is None:
+            raise SignalConflictError("invalid_structural_geometry")
+        risk = abs(entry_price - signal.stop)
+        if risk <= 0:
+            raise SignalConflictError("invalid_demo_risk")
+        position_id = hashlib.sha256(
+            f"DEMO|{execution_id}|{broker_position_id}".encode("utf-8")
+        ).hexdigest()
+        stored_payload = {
+            **dict(payload or {}),
+            "execution_id": execution_id,
+            "broker_order_id": broker_order_id,
+            "risk_fraction": float(
+                (payload or {}).get("risk_fraction", 0.0) if payload else 0.0
+            ),
+        }
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO ghost_positions(
+                    position_id,signal_id,venue,canonical_symbol,asset_group,
+                    broker_position_id,mode,status,direction,entry,stop,target,
+                    initial_risk,quantity,opened_at,closed_at,volatility_regime,
+                    entry_quality,signal_score,payload_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    position_id, signal.signal_id, signal.instrument.venue.value,
+                    signal.instrument.canonical_symbol, signal.instrument.asset_group.value,
+                    broker_position_id, "DEMO", "OPEN", signal.direction.value,
+                    entry_price, signal.stop, signal.target, risk, quantity,
+                    datetime.utcnow().isoformat() + "Z", None,
+                    signal.volatility_regime.value, signal.entry_quality,
+                    signal.confirmed_score, _canonical_json(stored_payload),
+                ),
+            )
+        position = self.get_position(position_id)
+        if position is None:
+            raise SignalConflictError("demo_position_persistence_failed")
+        return position
+
     def _row_to_position(self, row: sqlite3.Row) -> GhostPosition:
         return GhostPosition(
             position_id=row["position_id"], signal_id=row["signal_id"],
@@ -546,6 +628,7 @@ class GhostRepository:
             closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None,
             volatility_regime=VolatilityRegime(row["volatility_regime"]),
             entry_quality=row["entry_quality"], signal_score=row["signal_score"],
+            broker_position_id=row["broker_position_id"],
             payload=json.loads(row["payload_json"]),
         )
 
@@ -592,6 +675,14 @@ class GhostRepository:
                     _canonical_json(dict(payload or {})),
                 ),
             )
+
+    def set_position_status(self, position_id: str, status: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE ghost_positions SET status=? WHERE position_id=?",
+                (status, position_id),
+            )
+        return cursor.rowcount == 1
 
     def list_closed_trades(self) -> list[dict[str, Any]]:
         with self._connect() as connection:

@@ -321,6 +321,7 @@ class GhostPosition:
     volatility_regime: VolatilityRegime
     entry_quality: float
     signal_score: float
+    broker_position_id: str | None = None
     payload: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

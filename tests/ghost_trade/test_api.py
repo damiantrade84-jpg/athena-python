@@ -21,6 +21,7 @@ from ghost_trade.models import (
 from ghost_trade.persistence import GhostRepository
 from ghost_trade.service import GhostService, ScanAlreadyRunning
 from ghost_trade.runtime import build_ghost_trade_service
+from ghost_trade.execution.coordinator import CoordinatorResult
 
 
 NOW = datetime(2026, 7, 12, 12, 0, tzinfo=timezone.utc)
@@ -194,4 +195,76 @@ def test_runtime_builder_is_lazy_and_uses_dedicated_database(tmp_path):
 
     assert service.config.mode is GhostMode.SHADOW
     assert service.repository.db_path == tmp_path / "ghost_trade.db"
+    assert service._execution_coordinator is not None
     assert calls == []
+
+
+def test_execute_demo_route_uses_coordinator_and_server_signal_version(tmp_path):
+    _app, client, service, repository = app_client(tmp_path)
+    repository.upsert_signal(stored_signal())
+    service.config = GhostConfig(mode=GhostMode.DEMO_MANUAL)
+    calls = []
+
+    class Coordinator:
+        def execute(self, signal_id, *, expected_version, idempotency_key):
+            calls.append((signal_id, expected_version, idempotency_key))
+            return CoordinatorResult(
+                True, "SUBMITTED", "execution-1", broker_order_id="order-1",
+                broker_position_id="position-1",
+            )
+
+    service.set_execution_coordinator(Coordinator())
+
+    response = client.post(
+        "/api/ghost-trade/signals/signal-1/execute-demo",
+        json={"idempotencyKey": "manual-click-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["executionId"] == "execution-1"
+    assert calls == [("signal-1", "ghost-v1", "manual-click-1")]
+
+
+def test_demo_close_and_close_all_routes_use_execution_coordinator(tmp_path, monkeypatch):
+    _app, client, service, repository = app_client(tmp_path)
+    service.config = GhostConfig(mode=GhostMode.DEMO_MANUAL)
+    monkeypatch.setattr(
+        repository,
+        "get_position",
+        lambda position_id: SimpleNamespace(position_id=position_id, mode="DEMO"),
+    )
+
+    class Coordinator:
+        def close_position(self, position_id):
+            return CoordinatorResult(True, "CLOSED", f"close-{position_id}")
+
+        def close_all(self):
+            return [CoordinatorResult(True, "CLOSED", "close-all-1")]
+
+    service.set_execution_coordinator(Coordinator())
+
+    single = client.post("/api/ghost-trade/positions/position-1/close", json={})
+    all_positions = client.post("/api/ghost-trade/positions/close-all", json={})
+
+    assert single.status_code == 200
+    assert single.get_json()["status"] == "CLOSED"
+    assert all_positions.status_code == 200
+    assert all_positions.get_json()["results"][0]["executionId"] == "close-all-1"
+
+
+def test_safe_mode_update_propagates_to_execution_and_risk_services(tmp_path):
+    _app, client, service, _repository = app_client(tmp_path)
+    coordinator = SimpleNamespace(
+        config=service.config,
+        risk_service=SimpleNamespace(config=service.config),
+    )
+    service.set_execution_coordinator(coordinator)
+
+    response = client.put(
+        "/api/ghost-trade/config", json={"mode": "DEMO_MANUAL"}
+    )
+
+    assert response.status_code == 200
+    assert service.config.mode is GhostMode.DEMO_MANUAL
+    assert coordinator.config.mode is GhostMode.DEMO_MANUAL
+    assert coordinator.risk_service.config.mode is GhostMode.DEMO_MANUAL
