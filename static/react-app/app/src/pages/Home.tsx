@@ -27,6 +27,7 @@ import ASEPanel from '@/components/panels/ASEPanel';
 import TSMOMPanel from '@/components/panels/TSMOMPanel';
 import ForexFactorPanel from '@/components/panels/ForexFactorPanel';
 import EdgeLabSuggestionsPanel from '@/components/panels/EdgeLabSuggestionsPanel';
+import GhostTradePanel from '@/components/panels/GhostTradePanel';
 
 const panels: Record<string, React.ComponentType> = {
   dashboard: DashboardPanel,
@@ -56,6 +57,7 @@ const panels: Record<string, React.ComponentType> = {
   tsmom: TSMOMPanel,
   forexFactor: ForexFactorPanel,
   edgeLab: EdgeLabSuggestionsPanel,
+  ghostTrade: GhostTradePanel,
 };
 
 export default function Home() {
