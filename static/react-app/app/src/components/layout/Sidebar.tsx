@@ -14,6 +14,7 @@ import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
   Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut, Workflow, Cpu, Radar, Landmark, Sparkles,
+  Ghost,
 } from 'lucide-react';
 
 type NavItem = { id: PanelId; label: string; icon: ElementType; badge?: string; title?: string };
@@ -36,6 +37,7 @@ const navSections: NavSection[] = [
       { id: 'scanConfig',  label: 'Scan Config',  icon: Settings },
       { id: 'trades',      label: 'Trades',       icon: TrendingUp },
       { id: 'engineC',     label: 'Engine C',     icon: Layers },
+      { id: 'ghostTrade',  label: 'Ghost Trade',  icon: Ghost, badge: 'SHADOW' },
     ],
   },
   {

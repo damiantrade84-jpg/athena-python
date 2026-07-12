@@ -5216,3 +5216,66 @@ FX_FACTOR_SPREAD_PIPS_BY_SYMBOL:
   CADJPY: 2.2
   CADCHF: 2.8
   CHFJPY: 2.5
+
+# Standalone Ghost Trade. Live-account execution is structurally prohibited;
+# DEMO_AUTO also starts effectively OFF after every process restart.
+ghost_trade:
+  enabled: true
+  mode: SHADOW
+  live_trading_allowed: false
+  demo_auto_enabled: false
+  minimum_confirmed_score: 0.35
+  minimum_entry_quality: 0.60
+  minimum_raw_rr: 1.00
+  risk_per_trade: 0.0025
+  max_risk_per_trade: 0.005
+  max_total_risk: 0.02
+  max_open_positions: 8
+  max_scan_workers: 8
+  scan_interval_seconds: 3600
+  signal_cooldown_seconds: 14400
+  exit_strategy: STRUCTURAL
+  symbol_overrides: {}
+  group_profiles:
+    forex:
+      enabled: true
+      default_style: intraday
+      volume_quality_mode: tick_volume
+      execution_source: MT5
+      maximum_spread_pct: 0.0005
+    crypto:
+      enabled: true
+      default_style: intraday
+      volume_quality_mode: exchange_volume
+      execution_source: BYBIT
+      maximum_spread_pct: 0.002
+    metals:
+      enabled: true
+      default_style: intraday
+      volume_quality_mode: broker_or_exchange
+      execution_source: MT5
+      maximum_spread_pct: 0.0015
+    energy:
+      enabled: true
+      default_style: intraday
+      execution_source: MT5
+      maximum_spread_pct: 0.0015
+    commodities_other:
+      enabled: true
+      default_style: intraday
+      execution_source: MT5
+      maximum_spread_pct: 0.0015
+    indices:
+      enabled: true
+      default_style: intraday
+      execution_source: MT5
+      maximum_spread_pct: 0.001
+    equities:
+      enabled: true
+      default_style: swing
+      execution_source: MT5
+      maximum_spread_pct: 0.002
+    other:
+      enabled: true
+      default_style: intraday
+      maximum_spread_pct: 0.001
