@@ -221,6 +221,86 @@ class ConfirmedScoreResult:
     reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class GhostSignal:
+    signal_id: str
+    signal_version: str
+    scan_id: str
+    instrument: GhostInstrument
+    style: Style
+    direction: Direction
+    decision_time: datetime
+    confirmed_score: float
+    live_adjustment: float
+    display_score: float
+    direction_confidence: float
+    entry_quality: float
+    entry: float | None
+    stop: float | None
+    target: float | None
+    raw_rr: float | None
+    volatility_regime: VolatilityRegime
+    can_execute: bool
+    status: SignalStatus
+    reasons: tuple[str, ...] = ()
+    components: Mapping[str, Any] = field(default_factory=dict)
+    confirmed_times: Mapping[str, str] = field(default_factory=dict)
+    data_freshness: str = "UNKNOWN"
+    spread: float | None = None
+    group_rank: int | None = None
+    group_count: int | None = None
+    global_rank: int | None = None
+    global_count: int | None = None
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("confirmed_score", self.confirmed_score),
+            ("display_score", self.display_score),
+            ("entry_quality", self.entry_quality),
+        ):
+            if not 0.0 <= float(value) <= 1.0:
+                raise ValueError(f"{label} must be in [0, 1]")
+        if not -0.10 <= float(self.live_adjustment) <= 0.10:
+            raise ValueError("live_adjustment must be in [-0.10, 0.10]")
+        if not -1.0 <= float(self.direction_confidence) <= 1.0:
+            raise ValueError("direction_confidence must be in [-1, 1]")
+        object.__setattr__(self, "reasons", tuple(self.reasons))
+        object.__setattr__(self, "components", _immutable_mapping(self.components))
+        object.__setattr__(self, "confirmed_times", _immutable_mapping(self.confirmed_times))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "signalId": self.signal_id,
+            "signalVersion": self.signal_version,
+            "scanId": self.scan_id,
+            "instrument": self.instrument.to_dict(),
+            "style": self.style.value,
+            "direction": self.direction.value,
+            "decisionTime": self.decision_time.isoformat(),
+            "confirmedScore": self.confirmed_score,
+            "liveAdjustment": self.live_adjustment,
+            "displayScore": self.display_score,
+            "directionConfidence": self.direction_confidence,
+            "entryQuality": self.entry_quality,
+            "entry": self.entry,
+            "stop": self.stop,
+            "target": self.target,
+            "structuralRR": self.raw_rr,
+            "volatilityRegime": self.volatility_regime.value,
+            "canExecute": self.can_execute,
+            "status": self.status.value,
+            "reasons": list(self.reasons),
+            "components": dict(self.components),
+            "confirmedTimes": dict(self.confirmed_times),
+            "dataFreshness": self.data_freshness,
+            "spread": self.spread,
+            "groupRank": self.group_rank,
+            "groupCount": self.group_count,
+            "globalRank": self.global_rank,
+            "globalCount": self.global_count,
+        }
+
+
 def _immutable_mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return MappingProxyType(dict(value or {}))
 
