@@ -2162,6 +2162,26 @@ CONFIG: dict = {
     },
     # Log Engine C ALIGNED+tradeable rows to shadow_signals (no broker); Performance tab reads them.
     "SHADOW_LEDGER_ENABLED": True,
+    # Standalone Ghost Trade engine. Runtime parsing forces live trading off and
+    # resets the effective demo-auto switch after every process restart.
+    "ghost_trade": {
+        "enabled": True,
+        "mode": "SHADOW",
+        "live_trading_allowed": False,
+        "demo_auto_enabled": False,
+        "minimum_confirmed_score": 0.35,
+        "minimum_entry_quality": 0.60,
+        "minimum_raw_rr": 1.00,
+        "risk_per_trade": 0.0025,
+        "max_risk_per_trade": 0.005,
+        "max_total_risk": 0.02,
+        "max_open_positions": 8,
+        "scan_interval_seconds": 3600,
+        "signal_cooldown_seconds": 14400,
+        "exit_strategy": "STRUCTURAL",
+        "symbol_overrides": {},
+        "group_profiles": {},
+    },
     "MICROSTRUCTURE_FEEDS_ENABLED": True,
     "MICROSTRUCTURE_BYBIT_FEEDS_ENABLED": True,
     "MICROSTRUCTURE_BINANCE_FEEDS_ENABLED": False,
