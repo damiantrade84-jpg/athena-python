@@ -41,9 +41,10 @@ export function useGhostTrade() {
 
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 15_000);
+    const intervalMs = state.health?.scanRunning ? 2_000 : 15_000;
+    const timer = window.setInterval(() => void refresh(), intervalMs);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, state.health?.scanRunning]);
 
   const mutate = useCallback(async (operation: () => Promise<unknown>) => {
     setMutating(true);

@@ -48,12 +48,18 @@ class MT5UniverseProvider:
         *,
         history_checker: HistoryChecker | None = None,
         disabled_symbols: tuple[str, ...] = (),
+        allowed_broker_symbols: tuple[str, ...] | None = None,
         now: Callable[[], datetime] | None = None,
     ):
         self._client = client
         self._symbols = symbols
         self._history_checker = history_checker
         self._disabled_symbols = set(disabled_symbols)
+        self._allowed_broker_symbols = (
+            None
+            if allowed_broker_symbols is None
+            else {str(symbol).strip().upper() for symbol in allowed_broker_symbols}
+        )
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     def discover(self) -> UniverseResult:
@@ -72,6 +78,12 @@ class MT5UniverseProvider:
             except Exception as exc:
                 symbol = str(getattr(info, "name", "") or "<unknown>")
                 errors.append(f"mt5_instrument_failed:{symbol}:{exc}")
+                continue
+            if (
+                self._allowed_broker_symbols is not None
+                and instrument.broker_symbol.strip().upper()
+                not in self._allowed_broker_symbols
+            ):
                 continue
             reasons: list[str] = []
             if instrument.broker_symbol in self._disabled_symbols:
@@ -118,12 +130,18 @@ class BybitUniverseProvider:
         allow_spot: bool = False,
         history_checker: HistoryChecker | None = None,
         minimum_turnover: float | None = None,
+        allowed_canonical_symbols: tuple[str, ...] | None = None,
     ):
         self._client = client
         self._symbols = symbols
         self._allow_spot = allow_spot
         self._history_checker = history_checker
         self._minimum_turnover = minimum_turnover
+        self._allowed_canonical_symbols = (
+            None
+            if allowed_canonical_symbols is None
+            else {str(symbol).strip().upper() for symbol in allowed_canonical_symbols}
+        )
 
     def discover(self) -> UniverseResult:
         try:
@@ -144,6 +162,12 @@ class BybitUniverseProvider:
             except Exception as exc:
                 symbol = str(market.get("id") or market.get("symbol") or "<unknown>")
                 errors.append(f"bybit_instrument_failed:{symbol}:{exc}")
+                continue
+            if (
+                self._allowed_canonical_symbols is not None
+                and instrument.canonical_symbol.strip().upper()
+                not in self._allowed_canonical_symbols
+            ):
                 continue
             reasons: list[str] = []
             info = market.get("info") if isinstance(market.get("info"), Mapping) else {}

@@ -114,6 +114,29 @@ def build_ghost_trade_service(runtime: Any) -> GhostService:
     mt5_client = getattr(runtime, "mt5_client", None) or _LazyMT5Client()
     bybit_client = getattr(runtime, "bybit_client", None) or _LazyBybitClient()
 
+    active_pairs_provider = getattr(runtime, "active_pairs", None)
+    mt5_allowed: tuple[str, ...] | None = None
+    bybit_allowed: tuple[str, ...] | None = None
+    if callable(active_pairs_provider):
+        from mt5_executor import mt5_map_symbol
+
+        mt5_symbols: set[str] = set()
+        bybit_symbols: set[str] = set()
+        for pair in active_pairs_provider() or ():
+            if not isinstance(pair, dict) or not pair.get("enabled", True):
+                continue
+            display = str(pair.get("display") or "").strip()
+            if not display:
+                continue
+            if str(pair.get("type") or "").strip().lower() == "crypto":
+                bybit_symbols.add(display.upper())
+                continue
+            broker_symbol = mt5_map_symbol(display)
+            if broker_symbol:
+                mt5_symbols.add(str(broker_symbol).strip().upper())
+        mt5_allowed = tuple(sorted(mt5_symbols))
+        bybit_allowed = tuple(sorted(bybit_symbols))
+
     def load_candles(instrument, timeframe: str, limit: int):
         if instrument.venue is Venue.MT5:
             timeframe_value = getattr(mt5_client, f"TIMEFRAME_{timeframe}")
@@ -149,8 +172,13 @@ def build_ghost_trade_service(runtime: Any) -> GhostService:
 
     candle_provider = SharedCandleProvider(load_candles)
     universe_providers = (
-        MT5UniverseProvider(mt5_client, symbols),
-        BybitUniverseProvider(bybit_client, symbols, allow_spot=False),
+        MT5UniverseProvider(
+            mt5_client, symbols, allowed_broker_symbols=mt5_allowed,
+        ),
+        BybitUniverseProvider(
+            bybit_client, symbols, allow_spot=False,
+            allowed_canonical_symbols=bybit_allowed,
+        ),
     )
     service = GhostService(
         config=config,

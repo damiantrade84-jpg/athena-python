@@ -62,6 +62,12 @@ describe('Ghost Trade display contracts', () => {
         signals={[signal]}
         positions={[] as GhostPosition[]}
         performance={performance}
+        currentScan={{
+          scanId: 'scan-1', status: 'COMPLETED',
+          startedAt: '2026-07-12T12:00:00Z', completedAt: '2026-07-12T12:00:42Z',
+          discoveredCount: 1883, scoredCount: 1, skippedCount: 1767,
+          durationMs: 42200, errors: [],
+        }}
         loading={false}
         error={null}
         selectedSignal={signal}
@@ -81,6 +87,8 @@ describe('Ghost Trade display contracts', () => {
     expect(markup).toContain('D1 Structure');
     expect(markup).toContain('Confirmed 64');
     expect(markup).toContain('Live -4');
+    expect(markup).toContain('Scan 42.2s');
+    expect(markup).not.toContain('Discovered 1883');
     expect(markup).not.toContain('Execute Demo');
   });
 

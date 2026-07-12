@@ -139,7 +139,9 @@ def register_ghost_trade_routes(app, runtime) -> GhostService:
             offset = int(request.args.get("offset", 0))
         except (ValueError, TypeError):
             return _error("invalid_signal_filter", 400)
+        latest_completed = service.repository.latest_completed_scan()
         rows = service.repository.list_signals(
+            scan_id=latest_completed["scan_id"] if latest_completed else None,
             asset_group=group, direction=direction, minimum_score=minimum,
             limit=limit, offset=offset,
         )

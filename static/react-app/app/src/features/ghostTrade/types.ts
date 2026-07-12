@@ -113,6 +113,7 @@ export interface GhostScan {
   discoveredCount: number;
   scoredCount: number;
   skippedCount: number;
+  durationMs: number | null;
   errorCount?: number;
   errors: string[];
 }

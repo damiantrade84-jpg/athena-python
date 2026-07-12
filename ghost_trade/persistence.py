@@ -409,6 +409,15 @@ class GhostRepository:
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def latest_completed_scan(self) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT * FROM ghost_scan_runs
+                   WHERE status LIKE 'COMPLETED%'
+                   ORDER BY started_at DESC LIMIT 1"""
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def _row_to_signal(self, row: sqlite3.Row) -> GhostSignal:
         instrument = GhostInstrument(
             venue=Venue(row["venue"]),
@@ -456,6 +465,7 @@ class GhostRepository:
     def list_signals(
         self,
         *,
+        scan_id: str | None = None,
         asset_group: AssetGroup | None = None,
         direction: Direction | None = None,
         minimum_score: float | None = None,
@@ -465,6 +475,9 @@ class GhostRepository:
     ) -> list[GhostSignal]:
         clauses: list[str] = []
         params: list[Any] = []
+        if scan_id is not None:
+            clauses.append("scan_id=?")
+            params.append(str(scan_id))
         for column, value in (
             ("asset_group", asset_group.value if asset_group else None),
             ("direction", direction.value if direction else None),

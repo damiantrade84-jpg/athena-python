@@ -12,7 +12,7 @@ export function GhostGroupSection({ group, signals, onSelect, sort = 'score', vi
       <button type="button" className="flex w-full items-center gap-2 p-3 text-left" onClick={() => setOpen(!open)}>
         {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         <span className="font-semibold">{groupLabels[group.assetGroup]}</span>
-        <Badge variant="outline">{group.instrumentsScored}/{group.instrumentsDiscovered} scored</Badge>
+        <Badge variant="outline">{group.instrumentsScored} scored</Badge>
         <span className="ml-auto text-xs text-muted-foreground">↑{group.bullish} ↓{group.bearish} · eligible {group.executableDemo}</span>
       </button>
       {open && (

@@ -42,8 +42,11 @@ export function GhostTradeView(props: ViewProps) {
   }), [props.signals, search, direction]);
   const grouped = useMemo(() => groupSignals(visibleSignals), [visibleSignals]);
   const orderedGroups = props.groups.length ? props.groups : (Object.keys(groupLabels) as Array<keyof typeof groupLabels>).map((assetGroup) => ({ assetGroup, instrumentsDiscovered: 0, instrumentsScored: 0, signals: 0, bullish: 0, bearish: 0, neutral: 0, executableDemo: 0, averageScore: null, highestScore: null }));
-  const discovered = props.groups.reduce((sum, group) => sum + group.instrumentsDiscovered, 0);
-  const scored = props.groups.reduce((sum, group) => sum + group.instrumentsScored, 0);
+  const scored = props.currentScan?.scoredCount
+    ?? props.groups.reduce((sum, group) => sum + group.instrumentsScored, 0);
+  const scanDuration = props.currentScan?.durationMs == null
+    ? null
+    : `${(props.currentScan.durationMs / 1000).toFixed(1)}s`;
   const handleAutoToggle = (enabled: boolean) => {
     if (confirmAutoToggle(enabled, (message) => window.confirm(message))) {
       props.onToggleAuto(enabled);
@@ -55,7 +58,7 @@ export function GhostTradeView(props: ViewProps) {
         <Ghost className="h-6 w-6 text-violet-300" />
         <div><h2 className="text-lg font-semibold">Ghost Trade</h2><div className="text-xs text-muted-foreground">Independent structural engine · {props.health.mode}</div></div>
         <div className="ml-auto flex flex-wrap items-center gap-3 text-xs">
-          <span>Discovered {discovered}</span><span>Scored {scored}</span><span>Eligible {props.signals.filter((signal) => signal.canExecute).length}</span><span>Open {props.positions.length}</span><span>Risk {props.positions.reduce((sum, position) => sum + position.initialRisk, 0).toFixed(4)}</span>
+          <span>Scored {scored}</span><span>Scan {scanDuration || (props.health.scanRunning ? 'running' : 'not run')}</span><span>Eligible {props.signals.filter((signal) => signal.canExecute).length}</span><span>Open {props.positions.length}</span><span>Risk {props.positions.reduce((sum, position) => sum + position.initialRisk, 0).toFixed(4)}</span>
           <Button size="sm" variant="outline" onClick={props.onScan} disabled={props.loading || props.health.scanRunning}><RefreshCw className="mr-1 h-4 w-4" />Scan Now</Button>
           <label className="flex items-center gap-2"><span>Demo auto</span><Switch checked={props.health.demoAutoEnabled} disabled={props.health.mode !== 'DEMO_AUTO' || props.health.executionStatus !== 'DEMO VERIFIED'} onCheckedChange={handleAutoToggle} /></label>
         </div>

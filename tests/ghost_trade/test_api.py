@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import time
@@ -157,6 +158,33 @@ def test_positions_performance_and_groups_are_ghost_only(tmp_path):
     assert groups.get_json()["groups"][0]["signals"] == 1
 
 
+def test_signal_and_group_endpoints_use_latest_completed_scan(tmp_path):
+    _app, client, _service, repository = app_client(tmp_path)
+    old = replace(stored_signal(), signal_id="old", scan_id="scan-old")
+    current = replace(stored_signal(), signal_id="current", scan_id="scan-current")
+    repository.upsert_signal(old)
+    repository.upsert_signal(current)
+    repository.create_scan("scan-old", NOW, ["test"])
+    repository.complete_scan(
+        "scan-old", completed_at=NOW, status="COMPLETED",
+        discovered_count=1, scored_count=1, skipped_count=0,
+        errors=[], duration_ms=10,
+    )
+    repository.create_scan("scan-current", NOW.replace(minute=1), ["test"])
+    repository.complete_scan(
+        "scan-current", completed_at=NOW.replace(minute=1), status="COMPLETED",
+        discovered_count=1, scored_count=1, skipped_count=0,
+        errors=[], duration_ms=10,
+    )
+
+    signals = client.get("/api/ghost-trade/signals").get_json()["signals"]
+    forex_group = client.get("/api/ghost-trade/groups").get_json()["groups"][0]
+
+    assert [item["signalId"] for item in signals] == ["current"]
+    assert forex_group["signals"] == 1
+    assert forex_group["instrumentsDiscovered"] == 1
+
+
 def test_scan_conflict_returns_409(tmp_path, monkeypatch):
     _app, client, service, _repository = app_client(tmp_path)
     monkeypatch.setattr(
@@ -203,6 +231,57 @@ def test_runtime_builder_is_lazy_and_uses_dedicated_database(tmp_path):
     assert service.repository.db_path == tmp_path / "ghost_trade.db"
     assert service._execution_coordinator is not None
     assert calls == []
+
+
+def test_runtime_universe_is_bounded_to_active_engine_a_pairs(tmp_path):
+    class MT5:
+        SYMBOL_TRADE_MODE_DISABLED = 0
+
+        def symbols_get(self):
+            return [
+                SimpleNamespace(
+                    name="EURUSD", path="Forex", description="EUR/USD",
+                    currency_base="EUR", currency_profit="USD", visible=True,
+                    trade_mode=4, expiration_time=0,
+                ),
+                SimpleNamespace(
+                    name="GBPUSD", path="Forex", description="GBP/USD",
+                    currency_base="GBP", currency_profit="USD", visible=True,
+                    trade_mode=4, expiration_time=0,
+                ),
+            ]
+
+    class Bybit:
+        def load_markets(self):
+            def market(base):
+                return {
+                    "id": f"{base}USDT", "symbol": f"{base}/USDT:USDT",
+                    "base": base, "quote": "USDT", "active": True,
+                    "swap": True, "linear": True, "spot": False,
+                    "precision": {"price": 0.01, "amount": 0.001},
+                    "limits": {"amount": {"min": 0.001}},
+                    "info": {"status": "Trading"},
+                }
+            return {"BTC": market("BTC"), "ETH": market("ETH")}
+
+    runtime = SimpleNamespace(
+        CONFIG={"ghost_trade": {"mode": "SHADOW"}},
+        AUDIT_DB=str(tmp_path / "audit.db"),
+        fetch_bybit_klines=lambda *_args: [],
+        mt5_client=MT5(),
+        bybit_client=Bybit(),
+        active_pairs=lambda: [
+            {"display": "EUR/USD", "type": "forex", "source": "mt5", "enabled": True},
+            {"display": "BTC/USDT", "type": "crypto", "source": "binance", "enabled": True},
+        ],
+    )
+
+    service = build_ghost_trade_service(runtime)
+    mt5 = service._universe_providers[0].discover()
+    bybit = service._universe_providers[1].discover()
+
+    assert [item.broker_symbol for item in mt5.instruments] == ["EURUSD"]
+    assert [item.canonical_symbol for item in bybit.instruments] == ["BTC/USDT"]
 
 
 def test_runtime_mt5_candles_use_exact_discovered_symbol_without_static_pair_allowlist(tmp_path):

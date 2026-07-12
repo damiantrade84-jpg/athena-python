@@ -16657,6 +16657,7 @@ _ghost_trade_service = build_ghost_trade_service(
         AUDIT_DB=_AUDIT_DB,
         fetch_mt5=fetch_mt5,
         fetch_bybit_klines=_fetch_bybit_klines,
+        active_pairs=lambda: ACTIVE_PAIRS,
         kill_switch=lambda: _kill_switch,
     )
 )

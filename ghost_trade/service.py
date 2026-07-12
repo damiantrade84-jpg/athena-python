@@ -239,8 +239,11 @@ class GhostService:
         return self.config_dict()
 
     def groups(self) -> list[dict[str, Any]]:
-        instruments = self.repository.list_instruments()
-        signals = self.repository.list_signals(limit=1000)
+        latest_completed = self.repository.latest_completed_scan()
+        signals = self.repository.list_signals(
+            scan_id=latest_completed["scan_id"] if latest_completed else None,
+            limit=1000,
+        )
         order = (
             AssetGroup.FOREX, AssetGroup.CRYPTO, AssetGroup.METALS,
             AssetGroup.ENERGY, AssetGroup.COMMODITIES_OTHER, AssetGroup.INDICES,
@@ -248,14 +251,17 @@ class GhostService:
         )
         rows: list[dict[str, Any]] = []
         for group in order:
-            group_instruments = [item for item in instruments if item.asset_group is group]
             group_signals = [item for item in signals if item.instrument.asset_group is group]
+            scored_instruments = {
+                (item.instrument.venue.value, item.instrument.broker_symbol)
+                for item in group_signals
+            }
             scores = [item.confirmed_score for item in group_signals]
             rows.append(
                 {
                     "assetGroup": group.value,
-                    "instrumentsDiscovered": len(group_instruments),
-                    "instrumentsScored": len({item.instrument.broker_symbol for item in group_signals}),
+                    "instrumentsDiscovered": len(scored_instruments),
+                    "instrumentsScored": len(scored_instruments),
                     "signals": len(group_signals),
                     "bullish": sum(item.direction is Direction.LONG for item in group_signals),
                     "bearish": sum(item.direction is Direction.SHORT for item in group_signals),
