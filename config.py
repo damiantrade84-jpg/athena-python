@@ -1315,6 +1315,8 @@ CONFIG: dict = {
     "D1_CANDLES": 1001,
     "H4_CANDLES": 1000,
     "H1_CANDLES": 1000,
+    "M30_CANDLES": 500,
+    "M15_CANDLES": 500,
     # Skip /api/eod-bulk-last-day/{EXCH} for these ticker suffixes (404 on e.g. COMM).
     "CANDLE_BUILDER_BULK_D1_SKIP_EXCHANGES": ["COMM"],
     "SCAN_MAX_WORKERS": 3,
@@ -1975,6 +1977,11 @@ CONFIG: dict = {
     },
     "ENGINE_A_SCORING_PROFILE": {
         "ENABLED": True,
+        # Live-only lower-TF entry timing. Structural trend/momentum layers stay
+        # on D1/H4/H1; backtests keep their existing confirmed-TF contract.
+        "LIVE_ENTRY_TF_BY_STYLE": {
+            "intraday": {"forex": "M30"},
+        },
         "DEFAULT_BY_CLASS": {
             "default": {
                 "trend_layers": [
@@ -2328,6 +2335,7 @@ CONFIG: dict = {
             "M1": 180,
             "M5": 600,
             "M15": 1800,
+            "M30": 3600,
             "H1": 7200,
             "H4": 18000,
             "D1": 172800,
@@ -2443,6 +2451,16 @@ CONFIG: dict = {
     "ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE": {},
     "ENGINE_B_BT_STRUCTURE_GATE_ENABLED": True,
     "ENGINE_B_STRUCTURE_GATE_ENABLED": True,
+    # Diagnostic-only: when true, live scan may retarget Engine B trigger detection
+    # onto style_profile.entry_tf (H1/M15/M30) via role_candles. Default false —
+    # production trigger remains matrix H1. Experiment harness calls override
+    # kwargs directly and does not require this flag.
+    "ENGINE_B_DIAGNOSTIC_TRIGGER_TF_ENABLED": False,
+    # Diagnostic-only: when true, live scan may retarget Engine A V3 entry TF
+    # onto H1/M15/M30 via entry_tf_override. Default false — production entry
+    # remains VALID_V3_ENTRY_TIMEFRAMES (H1/H4/D1). Experiment harness calls
+    # override kwargs directly and does not require this flag.
+    "ENGINE_A_DIAGNOSTIC_ENTRY_TF_ENABLED": False,
     "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED": False,
     # Scan-only: let Engine B re-check its own naked-structure direction when
     # the Engine A direction blocks B. Default-off to preserve historical scan behavior.
@@ -2560,6 +2578,11 @@ CONFIG: dict = {
                 "fallback_rr": 3.0,
                 "require_macro_align": False,
             },
+        },
+        # Live-only trigger timing. H4 remains the intraday structure/zone TF;
+        # M15 supplies the active entry trigger and trigger-local ATR.
+        "LIVE_TRIGGER_TF_BY_STYLE": {
+            "intraday": {"forex": "M15"},
         },
         # Stage 2.5: Collapsed Engine B group overrides.
         # Only 4 groups retain overrides; all others use base profiles.
@@ -2742,6 +2765,8 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_B_FOREX_ADX_MIN",
     "ENGINE_B_RESEARCH_LAB_FACTORS",
     "ENGINE_B_STRUCTURE_GATE_ENABLED",
+    "ENGINE_B_DIAGNOSTIC_TRIGGER_TF_ENABLED",
+    "ENGINE_A_DIAGNOSTIC_ENTRY_TF_ENABLED",
     "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS",
     "ENGINE_C_AI_WEIGHT_ADJUST_ENABLED",
     "ENGINE_C_AI_WEIGHT_MAX",
@@ -2955,7 +2980,7 @@ def validate_config(cfg: dict) -> None:
             log.warning(f"[CFG] {k} expected number, got {type(v).__name__!r}")
         elif v <= 0:
             log.warning(f"[CFG] {k}={v} is non-positive — check config.yaml")
-    for k in ("D1_CANDLES", "H4_CANDLES", "H1_CANDLES"):
+    for k in ("D1_CANDLES", "H4_CANDLES", "H1_CANDLES", "M30_CANDLES", "M15_CANDLES"):
         v = cfg.get(k)
         if not isinstance(v, int) or v < 10:
             log.warning(f"[CFG] {k}={v} is too low — minimum 10 candles required")
@@ -3491,7 +3516,7 @@ AISafetyConstants.startup_safety_check()
 def scan_candle_limits() -> dict[str, int]:
     """Bar counts for Engine A (`analyze_pair`), Engine B, Engine C B-leg, and naked scans.
 
-    Single source of truth: ``D1_CANDLES``, ``H4_CANDLES``, ``H1_CANDLES`` in CONFIG / config.yaml.
+    Single source of truth: the ``*_CANDLES`` values in CONFIG / config.yaml.
     ``fetch_candles`` (athena) routes by pair ``source`` to Binance (crypto), EODHD (forex/stocks/
     commodities/indices/ETFs), Polygon, or yfinance — same limits apply to every asset class.
     Live ``analyze_pair`` may include the forming bar in indicator inputs (F8); callers that need
@@ -3501,6 +3526,8 @@ def scan_candle_limits() -> dict[str, int]:
         "D1": int(CONFIG["D1_CANDLES"]),
         "H4": int(CONFIG["H4_CANDLES"]),
         "H1": int(CONFIG["H1_CANDLES"]),
+        "M30": int(CONFIG["M30_CANDLES"]),
+        "M15": int(CONFIG["M15_CANDLES"]),
     }
 
 

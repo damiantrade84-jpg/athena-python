@@ -84,9 +84,14 @@ def _resolve_setup_candle_frames(
     route: SpecialistRoute,
     horizon: str,
     candles: dict[str, list[dict]],
+    *,
+    entry_tf_override: str | None = None,
 ) -> tuple[list[dict], list[dict], str, str]:
     """Primary/context frames aligned with quant entry TF (execution_tf overrides)."""
-    from engine_a_v3.timeframes import resolve_v3_entry_timeframe
+    from engine_a_v3.timeframes import (
+        resolve_diagnostic_v3_entry_timeframe,
+        resolve_v3_entry_timeframe,
+    )
 
     asset_type = (
         "forex"
@@ -101,6 +106,18 @@ def _resolve_setup_candle_frames(
         if route.family == "equity_etf"
         else "other"
     )
+    diagnostic_override = resolve_diagnostic_v3_entry_timeframe(entry_tf_override)
+    if entry_tf_override is not None and diagnostic_override is None:
+        return [], [], "", ""
+    if diagnostic_override is not None:
+        primary_tf = diagnostic_override
+        # Entry timing is lower-TF, while structural context stays aligned to
+        # the requested horizon: H4 for intraday and D1 for swing.
+        context_tf = "D1" if str(horizon).lower() == "swing" else "H4"
+        primary = list(candles.get(primary_tf) or [])
+        context = list(candles.get(context_tf) or candles.get("D1") or [])
+        return primary, context, primary_tf, context_tf
+
     primary_tf = resolve_v3_entry_timeframe(route.score_group, asset_type, horizon)
     if primary_tf == "H1":
         context_tf = "H4"
@@ -678,6 +695,7 @@ def detect_setup(
     *,
     display: str | None = None,
     indicator_periods: Mapping[str, Any] | None = None,
+    entry_tf_override: str | None = None,
 ) -> SetupCandidate:
     if route.family == "unknown":
         return SetupCandidate(
@@ -694,7 +712,7 @@ def detect_setup(
         indicator_periods = _resolved_periods(route.score_group, route.family)
     periods = SetupPeriods.from_mapping(indicator_periods)
     primary, context, _primary_tf, _context_tf = _resolve_setup_candle_frames(
-        route, horizon, candles
+        route, horizon, candles, entry_tf_override=entry_tf_override
     )
     setup_ids = route.setup_ids(horizon)
 

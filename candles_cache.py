@@ -27,8 +27,8 @@ _candle_fetch_inflight: dict = {}
 _last_cleanup_time = 0.0
 _CLEANUP_INTERVAL = 600.0  # seconds (10 mins)
 
-_CANDLE_CACHE_TTL = {"M1": 60, "M5": 5 * 60, "M15": 15 * 60, "H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
-_TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
+_CANDLE_CACHE_TTL = {"M1": 60, "M5": 5 * 60, "M15": 15 * 60, "M30": 30 * 60, "H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
+_TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}
 
 
 def _cache_key(pair: dict, tf: str, limit: int) -> tuple[str, str, int]:
@@ -564,7 +564,7 @@ def fetch_candles(
 
     TTL: M5=5 min, M15=15 min, H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
     """
-    crypto_live_tf = pair.get("type") == "crypto" and tf in {"M1", "M5", "M15", "H1", "H4", "D1"}
+    crypto_live_tf = pair.get("type") == "crypto" and tf in {"M1", "M5", "M15", "M30", "H1", "H4", "D1"}
     display = pair.get("display", pair.get("symbol", ""))
     key = _cache_key(pair, tf, limit)
     fetch_meta = {
@@ -605,7 +605,7 @@ def fetch_candles(
             fetch_meta["liveLastTs"] = live_candles[-1].get("time", live_candles[-1].get("datetime"))
             live_candles = None
 
-        _min_live_bars = {"M5": 20, "M15": 20, "H1": 20, "H4": 10, "D1": 50}.get(tf, limit)
+        _min_live_bars = {"M5": 20, "M15": 20, "M30": 20, "H1": 20, "H4": 10, "D1": 50}.get(tf, limit)
         live_bar_count = len(live_candles) if live_candles else 0
         live_only_ready = False
         _is_forex_ws = pair.get("source") == "mt5" and ptype in _eodhd_ws_ohlc_types

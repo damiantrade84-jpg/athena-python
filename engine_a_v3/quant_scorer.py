@@ -32,7 +32,10 @@ from typing import Any
 from factor_scoring import _adx_multiplier_from_value, _resolve_adx_thresholds
 from engine_a_scoring_profile import resolve_engine_a_scoring_profile
 from engine_a_v3.profile import CORE_COMPONENTS
-from engine_a_v3.timeframes import resolve_v3_entry_timeframe
+from engine_a_v3.timeframes import (
+    resolve_diagnostic_v3_entry_timeframe,
+    resolve_v3_entry_timeframe,
+)
 from engine_a_v3.subsystems import (
     ST_AVAILABLE,
     ST_NA,
@@ -584,11 +587,16 @@ def _volume_component(
 def _snapshots(
     candles: dict[str, list[dict]], asset_type: str, periods: Mapping[str, int],
     snapshot_cache: dict | None = None,
+    *,
+    extra_tfs: tuple[str, ...] = (),
 ) -> dict[str, Mapping[str, Any]]:
     from engine_a_v3.indicator_adapter import indicator_snapshot
 
     snaps: dict[str, Mapping[str, Any]] = {}
-    for tf in ("D1", "H4", "H1"):
+    tfs = ("D1", "H4", "H1") + tuple(
+        tf for tf in extra_tfs if tf and tf not in ("D1", "H4", "H1")
+    )
+    for tf in tfs:
         rows = candles.get(tf) or []
         if snapshot_cache is not None:
             key = (tf, len(rows))
@@ -603,6 +611,36 @@ def _snapshots(
     return snaps
 
 
+def _unavailable_quant(
+    profile: Any,
+    *,
+    entry_tf: str | None,
+    rejection_reason: str,
+) -> QuantScore:
+    unavailable = Component(0.0, 0.0, available=False)
+    return QuantScore(
+        direction="FLAT",
+        confluence_score=0.0,
+        max_score=MAX_SCORE,
+        score_norm=0.0,
+        conviction=0.0,
+        decision="WATCH",
+        threshold=profile.trade_threshold,
+        level_style="trend",
+        factor_scores={"trend": 0.0, "momentum": 0.0, "ortho": {}},
+        factor_diagnostics={
+            "entryTimeframe": entry_tf,
+            "rejectionReason": rejection_reason,
+        },
+        components={
+            "trend": unavailable,
+            "momentum": unavailable,
+            "location": unavailable,
+            "volume": unavailable,
+        },
+    )
+
+
 # ── public entry point ───────────────────────────────────────────────────────
 def score_pair(
     route: Any,
@@ -612,51 +650,64 @@ def score_pair(
     context: Mapping[str, Any] | None = None,
     profile: Any | None = None,
     snapshot_cache: dict | None = None,
+    entry_tf_override: str | None = None,
 ) -> QuantScore:
     """Continuous quality score for one pair. `route` is a SpecialistRoute
     (.score_group, .family). `context` carries subsystem snapshots and an
-    optional 'volume_ratio'."""
+    optional 'volume_ratio'.
+
+    ``entry_tf_override`` is diagnostic-only (H1/M15/M30). When set, primary
+    entry candles/snaps come from that TF with no silent H1/H4 fallback.
+    Trend stack remains D1/H4/H1.
+    """
     group = getattr(route, "score_group", "unknown")
     family = getattr(route, "family", "unknown")
     asset_type = _FAMILY_ASSET.get(family, "other")
     horizon = "intraday" if str(horizon).lower() == "intraday" else "swing"
-    entry_tf = _resolve_v3_entry_tf(group, asset_type, horizon)
+    diagnostic_override = resolve_diagnostic_v3_entry_timeframe(entry_tf_override)
+    if entry_tf_override is not None and diagnostic_override is None:
+        entry_tf = None
+    elif diagnostic_override is not None:
+        entry_tf = diagnostic_override
+    else:
+        entry_tf = _resolve_v3_entry_tf(group, asset_type, horizon)
 
     if profile is None:
         from engine_a_v3.profile import baseline_profile
         profile = baseline_profile(group, horizon)
     if entry_tf is None:
-        unavailable = Component(0.0, 0.0, available=False)
-        return QuantScore(
-            direction="FLAT",
-            confluence_score=0.0,
-            max_score=MAX_SCORE,
-            score_norm=0.0,
-            conviction=0.0,
-            decision="WATCH",
-            threshold=profile.trade_threshold,
-            level_style="trend",
-            factor_scores={"trend": 0.0, "momentum": 0.0, "ortho": {}},
-            factor_diagnostics={
-                "entryTimeframe": None,
-                "rejectionReason": "invalid_entry_timeframe",
-            },
-            components={
-                "trend": unavailable,
-                "momentum": unavailable,
-                "location": unavailable,
-                "volume": unavailable,
-            },
+        return _unavailable_quant(
+            profile, entry_tf=None, rejection_reason="invalid_entry_timeframe"
         )
-    snaps = _snapshots(candles, asset_type, dict(profile.indicator_periods), snapshot_cache)
-    entry_snap = snaps.get(entry_tf) or snaps.get("H4") or snaps.get("D1") or {}
+
+    entry_candles = list(candles.get(entry_tf) or [])
+    if diagnostic_override is not None and not entry_candles:
+        # Fail closed: never fall back to H1/H4 when diagnostic override is set.
+        return _unavailable_quant(
+            profile,
+            entry_tf=entry_tf,
+            rejection_reason="missing_entry_candles",
+        )
+
+    extra_tfs = (entry_tf,) if entry_tf not in ("D1", "H4", "H1") else ()
+    snaps = _snapshots(
+        candles,
+        asset_type,
+        dict(profile.indicator_periods),
+        snapshot_cache,
+        extra_tfs=extra_tfs,
+    )
+    if diagnostic_override is not None:
+        entry_snap = snaps.get(entry_tf) or {}
+    else:
+        entry_snap = snaps.get(entry_tf) or snaps.get("H4") or snaps.get("D1") or {}
     momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
     momentum_snap = snaps.get(momentum_tf) or snaps.get("H4") or entry_snap
 
     trend, coherence = _trend_component(
         snaps,
         _resolve_v3_tf_weights(group, asset_type, horizon),
-        entry_candles=candles.get(entry_tf) or [],
+        entry_candles=entry_candles,
         indicator_periods=dict(profile.indicator_periods),
         entry_tf=entry_tf,
     )
@@ -675,11 +726,12 @@ def score_pair(
             factor_diagnostics={
                 **mom_diag,
                 "adxGateRejected": True,
+                "entryTimeframe": entry_tf,
             },
             components={"trend": trend, "momentum": momentum, "location": Component(0.0, 0.0), "volume": Component(0.0, 0.0)},
         )
     location, level_style = _location_component(entry_snap, asset_type, group)
-    volume = _volume_component(entry_snap, candles.get(entry_tf) or [], context)
+    volume = _volume_component(entry_snap, entry_candles, context)
 
     components: dict[str, Component] = {
         "trend": trend,
@@ -918,6 +970,8 @@ def score_pair(
     factor_scores["ortho"] = ortho
     factor_scores["ortho_term"] = round(sum(ortho.values()), 4)
     factor_diagnostics = {
+        "entryTimeframe": entry_tf,
+        "entryTfOverride": diagnostic_override,
         "adxValue": mom_diag.get("adxValue"),
         "adxMultiplier": mom_diag.get("adxMultiplier"),
         "diAlignMult": mom_diag.get("diAlignMult"),
@@ -950,6 +1004,13 @@ def score_pair(
             }
             for name, comp in components.items()
         },
+        "entryBarCount": len(entry_candles),
+        "entryLastClose": (
+            float(entry_candles[-1]["close"])
+            if entry_candles and isinstance(entry_candles[-1], dict)
+            and entry_candles[-1].get("close") is not None
+            else None
+        ),
     }
 
     return QuantScore(

@@ -37,6 +37,7 @@ from market_structure import (
     NakedEngine,
     _reset_engine_b_gate_failures,
     engine_b_confidence_passes,
+    engine_b_live_trigger_kwargs,
     engine_b_forex_asian_session_blocks_bar,
     engine_b_min_score_threshold,
 )
@@ -89,10 +90,11 @@ def _engine_b_scan_freshness_stale_tfs(
     config: dict | None = None,
     score_group: str | None = None,
     style: str | None = None,
+    active_entry_tfs: dict[str, list] | None = None,
 ) -> tuple[list[str], dict[str, dict]]:
     """Return stale TF labels for Engine B scan when freshness gate is enabled."""
     cfg = config or CONFIG
-    if not bool(cfg.get("ENGINE_B_SCAN_FRESHNESS_GATE", True)):
+    if not bool(cfg.get("ENGINE_B_SCAN_FRESHNESS_GATE", True)) and not active_entry_tfs:
         return [], {}
 
     try:
@@ -168,6 +170,22 @@ def _engine_b_scan_freshness_stale_tfs(
                 continue
 
         stale_tfs.append(f"{tf}:{sev}")
+
+    # Lower entry/trigger series intentionally includes the active bar. Unlike
+    # confirmed structure, stale_1_bucket is not acceptable here: a missing
+    # current M15/M30 bucket would score the previous close as the entry.
+    for tf, candles in (active_entry_tfs or {}).items():
+        tf_u = str(tf or "").upper()
+        diag = candle_freshness_diagnostic(
+            pair,
+            tf_u,
+            candles or [],
+            source=pair.get("source"),
+        )
+        freshness_diag[tf_u] = diag
+        sev = str(diag.get("stalenessSeverity") or "missing")
+        if sev != "fresh":
+            stale_tfs.append(f"{tf_u}:{sev}")
 
     if pair.get("type") == "crypto" and d1 and d1_required:
         try:
@@ -1097,6 +1115,7 @@ def _engine_b_independent_direction_probe(
     asset_type: str,
     d1_snap: dict | None,
     h4_snap: dict | None,
+    role_candles: dict[str, list] | None = None,
 ) -> tuple[str | None, dict | None, dict | None]:
     """Pick best Engine B direction independently of Engine A.
 
@@ -1109,6 +1128,7 @@ def _engine_b_independent_direction_probe(
     """
     candidates: list[dict[str, Any]] = []
     engine.set_registry_context(pair.get("symbol") or pair.get("display"))
+    _diag_kw = engine_b_live_trigger_kwargs(style_profile, role_candles)
     precompute = engine.precompute_structure_data(
         d1_candles or [],
         h4_candles or [],
@@ -1122,6 +1142,7 @@ def _engine_b_independent_direction_probe(
         h4_snap=h4_snap or {},
         style=resolved_style,
         pair=pair,
+        **_diag_kw,
     )
     for try_direction in ("LONG", "SHORT"):
         res_b = engine.analyze_structure_direction(
@@ -1933,10 +1954,31 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 _h1_res, _h1_meta = _fetch_ab_crypto_signal_candles(
                     r, pair, "H1", _lim["H1"]
                 )
+                from engine_a_v3.timeframes import resolve_live_v3_entry_timeframe
+                from market_structure import resolve_live_engine_b_trigger_tf
+
+                _live_entry_tfs = {
+                    tf
+                    for tf in (
+                        resolve_live_v3_entry_timeframe(
+                            pair.get("type", ""), _pair_style, source=pair.get("source")
+                        ),
+                        resolve_live_engine_b_trigger_tf(
+                            pair.get("type", ""), _pair_style, source=pair.get("source")
+                        ),
+                    )
+                    if tf and tf not in {"D1", "H4", "H1"}
+                }
+                _lower_results: dict[str, tuple[list | None, dict | None]] = {}
+                for _tf in _live_entry_tfs:
+                    _lower_results[_tf] = _fetch_ab_crypto_signal_candles(
+                        r, pair, _tf, _lim[_tf]
+                    )
                 raw_candles = {
                     "D1": _d1_res,
                     "H4": (None if _crypto_bybit_signal_feed else _im_h4) or _h4_res,
                     "H1": _h1_res,
+                    **{tf: result[0] for tf, result in _lower_results.items()},
                 }
                 preloaded_market_state = {}
                 preloaded_candles_for_a = dict(raw_candles)
@@ -1947,7 +1989,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             get_tf_market_state,
                         )
 
-                        for _tf in ("D1", "H4", "H1"):
+                        for _tf in ("D1", "H4", "H1", *sorted(_live_entry_tfs)):
                             _raw = raw_candles.get(_tf) or []
                             _state = get_tf_market_state(
                                 pair,
@@ -1955,7 +1997,10 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                 candles=_raw,
                             )
                             preloaded_market_state[_tf] = _state
-                            preloaded_candles_for_a[_tf] = list(_state.get("confirmed") or [])
+                            _active = list(_state.get("confirmed") or [])
+                            if _tf in _live_entry_tfs and _state.get("forming"):
+                                _active.append(_state["forming"])
+                            preloaded_candles_for_a[_tf] = _active
                             _confirmed = list(_state.get("confirmed") or [])
                             _last_confirmed = _confirmed[-1] if _confirmed else None
                             _last_raw = (_raw or [])[-1] if (_raw or []) else None
@@ -1980,6 +2025,10 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     "D1": _d1_meta or get_candle_fetch_meta(pair, "D1", _lim["D1"]),
                     "H4": _h4_meta or get_candle_fetch_meta(pair, "H4", _lim["H4"]),
                     "H1": _h1_meta or get_candle_fetch_meta(pair, "H1", _lim["H1"]),
+                    **{
+                        tf: meta or get_candle_fetch_meta(pair, tf, _lim[tf])
+                        for tf, (_, meta) in _lower_results.items()
+                    },
                 }
                 rate_limited_tfs = [
                     tf
@@ -2116,11 +2165,35 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                         "entry_price": None,
                     }
                     _pair_score_group = get_pair_score_group(pair)
-                    resolved_style_b, style_profile_b = r.naked_scan_style_profile(
-                        _pair_style,
-                        score_group=_pair_score_group,
-                        asset_type=ptype,
-                    )
+                    try:
+                        resolved_style_b, style_profile_b = r.naked_scan_style_profile(
+                            _pair_style,
+                            score_group=_pair_score_group,
+                            asset_type=ptype,
+                            live_entry_tf=True,
+                            source=pair.get("source"),
+                        )
+                    except TypeError as _profile_type_err:
+                        if not any(
+                            name in str(_profile_type_err)
+                            for name in ("live_entry_tf", "source")
+                        ):
+                            raise
+                        resolved_style_b, style_profile_b = r.naked_scan_style_profile(
+                            _pair_style,
+                            score_group=_pair_score_group,
+                            asset_type=ptype,
+                        )
+                        _compat_trigger_tf = resolve_live_engine_b_trigger_tf(
+                            ptype,
+                            resolved_style_b,
+                            source=pair.get("source"),
+                        )
+                        if _compat_trigger_tf:
+                            style_profile_b = {
+                                **style_profile_b,
+                                "entry_tf": _compat_trigger_tf,
+                            }
 
                     d1 = raw_candles.get("D1")
                     h4 = raw_candles.get("H4")
@@ -2253,6 +2326,27 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
                     sig_a["engine_b_evaluated"] = True
                     _tf_map_b = {"D1": d1 or [], "H4": h4 or [], "H1": h1 or []}
+                    for _tf in _live_entry_tfs:
+                        _state = preloaded_market_state.get(_tf)
+                        if not isinstance(_state, dict):
+                            try:
+                                from athena_app.services.market_state import (
+                                    market_state_offset_hours,
+                                    split_market_state,
+                                )
+
+                                _state = split_market_state(
+                                    list(raw_candles.get(_tf) or []),
+                                    _tf,
+                                    pair.get("display") or pair.get("symbol") or "",
+                                    offset_hours=market_state_offset_hours(pair, _tf),
+                                )
+                            except Exception:
+                                _state = {}
+                        _active = list((_state or {}).get("confirmed") or [])
+                        if (_state or {}).get("forming"):
+                            _active.append(_state["forming"])
+                        _tf_map_b[_tf] = _active
                     _zone_tf_b = str(style_profile_b.get("zone_tf", "H4")).upper()
                     _entry_tf_b = str(style_profile_b.get("entry_tf", "H1")).upper()
                     _atr_tf_b = str(style_profile_b.get("atr_tf", "H4")).upper()
@@ -2269,6 +2363,11 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                             pair, d1, h4, h1,
                             score_group=_pair_score_group,
                             style=resolved_style_b,
+                            active_entry_tfs={
+                                _entry_tf_b: entry_candles_b
+                            }
+                            if _entry_tf_b not in {"D1", "H4", "H1"}
+                            else None,
                         )
                         if _stale_b_tfs:
                             _fresh_reason = "STALE_DATA_ENGINE_B:" + ",".join(_stale_b_tfs)
@@ -2408,6 +2507,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                         asset_type=ptype,
                                         d1_snap=_sc_d1_snap,
                                         h4_snap=_sc_h4_snap,
+                                        role_candles=_tf_map_b,
                                     )
                                 )
                                 if _b_dir in ("LONG", "SHORT"):
@@ -2441,6 +2541,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                         h4_snap=_sc_h4_snap,
                                         style=resolved_style_b,
                                         pair=pair,
+                                        **engine_b_live_trigger_kwargs(
+                                            style_profile_b, _tf_map_b
+                                        ),
                                     )
                                 _eb_funnel_extras["structure_executed"] = True
 
@@ -2498,6 +2601,9 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                                                 h4_snap=_sc_h4_snap,
                                                 style=resolved_style_b,
                                                 pair=pair,
+                                                **engine_b_live_trigger_kwargs(
+                                                    style_profile_b, _tf_map_b
+                                                ),
                                             )
                                             if alt_res_b.get("structural_verdict") == "CLEAR":
                                                 alt_conf_b = _engine_b.calculate_confidence(

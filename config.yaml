@@ -43,6 +43,8 @@ D1_CANDLES: 1001
 H4_CANDLES: 1001
 
 H1_CANDLES: 1001
+M30_CANDLES: 500  # Active Engine A forex intraday entry/setup bars.
+M15_CANDLES: 500  # Active Engine B forex intraday trigger bars.
 
 # EODHD bulk last-day URL uses /eod-bulk-last-day/{EXCH}; some suffixes (COMM) are not supported → HTTP 404.
 # Those pairs still receive D1 via normal EOD candle fetch; CandleBuilder bulk refresh skips them only.
@@ -66,6 +68,7 @@ BACKTEST_MAX_WORKERS: 10      # Parallel workers for backtesting (Engine A & B).
 BACKTEST_LOOKBACK_DAYS: 365   # Calendar days of history for Engine A/B/C backtests (was hardcoded 730).
 BT_VECTORIZED: true           # Speed path: exact-window indicator caching for Engine A/B backtests (parity-safe target).
 BACKTEST_DATA_AS_OF: null     # Optional YYYY-MM-DD frozen dataset manifest. Null = normal live/cache-backed backtest data.
+ENGINE_A_STRUCTURAL_SHADOW_ENABLED: false  # Research-only attachment; never executable.
 ENGINE_B_FAST_FVG_DETECTION: true
 
 SCAN_TIMEOUT_SEC: 45          # Per-pair scan timeout in seconds (faster fail for stalled pairs)
@@ -1013,6 +1016,9 @@ ENGINE_A_REVERSAL_PENDING_ENABLED: true
 ENGINE_A_REVERSAL_PENDING_MIN_TF: 2
 ENGINE_A_SCORING_PROFILE:
   ENABLED: true
+  # Live entry timing only. D1/H4/H1 trend layers and backtest routing remain unchanged.
+  LIVE_ENTRY_TF_BY_STYLE:
+    intraday: { forex: M30 }
   DEFAULT_BY_CLASS:
     default:
       trend_layers:
@@ -2103,6 +2109,7 @@ ATR_FRESHNESS:
     M1: 180
     M5: 600
     M15: 1800
+    M30: 3600
     H1: 7200
     H4: 18000
     D1: 172800
@@ -3454,6 +3461,10 @@ ENGINE_B_RESEARCH_LAB_FACTORS:
 
 NAKED_ENGINE:
 
+  # Live trigger timing only. Intraday structure/zones remain H4.
+  LIVE_TRIGGER_TF_BY_STYLE:
+    intraday: { forex: M15 }
+
   # 2026-07-02 audit: aligned to the effective value. engine_b_config.yaml
   # (crypto_aggtrade.alignment_bonus) merges last and was already 0.5; the 1.0
   # here was dead. Keep the two files in sync when tuning.
@@ -3934,6 +3945,13 @@ LOWER_TF_SHADOW:
 # false = disable the structure_ok gate in live calculate_confidence() (same as BT experiment).
 # Live scan, AI review, and execution all consume this key.
 ENGINE_B_STRUCTURE_GATE_ENABLED: true
+# Diagnostic-only: retarget Engine B trigger detection onto style_profile.entry_tf
+# (H1/M15/M30) when true. Default false — production trigger stays matrix H1.
+# Does not change struct/zone TFs. Experiment harness bypasses this flag.
+ENGINE_B_DIAGNOSTIC_TRIGGER_TF_ENABLED: false
+# Diagnostic-only: retarget Engine A V3 entry TF onto H1/M15/M30 when true.
+# Default false — production entry stays H1/H4/D1. Experiment harness bypasses.
+ENGINE_A_DIAGNOSTIC_ENTRY_TF_ENABLED: false
 # When true, Engine A full-scan *trade* tier requires Engine B confirmation (enginesAligned).
 # Default false: Engine A and B are independent on scan; use Engine C for combined verdict.
 ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED: false

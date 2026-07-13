@@ -1317,7 +1317,7 @@ ACTIVE_PAIRS = [p for p in ALL_PAIRS if p.get("enabled", True)]
 
 _load_toggle_state()
 
-TF_B = {"D1": "1d", "H4": "4h", "H1": "1h", "M15": "15m", "M5": "5m", "M1": "1m"}
+TF_B = {"D1": "1d", "H4": "4h", "H1": "1h", "M30": "30m", "M15": "15m", "M5": "5m", "M1": "1m"}
 
 _YF_INTRADAY_PERIOD = "180d"
 
@@ -1677,6 +1677,9 @@ def _attach_engine_a_v3_atr_provenance(
     d1: list | None,
     h4: list | None,
     h1: list | None,
+    *,
+    entry_tf: str | None = None,
+    entry_candles: list | None = None,
 ) -> dict:
     """Wire Engine A V3 level ATR provenance onto scan/review signal payloads."""
     from atr_diagnostics import attach_engine_a_v3_atr_provenance
@@ -1688,6 +1691,8 @@ def _attach_engine_a_v3_atr_provenance(
         d1,
         h4,
         h1,
+        entry_tf=entry_tf,
+        entry_candles=entry_candles,
         config=CONFIG if isinstance(CONFIG, dict) else {},
         bybit_atr_and_candles_fn=_bybit_atr_and_candles_for_levels,
     )
@@ -6708,6 +6713,9 @@ def _naked_scan_style_profile(
     style: str | None,
     score_group: str | None = None,
     asset_type: str | None = None,
+    *,
+    live_entry_tf: bool = False,
+    source: str | None = None,
 ) -> tuple[str, dict]:
     resolved = _normalize_style(style)
     if resolved == "auto":
@@ -6771,6 +6779,17 @@ def _naked_scan_style_profile(
             style_override = group_overrides.get(resolved, {})
             if isinstance(style_override, dict):
                 resolved_profile = {**resolved_profile, **style_override}
+
+    if live_entry_tf:
+        from market_structure import resolve_live_engine_b_trigger_tf
+
+        _live_trigger_tf = resolve_live_engine_b_trigger_tf(
+            _tf_asset,
+            resolved,
+            source=source,
+        )
+        if _live_trigger_tf:
+            resolved_profile["entry_tf"] = _live_trigger_tf
 
     resolved_profile["style"] = resolved
     if score_group:
@@ -7003,6 +7022,36 @@ def _compute_naked_analysis(
             _requested_style_naked,
             score_group=_pair_score_group,
             asset_type=pair_obj.get("type", ""),
+            live_entry_tf=True,
+            source=pair_obj.get("source"),
+        )
+        _entry_tf = str(style_profile.get("entry_tf", "H1")).upper()
+        _lower_entry_state = None
+        if _entry_tf not in {"D1", "H4", "H1"}:
+            if pair_obj.get("source") == "mt5":
+                _lower_entry_state = _engine_b_live_market_state(
+                    pair_obj, _entry_tf, _clim[_entry_tf]
+                )
+            else:
+                from athena_app.services.market_state import (
+                    market_state_offset_hours,
+                    split_market_state,
+                )
+
+                _lower_raw, _ = _fetch_ab_crypto_signal_candles(
+                    pair_obj, _entry_tf, _clim[_entry_tf]
+                )
+                _lower_entry_state = split_market_state(
+                    list(_lower_raw or []),
+                    _entry_tf,
+                    pair_obj.get("display") or pair_obj.get("symbol") or "",
+                    offset_hours=market_state_offset_hours(pair_obj, _entry_tf),
+                )
+        _lower_structure = _market_state_series(
+            _lower_entry_state, include_forming=False
+        )
+        _lower_trigger = _market_state_series(
+            _lower_entry_state, include_forming=_use_forming_trigger
         )
 
         # A3: Pre-score freshness gate — fail closed on stale D1/H4/H1 like the
@@ -7017,6 +7066,9 @@ def _compute_naked_analysis(
             pair_obj, d1, h4, h1,
             score_group=_pair_score_group,
             style=resolved_style,
+            active_entry_tfs={_entry_tf: _lower_trigger}
+            if _entry_tf not in {"D1", "H4", "H1"}
+            else None,
         )
         if _stale_tfs:
             _fresh_reason = "STALE_DATA_ENGINE_B:" + ",".join(_stale_tfs)
@@ -7027,10 +7079,19 @@ def _compute_naked_analysis(
             )
             return None, pair_obj, _fresh_reason
         _zone_tf = str(style_profile.get("zone_tf", "H4")).upper()
-        _entry_tf = str(style_profile.get("entry_tf", "H1")).upper()
         _atr_tf = str(style_profile.get("atr_tf", "H4")).upper()
-        _tf_map = {"D1": d1, "H4": h4, "H1": h1}
-        _trigger_tf_map = {"D1": d1, "H4": h4_trigger, "H1": h1_trigger}
+        _tf_map = {
+            "D1": d1,
+            "H4": h4,
+            "H1": h1,
+            **({_entry_tf: _lower_structure} if _lower_entry_state else {}),
+        }
+        _trigger_tf_map = {
+            "D1": d1,
+            "H4": h4_trigger,
+            "H1": h1_trigger,
+            **({_entry_tf: _lower_trigger} if _lower_entry_state else {}),
+        }
         zone_candles = _tf_map.get(_zone_tf, h4)
         structure_entry_candles = _tf_map.get(_entry_tf, h1)
         trigger_candles = _trigger_tf_map.get(_entry_tf, structure_entry_candles)
@@ -7074,18 +7135,24 @@ def _compute_naked_analysis(
             f"[NAKED-AI] {pair_obj.get('display')}: ATR tf={_atr_tf} series length={len(atr_series) if atr_series else 0}, final_ATR={atr}"
         )
 
-        from athena_app.services.engine_b_market_state import engine_b_gate_current_price
+        from athena_app.services.engine_b_market_state import fresh_live_gate_quote
+
+        try:
+            with _live_prices_lock:
+                _naked_live_prices = dict(_live_prices)
+            current_price, _naked_quote_diag = fresh_live_gate_quote(
+                pair_obj,
+                _naked_live_prices,
+                CONFIG,
+            )
+        except ValueError as _quote_err:
+            return None, pair_obj, f"Engine B live quote unavailable: {_quote_err}"
 
         if not atr or atr <= 0:
             if execution_mode:
                 return None, pair_obj, "Engine B execution ATR unavailable"
             log.warning(
                 f"[NAKED-AI] {pair_obj.get('display')}: Failed ATR calc - series={atr_series}, using fallback ATR"
-            )
-            current_price = engine_b_gate_current_price(
-                explicit_price=sig.get("price"),
-                structure_entry_candles=structure_entry_candles,
-                trigger_entry_candles=trigger_candles,
             )
             _atr_pct = {
                 "forex": 0.002,
@@ -7099,12 +7166,6 @@ def _compute_naked_analysis(
             log.info(
                 f"[NAKED-AI] {pair_obj.get('display')}: Using fallback ATR={atr} (type={pair_obj.get('type')})"
             )
-
-        current_price = engine_b_gate_current_price(
-            explicit_price=sig.get("price"),
-            structure_entry_candles=structure_entry_candles,
-            trigger_entry_candles=trigger_candles,
-        )
 
         from market_structure import (
             NakedEngine,
@@ -7222,6 +7283,9 @@ def _compute_naked_analysis(
         res["checklist_passed"] = bool(conf.get("passed"))
         res["passed"] = bool(_gate_ok)
         res["current_price"] = current_price
+        res["quoteAgeSec"] = _naked_quote_diag["ageSec"]
+        res["quoteTimestamp"] = _naked_quote_diag["timestamp"]
+        res["priceSource"] = "fresh_live_quote"
         res["direction"] = direction
         res["direction_source"] = _direction_source
         res["style"] = resolved_style
@@ -7445,6 +7509,8 @@ def api_compare_engines():
         requested_style,
         score_group=_pair_score_group,
         asset_type=pair_obj.get("type", ""),
+        live_entry_tf=True,
+        source=pair_obj.get("source"),
     )
 
     try:
@@ -7569,7 +7635,11 @@ def api_scan_naked():
     results = []
     _best_per_pair = {}
 
-    from market_structure import NakedEngine, engine_b_confidence_passes
+    from market_structure import (
+        NakedEngine,
+        engine_b_confidence_passes,
+        engine_b_live_trigger_kwargs,
+    )
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -7684,6 +7754,8 @@ def api_scan_naked():
                 requested_style,
                 score_group=_pair_score_group,
                 asset_type=pair.get("type", ""),
+                live_entry_tf=True,
+                source=pair.get("source"),
             )
             debug_row["style"] = resolved_style
 
@@ -7806,6 +7878,9 @@ def api_scan_naked():
                 _tf_map.get("H1", []),
                 score_group=_pair_score_group,
                 style=resolved_style,
+                active_entry_tfs={_entry_tf: entry_candles}
+                if str(_entry_tf).upper() not in {"D1", "H4", "H1"}
+                else None,
             )
             if _stale_tfs_b:
                 debug_row["final_reject_reason"] = "freshness_gate"
@@ -8008,6 +8083,7 @@ def api_scan_naked():
                     h4_snap=_eb_h4_snap,
                     style=resolved_style,
                     pair=pair,
+                    **engine_b_live_trigger_kwargs(style_profile, _tf_trigger_map),
                 )
 
                 verdict = res.get("structural_verdict", "NONE")
@@ -14083,8 +14159,14 @@ def analyze_pair(
 
     pair_profile = get_pair_profile(pair)
     from engine_a_v3.routing import route_specialist
+    from engine_a_v3.timeframes import resolve_live_v3_entry_timeframe
 
     _score_group = route_specialist(pair).score_group
+    _v3_live_entry_tf = resolve_live_v3_entry_timeframe(
+        pair.get("type", ""),
+        style,
+        source=pair.get("source"),
+    )
     _pair_ctx = dict(pair or {})
     _pair_ctx["score_group"] = _score_group
 
@@ -14223,7 +14305,45 @@ def analyze_pair(
             preloaded_fetch_meta["H4"] = _h4_sig_meta
         h4 = _engine_a_confirmed_candles("H4", h4)
 
-    if not d1 or not h4 or not h1:
+    _v3_entry_state = preloaded_market_state.get(_v3_live_entry_tf) if _v3_live_entry_tf else None
+    _v3_entry_candles: list = []
+    if _v3_live_entry_tf:
+        _v3_entry_raw = preloaded_candles.get(_v3_live_entry_tf)
+        if not isinstance(_v3_entry_state, dict):
+            if _v3_entry_raw is None:
+                _v3_entry_raw, _v3_entry_meta = _fetch_ab_crypto_signal_candles(
+                    pair,
+                    _v3_live_entry_tf,
+                    _lim[_v3_live_entry_tf],
+                    engine="A",
+                )
+                if _v3_entry_meta:
+                    preloaded_fetch_meta[_v3_live_entry_tf] = _v3_entry_meta
+            try:
+                from athena_app.services.market_state import (
+                    market_state_offset_hours,
+                    split_market_state,
+                )
+
+                _v3_entry_state = split_market_state(
+                    list(_v3_entry_raw or []),
+                    _v3_live_entry_tf,
+                    pair.get("display") or pair.get("symbol") or "",
+                    offset_hours=market_state_offset_hours(pair, _v3_live_entry_tf),
+                )
+            except Exception as _entry_split_err:
+                _mark_confirmed_split_failed(_v3_live_entry_tf, str(_entry_split_err))
+                _v3_entry_state = {}
+        _v3_entry_candles = list((_v3_entry_state or {}).get("confirmed") or [])
+        if (_v3_entry_state or {}).get("forming"):
+            _v3_entry_candles.append(_v3_entry_state["forming"])
+        is_forming = bool(is_forming or (_v3_entry_state or {}).get("is_live"))
+
+    _v3_candles = {"D1": d1, "H4": h4, "H1": h1}
+    if _v3_live_entry_tf:
+        _v3_candles[_v3_live_entry_tf] = _v3_entry_candles
+
+    if not d1 or not h4 or not h1 or (_v3_live_entry_tf and not _v3_entry_candles):
         log.warning(
             f"[ANALYZE] {pair.get('display', '?')} no candles - "
             f"D1={len(d1) if d1 else 0} H4={len(h4) if h4 else 0} H1={len(h1) if h1 else 0}"
@@ -14252,9 +14372,10 @@ def analyze_pair(
         return _attach_v3_intermarket_confirmation(
             evaluate_engine_a_v3(
                 pair,
-                {"D1": list(d1 or []), "H4": list(h4 or []), "H1": list(h1 or [])},
+                _v3_candles,
                 horizon=style,
                 blocked_reasons=("required_confirmed_candles_missing",),
+                entry_tf_override=_v3_live_entry_tf,
             ).to_dict(),
             pair,
             intermarket_snapshot=intermarket_snapshot,
@@ -14267,7 +14388,9 @@ def analyze_pair(
     # TF is stale. This prevents wasted CPU and false signal log entries from
     # scoring on stale data that would be blocked at execution time anyway.
     _freshness_diag = {}
-    _v3_freshness_required = bool(CONFIG.get("PRE_SCORING_FRESHNESS_GATE_ENABLED", True))
+    _v3_freshness_required = bool(_v3_live_entry_tf) or bool(
+        CONFIG.get("PRE_SCORING_FRESHNESS_GATE_ENABLED", True)
+    )
     if _v3_freshness_required:
         try:
             from athena_app.services.data_freshness import (
@@ -14285,7 +14408,10 @@ def analyze_pair(
             _is_forex_stock = _pair_type in ("forex", "stock", "index", "commodity", "etf", "etf_bond")
             _allow_confirmed_only_stale_1 = pre_scoring_allows_confirmed_only_stale_1(pair)
 
-            for _tf, _candles in (("D1", d1), ("H4", h4), ("H1", h1)):
+            _freshness_series = [("D1", d1), ("H4", h4), ("H1", h1)]
+            if _v3_live_entry_tf:
+                _freshness_series.append((_v3_live_entry_tf, _v3_entry_candles))
+            for _tf, _candles in _freshness_series:
                 _diag = candle_freshness_diagnostic(
                     pair, _tf, _candles,
                     source=pair.get("source"),
@@ -14299,6 +14425,12 @@ def analyze_pair(
                     continue
                 _sev = _diag.get("stalenessSeverity", "")
                 if not _sev or _sev == "fresh":
+                    continue
+
+                # Lower-TF entry scoring includes the active bucket. Never
+                # accept stale_1 here or scoring would fall back to the prior close.
+                if _tf == _v3_live_entry_tf:
+                    _stale_tfs.append(f"{_tf}:{_sev}")
                     continue
 
                 # Confirmed-only Engine A scoring: stale_1_bucket is expected
@@ -14394,9 +14526,10 @@ def analyze_pair(
 
                 _blocked = evaluate_engine_a_v3(
                     pair,
-                    {"D1": d1, "H4": h4, "H1": h1},
+                    _v3_candles,
                     horizon=style,
                     blocked_reasons=(_reason,),
+                    entry_tf_override=_v3_live_entry_tf,
                 ).to_dict()
                 _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
                 _blocked["candleFetchMeta"] = {
@@ -14424,9 +14557,10 @@ def analyze_pair(
 
             _blocked = evaluate_engine_a_v3(
                 pair,
-                {"D1": d1, "H4": h4, "H1": h1},
+                _v3_candles,
                 horizon=style,
                 blocked_reasons=("FRESHNESS_VALIDATION_ERROR",),
+                entry_tf_override=_v3_live_entry_tf,
             ).to_dict()
             _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
             _blocked["is_forming"] = is_forming
@@ -14458,9 +14592,10 @@ def analyze_pair(
         log.warning("[ANALYZE] %s %s", pair.get("display", "?"), _reason)
         _blocked = evaluate_engine_a_v3(
             pair,
-            {"D1": d1, "H4": h4, "H1": h1},
+            _v3_candles,
             horizon=style,
             blocked_reasons=(_reason,),
+            entry_tf_override=_v3_live_entry_tf,
         ).to_dict()
         _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
         _blocked["quoteFreshness"] = {
@@ -14483,7 +14618,11 @@ def analyze_pair(
         try:
             from duka_volume import get_forex_vr as _get_forex_vr
 
-            _v3_vr = _get_forex_vr(pair.get("display", ""), tf="H1", lookback=20)
+            _v3_vr = _get_forex_vr(
+                pair.get("display", ""),
+                tf=_v3_live_entry_tf or "H1",
+                lookback=20,
+            )
         except Exception:
             _v3_vr = None
     _v3_micro = resolve_live_microstructure_metrics(pair, runtime_cache=_micro_cache)
@@ -14496,10 +14635,14 @@ def analyze_pair(
 
     _v3_signal = evaluate_engine_a_v3(
         pair,
-        {"D1": d1, "H4": h4, "H1": h1},
+        _v3_candles,
         horizon=style,
         context=_v3_ctx,
         current_price=_engine_a_live_price,
+        entry_tf_override=_v3_live_entry_tf,
+        entry_candle_is_forming=bool(
+            _v3_live_entry_tf and (_v3_entry_state or {}).get("forming")
+        ),
     ).to_dict()
     _v3_signal["quoteAgeSec"] = _engine_a_quote_diag["ageSec"]
     _v3_signal["quoteTimestamp"] = _engine_a_quote_diag["timestamp"]
@@ -14510,10 +14653,27 @@ def analyze_pair(
         "D1": preloaded_fetch_meta.get("D1") or _freshness_diag.get("D1"),
         "H4": preloaded_fetch_meta.get("H4") or _freshness_diag.get("H4"),
         "H1": preloaded_fetch_meta.get("H1") or _freshness_diag.get("H1"),
+        **(
+            {
+                _v3_live_entry_tf: preloaded_fetch_meta.get(_v3_live_entry_tf)
+                or _freshness_diag.get(_v3_live_entry_tf)
+            }
+            if _v3_live_entry_tf
+            else {}
+        ),
         "pairSource": pair.get("source"),
     }
     _v3_signal["is_forming"] = is_forming
-    _attach_engine_a_v3_atr_provenance(_v3_signal, pair, style, d1, h4, h1)
+    _attach_engine_a_v3_atr_provenance(
+        _v3_signal,
+        pair,
+        style,
+        d1,
+        h4,
+        h1,
+        entry_tf=_v3_live_entry_tf,
+        entry_candles=_v3_entry_candles,
+    )
     if CONFIG.get("ENGINE_A_V3_SHADOW_JOURNAL_ENABLED", False):
         try:
             from engine_a_v3.shadow_journal import record_shadow_entry
@@ -14521,6 +14681,17 @@ def analyze_pair(
             record_shadow_entry(pair, {"D1": d1, "H4": h4, "H1": h1}, _v3_signal)
         except Exception:
             pass
+    # Post-result research attachment: it cannot affect Engine A fields or any
+    # downstream execution path.  Failures are diagnostic-only and fail closed.
+    if CONFIG.get("ENGINE_A_STRUCTURAL_SHADOW_ENABLED", False):
+        try:
+            from athena_research.engine_a_structural_shadow.model import attach_shadow, evaluate as _structural_shadow
+
+            _shadow = _structural_shadow({"D1": d1, "H4": h4, "H1": h1})
+            _v3_signal = attach_shadow(_v3_signal, _shadow)
+            log.info("[EA_STRUCTURAL_SHADOW] %s base=%s shadow=%s selected=%s", pair.get("display", "?"), _v3_signal.get("direction"), _shadow.get("direction"), _shadow.get("selected"))
+        except Exception as _structural_shadow_exc:
+            log.debug("[EA_STRUCTURAL_SHADOW] attachment skipped: %s", _structural_shadow_exc)
     return _attach_v3_intermarket_confirmation(
         _v3_signal,
         pair,

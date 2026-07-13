@@ -45,7 +45,11 @@ from execution_lifecycle import _demo_broker_execution_requested, run_managed_ex
 from factor_scoring import make_regime_smoothing_context
 from indicators import calc_atr, calc_indicators_with_normalized
 from intermarket import build_scan_snapshot
-from market_structure import NakedEngine, engine_b_confidence_passes
+from market_structure import (
+    NakedEngine,
+    engine_b_confidence_passes,
+    engine_b_live_trigger_kwargs,
+)
 from guardian import pre_trade_check as _guardian_pre_trade
 from scoring import get_pair_score_group
 from exit_mode_apply import apply_engine_a_exit_mode
@@ -2026,15 +2030,48 @@ def api_engine_c_scan():
                 _r.normalize_style(requested_style), pair
             )
 
-            resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
-                requested_style,
-                score_group=_pair_score_group,
-                asset_type=ptype,
-            )
+            try:
+                resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
+                    requested_style,
+                    score_group=_pair_score_group,
+                    asset_type=ptype,
+                    live_entry_tf=True,
+                    source=pair.get("source"),
+                )
+            except TypeError as _profile_type_err:
+                if not any(
+                    name in str(_profile_type_err)
+                    for name in ("live_entry_tf", "source")
+                ):
+                    raise
+                resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
+                    requested_style,
+                    score_group=_pair_score_group,
+                    asset_type=ptype,
+                )
+                from market_structure import resolve_live_engine_b_trigger_tf
+
+                _compat_trigger_tf = resolve_live_engine_b_trigger_tf(
+                    ptype,
+                    resolved_style_b,
+                    source=pair.get("source"),
+                )
+                if _compat_trigger_tf:
+                    style_profile_b = {
+                        **style_profile_b,
+                        "entry_tf": _compat_trigger_tf,
+                    }
 
             _zone_tf = str(style_profile_b.get("zone_tf", "H4")).upper()
             _entry_tf = str(style_profile_b.get("entry_tf", "H1")).upper()
             _atr_tf = str(style_profile_b.get("atr_tf", _zone_tf)).upper()
+            from engine_a_v3.timeframes import resolve_live_v3_entry_timeframe
+
+            _a_entry_tf = resolve_live_v3_entry_timeframe(
+                ptype,
+                engine_a_style,
+                source=pair.get("source"),
+            )
             _lim = _scan_limits
             _im_h4 = (
                 ((intermarket_snapshot or {}).get("seriesStore", {}) or {})
@@ -2073,6 +2110,15 @@ def api_engine_c_scan():
                 "H4": _h4_meta or get_candle_fetch_meta(pair, "H4", _lim["H4"]),
                 "H1": _h1_meta or get_candle_fetch_meta(pair, "H1", _lim["H1"]),
             }
+            _live_lower_tfs = {
+                tf
+                for tf in (_a_entry_tf, _entry_tf)
+                if tf and tf not in {"D1", "H4", "H1"}
+            }
+            for tf in _live_lower_tfs:
+                raw, meta = _fetch_engine_c_signal_candles(_r, pair, tf, _lim[tf])
+                raw_candles[tf] = raw
+                fetch_meta[tf] = meta or get_candle_fetch_meta(pair, tf, _lim[tf])
             rate_limited_tfs = [
                 tf
                 for tf, meta in fetch_meta.items()
@@ -2093,19 +2139,40 @@ def api_engine_c_scan():
 
             # Fetch candles ONCE — Engine A uses analyze_pair (confirmed inside);
             # Engine B uses bucket-aware confirmed series (scanner parity).
-            _all_tfs_needed = {"D1", "H4", "H1", _zone_tf, _entry_tf, _atr_tf}
+            _all_tfs_needed = {
+                "D1", "H4", "H1", _zone_tf, _entry_tf, _atr_tf, _a_entry_tf
+            } - {None}
             from athena_app.services.engine_b_market_state import (
                 engine_b_confirmed_candles_from_raw,
             )
 
             _tf_map: dict[str, list] = {}
+            _lower_state_map: dict[str, dict] = {}
             for tf in _all_tfs_needed:
                 if tf in raw_candles:
                     raw = raw_candles.get(tf) or []
                 else:
                     limit = _lim.get(tf, _lim.get("H4", 0))
                     raw, _ = _fetch_engine_c_signal_candles(_r, pair, tf, limit)
-                _tf_map[tf] = engine_b_confirmed_candles_from_raw(pair, tf, raw)
+                if tf in _live_lower_tfs:
+                    from athena_app.services.market_state import (
+                        market_state_offset_hours,
+                        split_market_state,
+                    )
+
+                    state = split_market_state(
+                        list(raw or []),
+                        tf,
+                        pair.get("display") or pair.get("symbol") or "",
+                        offset_hours=market_state_offset_hours(pair, tf),
+                    )
+                    _lower_state_map[tf] = state
+                    active = list(state.get("confirmed") or [])
+                    if state.get("forming"):
+                        active.append(state["forming"])
+                    _tf_map[tf] = active
+                else:
+                    _tf_map[tf] = engine_b_confirmed_candles_from_raw(pair, tf, raw)
             d1 = _tf_map.get("D1", [])
             h4 = _tf_map.get("H4", [])
             h1 = _tf_map.get("H1", [])
@@ -2120,6 +2187,7 @@ def api_engine_c_scan():
                 style=engine_a_style,
                 regime_context=_regime_context,
                 preloaded_candles=raw_candles,
+                preloaded_market_state=_lower_state_map,
                 preloaded_fetch_meta=fetch_meta,
                 intermarket_snapshot=intermarket_snapshot,
             )
@@ -2149,7 +2217,40 @@ def api_engine_c_scan():
                     detail=f"{_zone_tf}={len(zone_candles)}, {_entry_tf}={len(entry_candles)}",
                 )
 
-            current_price = float(sig_a.get("price") or entry_candles[-1]["close"])
+            if _entry_tf in _live_lower_tfs:
+                from athena_app.services.market_state import candle_freshness_diagnostic
+
+                _entry_fresh = candle_freshness_diagnostic(
+                    pair,
+                    _entry_tf,
+                    entry_candles,
+                    source=pair.get("source"),
+                )
+                if str(_entry_fresh.get("stalenessSeverity") or "missing") != "fresh":
+                    return "skip", _engine_c_skip_entry(
+                        display,
+                        "Stale entry candles",
+                        code="stale_entry_tf",
+                        detail=f"{_entry_tf}:{_entry_fresh.get('stalenessSeverity') or 'missing'}",
+                    )
+
+            from athena_app.services.engine_b_market_state import engine_b_live_gate_quote
+
+            try:
+                with _r.live_prices_lock:
+                    _live_prices = dict(_r.live_prices)
+                current_price, _live_quote_diag = engine_b_live_gate_quote(
+                    pair,
+                    _live_prices,
+                    _r.CONFIG,
+                )
+            except (AttributeError, ValueError) as _quote_err:
+                return "skip", _engine_c_skip_entry(
+                    display,
+                    "Fresh live quote unavailable",
+                    code="live_quote_freshness_gate",
+                    detail=str(_quote_err),
+                )
             atr, atr_source = _engine_b_atr_for_scan_levels(
                 sig_a,
                 atr_candles,
@@ -2214,6 +2315,7 @@ def api_engine_c_scan():
                     h4_snap=_ec_h4_snap,
                     style=resolved_style_b,
                     pair=pair,
+                    **engine_b_live_trigger_kwargs(style_profile_b, _tf_map),
                 )
                 if res_b.get("structural_verdict") == "CLEAR":
                     conf_b = engine_b.calculate_confidence(

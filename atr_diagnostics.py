@@ -105,6 +105,8 @@ def build_engine_a_diagnostics(
     d1_candles: list | None,
     h4_candles: list | None,
     h1_candles: list | None,
+    extra_candles_by_tf: dict[str, list] | None = None,
+    atr_confirmed_only: bool = True,
 ) -> dict[str, Any]:
     """Build the Engine A ``atrDiagnostics`` block from the inputs that
     produced ``atr_value``.
@@ -114,6 +116,10 @@ def build_engine_a_diagnostics(
         "H4": h4_candles,
         "H1": h1_candles,
     }
+    if isinstance(extra_candles_by_tf, dict):
+        series_by_tf.update(
+            {str(tf).upper(): rows for tf, rows in extra_candles_by_tf.items()}
+        )
     candles_for_tf = (
         series_by_tf.get(str(atr_tf or "").upper()) if atr_tf else None
     )
@@ -128,7 +134,7 @@ def build_engine_a_diagnostics(
         "atr_source_engine": "engine_a",
         "atr_candle_last_ts": iso,
         "atr_age_seconds": round(float(age), 3) if age is not None else None,
-        "atr_confirmed_only": True,
+        "atr_confirmed_only": bool(atr_confirmed_only),
     }
 
 
@@ -211,6 +217,7 @@ DEFAULT_MAX_AGE_SECONDS: dict[str, float] = {
     "M1": 180.0,
     "M5": 600.0,
     "M15": 1800.0,
+    "M30": 3600.0,
     "H1": 7200.0,
     "H4": 18000.0,
     "D1": 172800.0,
@@ -369,6 +376,8 @@ def resolve_engine_a_v3_level_atr(
     h4: list | None,
     h1: list | None,
     *,
+    entry_tf: str | None = None,
+    entry_candles: list | None = None,
     config: dict | None,
     bybit_atr_and_candles_fn=None,
 ) -> tuple[float | None, str | None, str | None, list | None]:
@@ -380,8 +389,11 @@ def resolve_engine_a_v3_level_atr(
     """
     from engine_a_v3.setups import atr_for_levels
 
-    primary_tf = _engine_a_v3_primary_tf(style)
-    primary = h1 if primary_tf == "H1" else h4
+    primary_tf = str(entry_tf or _engine_a_v3_primary_tf(style)).upper()
+    if entry_tf:
+        primary = entry_candles
+    else:
+        primary = h1 if primary_tf == "H1" else h4
     signal_atr: float | None = None
     if primary:
         try:
@@ -433,6 +445,8 @@ def attach_engine_a_v3_atr_provenance(
     h4: list | None,
     h1: list | None,
     *,
+    entry_tf: str | None = None,
+    entry_candles: list | None = None,
     config: dict | None = None,
     bybit_atr_and_candles_fn=None,
 ) -> dict:
@@ -449,6 +463,8 @@ def attach_engine_a_v3_atr_provenance(
         d1,
         h4,
         h1,
+        entry_tf=entry_tf,
+        entry_candles=entry_candles,
         config=config,
         bybit_atr_and_candles_fn=bybit_atr_and_candles_fn,
     )
@@ -466,6 +482,10 @@ def attach_engine_a_v3_atr_provenance(
         d1_candles=d1_series,
         h4_candles=h4_series,
         h1_candles=h1_series,
+        extra_candles_by_tf={entry_tf: entry_candles}
+        if entry_tf and entry_candles
+        else None,
+        atr_confirmed_only=not bool(entry_tf),
     )
     signal["atrDiagnostics"] = diag
     cfg = config or {}

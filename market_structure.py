@@ -508,19 +508,97 @@ def resolve_engine_b_tfs(asset_type: str, style: str) -> dict:
     }
 
 
+def resolve_live_engine_b_trigger_tf(
+    asset_type: str,
+    style: str,
+    *,
+    source: str | None = None,
+) -> str | None:
+    """Return the configured live trigger TF, independent of structure roles."""
+    try:
+        by_style = (config.CONFIG.get("NAKED_ENGINE") or {}).get(
+            "LIVE_TRIGGER_TF_BY_STYLE"
+        ) or {}
+        by_type = by_style.get(str(style or "").strip().lower()) or {}
+        raw = by_type.get(str(asset_type or "").strip().lower())
+    except Exception:
+        raw = None
+    tf = str(raw or "").strip().upper()
+    if tf not in _DIAGNOSTIC_TRIGGER_TFS:
+        return None
+    if str(asset_type or "").lower() == "forex" and str(source or "").lower() != "mt5":
+        return None
+    return tf
+
+
 def engine_b_candles_for_tf(
     tf: str,
     d1_candles: list,
     h4_candles: list,
     h1_candles: list,
+    extra_by_tf: dict[str, list] | None = None,
 ) -> list:
-    """Return the canonical D1/H4/H1 candle series for a role timeframe."""
+    """Return the candle series for a role timeframe.
+
+    Production path uses canonical D1/H4/H1 slots. Optional ``extra_by_tf``
+    supplies lower TFs (M15/M30/…) for diagnostic trigger overrides. When
+    ``extra_by_tf`` is provided and the key is absent or empty, returns []
+    (fail closed — never silently substitute H1 for a requested lower TF).
+    When ``extra_by_tf`` is None, unknown TFs fall back to H1 (legacy).
+    """
     key = str(tf or "").upper()
     if key == "D1":
         return d1_candles or []
     if key == "H4":
         return h4_candles or []
+    if key == "H1":
+        return h1_candles or []
+    if isinstance(extra_by_tf, dict):
+        if key not in extra_by_tf:
+            return []
+        series = extra_by_tf.get(key)
+        return list(series) if series else []
     return h1_candles or []
+
+
+_DIAGNOSTIC_TRIGGER_TFS = frozenset({"H1", "M15", "M30"})
+
+
+def engine_b_diagnostic_trigger_kwargs(
+    style_profile: dict | None,
+    role_candles: dict[str, list] | None,
+    *,
+    enabled: bool | None = None,
+) -> dict:
+    """Build analyze_structure kwargs for diagnostic trigger-TF override.
+
+    Default-off via ``ENGINE_B_DIAGNOSTIC_TRIGGER_TF_ENABLED``. When enabled and
+    ``style_profile.entry_tf`` is H1/M15/M30, returns ``role_candles`` +
+    ``trigger_tf_override`` so trigger detection runs on that series.
+    """
+    if enabled is None:
+        enabled = bool(config.CONFIG.get("ENGINE_B_DIAGNOSTIC_TRIGGER_TF_ENABLED", False))
+    if not enabled:
+        return {}
+    entry_tf = str((style_profile or {}).get("entry_tf") or "").strip().upper()
+    if entry_tf not in _DIAGNOSTIC_TRIGGER_TFS:
+        return {}
+    return {
+        "role_candles": role_candles if isinstance(role_candles, dict) else None,
+        "trigger_tf_override": entry_tf,
+    }
+
+
+def engine_b_live_trigger_kwargs(
+    style_profile: dict | None,
+    role_candles: dict[str, list] | None,
+) -> dict:
+    """Build fail-closed trigger kwargs for an explicitly live style profile."""
+    return engine_b_diagnostic_trigger_kwargs(
+        style_profile,
+        role_candles,
+        enabled=True,
+    )
 
 
 def resolve_engine_b_h4_snap(
@@ -4176,6 +4254,8 @@ class NakedEngine:
         trade_bucket_reference_ts=None,
         trade_bucket_require_fresh: bool = True,
         trade_bucket_historical_mode: bool = False,
+        role_candles: dict[str, list] | None = None,
+        trigger_tf_override: str | None = None,
     ) -> dict:
         """Precompute all direction-independent structure analysis data.
 
@@ -4185,13 +4265,17 @@ class NakedEngine:
 
         Backward-compatible: the original ``analyze_structure()`` calls this
         internally.
+
+        Diagnostic kwargs (default None — production path unchanged):
+          * ``role_candles`` — optional map of TF → candle series (e.g. M15/M30)
+          * ``trigger_tf_override`` — force trigger pattern detection onto that TF
         """
         if not d1_candles or not h4_candles or not h1_candles or atr <= 0:
             return {"_error": "Missing data or valid ATR"}
 
         registry_symbol = self._consume_registry_symbol() if enable_zone_registry else None
 
-        _tfs = resolve_engine_b_tfs(asset_type, style)
+        _tfs = dict(resolve_engine_b_tfs(asset_type, style))
         structure_tf = _tfs["struct"]
         if structure_tf == "D1":
             struct_candles = d1_candles
@@ -4227,12 +4311,35 @@ class NakedEngine:
                 "_error": _strip_reason or "struct_candles_empty",
                 "forming_strip_diagnostics": forming_strip_diag,
             }
-        trigger_candles = engine_b_candles_for_tf(
-            _tfs["trigger"], d1_candles, h4_candles, h1_candles
-        )
+
+        _override_tf = str(trigger_tf_override or "").strip().upper() or None
+        _extras = role_candles if isinstance(role_candles, dict) else None
+        if _override_tf:
+            # Fail closed: never silently substitute H1 for a requested lower TF.
+            if _override_tf in ("D1", "H4", "H1"):
+                trigger_candles = engine_b_candles_for_tf(
+                    _override_tf, d1_candles, h4_candles, h1_candles
+                )
+            else:
+                trigger_candles = engine_b_candles_for_tf(
+                    _override_tf,
+                    d1_candles,
+                    h4_candles,
+                    h1_candles,
+                    extra_by_tf=_extras if _extras is not None else {},
+                )
+            _tfs["trigger"] = _override_tf
+        else:
+            trigger_candles = engine_b_candles_for_tf(
+                _tfs["trigger"],
+                d1_candles,
+                h4_candles,
+                h1_candles,
+                extra_by_tf=_extras,
+            )
         _zone_tf = str(_tfs.get("zone") or structure_tf or "H4").upper()
         _zone_fvg_candles = engine_b_candles_for_tf(
-            _zone_tf, d1_candles, h4_candles, h1_candles
+            _zone_tf, d1_candles, h4_candles, h1_candles, extra_by_tf=_extras
         )
 
         h4_highs = np.array([float(c["high"]) for c in h4_candles])
@@ -4243,6 +4350,10 @@ class NakedEngine:
         struct_closes = np.array([float(c["close"]) for c in struct_candles])
         struct_atr = self._compute_atr_from_candles(struct_candles, fallback=atr)
         zone_atr = self._compute_atr_from_candles(_zone_fvg_candles, fallback=atr)
+        # Trigger-local ATR scales candle-body/wick and follow-through checks on
+        # the same lower timeframe. It never replaces the style ATR used for
+        # structural zones, SL/TP, RR, or room gates.
+        trigger_atr = self._compute_atr_from_candles(trigger_candles, fallback=atr)
         _score_group = (
             (pair or {}).get("score_group")
             or (pair or {}).get("group")
@@ -4493,6 +4604,7 @@ class NakedEngine:
             "_tfs": _tfs,
             "_structure_tf": structure_tf,
             "_trigger_candles": trigger_candles,
+            "_trigger_tf_override": _override_tf,
             "_struct_candles": struct_candles,
             "_score_group": _score_group,
             "asset_type": asset_type,
@@ -4500,6 +4612,7 @@ class NakedEngine:
             "d1_atr": d1_atr,
             "struct_atr": struct_atr,
             "zone_atr": zone_atr,
+            "trigger_atr": trigger_atr,
             "struct_highs": struct_highs,
             "struct_lows": struct_lows,
             "struct_closes": struct_closes,
@@ -4579,6 +4692,7 @@ class NakedEngine:
         d1_atr = precompute["d1_atr"]
         struct_atr = precompute["struct_atr"]
         zone_atr = precompute["zone_atr"]
+        trigger_atr = precompute.get("trigger_atr") or atr
         res_zones = precompute["res_zones"]
         sup_zones = precompute["sup_zones"]
         active_fvgs = precompute["active_fvgs"]
@@ -4792,7 +4906,7 @@ class NakedEngine:
                         _ob_at_zone = True
                         break
         trigger_ctx = self._price_action_trigger(
-            trigger_candles, direction, atr,
+            trigger_candles, direction, trigger_atr,
             zone_ctx["zone_touched"] or zone_ctx["near_zone"],
             bos_confirmed,
             is_trending=(
@@ -4908,6 +5022,8 @@ class NakedEngine:
             "d1_atr": d1_atr,
             "struct_atr": struct_atr,
             "zone_atr": zone_atr,
+            "trigger_atr": trigger_atr,
+            "trigger_atr_tf": tfs["trigger"],
             "bos_confirmed": bos_confirmed,
             "bos_mtf_confirmed": bos_mtf_confirmed,
             "bos_volume_confirmed": bos_data.get("bos_volume_confirmed", False),
@@ -4997,6 +5113,8 @@ class NakedEngine:
         trade_bucket_reference_ts=None,
         trade_bucket_require_fresh: bool = True,
         trade_bucket_historical_mode: bool = False,
+        role_candles: dict[str, list] | None = None,
+        trigger_tf_override: str | None = None,
     ) -> dict:
         """
         Analyzes raw candle data to find Support/Resistance zones and trend sequence.
@@ -5019,6 +5137,8 @@ class NakedEngine:
             trade_bucket_reference_ts=trade_bucket_reference_ts,
             trade_bucket_require_fresh=trade_bucket_require_fresh,
             trade_bucket_historical_mode=trade_bucket_historical_mode,
+            role_candles=role_candles,
+            trigger_tf_override=trigger_tf_override,
         )
         return self.analyze_structure_direction(pre, current_price, direction)
 
@@ -5107,6 +5227,10 @@ class NakedEngine:
         except (TypeError, ValueError):
             atr = 0.0
         atr_val = atr if atr > 0 else 0.0001
+        try:
+            trigger_atr_val = float(res.get("trigger_atr") or atr_val)
+        except (TypeError, ValueError):
+            trigger_atr_val = atr_val
         h1_seq = res.get("current_swing_sequence", "")
         h4_seq = res.get("macro_swing_sequence", "")
         profile = style_profile if isinstance(style_profile, dict) else {}
@@ -5122,6 +5246,13 @@ class NakedEngine:
         checklist_mode = str(profile.get("checklist_mode", "flexible")).lower()
         allow_breakout_entry = bool(
             profile.get("allow_breakout_entry", not require_macro_align)
+        )
+        expected_trigger_tf = str(profile.get("entry_tf") or "").upper()
+        actual_trigger_tf = str(res.get("trigger_timeframe") or "").upper()
+        trigger_timeframe_gate_required = expected_trigger_tf in {"M15", "M30"}
+        trigger_timeframe_gate_ok = (
+            not trigger_timeframe_gate_required
+            or actual_trigger_tf == expected_trigger_tf
         )
 
         micro_aligned = (direction == "LONG" and h1_seq == "HH_HL") or (
@@ -5275,7 +5406,7 @@ class NakedEngine:
 
         macro_ok = macro_aligned or not require_macro_align
         zone_ok = bool(res.get("zone_touched") or res.get("near_active_zone"))
-        trigger_ok = bool(res.get("trigger_ok"))
+        trigger_ok = bool(res.get("trigger_ok")) and trigger_timeframe_gate_ok
         breakout_ok = bool(res.get("bos_confirmed")) and bool(
             res.get("strong_close")
             or res.get("inside_break_candle")
@@ -5452,7 +5583,7 @@ class NakedEngine:
             direction=direction,
             entry_candles=entry_candles,
             current_price=current_price,
-            atr_val=atr_val,
+            atr_val=trigger_atr_val,
             profile=profile,
         )
         research_entry_ok = bool(research_lab_detail.get("entry_ok"))
@@ -5460,7 +5591,7 @@ class NakedEngine:
         if research_location_ok and not location_ok:
             location_ok = True
             location_mode = "research_lab"
-        if research_entry_ok and not trigger_ok:
+        if trigger_timeframe_gate_ok and research_entry_ok and not trigger_ok:
             trigger_ok = True
 
         # entry_ok: trigger OR breakout-with-volume OR sweep-at-zone OR choch-at-zone.
@@ -5473,7 +5604,7 @@ class NakedEngine:
             or (breakout_ok and bool(res.get("bos_volume_confirmed", False)))
             or (bool(res.get("liquidity_sweep")) and zone_ok)
             or (bool(res.get("choch_confirmed")) and zone_ok)
-        )
+        ) and trigger_timeframe_gate_ok
         # Follow-through trap: when ENABLED, a suspected liquidity trap blocks entry_ok.
         _ft_cfg_early = config.CONFIG.get("ENGINE_B_FOLLOW_THROUGH", {}) or {}
         _ft_block_entry = bool(_ft_cfg_early.get("ENABLED", False)) and bool(
@@ -5495,7 +5626,7 @@ class NakedEngine:
                 _ft_early = _breakout_follow_through(
                     _ft_series_early,
                     direction,
-                    atr_val,
+                    trigger_atr_val,
                     breakout_bar_index=_ft_idx_early,
                 )
                 if float(_ft_early.get("score") or 0.0) < 0.0:
@@ -5685,7 +5816,7 @@ class NakedEngine:
             _ft_idx = _find_breakout_bar_index(_ft_series, direction, _ft_level)
             if _ft_idx is not None:
                 _ft_result = _breakout_follow_through(
-                    _ft_series, direction, atr_val, breakout_bar_index=_ft_idx
+                    _ft_series, direction, trigger_atr_val, breakout_bar_index=_ft_idx
                 )
                 _ft_result["breakout_bar_index"] = _ft_idx
             else:
@@ -5946,6 +6077,10 @@ class NakedEngine:
             failed_gate_names.append("loc")
         if not entry_ok:
             failed_gate_names.append("trigger")
+        if not trigger_timeframe_gate_ok:
+            failed_gate_names.append(
+                f"trigger_tf={actual_trigger_tf or 'missing'}(expected={expected_trigger_tf})"
+            )
         if not space_gate_ok:
             failed_gate_names.append("space")
         if not rr_ok:
@@ -6035,6 +6170,8 @@ class NakedEngine:
                 _hard_fail_reasons.append("engine_b_structural_verdict_not_clear")
             if _aggtrade_hard_required and not _aggtrade_available:
                 _hard_fail_reasons.append("engine_b_aggtrade_required_false")
+            if not trigger_timeframe_gate_ok:
+                _hard_fail_reasons.append("engine_b_trigger_timeframe_false")
             _hard_fail_reasons = sorted(set(_hard_fail_reasons))
 
         _conf_result = {
@@ -6181,6 +6318,10 @@ class NakedEngine:
             else None,
             "trigger_passed": trigger_ok,
             "trigger_timeframe": res.get("trigger_timeframe"),
+            "trigger_timeframe_gate_required": trigger_timeframe_gate_required,
+            "trigger_timeframe_gate_ok": trigger_timeframe_gate_ok,
+            "trigger_timeframe_expected": expected_trigger_tf or None,
+            "trigger_timeframe_actual": actual_trigger_tf or None,
             "trigger_type": res.get("trigger_pattern", "NONE"),
             "failed_gate_names": failed_gate_names,
             "hard_fail_reasons": _hard_fail_reasons,

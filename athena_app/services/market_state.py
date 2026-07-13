@@ -44,6 +44,7 @@ def get_bucket_start_epoch(tf: str, ts_s: float, offset_hours: float = 0.0) -> i
     Standard offsets:
     M5: 300s
     M15: 900s
+    M30: 1800s
     H1: 3600s
     H4: 14400s
     D1: 86400s
@@ -52,6 +53,7 @@ def get_bucket_start_epoch(tf: str, ts_s: float, offset_hours: float = 0.0) -> i
         "M1": 60,
         "M5": 300,
         "M15": 900,
+        "M30": 1800,
         "H1": 3600,
         "H4": 14400,
         "D1": 86400
@@ -68,6 +70,7 @@ def _timeframe_seconds(tf: str) -> int:
         "M1": 60,
         "M5": 300,
         "M15": 900,
+        "M30": 1800,
         "H1": 3600,
         "H4": 14400,
         "D1": 86400,

@@ -25,7 +25,10 @@ from engine_a_v3.profile import baseline_profile
 from engine_a_v3.routing import route_specialist
 from engine_a_v3.session_scoring import session_score_passes
 from engine_a_v3.setups import SetupCandidate, detect_setup
-from engine_a_v3.timeframes import resolve_v3_entry_timeframe
+from engine_a_v3.timeframes import (
+    resolve_diagnostic_v3_entry_timeframe,
+    resolve_v3_entry_timeframe,
+)
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -220,15 +223,23 @@ def evaluate_engine_a_v3(
     context: Mapping[str, Any] | None = None,
     snapshot_cache: dict | None = None,
     current_price: float | None = None,
+    entry_tf_override: str | None = None,
+    entry_candle_is_forming: bool = False,
 ) -> EngineASetupSignal:
     route = route_specialist(pair)
     normalized_horizon = _horizon(horizon)
-    primary_tf = resolve_v3_entry_timeframe(
-        route.score_group,
-        str(pair.get("type") or pair.get("asset_type") or "other"),
-        normalized_horizon or "intraday",
-    )
-    primary = candles.get(primary_tf, []) if normalized_horizon else []
+    diagnostic_override = resolve_diagnostic_v3_entry_timeframe(entry_tf_override)
+    if entry_tf_override is not None and diagnostic_override is None:
+        primary_tf = None
+    elif diagnostic_override is not None:
+        primary_tf = diagnostic_override
+    else:
+        primary_tf = resolve_v3_entry_timeframe(
+            route.score_group,
+            str(pair.get("type") or pair.get("asset_type") or "other"),
+            normalized_horizon or "intraday",
+        )
+    primary = candles.get(primary_tf, []) if normalized_horizon and primary_tf else []
     last_ts_raw = (
         (primary[-1].get("time") or primary[-1].get("datetime"))
         if primary and isinstance(primary[-1], dict)
@@ -236,11 +247,50 @@ def evaluate_engine_a_v3(
     )
     decision_time = _parse_time(last_ts_raw) or datetime(1970, 1, 1, tzinfo=timezone.utc)
     last_ts = decision_time.isoformat() if last_ts_raw is not None else None
+    last_confirmed_ts = last_ts
+    if entry_candle_is_forming and len(primary) >= 2 and isinstance(primary[-2], dict):
+        _confirmed_raw = primary[-2].get("time") or primary[-2].get("datetime")
+        _confirmed_dt = _parse_time(_confirmed_raw)
+        last_confirmed_ts = _confirmed_dt.isoformat() if _confirmed_dt else None
     display = str(pair.get("display") or pair.get("pair") or pair.get("symbol") or "")
     symbol = str(pair.get("symbol") or display)
     asset_type = str(pair.get("type") or pair.get("asset_type") or "other")
 
     valid_candles, candle_reasons = _validate_candles(candles)
+    if diagnostic_override is not None:
+        if not primary:
+            candle_reasons = candle_reasons + ("missing_entry_candles",)
+            valid_candles = False
+        elif len(primary) < 50:
+            candle_reasons = candle_reasons + ("entry_history_insufficient",)
+            valid_candles = False
+        else:
+            _entry_prev_ts = None
+            for _entry_bar in primary:
+                try:
+                    _o = float(_entry_bar["open"])
+                    _h = float(_entry_bar["high"])
+                    _l = float(_entry_bar["low"])
+                    _c = float(_entry_bar["close"])
+                    _entry_ts = _parse_time(
+                        _entry_bar.get("time") or _entry_bar.get("datetime")
+                    )
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    _entry_ts = None
+                    _o = _h = _l = _c = float("nan")
+                if (
+                    not all(math.isfinite(v) for v in (_o, _h, _l, _c))
+                    or min(_o, _h, _l, _c) <= 0
+                    or _h < max(_o, _c)
+                    or _l > min(_o, _c)
+                    or _h < _l
+                    or _entry_ts is None
+                    or (_entry_prev_ts is not None and _entry_ts <= _entry_prev_ts)
+                ):
+                    candle_reasons = candle_reasons + ("entry_candles_invalid",)
+                    valid_candles = False
+                    break
+                _entry_prev_ts = _entry_ts
     if normalized_horizon is None:
         candle_reasons = ("unsupported_horizon",) + candle_reasons
     if primary_tf is None:
@@ -278,7 +328,7 @@ def evaluate_engine_a_v3(
             qualified=False,
             direction=None,
             decisionTime=decision_time.isoformat(),
-            lastConfirmedCandleTs=last_ts,
+            lastConfirmedCandleTs=last_confirmed_ts,
             validUntil=_expiry(
                 decision_time, normalized_horizon or "intraday", primary_tf
             ).isoformat(),
@@ -295,8 +345,8 @@ def evaluate_engine_a_v3(
             rejectionReasons=rejection_reasons,
             dataFreshness=DataFreshness(
                 allowed=False,
-                policy="confirmed_only",
-                lastConfirmedCandleTs=last_ts,
+                policy="active_entry_confirmed_structure" if entry_candle_is_forming else "confirmed_only",
+                lastConfirmedCandleTs=last_confirmed_ts,
                 reason=rejection_reasons[0] if rejection_reasons else "invalid_data",
             ),
             validationArtifact=None,
@@ -313,7 +363,15 @@ def evaluate_engine_a_v3(
         symbol=symbol,
     )
     profile = promotion.profile or baseline_profile(route.score_group, normalized_horizon)
-    quant = score_pair(route, normalized_horizon, candles, context=context, profile=profile, snapshot_cache=snapshot_cache)
+    quant = score_pair(
+        route,
+        normalized_horizon,
+        candles,
+        context=context,
+        profile=profile,
+        snapshot_cache=snapshot_cache,
+        entry_tf_override=diagnostic_override,
+    )
 
     # ── Setup overlay: use already-implemented specialists for every family
     # (forex: breakout/retest/pullback/london_open/mean_reversion; crypto:
@@ -332,6 +390,7 @@ def evaluate_engine_a_v3(
             candles,
             display=display,
             indicator_periods=dict(profile.indicator_periods),
+            entry_tf_override=diagnostic_override,
         )
         setup_diagnostics = {
             "setupId": setup.setup_id,
@@ -536,10 +595,30 @@ def evaluate_engine_a_v3(
     elif (quant.factor_diagnostics or {}).get("cryptoDerivBlocked"):
         rejection_reasons.append("crypto_derivatives_conflict")
 
+    # A live lower-TF entry is only executable when its active bucket was
+    # explicitly supplied.  Without this guard, a caller could route M15/M30
+    # through the evaluator as though its last candle were closed and promote a
+    # setup that is already one bar late.  Higher-TF structure remains
+    # confirmed-only; this is an entry-timing gate only.
+    active_entry_gate_required = diagnostic_override in {"M15", "M30"}
+    active_entry_gate_ok = (
+        not active_entry_gate_required or bool(entry_candle_is_forming)
+    )
+    if decision == "TRADE" and not active_entry_gate_ok:
+        decision = "WATCH"
+        rejection_reasons.append("active_entry_candle_required")
+        setup_diagnostics["activeEntryGateBlocked"] = True
+
     # Recompute after late demotions (blocked trend / equity volume / crypto deriv).
     qualified = decision == "TRADE" and promotion_execution_allowed and levels is not None
 
     factor_diagnostics = dict(quant.factor_diagnostics or {})
+    factor_diagnostics["entryUsesActiveCandle"] = bool(entry_candle_is_forming)
+    factor_diagnostics["activeEntryGate"] = {
+        "required": active_entry_gate_required,
+        "passed": active_entry_gate_ok,
+        "timeframe": diagnostic_override,
+    }
     factor_diagnostics["setupOverlay"] = setup_diagnostics
     factor_diagnostics["promotion"] = {
         "qualified": bool(promotion.qualified),
@@ -560,7 +639,7 @@ def evaluate_engine_a_v3(
         "decision": decision,
         "direction": direction,
         "score": quant.confluence_score,
-        "lastConfirmedCandleTs": last_ts,
+        "lastConfirmedCandleTs": last_confirmed_ts,
         "artifactId": promotion.artifact.artifactId if promotion.artifact else None,
         "entry": executable_levels.price if executable_levels else None,
     }
@@ -582,7 +661,7 @@ def evaluate_engine_a_v3(
         qualified=qualified,
         direction=direction,
         decisionTime=decision_time.isoformat(),
-        lastConfirmedCandleTs=last_ts,
+        lastConfirmedCandleTs=last_confirmed_ts,
         validUntil=_expiry(decision_time, normalized_horizon, primary_tf).isoformat(),
         entryZone=executable_levels.entry_zone if executable_levels else None,
         invalidation=executable_levels.invalidation if executable_levels else None,
@@ -600,10 +679,16 @@ def evaluate_engine_a_v3(
             else tuple(rejection_reasons)
         ),
         dataFreshness=DataFreshness(
-            allowed=True,
-            policy="confirmed_only",
-            lastConfirmedCandleTs=last_ts,
-            reason="confirmed_candles_valid",
+            allowed=active_entry_gate_ok,
+            policy="active_entry_confirmed_structure" if entry_candle_is_forming else "confirmed_only",
+            lastConfirmedCandleTs=last_confirmed_ts,
+            reason=(
+                "active_entry_candle_required"
+                if not active_entry_gate_ok
+                else "active_entry_and_confirmed_structure_valid"
+                if entry_candle_is_forming
+                else "confirmed_candles_valid"
+            ),
         ),
         validationArtifact=promotion.artifact,
         validationStatus=validation_status,
