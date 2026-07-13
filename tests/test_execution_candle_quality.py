@@ -192,6 +192,64 @@ def test_hydrate_nonempty_fetch_repairs_poison_staleness(monkeypatch) -> None:
         assert tf in sig.get("candleFreshness", {}), sig.get("candleFreshness")
 
 
+def test_hydrate_recomputes_stored_atr_freshness_with_current_policy(monkeypatch) -> None:
+    """A scan-time ATR verdict must not survive a fresh execution-time hydrate."""
+    import execution
+
+    now = datetime.now(timezone.utc)
+
+    def _series(seconds: int, n: int) -> list[dict]:
+        base = int(now.timestamp()) - n * seconds
+        return [
+            {"time": base + i * seconds, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0}
+            for i in range(n)
+        ]
+
+    buckets = {"H1": _series(3600, 60), "H4": _series(14400, 60), "D1": _series(86400, 120)}
+
+    def _fake_fetch(_pair: dict, tf: str, lim: int):
+        return buckets[tf][-lim:]
+
+    mock_r = MagicMock()
+    mock_r.CONFIG = {
+        "EXECUTION_HYDRATE_CANDLE_QUALITY": True,
+        "QUICK_EXEC_PREFETCH_CANDLE_META": False,
+        "CANDLE_FRESHNESS_ENABLED": True,
+        "DATA_FRESHNESS_GATES": {"BLOCK_EXECUTION_ON_STALE": False},
+        "ATR_FRESHNESS": {
+            "ENABLED": True,
+            "BLOCK_EXECUTION_ON_STALE_ATR": True,
+            "MAX_AGE_SECONDS": {"H4": 28800},
+        },
+    }
+    mock_r.ALL_PAIRS = [{"display": "EUR/USD", "source": "mt5", "type": "forex"}]
+    mock_r.fetch_candles = _fake_fetch
+    mock_r._fetch_ab_crypto_signal_candles = None
+    mock_r.log = MagicMock()
+    monkeypatch.setattr(execution, "scan_candle_limits", lambda: {"H1": 100, "H4": 100, "D1": 110})
+
+    h4_last_open = (now.timestamp() - 22_394)
+    sig = {
+        "pair": "EUR/USD",
+        "display": "EUR/USD",
+        "atrDiagnostics": {
+            "atr_value": 0.005,
+            "atr_tf": "H4",
+            "atr_source": "mt5",
+            "atr_candle_last_ts": h4_last_open,
+            "atr_age_seconds": 22_394,
+            "atr_confirmed_only": True,
+        },
+        "atrFreshness": {"stale": True, "would_block": True, "reason": "old_scan_verdict"},
+    }
+
+    execution._hydrate_execution_candle_quality(sig, _r=mock_r)
+
+    assert sig["atrFreshness"]["stale"] is False
+    assert sig["atrFreshness"]["would_block"] is False
+    assert sig["atrFreshness"]["reason"] == "fresh"
+
+
 def test_hydrate_reannotates_cache_meta_at_execution_time(monkeypatch) -> None:
     """Fresh candle hydrate must align cache meta bucket with execution time_now."""
     import execution

@@ -2111,7 +2111,9 @@ ATR_FRESHNESS:
     M15: 1800
     M30: 3600
     H1: 7200
-    H4: 18000
+    # Confirmed H4 candles retain their opening timestamp; allow the full
+    # four-hour forming interval before treating the ATR input as stale.
+    H4: 28800
     D1: 172800
 
 

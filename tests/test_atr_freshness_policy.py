@@ -28,8 +28,9 @@ def test_evaluate_freshness_disabled_returns_fresh():
 def test_evaluate_freshness_default_thresholds_h4_stale():
     from atr_diagnostics import evaluate_freshness
 
-    # Default H4 threshold = 18000s. 20000s is stale.
-    diag = {"atr_tf": "H4", "atr_age_seconds": 20000.0, "atr_value": 0.005}
+    # Default H4 threshold = 28800s, covering a confirmed H4 candle's
+    # timestamp through the next four-hour close. 30000s is genuinely stale.
+    diag = {"atr_tf": "H4", "atr_age_seconds": 30000.0, "atr_value": 0.005}
     result = evaluate_freshness(
         diag, enabled=True, block_on_stale=False, max_age_overrides=None
     )

@@ -1005,6 +1005,7 @@ def _hydrate_execution_candle_quality(sig: dict, *, _r) -> None:
     Controlled by CONFIG ``EXECUTION_HYDRATE_CANDLE_QUALITY`` (default True in ``config.py``).
     """
     cfg = getattr(_r, "CONFIG", None) or {}
+    _refresh_atr_freshness_at_execution(sig, cfg)
     if not bool(cfg.get("EXECUTION_HYDRATE_CANDLE_QUALITY", True)):
         _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
         return
@@ -1179,6 +1180,38 @@ def _hydrate_execution_candle_quality(sig: dict, *, _r) -> None:
         except Exception:
             pass
         _maybe_prefetch_execution_candle_fetch_meta(sig, _r=_r)
+
+
+def _refresh_atr_freshness_at_execution(sig: dict, cfg: dict) -> None:
+    """Re-evaluate ATR freshness against execution time and active policy.
+
+    Scan payloads persist ``atrFreshness`` as a point-in-time result.  Risk
+    checks run later, so use the recorded ATR candle timestamp to update its
+    age and evaluate the currently loaded policy immediately before execution.
+    Missing or malformed timestamps become an unknown age, preserving the
+    existing fail-closed behaviour when the ATR gate is enabled.
+    """
+    diagnostics_raw = sig.get("atrDiagnostics")
+    if not isinstance(diagnostics_raw, dict):
+        return
+
+    from atr_diagnostics import derive_candle_age_seconds, evaluate_freshness_from_config
+
+    diagnostics = dict(diagnostics_raw)
+    atr_last_ts = diagnostics.get("atr_candle_last_ts")
+    if atr_last_ts is None:
+        diagnostics["atr_age_seconds"] = None
+    else:
+        _, age = derive_candle_age_seconds([{"time": atr_last_ts}])
+        diagnostics["atr_age_seconds"] = (
+            round(float(age), 3) if age is not None else None
+        )
+
+    sig["atrDiagnostics"] = diagnostics
+    sig["atrFreshness"] = evaluate_freshness_from_config(
+        diagnostics,
+        cfg.get("ATR_FRESHNESS") if isinstance(cfg.get("ATR_FRESHNESS"), dict) else None,
+    )
 
 
 def _sync_engine_b_execution_price(sig: dict, engine_b: dict | None = None) -> None:
