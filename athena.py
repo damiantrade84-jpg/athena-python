@@ -92,6 +92,7 @@ from data_feeds import (  # noqa: E402
     _fetch_bybit_open_interest,
     _fetch_open_interest,
     _calc_oi_divergence,
+    clear_bybit_kline_cache,
 )
 from eodhd_volume_overlay import (  # noqa: E402
     eodhd_commodity_ticker_for_pair as _eodhd_commodity_ticker_for_pair,
@@ -3231,7 +3232,13 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     }
     return _overlay_mt5_candles_with_eodhd_volume(pair, tf, resp)
 
-def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
+def fetch_candles(
+    pair: dict,
+    tf: str,
+    limit: int,
+    *,
+    force_refresh: bool = False,
+) -> list | None:
     """Route candle fetch to correct source with in-memory TTL cache (see candles_cache)."""
     return _fetch_candles_routed(
         pair,
@@ -3246,16 +3253,24 @@ def fetch_candles(pair: dict, tf: str, limit: int) -> list | None:
         fetch_mt5=fetch_mt5,
         yfinance_symbol_for_pair=_yfinance_symbol_for_pair,
         tf_b=TF_B,
+        force_refresh=force_refresh,
     )
 
 
-def _fetch_ab_crypto_signal_candles(pair: dict, tf: str, limit: int, *, engine: str = "AB"):
+def _fetch_ab_crypto_signal_candles(
+    pair: dict,
+    tf: str,
+    limit: int,
+    *,
+    engine: str = "AB",
+    force_refresh: bool = False,
+):
     """Fetch Engine A/B crypto signal candles with optional Bybit source experiment."""
     if (
         str((pair or {}).get("type") or "").lower() != "crypto"
         or _resolve_crypto_signal_feed(engine, CONFIG) == "binance"
     ):
-        return fetch_candles(pair, tf, limit), None
+        return fetch_candles(pair, tf, limit, force_refresh=force_refresh), None
 
     result = _fetch_crypto_signal_candles(
         pair,
@@ -3264,7 +3279,7 @@ def _fetch_ab_crypto_signal_candles(pair: dict, tf: str, limit: int, *, engine: 
         engine=engine,
         config=CONFIG,
         default_fetch=lambda pair_arg, tf_arg, limit_arg: fetch_candles(
-            pair_arg, tf_arg, limit_arg
+            pair_arg, tf_arg, limit_arg, force_refresh=force_refresh
         ),
         bybit_fetch=_fetch_bybit_klines,
         bybit_paginated_fetch=_fetch_bybit_klines_paginated,
@@ -3624,14 +3639,18 @@ _yield_cache = {"data": None, "ts": 0}
 _YIELD_TTL = 3600
 
 
-def fetch_yield_curve():
+def fetch_yield_curve(*, force_refresh: bool = False):
     """Fetch UST yield rates from EODHD. Returns shape, 2Y-10Y spread, and 3M rate for AI risk context."""
 
     global _yield_cache
 
     now = time.time()
 
-    if _yield_cache["data"] and (now - _yield_cache["ts"]) < _YIELD_TTL:
+    if (
+        not force_refresh
+        and _yield_cache["data"]
+        and (now - _yield_cache["ts"]) < _YIELD_TTL
+    ):
         return _yield_cache["data"]
 
     try:
@@ -3732,7 +3751,7 @@ _DIVSPLIT_TTL = 86400  # 24 hours
 _DIV_SPLIT_PAIRS = [p["symbol"] for p in ALL_PAIRS if p.get("type") == "stock"]
 
 
-def fetch_div_split_context():
+def fetch_div_split_context(*, force_refresh: bool = False):
     """Fetch upcoming dividends and splits for stock pairs.
 
     Preserves the existing event-risk semantics, but fetches symbols concurrently so
@@ -3743,7 +3762,11 @@ def fetch_div_split_context():
 
     now = time.time()
 
-    if _divsplit_cache["ts"] > 0 and (now - _divsplit_cache["ts"]) < _DIVSPLIT_TTL:
+    if (
+        not force_refresh
+        and _divsplit_cache["ts"] > 0
+        and (now - _divsplit_cache["ts"]) < _DIVSPLIT_TTL
+    ):
         log.debug(f"[DIVS] Cache hit - age {int(now - _divsplit_cache['ts'])}s")
         return _divsplit_cache["data"]
 
@@ -3901,7 +3924,11 @@ _EARNINGS_TTL = 21600
 _EARNINGS_AVAILABLE = None  # None = untested, True = confirmed working
 
 
-def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
+def fetch_upcoming_earnings_context(
+    pairs: list | None = None,
+    *,
+    force_refresh: bool = False,
+) -> dict:
     """Fetch upcoming earnings for tracked stock pairs via EODHD SDK."""
 
     global _earnings_cache, _EARNINGS_AVAILABLE
@@ -3912,7 +3939,11 @@ def fetch_upcoming_earnings_context(pairs: list | None = None) -> dict:
 
     now = time.time()
 
-    if _earnings_cache["data"] and (now - _earnings_cache["ts"]) < _EARNINGS_TTL:
+    if (
+        not force_refresh
+        and _earnings_cache["data"]
+        and (now - _earnings_cache["ts"]) < _EARNINGS_TTL
+    ):
         return _earnings_cache["data"]
 
     if _EARNINGS_AVAILABLE is False:
@@ -7631,6 +7662,9 @@ def api_scan_naked():
     asset_class = str(d.get("assetClass") or "").strip().lower()
     requested_style = d.get("style", "auto")
     debug_mode = d.get("debug", False)
+    refresh_market_data = bool(d.get("refresh_market_data", False))
+    if refresh_market_data:
+        clear_bybit_kline_cache()
 
     # Optional explicit symbol scope: when provided, scan only these symbols
     # (matched against display or symbol, case/separator-insensitive) instead of
@@ -7851,7 +7885,9 @@ def api_scan_naked():
                     # source=binance pairs), producing structure on a different venue
                     # than the full scan (audit HIGH #5). Non-crypto pairs pass through
                     # unchanged via _fetch_ab_crypto_signal_candles's non-crypto branch.
-                    raw, _crypto_signal_meta_b = _fetch_ab_crypto_signal_candles(pair, tf, limit)
+                    raw, _crypto_signal_meta_b = _fetch_ab_crypto_signal_candles(
+                        pair, tf, limit, force_refresh=refresh_market_data
+                    )
                     if _crypto_signal_meta_b is not None:
                         debug_row.setdefault("crypto_signal_feed_meta", {})[tf] = _crypto_signal_meta_b
                     from athena_app.services.market_state import (
@@ -8708,6 +8744,7 @@ def api_scan_naked():
             "scanFunnel": engine_b_funnel,
             "totalPairs": len(candidate_pairs),
             "activePairs": len(candidate_pairs),
+            "marketDataRefreshed": refresh_market_data,
         }))
 
     global _last_engine_b_scan_results
@@ -8724,6 +8761,7 @@ def api_scan_naked():
         "scanFunnel": engine_b_funnel,
         "totalPairs": len(candidate_pairs),
         "activePairs": len(candidate_pairs),
+        "marketDataRefreshed": refresh_market_data,
     }))
 
 
@@ -14187,6 +14225,7 @@ def analyze_pair(
     preloaded_market_state=None,
     preloaded_fetch_meta=None,
     intermarket_snapshot=None,
+    refresh_market_data: bool = False,
 ):
 
     pair_profile = get_pair_profile(pair)
@@ -14654,6 +14693,7 @@ def analyze_pair(
                 pair.get("display", ""),
                 tf=_v3_live_entry_tf or "H1",
                 lookback=20,
+                force_refresh=refresh_market_data,
             )
         except Exception:
             _v3_vr = None
@@ -16663,6 +16703,7 @@ set_runtime(
         bybit_atr_for_levels=_bybit_atr_for_levels,
         fetch_bybit_klines=_fetch_bybit_klines,
         fetch_bybit_klines_paginated=_fetch_bybit_klines_paginated,
+        clear_bybit_kline_cache=clear_bybit_kline_cache,
         fetch_bybit_ticker=_fetch_bybit_ticker,
         get_pair_level_atr_class=get_pair_level_atr_class,
         calc_levels=calc_levels,

@@ -305,13 +305,27 @@ def _attach_engine_a_execution_freshness(
     return exec_fresh
 
 
-def _fetch_ab_crypto_signal_candles(runtime, pair: dict, tf: str, limit: int):
+def _fetch_ab_crypto_signal_candles(
+    runtime,
+    pair: dict,
+    tf: str,
+    limit: int,
+    *,
+    force_refresh: bool = False,
+):
     """Fetch shared Engine A/B scan candles with optional crypto Bybit experiment."""
+    def _default_fetch(pair_arg: dict, tf_arg: str, limit_arg: int):
+        if force_refresh:
+            return runtime.fetch_candles(
+                pair_arg, tf_arg, limit_arg, force_refresh=True
+            )
+        return runtime.fetch_candles(pair_arg, tf_arg, limit_arg)
+
     if (
         str((pair or {}).get("type") or "").lower() != "crypto"
         or resolve_crypto_signal_feed("AB", CONFIG) == "binance"
     ):
-        return runtime.fetch_candles(pair, tf, limit), None
+        return _default_fetch(pair, tf, limit), None
 
     result = fetch_crypto_signal_candles(
         pair,
@@ -319,16 +333,21 @@ def _fetch_ab_crypto_signal_candles(runtime, pair: dict, tf: str, limit: int):
         limit,
         engine="AB",
         config=CONFIG,
-        default_fetch=lambda pair_arg, tf_arg, limit_arg: runtime.fetch_candles(
-            pair_arg, tf_arg, limit_arg
-        ),
+        default_fetch=_default_fetch,
         bybit_fetch=getattr(runtime, "fetch_bybit_klines", None),
         bybit_paginated_fetch=getattr(runtime, "fetch_bybit_klines_paginated", None),
     )
     return result.candles, result.meta
 
 
-def _fetch_scan_h4_candles(runtime, pair: dict, limit: int, preloaded_h4: list | None):
+def _fetch_scan_h4_candles(
+    runtime,
+    pair: dict,
+    limit: int,
+    preloaded_h4: list | None,
+    *,
+    force_refresh: bool = False,
+):
     """Return H4 scan candles, reusing intermarket preloads when feed policy allows it."""
     crypto_bybit_signal_feed = (
         str((pair or {}).get("type") or "").lower() == "crypto"
@@ -336,7 +355,9 @@ def _fetch_scan_h4_candles(runtime, pair: dict, limit: int, preloaded_h4: list |
     )
     if preloaded_h4 is not None and not crypto_bybit_signal_feed:
         return preloaded_h4, None, crypto_bybit_signal_feed
-    candles, meta = _fetch_ab_crypto_signal_candles(runtime, pair, "H4", limit)
+    candles, meta = _fetch_ab_crypto_signal_candles(
+        runtime, pair, "H4", limit, force_refresh=force_refresh
+    )
     return candles, meta, crypto_bybit_signal_feed
 
 
@@ -1694,9 +1715,16 @@ def annotate_signal_for_scan(
     return signal
 
 
-def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[str, Any]:
+def run_full_scan(
+    style: str = "auto",
+    asset_class: str | None = None,
+    refresh_market_data: bool = False,
+) -> dict[str, Any]:
     """Parallel scan of tracked pairs. Optional asset_class filter."""
     r = rt()
+
+    if refresh_market_data and callable(getattr(r, "clear_bybit_kline_cache", None)):
+        r.clear_bybit_kline_cache()
 
     # REGRESSION CHECK: Print config state at scan startup
     print("\n" + "="*80)
@@ -1844,10 +1872,19 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
 
         log.info("Fetching market context...")
 
-        news_ctx = r.fetch_news_context(candidate_pairs, allow_refresh=False)
+        if refresh_market_data:
+            news_ctx = r.fetch_news_context(
+                candidate_pairs, allow_refresh=True, force_refresh=True
+            )
+        else:
+            news_ctx = r.fetch_news_context(candidate_pairs, allow_refresh=False)
 
         try:
-            yield_ctx = r.fetch_yield_curve()
+            yield_ctx = (
+                r.fetch_yield_curve(force_refresh=True)
+                if refresh_market_data
+                else r.fetch_yield_curve()
+            )
 
             if yield_ctx:
                 news_ctx["yieldCurve"] = yield_ctx
@@ -1856,7 +1893,11 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             log.warning(f"[YIELD] scan fetch err: {e}")
 
         try:
-            ds_ctx = r.fetch_div_split_context()
+            ds_ctx = (
+                r.fetch_div_split_context(force_refresh=True)
+                if refresh_market_data
+                else r.fetch_div_split_context()
+            )
 
             if ds_ctx:
                 news_ctx["divSplit"] = ds_ctx
@@ -1865,7 +1906,11 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             log.warning(f"[DIVS] scan fetch err: {e}")
 
         try:
-            earnings_ctx = r.fetch_upcoming_earnings_context(candidate_pairs)
+            earnings_ctx = (
+                r.fetch_upcoming_earnings_context(candidate_pairs, force_refresh=True)
+                if refresh_market_data
+                else r.fetch_upcoming_earnings_context(candidate_pairs)
+            )
 
             if earnings_ctx:
                 news_ctx["upcomingEarnings"] = earnings_ctx
@@ -1874,8 +1919,13 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             log.warning(f"[EARN] scan fetch err: {e}")
 
         try:
-            btc = r.fetch_candles(
-                {"symbol": "BTCUSDT", "source": "binance"}, "D1", CONFIG["D1_CANDLES"]
+            _btc_pair = {"symbol": "BTCUSDT", "source": "binance"}
+            btc = (
+                r.fetch_candles(
+                    _btc_pair, "D1", CONFIG["D1_CANDLES"], force_refresh=True
+                )
+                if refresh_market_data
+                else r.fetch_candles(_btc_pair, "D1", CONFIG["D1_CANDLES"])
             )
 
             if btc and len(btc) >= 200:
@@ -1906,7 +1956,8 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     # the same provider Engine A scores. Non-crypto / binance-feed
                     # pairs fall through to fetch_candles unchanged.
                     _candles, _ = _fetch_ab_crypto_signal_candles(
-                        r, _pair, "H4", _im_h4_limit
+                        r, _pair, "H4", _im_h4_limit,
+                        force_refresh=refresh_market_data,
                     )
                     if _candles:
                         _im_preloaded_h4[_pair["display"]] = _candles
@@ -1946,13 +1997,13 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                     .get("candles")
                 )
                 _d1_res, _d1_meta = _fetch_ab_crypto_signal_candles(
-                    r, pair, "D1", _lim["D1"]
+                    r, pair, "D1", _lim["D1"], force_refresh=refresh_market_data
                 )
                 _h4_res, _h4_meta, _crypto_bybit_signal_feed = _fetch_scan_h4_candles(
-                    r, pair, _lim["H4"], _im_h4
+                    r, pair, _lim["H4"], _im_h4, force_refresh=refresh_market_data
                 )
                 _h1_res, _h1_meta = _fetch_ab_crypto_signal_candles(
-                    r, pair, "H1", _lim["H1"]
+                    r, pair, "H1", _lim["H1"], force_refresh=refresh_market_data
                 )
                 from engine_a_v3.timeframes import resolve_live_v3_entry_timeframe
                 from market_structure import resolve_live_engine_b_trigger_tf
@@ -1972,7 +2023,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                 _lower_results: dict[str, tuple[list | None, dict | None]] = {}
                 for _tf in _live_entry_tfs:
                     _lower_results[_tf] = _fetch_ab_crypto_signal_candles(
-                        r, pair, _tf, _lim[_tf]
+                        r, pair, _tf, _lim[_tf], force_refresh=refresh_market_data
                     )
                 raw_candles = {
                     "D1": _d1_res,
@@ -2046,15 +2097,20 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
                         "skipCode": "rate_limited",
                         "skipDetail": f"Rate limited on {', '.join(rate_limited_tfs)}",
                     }, None
+                _analyze_kwargs = {
+                    "style": _pair_style,
+                    "regime_context": _regime_context,
+                    "preloaded_candles": preloaded_candles_for_a,
+                    "preloaded_market_state": preloaded_market_state,
+                    "preloaded_fetch_meta": fetch_meta,
+                    "intermarket_snapshot": intermarket_snapshot,
+                }
+                if refresh_market_data:
+                    _analyze_kwargs["refresh_market_data"] = True
                 sig_a = r.analyze_pair(
                     pair,
                     btc_bias,
-                    style=_pair_style,
-                    regime_context=_regime_context,
-                    preloaded_candles=preloaded_candles_for_a,
-                    preloaded_market_state=preloaded_market_state,
-                    preloaded_fetch_meta=fetch_meta,
-                    intermarket_snapshot=intermarket_snapshot,
+                    **_analyze_kwargs,
                 )
 
                 if sig_a:
@@ -3346,6 +3402,7 @@ def run_full_scan(style: str = "auto", asset_class: str | None = None) -> dict[s
             "scanQuantileFloors": quantile_floors,
             "scanQuantileMinSamples": _q_min_n,
             "payloadVersion": "2.0",
+            "marketDataRefreshed": bool(refresh_market_data),
             "contract": {
                 "engineA": "engine_a_v3",
                 "engineB": "naked_structure",

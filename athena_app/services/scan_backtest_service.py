@@ -10,6 +10,7 @@ def handle_scan_request(payload: dict, *, run_full_scan: Callable) -> dict:
     return run_full_scan(
         style=payload.get("style", "auto"),
         asset_class=payload.get("asset_class"),
+        refresh_market_data=bool(payload.get("refresh_market_data", False)),
     )
 
 

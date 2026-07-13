@@ -617,7 +617,7 @@ export default function SignalsPanel() {
   const scanEngineA = useCallback(async () => {
     const ac = assetClass === 'all' ? '' : assetClass;
     try {
-      const result = await postScanA('/api/scan', { asset_class: ac, force: false, style });
+      const result = await postScanA('/api/scan', { asset_class: ac, refresh_market_data: true, style });
       if (!result) return null;
       const tradeSignals = Array.isArray(result.signals) ? result.signals : [];
       const watchlistSignals = Array.isArray(result.watchlist) ? result.watchlist : [];
@@ -649,7 +649,7 @@ export default function SignalsPanel() {
   const scanEngineB = useCallback(async () => {
     const ac = assetClass === 'all' ? '' : assetClass;
     try {
-      const result = await postScanB('/api/scan-naked', { assetClass: ac, style });
+      const result = await postScanB('/api/scan-naked', { assetClass: ac, refresh_market_data: true, style });
       if (!result || !result.signals) return null;
       const pairsScanned = result.totalPairs ?? result.activePairs;
       const funnel = result.scanFunnel as Record<string, number> | undefined;

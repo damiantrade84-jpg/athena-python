@@ -303,7 +303,13 @@ def get_forex_volume_bars(
 # ── Public: get volume ratio (current / SMA) for scoring ─────────────────────
 
 
-def get_forex_vr(display: str, tf: str = "H1", lookback: int = 20) -> float:
+def get_forex_vr(
+    display: str,
+    tf: str = "H1",
+    lookback: int = 20,
+    *,
+    force_refresh: bool = False,
+) -> float:
     """
     Return current volume ratio = latest_bar_volume / SMA(lookback bars).
 
@@ -318,6 +324,10 @@ def get_forex_vr(display: str, tf: str = "H1", lookback: int = 20) -> float:
     Returns:
         float >= 0.0; typical range 0.3–3.0; 1.0 = average volume.
     """
+    if force_refresh:
+        # Manual scans refresh the two most recent trading days before using the
+        # local series. Background scans remain read-only and inexpensive.
+        fetch_and_cache(display, days=60)
     bars = get_forex_volume_bars(display, tf=tf, days=60, blocking_fetch=False)
     if len(bars) < lookback + 1:
         return 1.0

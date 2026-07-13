@@ -554,13 +554,17 @@ def fetch_candles(
     fetch_mt5: Callable[..., Any] = None,
     yfinance_symbol_for_pair: Callable[[dict], str | None] = None,
     tf_b: dict[str, str],
+    force_refresh: bool = False,
 ) -> list | None:
     tf = tf.upper()
     """Route candle fetch to correct source with in-memory TTL cache.
 
     Caches candle lists per (symbol, tf) for non-forex/non-crypto instruments so
     repeated scans within the same bar window reuse data instead of hammering
-    slower REST APIs. Live forex and crypto bypass the TTL cache.
+    slower REST APIs. Live forex and crypto bypass the TTL cache. A caller may
+    opt into ``force_refresh`` for a manual scan; that request bypasses both the
+    in-process TTL cache and the live CandleBuilder short-circuit, while normal
+    background scans retain their rate-limit protection.
 
     TTL: M5=5 min, M15=15 min, H1=55 min, H4=3h55m, D1=23h — expires just before the next bar closes.
     """
@@ -580,6 +584,7 @@ def fetch_candles(
         "cacheHit": False,
         "primary_provider": pair.get("source"),
         "fallback_used": False,
+        "forceRefresh": bool(force_refresh),
     }
     ptype = str(pair.get("type") or "").lower()
     # Must match `candle_freshness_diagnostic` / `market_state_offset_hours` for all TFs.
@@ -592,6 +597,8 @@ def fetch_candles(
     _eodhd_ws_ohlc_types = {"forex", "commodity", "index"}
     # Exclude mt5 completely from CandleBuilder to prevent EODHD WS data overriding MT5 OHLC
     use_candle_builder = (
+        not force_refresh
+        and
         (pair.get("source") not in ("polygon", "mt5") and (tf == "H1" or crypto_live_tf))
     )
     live_candles = None
@@ -712,7 +719,10 @@ def fetch_candles(
         if now - _last_cleanup_time > _CLEANUP_INTERVAL:
             _cleanup_stale_cache(now)
 
-        if bypass_ttl_cache:
+        if force_refresh:
+            _candle_cache.pop(key, None)
+            _candle_fetch_meta.pop(key, None)
+        elif bypass_ttl_cache:
             _candle_cache.pop(key, None)
         else:
             entry = _candle_cache.get(key)
