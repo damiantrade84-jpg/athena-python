@@ -3481,7 +3481,8 @@ ABSOLUTE RULES - VIOLATION = FAILURE:
 STYLE & ASSET AWARENESS RULES:
 Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT.
 - Do NOT judge a Scalp setup by Swing criteria (or vice versa).
-- Risk:Reward (RR): compare RR1/RR2 against `Style min RR (config)` from AI CALIBRATION CONTEXT only. Do NOT invent thresholds (no hardcoded 1.5/2.0/3.0). RR/SL/TP are deterministic engine outputs already gated by Python — treat RR as an informational risk note, NOT a primary grade driver.
+- Timeframes: use actual server fields. Engine A entryTimeframe is the live timing/location/volume input while D1/H4/H1 remain structural trend layers. Engine B zone_tf and trigger_timeframe_actual/entry_tf may differ from the canonical matrix; require trigger_timeframe_gate_ok=true for configured lower-TF triggers and never substitute H1.
+- Risk:Reward (RR): for Engine B scale-out, compare RR1 to Engine B TP1 minimum RR and RR2 / rrUsedForGate to `Style min RR (config)` from AI CALIBRATION CONTEXT only. Do NOT compare RR1 to style min RR when scaleOutActive=true and RR1 passes tp1MinRr with tp1PathClear=true. Do NOT invent thresholds (no hardcoded 1.5/2.0/3.0). RR/SL/TP are deterministic engine outputs already gated by Python — treat RR as an informational risk note, NOT a primary grade driver.
 - Stop Loss (SL) bounds per Asset Type & Style:
   * CRYPTO: SL > 2% is normal for alts; do NOT automatically force quarter sizing for wide SL unless it exceeds MAX_SL_PCT.
   * FOREX: SL% is typically tighter. A wide SL can be an elevated risk if ATR confirms it.
@@ -3504,7 +3505,7 @@ HOW TO ANALYSE - FOLLOW THIS EXACT ORDER:
 Step 1: Read AI CALIBRATION CONTEXT first. Identify the Engine source, Asset Type, and Resolved AI style. Note Style min RR (config). Note whether the dashboard confluence label is Weak, Medium, or Strong. Do not confuse thresholdProgressPct with rawScorePct.
 Step 1B: If Engine source is Engine B naked market structure, use ENGINE B (NAKED MARKET STRUCTURE), ENGINE B SCORING DIAGNOSTICS, LEVELS, and CANDLE DATA FRESHNESS as the primary deterministic setup context. Engine A FACTOR DIAGNOSTICS and Engine A technical indicators may be absent; do not call them weak or bearish unless actual values are supplied.
 Step 1C: If Engine source is Engine C consensus, use ENGINE C CONSENSUS as the primary deterministic setup context. Engine A and Engine B sections are child diagnostics. Do not call the whole setup weak solely because one child diagnostic has missing optional fields; still flag genuine missing levels, stale data, direction conflict, or blocked/watchlist decision_state.
-Step 2: Read FACTOR DIAGNOSTICS. Which directional factors are active? Does direction match? What is the confidence multiplier?
+Step 2: Read FACTOR DIAGNOSTICS. Engine A V3 uses factorScores trend/momentum plus factorScores.ortho location/volume and factorDiagnostics.components. Use contribution/weight/quality exactly as supplied and the actual entryTimeframe. If activeEntryGate.passed=false, timing eligibility failed. For Engine B primary, use structure/location/entry/space/RR gates plus gateScore and qualityComponents.
 Step 3: Check trendCoherence. How many timeframes agree? If coherence_ratio < 0.5, signal is fragmented; 0.5-0.7 mixed; >0.7 aligned.
 Step 4: Read regime. Explain follow-through and chop risk from the data. Do not auto-downgrade purely from regime label.
 Step 5: Read LEVELS — advisory levels review (does NOT override Python gates):
@@ -3514,6 +3515,7 @@ Step 5: Read LEVELS — advisory levels review (does NOT override Python gates):
   d) When verdict is adjust or reject, populate suggestedSL and suggestedTP with cited advisory prices. When accept, leave suggestedSL/suggestedTP null.
   e) Do NOT automatically penalize Crypto for >2% SL.
 Step 6: If ENGINE B data is present, cross-reference structural verdict with factor direction. Agreement = positive; conflict = major red flag. If Final Score is 0.00 but structural_verdict is CLEAR and direction aligns, overlay numeric score is absent — judge by structural_verdict and alignment, NOT the 0.00.
+Step 6B: For Engine B, false structure_ok, location_ok, entry_ok, space_gate_ok, rr_ok, trigger_timeframe_gate_ok, MAX_SL_PCT, or execution_levels_valid is execution-blocking and cannot be overridden. Keep gateScore separate from qualityScore/qualityComponents and derive deterministic percentage from score/max_possible, never gate_pct.
 Step 7: If CONTEXT data is present, use for narrative color ONLY.
 
 GRADING - derive from data, NOT from rawScorePct buckets:
@@ -4762,8 +4764,16 @@ def _build_signal_message(
                     f"available={_comp.get('available')}"
                 )
             lines.append(
-                "  Note: Engine A V3 uses factorScores trend/momentum/location/volume. "
+                "  Note: Engine A V3 uses factorScores trend/momentum and factorScores.ortho location/volume. "
                 "Do not require legacy directionalScore/activeDirectionalFactors unless supplied."
+            )
+        if _fd.get("entryTimeframe") or signal.get("entryTimeframe"):
+            lines.append(
+                "  Engine A entry scoring: "
+                f"timeframe={_fd.get('entryTimeframe') or signal.get('entryTimeframe')} "
+                f"override={_fd.get('entryTfOverride')} "
+                f"uses_active_candle={_fd.get('entryUsesActiveCandle')} "
+                f"active_entry_gate={_fd.get('activeEntryGate')}"
             )
         if signal.get("setupId") or signal.get("setup_id") or signal.get("decision"):
             lines.append(
@@ -4838,6 +4848,19 @@ def _build_signal_message(
         lines.append(f"  Score: {_naked.get('score', 'N/A')} / {_naked.get('max_possible', 'N/A')} ({_naked.get('score_pct', 'N/A')}%)")
         lines.append(f"  Structural Verdict: {_naked.get('structural_verdict', 'N/A')}")
         lines.append(f"  Style: {_naked.get('style', signal.get('style', 'N/A'))} | Min RR: {_naked.get('min_rr', signal.get('min_rr', 'N/A'))}")
+        lines.append(
+            "  Timeframe roles: "
+            f"struct={_naked.get('struct_tf', 'N/A')} "
+            f"zone={_naked.get('zone_tf', 'N/A')} "
+            f"trigger={_naked.get('trigger_timeframe_actual', _naked.get('trigger_timeframe', _naked.get('entry_tf', 'N/A')))} "
+            f"atr={_naked.get('atr_tf', 'N/A')}"
+        )
+        lines.append(
+            "  Trigger TF gate: "
+            f"expected={_naked.get('trigger_timeframe_expected', 'N/A')} "
+            f"actual={_naked.get('trigger_timeframe_actual', _naked.get('trigger_timeframe', 'N/A'))} "
+            f"passed={_naked.get('trigger_timeframe_gate_ok', 'N/A')}"
+        )
         lines.append(f"  RR used for gate: {_naked.get('rr_used_for_gate', _naked.get('execution_rr', _naked.get('rr', 'N/A')))}")
         if _present(_naked.get("d1_adx")) or _present(_naked.get("h4_adx")) or _present(_naked.get("_adx_derived_regime")):
             lines.append(
@@ -4849,11 +4872,20 @@ def _build_signal_message(
             "  Gate flags: "
             f"structure_ok={_naked.get('structure_ok', 'N/A')}, "
             f"location_ok={_naked.get('location_ok', 'N/A')}, "
-            f"trigger_ok={_naked.get('trigger_ok', 'N/A')}, "
+            f"entry_ok={_naked.get('entry_ok', 'N/A')}, "
+            f"trigger_pattern_ok={_naked.get('trigger_ok', 'N/A')}, "
             f"rr_ok={_naked.get('rr_ok', 'N/A')}, "
             f"room_ok={_naked.get('room_ok', 'N/A')}, "
+            f"space_gate_ok={_naked.get('space_gate_ok', 'N/A')}, "
             f"macro_ok={_naked.get('macro_ok', 'N/A')}"
         )
+        if _naked.get("gate_score") is not None or _naked.get("quality_score") is not None:
+            lines.append(
+                "  Score contribution: "
+                f"gates={_naked.get('gate_score')}/{_naked.get('gate_max_possible')} "
+                f"quality={_naked.get('quality_score')}/{_naked.get('quality_max_possible')} "
+                f"components={_naked.get('quality_components')}"
+            )
         lines.append(f"  Room-to-move bonus: {_naked.get('room_to_move_bonus', 0)}")
         lines.append(f"  Catalyst bonus: {_naked.get('catalyst_bonus', 0)}")
         lines.append(f"  AI stats adjustment: {_naked.get('ai_adjustment', 0)}")

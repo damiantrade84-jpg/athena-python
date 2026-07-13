@@ -2097,6 +2097,8 @@ def test_engine_b_max_sl_gate_honours_score_group_override(monkeypatch):
         config.CONFIG, "MAX_SL_PCT_SCORE_GROUP_OVERRIDES", {"precious_trackers": 0.10}
     )
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_ENFORCE_MAX_SL_PCT", True)
+    # Isolate the percentage cap from the independent ATR-distance clamp.
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ATR_SL_CLAMPS_ENABLED", False)
     monkeypatch.setitem(
         config.CONFIG, "STYLE_ATR_MULTS", {"swing": {"commodity": {"sl": 2.0, "tp1": 3.0}}}
     )
@@ -2129,6 +2131,8 @@ def test_engine_b_confidence_passes_score_group_to_max_sl_gate(monkeypatch):
         config.CONFIG, "MAX_SL_PCT_SCORE_GROUP_OVERRIDES", {"precious_trackers": 0.10}
     )
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_ENFORCE_MAX_SL_PCT", True)
+    # Isolate the percentage cap from the independent ATR-distance clamp.
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ATR_SL_CLAMPS_ENABLED", False)
     monkeypatch.setitem(
         config.CONFIG, "STYLE_ATR_MULTS", {"swing": {"commodity": {"sl": 2.0, "tp1": 3.0}}}
     )

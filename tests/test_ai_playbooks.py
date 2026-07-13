@@ -67,8 +67,19 @@ def test_engine_a_playbook_uses_v3_factor_score_keys() -> None:
     usage = " ".join(pb["indicatorUsage"].keys())
     assert "factorScores.trend" in usage
     assert "factorScores.momentum" in usage
+    assert "factorScores.ortho.location" in usage
+    assert "factorDiagnostics.components" in usage
     assert "factorDiagnostics.minDirectionalFailed" in usage
     assert "diagnostics.trendScore" not in pb["indicatorUsage"]
+
+
+def test_engine_playbooks_surface_live_entry_timeframe_contract() -> None:
+    a_pb = get_engine_a_playbook()
+    b_pb = get_engine_b_playbook()
+
+    assert a_pb["timeframeContract"]["liveEntryTfByStyle"]["intraday"]["forex"] == "M30"
+    assert b_pb["liveTriggerOverrides"]["intraday"]["forex"] == "M15"
+    assert "server" in b_pb["timeframeAuthority"].lower()
 
 
 def test_engine_b_playbook_documents_ob_fvg_and_gates() -> None:

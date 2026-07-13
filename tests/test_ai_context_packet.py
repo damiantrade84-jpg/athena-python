@@ -236,6 +236,13 @@ def test_existing_ai_calibration_context_still_builds():
     assert ctx["engine_a"]["confluenceScore"] == 1.2
 
 
+def test_sl_classification_compares_percent_to_fractional_max_sl_cap():
+    from ai_context import classify_sl_by_asset_style
+
+    assert classify_sl_by_asset_style("forex", "intraday", 2.0, 0.01, 1.0, 0.025) == "Wide (Elevated Risk)"
+    assert classify_sl_by_asset_style("forex", "intraday", 3.0, 0.01, 1.0, 0.025) == "Execution-blocking"
+
+
 def test_deterministic_gate_context_exposes_engine_a_trade_gate_fields():
     packet = build_ai_review_packet(
         {
@@ -357,7 +364,21 @@ def test_calibration_context_string_injects_engine_b_native_diagnostics():
             "is_actionable": False,
             "passed": True,
             "rr_used_for_gate": 3.37,
+            "structure_ok": True,
+            "location_ok": True,
+            "entry_ok": True,
             "room_ok": False,
+            "space_gate_ok": True,
+            "zone_tf": "H4",
+            "entry_tf": "M15",
+            "atr_tf": "H4",
+            "trigger_timeframe_expected": "M15",
+            "trigger_timeframe_actual": "M15",
+            "trigger_timeframe_gate_ok": True,
+            "gate_score": 5.0,
+            "gate_max_possible": 5.0,
+            "quality_score": 1.0,
+            "quality_components": {"structure": 0.6, "location": 0.4},
             "d1_adx": 22.4,
             "h4_adx": 28.7,
             "_adx_derived_regime": "NORMAL",
@@ -382,6 +403,10 @@ def test_calibration_context_string_injects_engine_b_native_diagnostics():
     assert "Engine B score: 6.0 / 8.0 (75.0%)" in text
     assert "Engine B actionable: False | RR gate: 3.37 | room_ok: False" in text
     assert "space_gate_ok" in text or "Engine B canonical status: REJECT_NO_ROOM" in text
+    assert "Engine B timeframe roles: struct=H4 zone=H4 trigger=M15 atr=H4" in text
+    assert "Engine B trigger TF gate: expected=M15 actual=M15 passed=True" in text
+    assert "Engine B mandatory gates: structure=True location=True entry=True space=True rr=None" in text
+    assert "Engine B score contribution: gates=5.0/5.0 quality=1.0" in text
     assert "Engine B canonical status: REJECT_NO_ROOM" in text
 
 

@@ -153,7 +153,9 @@ def classify_sl_by_asset_style(asset_type: str, style: str, sl_pct: float, atr: 
     asset_type = asset_type.lower()
     style = style.upper()
     
-    if max_sl_pct is not None and sl_pct > max_sl_pct:
+    # sl_pct is expressed as human percent (2.5 == 2.5%); MAX_SL_PCT config is
+    # a fraction (0.025 == 2.5%). Keep units explicit at this AI-only boundary.
+    if max_sl_pct is not None and (sl_pct / 100.0) > max_sl_pct:
         return "Execution-blocking"
         
     if asset_type == "forex":
@@ -208,6 +210,11 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "trendState": signal.get("trendState") or signal.get("regimeName") or (signal.get("regime", {}).get("label") if isinstance(signal.get("regime", {}), dict) else signal.get("regime")),
         "warnings": signal.get("warnings", []),
         "addonStatus": (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("addon_status"),
+        "entryTimeframe": signal.get("entryTimeframe")
+        or (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("entryTimeframe"),
+        "entryUsesActiveCandle": (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("entryUsesActiveCandle"),
+        "activeEntryGate": (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("activeEntryGate"),
+        "components": (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("components") or signal.get("componentScores"),
     }
     
     # 3. Engine B metrics
@@ -220,6 +227,17 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
             if value is not None:
                 return value
         return None
+
+    engine_b_tf_defaults: Dict[str, Any] = {}
+    try:
+        from market_structure import resolve_engine_b_tfs
+
+        engine_b_tf_defaults = resolve_engine_b_tfs(
+            asset_type,
+            str(resolved_style or "intraday").lower(),
+        )
+    except Exception:
+        engine_b_tf_defaults = {}
         
     engine_b = {
         "structural_verdict": _first_not_none(engine_b_data.get("structural_verdict"), signal.get("engine_b_verdict")),
@@ -314,6 +332,33 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         ),
         "reason_codes": engine_b_data.get("reason_codes") or engine_b_data.get("engine_b_diagnostics", {}).get("reason_codes", []),
         "independent_direction": engine_b_data.get("independent_direction") or engine_b_data.get("engine_b_independent_direction"),
+        "struct_tf": _first_not_none(
+            engine_b_data.get("struct_tf"),
+            engine_b_data.get("structure_timeframe"),
+            engine_b_tf_defaults.get("struct"),
+        ),
+        "zone_tf": _first_not_none(engine_b_data.get("zone_tf"), engine_b_tf_defaults.get("zone")),
+        "trigger_tf": _first_not_none(
+            engine_b_data.get("trigger_timeframe_actual"),
+            engine_b_data.get("trigger_timeframe"),
+            engine_b_data.get("entry_tf"),
+            engine_b_tf_defaults.get("trigger"),
+        ),
+        "atr_tf": _first_not_none(engine_b_data.get("atr_tf"), engine_b_tf_defaults.get("atr")),
+        "trigger_timeframe_expected": engine_b_data.get("trigger_timeframe_expected"),
+        "trigger_timeframe_actual": _first_not_none(
+            engine_b_data.get("trigger_timeframe_actual"),
+            engine_b_data.get("trigger_timeframe"),
+        ),
+        "trigger_timeframe_gate_ok": engine_b_data.get("trigger_timeframe_gate_ok"),
+        "structure_ok": engine_b_data.get("structure_ok"),
+        "location_ok": engine_b_data.get("location_ok"),
+        "entry_ok": engine_b_data.get("entry_ok"),
+        "gate_score": engine_b_data.get("gate_score"),
+        "gate_max_possible": engine_b_data.get("gate_max_possible"),
+        "quality_score": engine_b_data.get("quality_score"),
+        "quality_max_possible": engine_b_data.get("quality_max_possible"),
+        "quality_components": engine_b_data.get("quality_components") or {},
     }
     
     # 4. Engine C metrics
@@ -356,6 +401,23 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
     sl = float(signal.get("sl") or 0)
     sl_pct = (abs(entry - sl) / entry * 100) if entry > 0 and sl > 0 else 0
     atr = float(signal.get("atr") or 0)
+    max_sl_pct = signal.get("MAX_SL_PCT")
+    max_sl_source = signal.get("MAX_SL_PCT_SOURCE")
+    if max_sl_pct is None:
+        try:
+            from config import CONFIG
+            from risk_engine import resolve_max_sl_pct
+
+            max_sl_pct, max_sl_source = resolve_max_sl_pct(signal, asset_type, CONFIG)
+        except Exception:
+            max_sl_pct = None
+            max_sl_source = None
+    sl_fraction = (abs(entry - sl) / entry) if entry > 0 and sl > 0 else None
+    max_sl_passed = (
+        sl_fraction <= float(max_sl_pct) + 1e-12
+        if sl_fraction is not None and max_sl_pct is not None
+        else None
+    )
     
     trade_risk = {
         "direction": signal.get("direction"),
@@ -369,7 +431,10 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "slPct": sl_pct,
         "atr": atr,
         "slDistance": abs(entry - sl) if entry > 0 and sl > 0 else 0,
-        "MAX_SL_PCT": signal.get("MAX_SL_PCT"),
+        "MAX_SL_PCT": max_sl_pct,
+        "MAX_SL_PCT_SOURCE": max_sl_source,
+        "slFraction": sl_fraction,
+        "maxSlPassed": max_sl_passed,
         "position_sizing": signal.get("position_sizing") or signal.get("sizing"),
         "risk_sizing_context": signal.get("risk_sizing_context"),
         "spread_fees_guard": signal.get("spread_fees_guard"),
@@ -433,6 +498,15 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
         lines.append("Dashboard confluence label: Weak")
         
     lines.append(f"ScoreNorm: {engine_a['scoreNorm']}")
+    if engine_a.get("entryTimeframe"):
+        lines.append(
+            "Engine A entry scoring: "
+            f"timeframe={engine_a.get('entryTimeframe')} "
+            f"uses_active_candle={engine_a.get('entryUsesActiveCandle')} "
+            f"active_entry_gate={engine_a.get('activeEntryGate')}"
+        )
+    if engine_a.get("components"):
+        lines.append(f"Engine A score contributions: {engine_a.get('components')}")
     if ctx["engine_c"].get("conviction") is not None:
         lines.append(f"CombinedConviction: {ctx['engine_c']['conviction']}")
     is_engine_b_source = str(identity.get("engine_source") or "").lower().startswith("engine b") or bool(signal.get("is_naked"))
@@ -458,6 +532,31 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
             f"{engine_b.get('is_actionable')} | RR gate: {engine_b.get('rr_used_for_gate')} "
             f"| room_ok: {engine_b.get('room_ok')} | space_gate_ok: {engine_b.get('space_gate_ok')}"
         )
+        lines.append(
+            "Engine B timeframe roles: "
+            f"struct={engine_b.get('struct_tf')} zone={engine_b.get('zone_tf')} "
+            f"trigger={engine_b.get('trigger_tf')} atr={engine_b.get('atr_tf')}"
+        )
+        lines.append(
+            "Engine B trigger TF gate: "
+            f"expected={engine_b.get('trigger_timeframe_expected')} "
+            f"actual={engine_b.get('trigger_timeframe_actual')} "
+            f"passed={engine_b.get('trigger_timeframe_gate_ok')}"
+        )
+        lines.append(
+            "Engine B mandatory gates: "
+            f"structure={engine_b.get('structure_ok')} "
+            f"location={engine_b.get('location_ok')} "
+            f"entry={engine_b.get('entry_ok')} "
+            f"space={engine_b.get('space_gate_ok')} rr={engine_b.get('rr_ok')}"
+        )
+        if engine_b.get("gate_score") is not None or engine_b.get("quality_score") is not None:
+            lines.append(
+                "Engine B score contribution: "
+                f"gates={engine_b.get('gate_score')}/{engine_b.get('gate_max_possible')} "
+                f"quality={engine_b.get('quality_score')}/{engine_b.get('quality_max_possible')} "
+                f"components={engine_b.get('quality_components')}"
+            )
         if engine_b.get("space_gate_ok") is not None:
             lines.append(
                 "Engine B space gate note: space_gate_ok is the authoritative deterministic room gate; "
@@ -613,6 +712,13 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
     lines.append(f"Entry: {trade_risk['entry']} | SL: {trade_risk['sl']} | TP1: {trade_risk['tp1']} | TP2: {trade_risk['tp2']}")
     lines.append(f"R:R = 1:{trade_risk['rr1']} / 1:{trade_risk['rr2']}")
     lines.append(f"Style min RR (config): {trade_risk.get('style_min_rr', '?')}")
+    lines.append(
+        "MAX_SL_PCT gate: "
+        f"sl_fraction={trade_risk.get('slFraction')} "
+        f"cap_fraction={trade_risk.get('MAX_SL_PCT')} "
+        f"source={trade_risk.get('MAX_SL_PCT_SOURCE')} "
+        f"passed={trade_risk.get('maxSlPassed')}"
+    )
     lines.append(
         "Note: TP1/RR1 is partial exit target; TP2/RR2 is runner. "
         "Levels are deterministic engine outputs already gated by Python."

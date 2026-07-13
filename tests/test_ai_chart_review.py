@@ -1762,6 +1762,39 @@ def test_build_engine_a_prompt_context_includes_factor_scores():
     assert prompt_ctx["diagnostics"]["rsi"] == 54.2
 
 
+def test_build_engine_a_prompt_context_reads_live_v3_ortho_and_entry_contributions():
+    ctx = _engine_a_ctx(asset_group="forex_majors", asset_class="forex")
+    ctx["factor_diagnostics"] = {
+        "entryTimeframe": "M30",
+        "entryTfOverride": "M30",
+        "entryUsesActiveCandle": True,
+        "activeEntryGate": {"required": True, "passed": True, "timeframe": "M30"},
+        "factorScores": {
+            "trend": 0.82,
+            "momentum": 0.61,
+            "ortho": {"location": 0.44, "volume": 0.22},
+        },
+        "components": {
+            "location": {
+                "signal": 0.8,
+                "quality": 0.55,
+                "weight": 0.2,
+                "contribution": 0.11,
+                "available": True,
+            }
+        },
+    }
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+
+    prompt_ctx = build_engine_a_prompt_context(ctx)
+
+    assert prompt_ctx["entryTimeframe"] == "M30"
+    assert prompt_ctx["entryUsesActiveCandle"] is True
+    assert prompt_ctx["diagnostics"]["locationScore"] == pytest.approx(0.44)
+    assert prompt_ctx["diagnostics"]["volumeScore"] == pytest.approx(0.22)
+    assert prompt_ctx["componentScores"]["location"]["contribution"] == pytest.approx(0.11)
+
+
 def test_build_engine_a_prompt_context_surfaces_per_group_indicator_periods():
     """Engine A's per-group scoring periods (not the chart's fixed 50/200) reach the model."""
     ctx = _engine_a_ctx(asset_group="forex_majors", asset_class="forex")
@@ -2058,6 +2091,56 @@ def test_build_engine_b_prompt_context_includes_geometry_and_scale_out_fields():
     assert eb_ctx["tp1PathClear"] is False
     assert eb_ctx["nearestSupportZone"]["lower"] == pytest.approx(6.6525)
     assert eb_ctx["nearestSupportZone"]["upper"] == pytest.approx(6.8345)
+
+
+def test_build_engine_b_prompt_context_includes_live_tf_gates_and_score_contributions():
+    from ai_review.engine_a_context import build_engine_b_prompt_context
+
+    ctx = {
+        "asset_class": "forex",
+        "asset_group": "forex_majors",
+        "symbol": "EURUSD",
+        "direction": "LONG",
+        "structure_context": {
+            "structural_verdict": "CLEAR",
+            "structure_timeframe": "H4",
+            "zone_tf": "H4",
+            "entry_tf": "M15",
+            "atr_tf": "H4",
+        },
+        "engine_b_confidence": {
+            "structure_ok": True,
+            "location_ok": True,
+            "entry_ok": True,
+            "space_gate_ok": True,
+            "rr_ok": True,
+            "trigger_timeframe_expected": "M15",
+            "trigger_timeframe_actual": "M15",
+            "trigger_timeframe_gate_ok": True,
+            "gate_score": 5.0,
+            "gate_max_possible": 5.0,
+            "quality_score": 2.25,
+            "quality_max_possible": 4.5,
+            "quality_components": {"structure": 0.8, "location": 0.7},
+            "execution_sl": 1.075,
+            "rr_used_for_gate": 1.8,
+            "rr_required": 1.2,
+        },
+        "geometry": {"candidate_entry": 1.1, "stop_loss": 1.075, "rr": 1.8},
+        "engine_snapshots": {"engineB": {"score": 7.25, "passed": True, "direction": "LONG"}},
+    }
+
+    eb_ctx = build_engine_b_prompt_context(ctx)
+
+    assert eb_ctx["structTf"] == "H4"
+    assert eb_ctx["zoneTf"] == "H4"
+    assert eb_ctx["triggerTf"] == "M15"
+    assert eb_ctx["atrTf"] == "H4"
+    assert eb_ctx["triggerTimeframeGateOk"] is True
+    assert eb_ctx["gateScore"] == pytest.approx(5.0)
+    assert eb_ctx["qualityComponents"]["location"] == pytest.approx(0.7)
+    assert eb_ctx["maxSlFraction"] == pytest.approx(0.025)
+    assert eb_ctx["maxSlPassed"] is True
 
 
 def test_default_resolve_pair_unknown_symbol_returns_none(monkeypatch):

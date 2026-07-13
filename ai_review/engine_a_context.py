@@ -27,6 +27,66 @@ def _first_present(*values: Any) -> Any:
     return None
 
 
+def _resolved_risk_geometry(
+    engine_ctx: dict[str, Any],
+    *,
+    entry: Any,
+    sl: Any,
+    rr: Any,
+    rr_required: Any = None,
+) -> dict[str, Any]:
+    """Project the same MAX_SL/RR geometry used by deterministic execution."""
+    entry_f = _to_float(entry)
+    sl_f = _to_float(sl)
+    rr_f = _to_float(rr)
+    required_f = _to_float(rr_required)
+    max_sl_fraction = None
+    max_sl_source = None
+    try:
+        from config import CONFIG
+        from risk_engine import resolve_max_sl_pct
+
+        signal_ctx = {
+            "pair": engine_ctx.get("symbol"),
+            "display": engine_ctx.get("symbol"),
+            "symbol": engine_ctx.get("symbol"),
+            "type": engine_ctx.get("asset_class"),
+            "scoreGroup": engine_ctx.get("asset_group"),
+        }
+        max_sl_fraction, max_sl_source = resolve_max_sl_pct(
+            signal_ctx,
+            str(engine_ctx.get("asset_class") or ""),
+            CONFIG,
+        )
+        if required_f is None:
+            required_f = _to_float(CONFIG.get("ENGINE_C_EXEC_MIN_RR", 1.0))
+    except Exception:
+        pass
+
+    sl_fraction = None
+    if entry_f is not None and entry_f > 0 and sl_f is not None and sl_f > 0:
+        sl_fraction = abs(entry_f - sl_f) / abs(entry_f)
+    max_sl_passed = (
+        sl_fraction <= float(max_sl_fraction) + 1e-12
+        if sl_fraction is not None and max_sl_fraction is not None
+        else None
+    )
+    rr_passed = (
+        rr_f + 1e-12 >= required_f
+        if rr_f is not None and required_f is not None
+        else None
+    )
+    return {
+        "slDistanceFraction": sl_fraction,
+        "maxSlFraction": max_sl_fraction,
+        "maxSlSource": max_sl_source,
+        "maxSlPassed": max_sl_passed,
+        "rr": rr_f,
+        "rrRequired": required_f,
+        "rrPassed": rr_passed,
+    }
+
+
 def _last_candle_ts(candles: list | None) -> str | None:
     if not candles:
         return None
@@ -857,6 +917,62 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         or eb.get("structuralVerdict")
     )
 
+    entry_value = _first_float(
+        geometry.get("candidate_entry"),
+        geometry.get("current_price"),
+        conf.get("current_price"),
+        struct.get("current_price"),
+    )
+    execution_sl = _first_float(
+        conf.get("execution_sl"),
+        struct.get("execution_sl"),
+        struct.get("recommended_stop_loss"),
+        geometry.get("stop_loss"),
+    )
+    rr_used = _first_float(
+        conf.get("rr_used_for_gate"),
+        conf.get("rr"),
+        struct.get("rr_used_for_gate"),
+        struct.get("rr"),
+        geometry.get("rr"),
+    )
+    rr_required = _first_float(
+        conf.get("rr_required"),
+        conf.get("style_min_rr"),
+        struct.get("rr_required"),
+        struct.get("style_min_rr"),
+    )
+    risk_geometry = _resolved_risk_geometry(
+        engine_a_ctx,
+        entry=entry_value,
+        sl=execution_sl,
+        rr=rr_used,
+        rr_required=rr_required,
+    )
+
+    trigger_expected = _first_present(
+        conf.get("trigger_timeframe_expected"),
+        struct.get("trigger_timeframe_expected"),
+        struct.get("entry_tf"),
+    )
+    trigger_actual = _first_present(
+        conf.get("trigger_timeframe_actual"),
+        conf.get("trigger_timeframe"),
+        struct.get("trigger_timeframe_actual"),
+        struct.get("trigger_timeframe"),
+        struct.get("entry_tf"),
+    )
+    role_defaults: dict[str, Any] = {}
+    try:
+        from market_structure import resolve_engine_b_tfs
+
+        role_defaults = resolve_engine_b_tfs(
+            str(engine_a_ctx.get("asset_class") or ""),
+            str(engine_a_ctx.get("analyze_style") or "intraday"),
+        )
+    except Exception:
+        role_defaults = {}
+
     return {
         "available": available,
         "score": eb.get("score"),
@@ -865,6 +981,25 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "normalizedScore": eb.get("normalizedScore"),
         "passed": eb.get("passed"),
         "direction": eb.get("direction") or engine_a_ctx.get("direction"),
+        "structTf": _first_present(
+            conf.get("struct_tf"),
+            struct.get("struct_tf"),
+            struct.get("structure_timeframe"),
+            role_defaults.get("struct"),
+        ),
+        "zoneTf": _first_present(
+            conf.get("zone_tf"), struct.get("zone_tf"), role_defaults.get("zone")
+        ),
+        "triggerTf": trigger_actual or role_defaults.get("trigger"),
+        "atrTf": _first_present(
+            conf.get("atr_tf"), struct.get("atr_tf"), role_defaults.get("atr")
+        ),
+        "triggerTimeframeExpected": trigger_expected,
+        "triggerTimeframeActual": trigger_actual,
+        "triggerTimeframeGateOk": conf.get(
+            "trigger_timeframe_gate_ok",
+            struct.get("trigger_timeframe_gate_ok"),
+        ),
         "structuralVerdict": struct.get("structural_verdict") or eb.get("structuralVerdict"),
         "bosConfirmed": struct.get("bos_confirmed"),
         "chochConfirmed": struct.get("choch_confirmed"),
@@ -893,12 +1028,7 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "structuralTp": _first_float(conf.get("structural_tp"), struct.get("structural_tp")),
         "structuralRr": _first_float(conf.get("structural_rr"), struct.get("structural_rr")),
         "structuralSlValid": conf.get("structural_sl_valid", struct.get("structural_sl_valid")),
-        "executionSl": _first_float(
-            conf.get("execution_sl"),
-            struct.get("execution_sl"),
-            struct.get("recommended_stop_loss"),
-            geometry.get("stop_loss"),
-        ),
+        "executionSl": execution_sl,
         "executionTp": _first_float(
             conf.get("execution_tp"),
             struct.get("execution_tp"),
@@ -910,14 +1040,20 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "executionRr": _first_float(conf.get("execution_rr"), struct.get("execution_rr")),
         "executionRr1": _first_float(conf.get("execution_rr1"), struct.get("execution_rr1")),
         "executionRr2": _first_float(conf.get("execution_rr2"), struct.get("execution_rr2")),
-        "rrUsedForGate": _first_float(
-            conf.get("rr_used_for_gate"),
-            conf.get("rr"),
-            struct.get("rr_used_for_gate"),
-            struct.get("rr"),
-            geometry.get("rr"),
+        "rrUsedForGate": rr_used,
+        "rrRequired": rr_required,
+        "gateScore": _first_float(conf.get("gate_score"), struct.get("gate_score")),
+        "gateMaxPossible": _first_float(
+            conf.get("gate_max_possible"), struct.get("gate_max_possible")
         ),
-        "rrRequired": _first_float(conf.get("rr_required"), struct.get("rr_required")),
+        "qualityScore": _first_float(conf.get("quality_score"), struct.get("quality_score")),
+        "qualityMaxPossible": _first_float(
+            conf.get("quality_max_possible"), struct.get("quality_max_possible")
+        ),
+        "qualityComponents": conf.get("quality_components")
+        or struct.get("quality_components")
+        or {},
+        **risk_geometry,
         "slSource": conf.get("sl_source") or struct.get("sl_source"),
         "tpSource": conf.get("tp_source") or struct.get("tp_source"),
         "tp1Source": conf.get("tp1_source") or struct.get("tp1_source"),
@@ -970,13 +1106,7 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             "execution_sl_tighter_than_structural",
             struct.get("execution_sl_tighter_than_structural"),
         ),
-        "rr": _first_float(
-            conf.get("rr_used_for_gate"),
-            conf.get("rr"),
-            struct.get("rr_used_for_gate"),
-            struct.get("rr"),
-            geometry.get("rr"),
-        ),
+        "rr": rr_used,
         "volumeProfileContext": struct.get("profile_vp_context")
         or build_engine_b_profile_vp_context(str(engine_a_ctx.get("asset_class") or "")),
     }
@@ -1280,6 +1410,10 @@ def _factor_score(fd: dict[str, Any], *keys: str) -> float | None:
         val = _to_float(fs.get(key) if isinstance(fs, dict) else None)
         if val is not None:
             return val
+        ortho = fs.get("ortho") if isinstance(fs, dict) else None
+        val = _to_float(ortho.get(key) if isinstance(ortho, dict) else None)
+        if val is not None:
+            return val
     return None
 
 
@@ -1513,6 +1647,18 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
     asset_type = str(engine_a_ctx.get("asset_class") or "")
     ema_periods = _resolve_ema_periods(score_group, asset_type)
     rsi_period = _resolve_rsi_period(score_group, asset_type)
+    components = fd.get("components") if isinstance(fd.get("components"), dict) else {}
+    entry_timeframe = _first_present(
+        fd.get("entryTimeframe"),
+        fd.get("entry_timeframe"),
+        engine_a_ctx.get("execution_timeframe"),
+    )
+    risk_geometry = _resolved_risk_geometry(
+        engine_a_ctx,
+        entry=geometry.get("candidate_entry"),
+        sl=geometry.get("stop_loss"),
+        rr=geometry.get("rr"),
+    )
 
     return {
         "direction": engine_a_ctx.get("direction"),
@@ -1522,6 +1668,12 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "normalizedScore": ea.get("normalizedScore"),
         "passed": ea.get("passed") if ea.get("passed") is not None else engine_a_ctx.get("passed"),
         "activeFactors": ea.get("activeFactors"),
+        "entryTimeframe": entry_timeframe,
+        "entryTfOverride": fd.get("entryTfOverride"),
+        "entryUsesActiveCandle": fd.get("entryUsesActiveCandle"),
+        "activeEntryGate": fd.get("activeEntryGate"),
+        "componentScores": components,
+        "riskGeometry": risk_geometry,
         "conviction": _to_float(fd.get("conviction") or fd.get("combinedConviction")),
         "abortReasons": _abort_reasons(engine_a_ctx),
         "candleFreshnessSummary": fresh.get("candleFreshnessSummary"),
@@ -1533,6 +1685,7 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "diagnostics": {
             "trendScore": _factor_score(fd, "trend"),
             "momentumScore": _factor_score(fd, "momentum"),
+            "locationScore": _factor_score(fd, "location"),
             "volatilityScore": _factor_score(fd, "mean_reversion", "volatility"),
             "addonScore": addon_score,
             "volumeScore": volume_score,

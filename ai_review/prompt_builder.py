@@ -54,8 +54,11 @@ def _fmt_list(value: Any) -> str:
     return ", ".join(str(item) for item in value)
 
 
-def _engine_b_tf_roles_block(style: str) -> str:
-    """Resolve struct/zone/trigger/atr TFs for analyze_style from the B playbook matrix."""
+def _engine_b_tf_roles_block(
+    style: str,
+    engine_b_context: dict[str, Any] | None = None,
+) -> str:
+    """Render actual server TF roles, falling back to the canonical B matrix."""
     matrix = get_engine_b_playbook().get("timeframeMatrix") or {}
     macro = matrix.get("macroSwing", "H4")
     style_key = str(style or "intraday").lower()
@@ -64,11 +67,23 @@ def _engine_b_tf_roles_block(style: str) -> str:
     roles = matrix.get(style_key) or matrix.get("intraday") or {}
     if not isinstance(roles, dict):
         roles = {}
+    ctx = engine_b_context if isinstance(engine_b_context, dict) else {}
+    resolved_roles = {
+        "struct": ctx.get("structTf") or roles.get("struct", "unavailable"),
+        "zone": ctx.get("zoneTf") or roles.get("zone", "unavailable"),
+        "trigger": ctx.get("triggerTf") or roles.get("trigger", "unavailable"),
+        "atr": ctx.get("atrTf") or roles.get("atr", "unavailable"),
+    }
+    role_source = "server" if any(ctx.get(k) for k in ("structTf", "zoneTf", "triggerTf", "atrTf")) else "canonical_fallback"
     return (
         "== ENGINE B TIMEFRAME ROLES (style-resolved) ==\n"
         f"analyze_style: {style_key}\n"
-        f"struct_tf: {roles.get('struct', 'unavailable')} | zone_tf: {roles.get('zone', 'unavailable')} | "
-        f"trigger_tf: {roles.get('trigger', 'unavailable')} | atr_tf: {roles.get('atr', 'unavailable')}\n"
+        f"role_source: {role_source}\n"
+        f"struct_tf: {resolved_roles['struct']} | zone_tf: {resolved_roles['zone']} | "
+        f"trigger_tf: {resolved_roles['trigger']} | atr_tf: {resolved_roles['atr']}\n"
+        f"trigger_tf_expected: {ctx.get('triggerTimeframeExpected', 'unavailable')} | "
+        f"trigger_tf_actual: {ctx.get('triggerTimeframeActual', 'unavailable')} | "
+        f"trigger_tf_gate_ok: {ctx.get('triggerTimeframeGateOk', 'unavailable')}\n"
         f"macro_swing: {macro}\n"
         "Evaluate zone retest on zone_tf; evaluate entry trigger on trigger_tf.\n"
         "Chart screenshot TF may differ — server-trusted engineBContext gates override visual zone guesses.\n"
@@ -164,6 +179,8 @@ Rules:
 - Use the chart image for visual direction and timing validation.
 - Use non-visual context to understand why Engine A scored the setup.
 - Never change Engine A score or threshold. AI review may validate or downgrade timing only.
+- Use engineAContext.entryTimeframe and componentScores for the live entry contribution. D1/H4/H1 remain structural trend layers; never substitute H1 when a lower-TF active entry is supplied.
+- False activeEntryGate.passed, riskGeometry.maxSlPassed, or riskGeometry.rrPassed blocks ENTRY_NOW.
 - Never claim addonScore is volume. addonScore is the asset add-on only; volumeScore is separate and may be null.
 - For forex pairs, volumeScore and volumeRatio reflect tick volume, not real traded volume. Do not penalize or downgrade based on volume metrics for forex.
 - Do not mark funding/OI missing for non-crypto assets.
@@ -243,7 +260,7 @@ def _build_engine_b_chart_review_prompt(context: dict[str, Any]) -> str:
     trade_skill_schema = render_trade_skill_prompt_schema("engine_b_chart")
     macro_block = render_macro_prompt_block(context.get("symbol"), context.get("asset_class"))
     analyze_style = str(context.get("analyze_style") or "intraday")
-    tf_roles_block = _engine_b_tf_roles_block(analyze_style)
+    tf_roles_block = _engine_b_tf_roles_block(analyze_style, engine_b_context)
 
     return f"""{_CHART_REVIEW_B_PREAMBLE}
 1. Follow Engine B playbook: structure, liquidity, zones, invalidation.
@@ -287,6 +304,9 @@ Rules:
 - Engine B overlays on the chart (zones, BOS, FVG) are advisory visual context — server-trusted structure fields in engineBContext are authoritative.
 - Engine B is zone-retest: when locationOk=true and entryOk=true, retest at the active zone is valid — do not reflex-reject as inside resistance/support.
 - Judge zones on zone_tf and triggers on trigger_tf (see ENGINE B TIMEFRAME ROLES); chart TF may differ from zone_tf.
+- Use the server-resolved timeframe roles and require triggerTimeframeGateOk=true when the lower-TF trigger gate is present; never replace M15/M30 with H1 evidence.
+- Treat structureOk, locationOk, entryOk, spaceGateOk, rrOk, maxSlPassed, and executionLevelsValid as deterministic gates. AI cannot override a false gate.
+- Cite gateScore/gateMaxPossible and qualityScore/qualityComponents separately; normalize the deterministic headline with score/maxScore, never gatePct.
 - This is review-only. Do not issue execution instructions.
 
 == SERVER-TRUSTED engineBContext (JSON) ==
