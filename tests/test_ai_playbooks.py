@@ -78,7 +78,7 @@ def test_engine_playbooks_surface_live_entry_timeframe_contract() -> None:
     b_pb = get_engine_b_playbook()
 
     assert a_pb["timeframeContract"]["liveEntryTfByStyle"]["intraday"]["forex"] == "M30"
-    assert b_pb["liveTriggerOverrides"]["intraday"]["forex"] == "M15"
+    assert b_pb["liveTriggerOverrides"]["intraday"]["forex"] == "M30"
     assert "server" in b_pb["timeframeAuthority"].lower()
 
 

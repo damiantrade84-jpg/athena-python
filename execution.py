@@ -1466,6 +1466,45 @@ def _should_refresh_engine_b_before_execute(
     return str(sig.get("type") or "").lower() == "crypto"
 
 
+def _engine_a_v3_live_entry_market_state(runtime, pair_obj: dict, entry_tf: str) -> dict | None:
+    """Fetch the live lower-TF entry market state for the V3 execute-time refresh.
+
+    The V3 active-entry gate and the pre-scoring freshness gate both demote a setup
+    to WATCH when the configured live entry TF (e.g. M30 for intraday forex) has no
+    forming (active) bar. MT5 can transiently omit the in-progress bar at a bucket
+    boundary, so a single cold ``analyze_pair`` re-fetch at execute time can
+    false-block a setup that was TRADE at scan time
+    (ENGINE_A_V3_REFRESH_SCAN_TIER_NOT_TRADE). Give the terminal a brief moment to
+    register a tick and refetch, mirroring the scan/Engine C preload. Returns the
+    market-state dict (confirmed/forming/is_live), or ``None`` when the TF cannot be
+    resolved so the caller falls back to the standard cold path.
+    """
+    from athena_app.services.market_state import get_tf_market_state
+
+    try:
+        limit = int(scan_candle_limits().get(entry_tf, 500))
+    except Exception:
+        limit = 500
+    try:
+        sleep_ms = int((getattr(runtime, "CONFIG", {}) or {}).get("MT5_H4_FETCH_RETRY_SLEEP_MS", 400) or 0)
+    except Exception:
+        sleep_ms = 400
+    state: dict | None = None
+    for attempt in range(3):  # initial fetch + up to two retries to recover a forming bar
+        try:
+            raw = runtime.fetch_candles(pair_obj, entry_tf, limit)
+        except Exception:
+            raw = None
+        if not isinstance(raw, list):
+            raw = []
+        state = get_tf_market_state(pair_obj, entry_tf, candles=raw)
+        if isinstance(state, dict) and state.get("forming"):
+            return state
+        if attempt < 2 and sleep_ms > 0:
+            time.sleep(min(sleep_ms, 2000) / 1000.0)
+    return state if isinstance(state, dict) else None
+
+
 def _refresh_engine_a_v3_execution_context(
     sig: dict,
     runtime,
@@ -1489,11 +1528,32 @@ def _refresh_engine_a_v3_execution_context(
     )
     if pair_obj is None:
         return f"ENGINE_A_V3_REFRESH_PAIR_NOT_FOUND: {pair_key}"
+    _style = str(sig.get("horizon") or sig.get("style") or "")
+    # Preload the live lower-TF entry state (with the forming bar) so the execute-time
+    # re-scan reproduces the scan's active-entry gate instead of false-blocking on a
+    # cold fetch that momentarily omits the in-progress bar. Structure TFs (D1/H4/H1)
+    # stay confirmed-only and are fetched by analyze_pair as before.
+    _preloaded_state = None
+    try:
+        from engine_a_v3.timeframes import resolve_live_v3_entry_timeframe
+
+        _entry_tf = resolve_live_v3_entry_timeframe(
+            pair_obj.get("type", ""),
+            _style,
+            source=pair_obj.get("source"),
+        )
+        if _entry_tf and _entry_tf not in {"D1", "H4", "H1"}:
+            _entry_state = _engine_a_v3_live_entry_market_state(runtime, pair_obj, _entry_tf)
+            if isinstance(_entry_state, dict):
+                _preloaded_state = {_entry_tf: _entry_state}
+    except Exception:
+        _preloaded_state = None
     try:
         refreshed = runtime.analyze_pair(
             pair_obj,
             "neutral",
-            style=str(sig.get("horizon") or sig.get("style") or ""),
+            style=_style,
+            preloaded_market_state=_preloaded_state,
         )
     except Exception as exc:
         return f"ENGINE_A_V3_REFRESH_FAILED: {exc}"

@@ -2580,9 +2580,9 @@ CONFIG: dict = {
             },
         },
         # Live-only trigger timing. H4 remains the intraday structure/zone TF;
-        # M15 supplies the active entry trigger and trigger-local ATR.
+        # M30 supplies the active entry trigger and trigger-local ATR.
         "LIVE_TRIGGER_TF_BY_STYLE": {
-            "intraday": {"forex": "M15"},
+            "intraday": {"forex": "M30"},
         },
         # Stage 2.5: Collapsed Engine B group overrides.
         # Only 4 groups retain overrides; all others use base profiles.

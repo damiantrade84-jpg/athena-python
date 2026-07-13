@@ -7278,6 +7278,11 @@ def _compute_naked_analysis(
                         "asset_type": pair_obj.get("type", ""),
                         "d1_snap": _na_d1_snap,
                         "h4_snap": _na_h4_snap,
+                        # Detect triggers on the configured live entry TF (M30 for
+                        # intraday forex) instead of the matrix default, so the
+                        # execute-time/naked re-scan matches the scan that surfaced
+                        # the signal. Resolves to H1 (== default) for non-live paths.
+                        "role_candles": _trigger_tf_map,
                     },
                 )
             )
@@ -7287,6 +7292,8 @@ def _compute_naked_analysis(
         if _probe_res is not None:
             res = _probe_res
         else:
+            from market_structure import engine_b_live_trigger_kwargs
+
             res = engine.set_registry_context(
                 pair_obj.get("symbol") or pair_obj.get("display")
             ).analyze_structure(
@@ -7302,6 +7309,10 @@ def _compute_naked_analysis(
                 h4_snap=_na_h4_snap,
                 style=resolved_style,
                 pair=pair_obj,
+                # Detect triggers on the configured live entry TF (M30 for intraday
+                # forex); resolves to H1 (== matrix default) for non-live paths so
+                # non-forex/swing scoring is unchanged.
+                **engine_b_live_trigger_kwargs(style_profile, _trigger_tf_map),
             )
 
         try:

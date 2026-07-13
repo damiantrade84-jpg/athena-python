@@ -3465,7 +3465,7 @@ NAKED_ENGINE:
 
   # Live trigger timing only. Intraday structure/zones remain H4.
   LIVE_TRIGGER_TF_BY_STYLE:
-    intraday: { forex: M15 }
+    intraday: { forex: M30 }
 
   # 2026-07-02 audit: aligned to the effective value. engine_b_config.yaml
   # (crypto_aggtrade.alignment_bonus) merges last and was already 0.5; the 1.0

@@ -70,10 +70,10 @@ def test_diagnostic_trigger_kwargs_enabled(monkeypatch):
     assert engine_b_diagnostic_trigger_kwargs({"entry_tf": "H4"}, {"H4": m15}) == {}
 
 
-def test_live_forex_intraday_trigger_is_m15_only_on_mt5():
+def test_live_forex_intraday_trigger_is_m30_only_on_mt5():
     assert resolve_live_engine_b_trigger_tf(
         "forex", "intraday", source="mt5"
-    ) == "M15"
+    ) == "M30"
     assert resolve_live_engine_b_trigger_tf(
         "forex", "intraday", source="eodhd"
     ) is None

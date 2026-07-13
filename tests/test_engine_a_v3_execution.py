@@ -123,6 +123,93 @@ def test_refresh_cannot_promote_missing_or_nontrade_original_scanner_tier(origin
     )
 
 
+def _forming_m30_series(*, forming: bool = True, bars: int = 60) -> list[dict]:
+    """Build an M30 series whose last bar is (or is not) the current bucket."""
+    import time as _t
+    from datetime import datetime, timezone
+
+    from athena_app.services.market_state import get_bucket_start_epoch
+
+    current = get_bucket_start_epoch("M30", _t.time(), offset_hours=0.0)
+    # When forming is False, shift every bar back one bucket so the newest bar is a
+    # just-closed (confirmed) bar and split_market_state reports no forming bar.
+    newest = current if forming else current - 1800
+    series: list[dict] = []
+    for i in range(bars, -1, -1):
+        ts = newest - i * 1800
+        series.append(
+            {
+                "time": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
+                "open": 1.10,
+                "high": 1.11,
+                "low": 1.09,
+                "close": 1.105,
+                "vol": 100.0,
+            }
+        )
+    return series
+
+
+class _FakeV3Runtime:
+    """Minimal analyze_pair/fetch_candles runtime for the V3 execute-time refresh."""
+
+    def __init__(self, m30_batches: list[list[dict]], refreshed: dict | None = None):
+        self.ALL_PAIRS = [
+            {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex", "source": "mt5"}
+        ]
+        self.CONFIG = {"MT5_H4_FETCH_RETRY_SLEEP_MS": 0}
+        self._m30_batches = list(m30_batches)
+        self._refreshed = refreshed if refreshed is not None else _signal(signalId="signal-2")
+        self.fetch_calls: list[str] = []
+        self.captured: dict = {}
+
+    def fetch_candles(self, pair, tf, limit):
+        if str(tf).upper() == "M30":
+            self.fetch_calls.append("M30")
+            idx = min(len(self.fetch_calls), len(self._m30_batches)) - 1
+            return self._m30_batches[idx] if self._m30_batches else []
+        return []
+
+    def analyze_pair(self, pair, bias, style=None, preloaded_market_state=None):
+        self.captured["style"] = style
+        self.captured["preloaded_market_state"] = preloaded_market_state
+        return self._refreshed
+
+
+def test_v3_refresh_preloads_live_entry_forming_bar():
+    runtime = _FakeV3Runtime([_forming_m30_series(forming=True)])
+    sig = _signal()
+
+    err = execution._refresh_engine_a_v3_execution_context(sig, runtime)
+
+    assert err is None
+    pms = runtime.captured["preloaded_market_state"]
+    assert isinstance(pms, dict) and "M30" in pms
+    assert pms["M30"].get("forming") is not None
+    assert pms["M30"].get("is_live") is True
+    # A single fetch already had a forming bar — no retry needed.
+    assert len(runtime.fetch_calls) == 1
+
+
+def test_v3_refresh_retries_to_recover_missing_forming_bar():
+    # First two fetches lack the forming bar; the third recovers it.
+    runtime = _FakeV3Runtime(
+        [
+            _forming_m30_series(forming=False),
+            _forming_m30_series(forming=False),
+            _forming_m30_series(forming=True),
+        ]
+    )
+    sig = _signal()
+
+    err = execution._refresh_engine_a_v3_execution_context(sig, runtime)
+
+    assert err is None
+    assert len(runtime.fetch_calls) == 3
+    pms = runtime.captured["preloaded_market_state"]
+    assert pms["M30"].get("forming") is not None
+
+
 def test_refreshed_signal_replaces_authoritative_contract_and_levels():
     original = _signal(price=1.10, sl=1.09, tp1=1.11, tp2=1.12)
     refreshed = _signal(
