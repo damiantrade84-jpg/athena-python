@@ -455,6 +455,34 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "combinedConviction": "Execution gate proxy.",
         "AI_instruction": "AI must not treat these as the same metric.",
     }
+
+    timeframe_policy = {
+        key: signal.get(key)
+        for key in (
+            "timeframePolicyVersion",
+            "timeframePolicyHash",
+            "timeframeProfile",
+            "regimeTf",
+            "biasTf",
+            "structureTf",
+            "setupTf",
+            "triggerTf",
+            "executionTf",
+            "m5Role",
+            "baselineSpeedClass",
+            "liveSpeedClass",
+            "speedPercentile",
+            "policySource",
+            "confirmedBarTimes",
+            "formingBarTime",
+            "entryReadiness",
+            "entryReadinessReason",
+            "atrValue",
+            "atrTimeframe",
+            "structureAgeBars",
+            "quoteAgeSec",
+        )
+    }
     
     return {
         "identity": identity,
@@ -464,6 +492,7 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "vision": vision,
         "trade_risk": trade_risk,
         "data_quality": data_quality,
+        "timeframe_policy": timeframe_policy,
         "calibration_notes": calibration_notes,
     }
 
@@ -474,6 +503,7 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
     engine_a = ctx["engine_a"]
     engine_b = ctx["engine_b"]
     trade_risk = ctx["trade_risk"]
+    timeframe_policy = ctx["timeframe_policy"]
     
     lines = [
         "=== AI CALIBRATION CONTEXT ===",
@@ -486,6 +516,13 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
         f"Raw score pct: {engine_a['rawScorePct']:.1f}%",
         f"Live threshold: {engine_a['liveThreshold']}",
         f"Threshold progress pct: {engine_a['thresholdProgressPct']:.1f}%",
+        "Deterministic timeframe policy: "
+        f"bias={timeframe_policy.get('biasTf')} "
+        f"structure={timeframe_policy.get('structureTf')} "
+        f"setup={timeframe_policy.get('setupTf')} "
+        f"trigger={timeframe_policy.get('triggerTf')} "
+        f"execution={timeframe_policy.get('executionTf')} "
+        f"readiness={timeframe_policy.get('entryReadiness')}",
     ]
     
     if signal.get("dashboard_confluence_label"):

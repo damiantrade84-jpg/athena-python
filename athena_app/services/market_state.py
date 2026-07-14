@@ -12,12 +12,20 @@ from typing import Any, Callable, TypedDict, Optional
 from config import CONFIG, get_d1_resample_offset_hours
 
 
-class MarketState(TypedDict):
+class MarketState(TypedDict, total=False):
     confirmed: list[dict[str, Any]]  # Series of closed bars
     forming: Optional[dict[str, Any]]  # The current open bar, if active
     is_live: bool  # True if the series includes a forming bar
     pair_display: str
     timeframe: str
+    provider: str | None
+    provider_symbol: str | None
+    last_confirmed_open_time_utc: str | None
+    forming_open_time_utc: str | None
+    expected_close_time_utc: str | None
+    age_seconds: float | None
+    stale: bool
+    missing_reason: str | None
 
 
 def candle_timestamp_epoch(candle: dict[str, Any] | None) -> int:
@@ -33,6 +41,10 @@ def candle_timestamp_epoch(candle: dict[str, Any] | None) -> int:
         from datetime import datetime
 
         dt = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            # Provider timestamps without an offset are part of Athena's UTC
+            # candle contract.  Never interpret them in the host timezone.
+            dt = dt.replace(tzinfo=timezone.utc)
         return int(dt.timestamp())
     except Exception:
         return 0
@@ -292,44 +304,79 @@ def split_market_state(
     pair_display: str,
     time_now: Optional[float] = None,
     offset_hours: float = 0.0,
+    provider: str | None = None,
+    provider_symbol: str | None = None,
 ) -> MarketState:
     """Split a candle series into confirmed and forming components.
     
     A bar is 'forming' if its timestamp matches the current timeframe bucket.
     """
-    if not candles:
-        return {
-            "confirmed": [],
-            "forming": None,
-            "is_live": False,
-            "pair_display": pair_display,
-            "timeframe": tf
-        }
-
     now = time_now if time_now is not None else time.time()
     current_bucket = get_bucket_start_epoch(tf, now, offset_hours=offset_hours)
-    
-    last_bar = candles[-1]
-    last_ts = candle_timestamp_epoch(last_bar)
-    
-    is_forming = (last_ts == current_bucket)
-    
-    if is_forming:
-        return {
-            "confirmed": candles[:-1],
-            "forming": last_bar,
-            "is_live": True,
-            "pair_display": pair_display,
-            "timeframe": tf
-        }
-    else:
-        return {
-            "confirmed": candles,
-            "forming": None,
-            "is_live": False,
-            "pair_display": pair_display,
-            "timeframe": tf
-        }
+    tf_seconds = _timeframe_seconds(tf)
+
+    def _explicit_confirm(value: Any) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and value in (0, 1):
+            return bool(value)
+        text = str(value or "").strip().lower()
+        if text in {"true", "1", "yes", "closed", "confirmed"}:
+            return True
+        if text in {"false", "0", "no", "forming", "open"}:
+            return False
+        return None
+
+    confirmed: list[dict[str, Any]] = []
+    forming_candidates: list[dict[str, Any]] = []
+    for candle in candles or []:
+        explicit = _explicit_confirm(candle.get("confirm")) if "confirm" in candle else None
+        candle_bucket = get_bucket_start_epoch(
+            tf,
+            candle_timestamp_epoch(candle),
+            offset_hours=offset_hours,
+        ) if candle_timestamp_epoch(candle) else None
+        if explicit is False:
+            # Bybit confirm=false is authoritative even if the local clock is
+            # near a boundary; it must never enter a closed-candle series.
+            forming_candidates.append(candle)
+        elif explicit is True:
+            confirmed.append(candle)
+        elif candle_bucket == current_bucket:
+            forming_candidates.append(candle)
+        else:
+            confirmed.append(candle)
+
+    forming = forming_candidates[-1] if forming_candidates else None
+    last_confirmed_epoch = candle_timestamp_epoch(confirmed[-1]) if confirmed else 0
+    forming_epoch = candle_timestamp_epoch(forming) if forming else 0
+    expected_close_epoch = (
+        forming_epoch + tf_seconds
+        if forming_epoch
+        else last_confirmed_epoch + tf_seconds if last_confirmed_epoch else None
+    )
+    age_seconds = (
+        max(0.0, float(now) - float(last_confirmed_epoch + tf_seconds))
+        if last_confirmed_epoch
+        else None
+    )
+    stale = not confirmed or bool(age_seconds is not None and age_seconds > tf_seconds)
+    missing_reason = "no_candles" if not candles else "no_confirmed_candles" if not confirmed else None
+    return {
+        "confirmed": confirmed,
+        "forming": forming,
+        "is_live": forming is not None,
+        "pair_display": pair_display,
+        "timeframe": str(tf or "").upper(),
+        "provider": provider,
+        "provider_symbol": provider_symbol,
+        "last_confirmed_open_time_utc": _epoch_iso(last_confirmed_epoch or None),
+        "forming_open_time_utc": _epoch_iso(forming_epoch or None),
+        "expected_close_time_utc": _epoch_iso(expected_close_epoch),
+        "age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
+        "stale": stale,
+        "missing_reason": missing_reason,
+    }
 
 
 def candle_freshness_diagnostic(
@@ -477,6 +524,7 @@ def get_tf_market_state(
     limit: int | None = None,
     fetch_candles: Callable[[dict[str, Any], str, int], Any] | None = None,
     time_now: Optional[float] = None,
+    provider_symbol: str | None = None,
 ) -> MarketState:
     """Normalize a timeframe candle series into raw/confirmed/forming state.
 
@@ -495,13 +543,38 @@ def get_tf_market_state(
             series = raw
     series, _ = trim_mt5_d1_broker_session_ahead_tail(pair, tf, series, time_now=now_ts)
     offset_hours = market_state_offset_hours(pair, tf)
-    return split_market_state(
+    source = str(pair.get("source") or "").lower()
+    resolved_provider_symbol = provider_symbol or (
+        pair.get("bybit_symbol") if source == "bybit"
+        else pair.get("mt5_symbol") if source == "mt5"
+        else pair.get("symbol")
+    )
+    state = split_market_state(
         series,
         tf,
         display,
-        time_now=time_now,
+        time_now=now_ts,
         offset_hours=offset_hours,
+        provider=source or None,
+        provider_symbol=str(resolved_provider_symbol or "") or None,
     )
+    freshness = candle_freshness_diagnostic(
+        pair,
+        tf,
+        series,
+        time_now=now_ts,
+        source=source or None,
+    )
+    severity = str(freshness.get("stalenessSeverity") or "")
+    state["stale"] = severity in {
+        "missing_current_bucket",
+        "stale_multi_bucket",
+    }
+    if state["stale"] and not state.get("missing_reason"):
+        state["missing_reason"] = severity
+    elif not state["stale"] and state.get("confirmed"):
+        state["missing_reason"] = None
+    return state
 
 
 # Per-TF config keys / default lag caps for the one-shot forex stale refetch.

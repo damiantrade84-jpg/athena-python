@@ -26,6 +26,7 @@ import logging
 import logging.handlers
 import sqlite3
 import signal as _signal
+from typing import Any
 
 # Load .env BEFORE importing any module that reads env vars at import time
 # (telegram_notify starts a background thread on import that calls _load_config())
@@ -6777,8 +6778,10 @@ def _naked_scan_style_profile(
     score_group: str | None = None,
     asset_type: str | None = None,
     *,
+    symbol: str = "",
     live_entry_tf: bool = False,
     source: str | None = None,
+    speed_state: Any | None = None,
 ) -> tuple[str, dict]:
     resolved = _normalize_style(style)
     if resolved == "auto":
@@ -6788,9 +6791,15 @@ def _naked_scan_style_profile(
     # for tests / callers that don't supply pair context.
     from market_structure import resolve_engine_b_tfs
     _tf_asset = (asset_type or "forex").lower()
-    _tf_scalp = resolve_engine_b_tfs(_tf_asset, "scalp")
-    _tf_intra = resolve_engine_b_tfs(_tf_asset, "intraday")
-    _tf_swing = resolve_engine_b_tfs(_tf_asset, "swing")
+    _tf_scalp = resolve_engine_b_tfs(
+        _tf_asset, "scalp", symbol=symbol, score_group=score_group, speed_state=speed_state
+    )
+    _tf_intra = resolve_engine_b_tfs(
+        _tf_asset, "intraday", symbol=symbol, score_group=score_group, speed_state=speed_state
+    )
+    _tf_swing = resolve_engine_b_tfs(
+        _tf_asset, "swing", symbol=symbol, score_group=score_group, speed_state=speed_state
+    )
     profiles = {
         "scalp": {
             "min_score": 3.0,
@@ -6799,7 +6808,9 @@ def _naked_scan_style_profile(
             "fallback_rr": 1.4,
             "require_macro_align": False,
             "zone_tf": _tf_scalp["zone"],
+            "setup_tf": _tf_scalp["setup"],
             "entry_tf": _tf_scalp["trigger"],
+            "execution_tf": _tf_scalp["execution"],
             "atr_tf": _tf_scalp["atr"],
         },
         "intraday": {
@@ -6809,7 +6820,9 @@ def _naked_scan_style_profile(
             "fallback_rr": 1.8,
             "require_macro_align": False,
             "zone_tf": _tf_intra["zone"],
+            "setup_tf": _tf_intra["setup"],
             "entry_tf": _tf_intra["trigger"],
+            "execution_tf": _tf_intra["execution"],
             "atr_tf": _tf_intra["atr"],
         },
         "swing": {
@@ -6819,7 +6832,9 @@ def _naked_scan_style_profile(
             "fallback_rr": 2.2,
             "require_macro_align": False,
             "zone_tf": _tf_swing["zone"],
+            "setup_tf": _tf_swing["setup"],
             "entry_tf": _tf_swing["trigger"],
+            "execution_tf": _tf_swing["execution"],
             "atr_tf": _tf_swing["atr"],
         },
     }
@@ -6843,16 +6858,24 @@ def _naked_scan_style_profile(
             if isinstance(style_override, dict):
                 resolved_profile = {**resolved_profile, **style_override}
 
-    if live_entry_tf:
-        from market_structure import resolve_live_engine_b_trigger_tf
-
-        _live_trigger_tf = resolve_live_engine_b_trigger_tf(
-            _tf_asset,
-            resolved,
-            source=source,
-        )
-        if _live_trigger_tf:
-            resolved_profile["entry_tf"] = _live_trigger_tf
+    # Timeframe roles are policy-owned. Numeric strictness overrides above are
+    # preserved, but legacy config cannot replace the central role mapping.
+    _selected_tfs = {
+        "scalp": _tf_scalp,
+        "intraday": _tf_intra,
+        "swing": _tf_swing,
+    }.get(resolved, _tf_scalp)
+    resolved_profile.update(
+        {
+            "zone_tf": _selected_tfs["zone"],
+            "setup_tf": _selected_tfs["setup"],
+            "entry_tf": _selected_tfs["trigger"],
+            "execution_tf": _selected_tfs["execution"],
+            "atr_tf": _selected_tfs["atr"],
+            "timeframe_policy_version": _selected_tfs["policy_version"],
+            "timeframe_policy_profile": _selected_tfs["policy_profile"],
+        }
+    )
 
     resolved_profile["style"] = resolved
     if score_group:
@@ -7085,6 +7108,7 @@ def _compute_naked_analysis(
             _requested_style_naked,
             score_group=_pair_score_group,
             asset_type=pair_obj.get("type", ""),
+            symbol=pair_obj.get("display") or pair_obj.get("symbol") or "",
             live_entry_tf=True,
             source=pair_obj.get("source"),
         )
@@ -7583,6 +7607,7 @@ def api_compare_engines():
         requested_style,
         score_group=_pair_score_group,
         asset_type=pair_obj.get("type", ""),
+        symbol=pair_obj.get("display") or pair_obj.get("symbol") or "",
         live_entry_tf=True,
         source=pair_obj.get("source"),
     )
@@ -7831,6 +7856,7 @@ def api_scan_naked():
                 requested_style,
                 score_group=_pair_score_group,
                 asset_type=pair.get("type", ""),
+                symbol=pair.get("display") or pair.get("symbol") or "",
                 live_entry_tf=True,
                 source=pair.get("source"),
             )
@@ -14756,6 +14782,25 @@ def analyze_pair(
         h1,
         entry_tf=_v3_live_entry_tf,
         entry_candles=_v3_entry_candles,
+    )
+    from timeframe_policy import attach_timeframe_policy_payload
+
+    _policy_market_states = {
+        "D1": _d1_state if isinstance(_d1_state, dict) else {"confirmed": d1 or []},
+        "H4": _h4_state if isinstance(_h4_state, dict) else {"confirmed": h4 or []},
+        "H1": _h1_state if isinstance(_h1_state, dict) else {"confirmed": h1 or []},
+    }
+    for _tf, _state in (preloaded_market_state or {}).items():
+        if isinstance(_state, dict):
+            _policy_market_states[str(_tf).upper()] = _state
+    if _v3_live_entry_tf and isinstance(_v3_entry_state, dict):
+        _policy_market_states[_v3_live_entry_tf] = _v3_entry_state
+    attach_timeframe_policy_payload(
+        _v3_signal,
+        pair,
+        style,
+        engine="engine_a",
+        market_states=_policy_market_states,
     )
     if CONFIG.get("ENGINE_A_V3_SHADOW_JOURNAL_ENABLED", False):
         try:

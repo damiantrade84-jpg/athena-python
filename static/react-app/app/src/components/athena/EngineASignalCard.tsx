@@ -221,6 +221,8 @@ export default function EngineASignalCard({
           </div>
         </div>
 
+        <TimeframePolicyLine signal={signal} compact={compact} />
+
         {/* Score + threshold + bar */}
         <div className="space-y-1">
           <div className="flex items-center justify-between text-[10px] text-muted-foreground">
@@ -510,6 +512,8 @@ function EngineAV3SignalCard({
           <Badge variant={isShort ? 'destructive' : 'secondary'}>{signal.direction || '-'}</Badge>
         </div>
 
+        <TimeframePolicyLine signal={signal} compact={compact} />
+
         {hasQuality && (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
@@ -644,6 +648,33 @@ function EngineAV3SignalCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function TimeframePolicyLine({ signal, compact }: { signal: EngineASignal; compact?: boolean }) {
+  if (!signal.timeframePolicyVersion) return null;
+  const roles = [
+    signal.biasTf ? `${signal.biasTf} bias` : null,
+    signal.structureTf ? `${signal.structureTf} structure` : null,
+    signal.triggerTf ? `${signal.triggerTf} trigger` : null,
+    signal.executionTf ? `${signal.executionTf} execution` : null,
+  ].filter(Boolean).join(' · ');
+  const speed = signal.liveSpeedClass || signal.baselineSpeedClass || 'UNKNOWN';
+  const profile = signal.timeframeProfile || 'SAFE_FALLBACK';
+  return (
+    <div className="rounded border border-border/50 bg-muted/20 px-2 py-1 text-[10px] text-muted-foreground">
+      <p className="font-mono text-foreground">{roles}</p>
+      {!compact && (
+        <p>
+          Speed {speed} · baseline {profile}
+          {signal.entryReadiness && (
+            <span className={signal.entryReadiness === 'READY' ? 'text-long' : 'text-warning'}>
+              {' '}· entry {signal.entryReadiness}
+            </span>
+          )}
+        </p>
+      )}
+    </div>
   );
 }
 

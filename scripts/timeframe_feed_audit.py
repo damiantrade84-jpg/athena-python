@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import sys
@@ -80,6 +81,63 @@ REFERENCE_TF_POLICY = {
     "crypto_alts":      {"bias": "D1/H4", "setup": "H1/M30", "trig": "M15", "micro": "avoid"},
 }
 
+
+def _registered_pairs_from_source() -> list[dict]:
+    """Read the production universe literals without importing athena.py."""
+    wanted = {
+        "FOREX_PAIRS",
+        "COMMODITY_PAIRS",
+        "INDEX_PAIRS",
+        "US_STOCK_PAIRS",
+        "ETF_PAIRS",
+        "JSE_PAIRS",
+        "CRYPTO_PAIRS",
+    }
+    path = os.path.join(_REPO_ROOT, "athena.py")
+    tree = ast.parse(open(path, "r", encoding="utf-8").read(), filename=path)
+    pairs: list[dict] = []
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if isinstance(target, ast.Name) and target.id in wanted:
+            pairs.extend(ast.literal_eval(node.value))
+    return pairs
+
+
+def _mt5_symbol_map_from_source() -> dict[str, str]:
+    """Read the execution-owned MT5 map without importing safety-critical code."""
+    path = os.path.join(_REPO_ROOT, "mt5_executor.py")
+    tree = ast.parse(open(path, "r", encoding="utf-8").read(), filename=path)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if isinstance(target, ast.Name) and target.id == "_MT5_SYMBOL_MAP":
+            return dict(ast.literal_eval(node.value))
+    return {}
+
+
+def _symbol_reconciliation() -> dict:
+    from timeframe_policy import reconcile_symbol_universe
+
+    reconciliation = reconcile_symbol_universe(_registered_pairs_from_source())
+    mt5_map = _mt5_symbol_map_from_source()
+    for row in reconciliation.get("rows") or []:
+        if row.get("provider") != "mt5":
+            continue
+        display = str(row.get("display_symbol") or "")
+        provider_symbol = mt5_map.get(display)
+        if not provider_symbol:
+            stripped = display.replace("/", "").replace(" ", "")
+            provider_symbol = (
+                f"{stripped}.US"
+                if stripped.isupper() and 1 < len(stripped) <= 5
+                else stripped
+            )
+        row["provider_symbol"] = provider_symbol or None
+    return reconciliation
+
 # Representative symbols per group (display -> group) for live probes.
 MT5_PROBE_SYMBOLS = {
     "EUR/USD": "fx_majors", "GBP/USD": "fx_majors", "USD/JPY": "fx_majors",
@@ -130,51 +188,12 @@ def _scan_limits_from_yaml() -> dict | None:
         import re
         with open(path, "r", encoding="utf-8") as fh:
             for line in fh:
-                m = re.match(r"^(D1_CANDLES|H4_CANDLES|H1_CANDLES)\s*:\s*(\d+)", line)
+                m = re.match(
+                    r"^(D1_CANDLES|H4_CANDLES|H1_CANDLES|M30_CANDLES|M15_CANDLES|M5_CANDLES)\s*:\s*(\d+)",
+                    line,
+                )
                 if m:
                     out[m.group(1).split("_")[0]] = int(m.group(2))
-    except Exception:
-        return out or None
-    return out or None
-
-
-def _engine_b_matrix_from_source() -> dict | None:
-    """Parse market_structure._ENGINE_B_TF_MATRIX from source (read-only).
-
-    Lines look like:  "intraday": ("H4", "H4", "H1", "H4"),  -> (struct, zone,
-    trigger, atr). Used only when importing the module is blocked by the config
-    safety gate."""
-    import re
-    path = os.path.join(_REPO_ROOT, "market_structure.py")
-    if not os.path.exists(path):
-        return None
-    out: dict = {}
-    cur_asset = None
-    in_matrix = False
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            for line in fh:
-                if "_ENGINE_B_TF_MATRIX" in line and "{" in line:
-                    in_matrix = True
-                    continue
-                if not in_matrix:
-                    continue
-                if line.strip() == "}":
-                    break
-                am = re.match(r'\s*"(\w+)":\s*\{', line)
-                if am:
-                    cur_asset = am.group(1)
-                    out.setdefault(cur_asset, {})
-                for sm in re.finditer(
-                    r'"(scalp|intraday|swing)":\s*\("(\w+)",\s*"(\w+)",\s*"(\w+)",\s*"(\w+)"\)',
-                    line,
-                ):
-                    if cur_asset is None:
-                        continue
-                    out[cur_asset][sm.group(1)] = {
-                        "struct": sm.group(2), "zone": sm.group(3),
-                        "trigger": sm.group(4), "atr": sm.group(5),
-                    }
     except Exception:
         return out or None
     return out or None
@@ -228,11 +247,31 @@ def collect_engine_wiring() -> dict:
                 matrix[asset][style] = ms.resolve_engine_b_tfs(asset, style)
         wiring["engine_b_tf_matrix"] = matrix
     except BaseException as exc:  # noqa: BLE001
-        # config import blocked by safety gate -> read the matrix source directly
-        # (read-only) so the key Engine B trigger-TF finding still populates.
-        wiring["engine_b_tf_matrix"] = _engine_b_matrix_from_source()
+        # The policy module is side-effect free and remains importable when the
+        # runtime config safety gate correctly blocks market_structure imports.
+        try:
+            from timeframe_policy import resolve_timeframe_policy
+
+            matrix = {}
+            for asset in ("forex", "crypto", "commodity", "index", "stock"):
+                matrix[asset] = {}
+                for style in ("scalp", "intraday", "swing"):
+                    policy = resolve_timeframe_policy(
+                        "", asset, None, f"engine_b_{style}"
+                    )
+                    matrix[asset][style] = {
+                        "struct": policy.structure_tf.value,
+                        "zone": policy.structure_tf.value,
+                        "setup": policy.setup_tf.value,
+                        "trigger": policy.trigger_tf.value,
+                        "execution": policy.execution_tf.value,
+                        "atr": policy.structure_tf.value,
+                    }
+            wiring["engine_b_tf_matrix"] = matrix
+        except Exception:
+            wiring["engine_b_tf_matrix"] = None
         wiring["errors"].append(
-            f"engine_b_tf_matrix import blocked ({exc!r}); used source-parse fallback"
+            f"engine_b_tf_matrix runtime import blocked ({exc!r}); used side-effect-free policy fallback"
         )
 
     # Cascade scan TFs.
@@ -273,8 +312,8 @@ def collect_engine_wiring() -> dict:
     # record the known mapping and its documented silent fallback.
     wiring["mt5_generic_tf_map"] = {
         "supported": ["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
-        "silent_default_on_unknown": "H1",  # athena.py: tf_map.get(tf, mt5.TIMEFRAME_H1)
-        "ref": "athena.py _mt5_fetch path (tf_map.get(tf, mt5.TIMEFRAME_H1))",
+        "silent_default_on_unknown": None,
+        "ref": "athena.py _mt5_fetch rejects mt5_tf is None (no H1 fallback)",
     }
 
     # Bybit interval map.
@@ -473,9 +512,12 @@ def build_report(wiring: dict, mt5_res: dict | None, bybit_res: dict | None) -> 
         "area": "Engine A/B/C scan path",
         "evidence": "config.scan_candle_limits() -> "
                     f"{wiring.get('scan_candle_limits')}",
-        "detail": "Main scan fetches ONLY D1/H4/H1. No M30/M15/M5 key exists, so "
-                  "Engine A, Engine B and the Engine C consensus cannot receive "
-                  "sub-H1 candles regardless of any requested trigger TF.",
+        "detail": (
+            "Main scan exposes D1/H4/H1/M30/M15/M5 policy limits and can preload "
+            "the resolved lower-timeframe roles."
+            if scan_has_sub_h1
+            else "Main scan has no sub-H1 candle limit and cannot supply resolved trigger roles."
+        ),
     })
 
     # Finding 2: Engine B trigger ceiling.
@@ -483,24 +525,23 @@ def build_report(wiring: dict, mt5_res: dict | None, bybit_res: dict | None) -> 
     trigs = sorted({v["trigger"] for a in ebm.values() for v in a.values()}) if ebm else []
     findings.append({
         "id": "TF-2",
-        "severity": "FAIL" if trigs and all(t in ("H1", "H4", "D1") for t in trigs) else "WARN",
+        "severity": "PASS" if "M15" in trigs else "FAIL",
         "area": "Engine B trigger TF",
-        "evidence": f"market_structure._ENGINE_B_TF_MATRIX trigger TFs = {trigs}",
-        "detail": "Engine B is the designated MTF structure engine but its entry "
-                  "trigger TF tops out at H1. Reference policy expects M15 trigger "
-                  "(+M5 micro). Engine B has no M15/M5 path.",
+        "evidence": f"timeframe_policy.resolve_timeframe_policy trigger TFs = {trigs}",
+        "detail": (
+            "Engine B resolves M15 intraday triggers and explicit M5 scalp execution."
+            if "M15" in trigs
+            else "Engine B trigger roles do not expose the required M15 path."
+        ),
     })
 
     # Finding 3: silent MT5 fallback to H1.
     findings.append({
         "id": "TF-3",
-        "severity": "WARN",
+        "severity": "PASS" if wiring["mt5_generic_tf_map"].get("silent_default_on_unknown") is None else "WARN",
         "area": "MT5 generic fetch",
         "evidence": wiring["mt5_generic_tf_map"]["ref"],
-        "detail": "Unknown/malformed TF string silently maps to H1 "
-                  "(tf_map.get(tf, mt5.TIMEFRAME_H1)) instead of raising/blocking. "
-                  "A typo'd TF would be served as H1 with no signal. Scan path only "
-                  "passes valid D1/H4/H1 today, so impact is latent, not active.",
+        "detail": "Unknown/malformed MT5 timeframe strings fail closed and are not served as H1.",
     })
 
     # Finding 4: ASE has no sub-H1 data.
@@ -522,11 +563,7 @@ def build_report(wiring: dict, mt5_res: dict | None, bybit_res: dict | None) -> 
         "severity": "INFO",
         "area": "Scalp engine (Engine D / Scalp Workbench)",
         "evidence": f"scalp_engine.mt5_fetch_scalp_candles TFs = {wiring.get('scalp_mt5_tfs')}",
-        "detail": "The ONLY code path that fetches M15/M5/M1 is the manual scalp "
-                  "workbench. It is separate from the Engine A/B/C scan and is not the "
-                  "'Engine C confirmation' layer described in the policy. Engine C "
-                  "(engine_c.compute_consensus) is a meta-consensus over A/B outputs and "
-                  "fetches no candles of its own.",
+        "detail": "Engine D retains its native H1/M15/M5/M1 feed path; the main scanner now independently preloads M30/M15/M5 roles for A/B without collapsing Engine C boundaries.",
     })
 
     # Finding 6: Bybit interval map completeness.
@@ -552,6 +589,7 @@ def build_report(wiring: dict, mt5_res: dict | None, bybit_res: dict | None) -> 
         "wiring": wiring,
         "findings": findings,
         "reference_policy": REFERENCE_TF_POLICY,
+        "symbol_reconciliation": _symbol_reconciliation(),
         "mt5_probe": mt5_res,
         "bybit_probe": bybit_res,
     }
@@ -571,14 +609,14 @@ def render_markdown(report: dict) -> str:
     L.append(f"| Engine A (scan) | {list((scl or {}).keys())} | H4/H1 score | config.scan_candle_limits |")
     ebm = w.get("engine_b_tf_matrix") or {}
     trigs = sorted({v['trigger'] for a in ebm.values() for v in a.values()}) if ebm else []
-    L.append(f"| Engine B | D1/H4/H1 | {trigs} | market_structure._ENGINE_B_TF_MATRIX |")
-    L.append(f"| Engine C (consensus) | inherits A/B (D1/H4/H1) | n/a | engine_c.compute_consensus |")
+    L.append(f"| Engine B | {list((scl or {}).keys())} | {trigs} | timeframe_policy.resolve_timeframe_policy |")
+    L.append(f"| Engine C (consensus) | consumes independent A/B policy payloads | n/a | engine_c.compute_consensus |")
     L.append(f"| Scalp (Engine D) | {w.get('scalp_mt5_tfs')} | M1/M5 | scalp_engine.mt5_fetch_scalp_candles |")
     L.append(f"| ASE | {w.get('ase_ingest_tfs')} | H1 | athena_ase.data.ingest |")
     L.append(f"| Cascade scan | {w.get('cascade_analysis_tfs')} | H1/H4 | cascade_scan.ANALYSIS_TIMEFRAMES |")
     L.append("")
 
-    L.append("## 3. Reference asset-group TF policy (diagnostic only — NOT wired)\n")
+    L.append("## 3. Reference asset-group TF benchmark (production policy: timeframe_policy.py)\n")
     L.append("| Group | bias | setup | trigger | micro |")
     L.append("|---|---|---|---|---|")
     for g, p in report["reference_policy"].items():
@@ -595,8 +633,27 @@ def render_markdown(report: dict) -> str:
         L.append(f"- **{f['id']} [{f['severity']}] {f['area']}** — evidence: `{f['evidence']}`")
     L.append("")
 
-    for label, res in (("5. MT5 feed capability matrix", report.get("mt5_probe")),
-                       ("6. Bybit feed capability matrix", report.get("bybit_probe"))):
+    reconciliation = report.get("symbol_reconciliation") or {}
+    rows = reconciliation.get("rows") or []
+    L.append("## 5. Production symbol reconciliation\n")
+    L.append(
+        f"Enabled={len(rows)}; duplicate canonicals={reconciliation.get('duplicate_canonical_symbols') or []}; "
+        f"multi-group aliases={reconciliation.get('aliases_mapping_to_multiple_groups') or {}}; "
+        f"unsafe fallbacks={reconciliation.get('unsafe_symbols') or []}.\n"
+    )
+    L.append("| Display | Canonical | Asset | Score group | Provider | Provider symbol | Styles | Baseline | Source |")
+    L.append("|---|---|---|---|---|---|---|---|---|")
+    for row in rows:
+        L.append(
+            f"| {row.get('display_symbol')} | {row.get('canonical_symbol')} | "
+            f"{row.get('asset_type')} | {row.get('score_group')} | {row.get('provider')} | "
+            f"{row.get('provider_symbol')} | {', '.join(row.get('supported_styles') or [])} | "
+            f"{row.get('baseline_profile')} | {row.get('policy_source')} |"
+        )
+    L.append("")
+
+    for label, res in (("6. MT5 feed capability matrix", report.get("mt5_probe")),
+                       ("7. Bybit feed capability matrix", report.get("bybit_probe"))):
         L.append(f"## {label}\n")
         if not res:
             L.append("_Not probed (run with --probe-mt5 / --probe-bybit)._\n")
@@ -617,7 +674,7 @@ def render_markdown(report: dict) -> str:
                      + " | ".join(cells) + f" | {row['status']} |")
         L.append("")
 
-    L.append("## 7. Symbol mapping audit\n")
+    L.append("## 8. Symbol mapping audit\n")
     L.append("- MT5: explicit dict `_MT5_SYMBOL_MAP` + fallback strip `/`/space; "
              "2-5 char uppercase -> `.US` suffix (stocks/ETFs). Forex/metals are "
              "in the explicit map. See `mt5_executor.mt5_map_symbol`.")

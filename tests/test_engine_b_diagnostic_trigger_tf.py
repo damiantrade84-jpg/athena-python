@@ -52,8 +52,8 @@ def test_engine_b_candles_for_tf_extra_map_m15_no_h1_fallback():
     assert engine_b_candles_for_tf("M15", d1, h4, h1, extra_by_tf={}) == []
     # Empty series → fail closed empty.
     assert engine_b_candles_for_tf("M15", d1, h4, h1, extra_by_tf={"M15": []}) == []
-    # Legacy: no extras map → unknown TF falls back to H1.
-    assert engine_b_candles_for_tf("M15", d1, h4, h1)[-1]["close"] == pytest.approx(3.0)
+    # No extras map → fail closed; never substitute H1.
+    assert engine_b_candles_for_tf("M15", d1, h4, h1) == []
 
 
 def test_diagnostic_trigger_kwargs_default_off(monkeypatch):

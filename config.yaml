@@ -45,6 +45,7 @@ H4_CANDLES: 1001
 H1_CANDLES: 1001
 M30_CANDLES: 500  # Active Engine A forex intraday entry/setup bars.
 M15_CANDLES: 500  # Active Engine B forex intraday trigger bars.
+M5_CANDLES: 1000  # Policy-driven execution/refinement bars; never a higher-TF fallback.
 
 # EODHD bulk last-day URL uses /eod-bulk-last-day/{EXCH}; some suffixes (COMM) are not supported → HTTP 404.
 # Those pairs still receive D1 via normal EOD candle fetch; CandleBuilder bulk refresh skips them only.
@@ -3463,7 +3464,8 @@ ENGINE_B_RESEARCH_LAB_FACTORS:
 
 NAKED_ENGINE:
 
-  # Live trigger timing only. Intraday structure/zones remain H4.
+  # Deprecated compatibility input. Timeframe roles are now owned by
+  # timeframe_policy.py; runtime profiles ignore this override.
   LIVE_TRIGGER_TF_BY_STYLE:
     intraday: { forex: M30 }
 
@@ -3823,7 +3825,7 @@ ENGINE_B_BOS_VOLUME_FOR_TICKVOL: false
 
 
 # Engine B structure / zone / trigger / ATR timeframes are resolved per
-# (asset_type, style) by market_structure.resolve_engine_b_tfs().
+# symbol/group/style by timeframe_policy.resolve_timeframe_policy().
 # Legacy ENGINE_B_FOREX_STRUCTURE_TF is no longer read.
 
 # Minimum ADX for forex Engine B (D1 snap preferred, else H4/zone snap; else

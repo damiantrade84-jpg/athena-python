@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
@@ -50,6 +51,81 @@ from threshold_audit import (
 from factor_scoring import make_regime_smoothing_context
 
 log = logging.getLogger("sentinel")
+
+_SPEED_STATE_BY_SYMBOL: dict[str, Any] = {}
+_SPEED_STATE_LOCK = threading.Lock()
+
+
+def _scan_speed_state(
+    pair: dict[str, Any],
+    market_states: dict[str, Any],
+    live_prices: dict[str, Any] | None,
+    *,
+    current_session: str | None = None,
+    scheduled_event: bool | None = None,
+):
+    """Build persistent speed state from confirmed bars and quote quality."""
+    from athena_app.services.market_state import candle_timestamp_epoch
+    from timeframe_policy import calculate_speed_state, canonical_symbol
+
+    requested_symbol = pair.get("display") or pair.get("symbol") or ""
+    key = canonical_symbol(requested_symbol) or "".join(
+        ch for ch in str(requested_symbol).upper() if ch.isalnum()
+    )
+
+    def _quote_key(value: Any) -> str:
+        return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+    wanted = {
+        _quote_key(pair.get("display")),
+        _quote_key(pair.get("symbol")),
+        _quote_key(pair.get("pair")),
+    }
+    wanted.discard("")
+    quote = next(
+        (
+            dict(value)
+            for raw_key, value in (live_prices or {}).items()
+            if _quote_key(raw_key) in wanted and isinstance(value, dict)
+        ),
+        {},
+    )
+    try:
+        bid = float(quote.get("bid"))
+        ask = float(quote.get("ask"))
+        spread = ask - bid if ask >= bid and bid > 0 else None
+    except (TypeError, ValueError):
+        spread = None
+    try:
+        quote_ts = float(quote.get("ts"))
+        if quote_ts > 1e12:
+            quote_ts /= 1000.0
+        quote_age = max(0.0, datetime.now(timezone.utc).timestamp() - quote_ts) if quote_ts > 0 else None
+    except (TypeError, ValueError):
+        quote_age = None
+
+    h1 = list((market_states.get("H1") or {}).get("confirmed") or [])
+    m15 = list((market_states.get("M15") or {}).get("confirmed") or [])
+    last_h1_epoch = candle_timestamp_epoch(h1[-1]) if h1 else None
+    gap_status = "stale" if any(
+        bool((market_states.get(tf) or {}).get("stale")) for tf in ("H1", "M15")
+    ) else "normal"
+    with _SPEED_STATE_LOCK:
+        previous = _SPEED_STATE_BY_SYMBOL.get(key)
+    state = calculate_speed_state(
+        h1,
+        m15,
+        spread=spread,
+        quote_age_sec=quote_age,
+        current_session=current_session,
+        previous=previous,
+        last_closed_h1_open_time=int(last_h1_epoch) if last_h1_epoch else None,
+        gap_status=gap_status,
+        scheduled_event=scheduled_event,
+    )
+    with _SPEED_STATE_LOCK:
+        _SPEED_STATE_BY_SYMBOL[key] = state
+    return state
 
 
 def _engine_b_scan_confirmation_gate_enabled(config: dict | None = None) -> bool:
@@ -2006,7 +2082,23 @@ def run_full_scan(
                     r, pair, "H1", _lim["H1"], force_refresh=refresh_market_data
                 )
                 from engine_a_v3.timeframes import resolve_live_v3_entry_timeframe
+                from engine_a_groups import resolve_score_group_by_type
                 from market_structure import resolve_live_engine_b_trigger_tf
+                from timeframe_policy import resolve_timeframe_policy
+
+                _policy_score_group = resolve_score_group_by_type(pair)
+                _policy_a = resolve_timeframe_policy(
+                    pair.get("display") or pair.get("symbol") or "",
+                    pair.get("type", ""),
+                    _policy_score_group,
+                    _pair_style,
+                )
+                _policy_b = resolve_timeframe_policy(
+                    pair.get("display") or pair.get("symbol") or "",
+                    pair.get("type", ""),
+                    _policy_score_group,
+                    f"engine_b_{_pair_style}",
+                )
 
                 _live_entry_tfs = {
                     tf
@@ -2017,6 +2109,12 @@ def run_full_scan(
                         resolve_live_engine_b_trigger_tf(
                             pair.get("type", ""), _pair_style, source=pair.get("source")
                         ),
+                        _policy_a.setup_tf.value,
+                        _policy_a.trigger_tf.value,
+                        _policy_a.execution_tf.value,
+                        _policy_b.setup_tf.value,
+                        _policy_b.trigger_tf.value,
+                        _policy_b.execution_tf.value,
                     )
                     if tf and tf not in {"D1", "H4", "H1"}
                 }
@@ -2046,6 +2144,11 @@ def run_full_scan(
                                 pair,
                                 _tf,
                                 candles=_raw,
+                                provider_symbol=(
+                                    r.mt5_map_symbol(pair.get("display") or pair.get("symbol") or "")
+                                    if callable(getattr(r, "mt5_map_symbol", None))
+                                    else pair.get("mt5_symbol")
+                                ),
                             )
                             preloaded_market_state[_tf] = _state
                             _active = list(_state.get("confirmed") or [])
@@ -2072,6 +2175,63 @@ def run_full_scan(
                             pair.get("display", "?"),
                             _state_err,
                         )
+                else:
+                    try:
+                        from athena_app.services.market_state import get_tf_market_state
+
+                        for _tf in ("D1", "H4", "H1", *sorted(_live_entry_tfs)):
+                            _state = get_tf_market_state(
+                                pair,
+                                _tf,
+                                candles=list(raw_candles.get(_tf) or []),
+                                provider_symbol=(
+                                    pair.get("bybit_symbol")
+                                    or pair.get("symbol")
+                                ),
+                            )
+                            preloaded_market_state[_tf] = _state
+                            _active = list(_state.get("confirmed") or [])
+                            if _tf in _live_entry_tfs and _state.get("forming"):
+                                _active.append(_state["forming"])
+                            preloaded_candles_for_a[_tf] = _active
+                    except Exception as _state_err:
+                        log.debug(
+                            "[SCAN][STATE][A] %s provider market-state preload failed: %s",
+                            pair.get("display", "?"),
+                            _state_err,
+                        )
+                try:
+                    with r.live_prices_lock:
+                        _policy_live_prices = dict(r.live_prices)
+                except (AttributeError, TypeError):
+                    _policy_live_prices = {}
+                try:
+                    from scalp_engine import get_sessions_for_time
+
+                    _sessions = get_sessions_for_time(
+                        pair.get("type", ""),
+                        symbol=pair.get("display") or pair.get("symbol") or "",
+                    )
+                    _speed_session = "+".join(_sessions) if _sessions else "closed"
+                except Exception:
+                    _speed_session = None
+                try:
+                    _speed_event_risk = _build_event_risk(
+                        pair,
+                        ds_ctx,
+                        earnings_ctx,
+                        _closed_exchanges,
+                    )
+                    _speed_scheduled_event = bool(_speed_event_risk.get("reasons"))
+                except Exception:
+                    _speed_scheduled_event = None
+                _speed_state = _scan_speed_state(
+                    pair,
+                    preloaded_market_state,
+                    _policy_live_prices,
+                    current_session=_speed_session,
+                    scheduled_event=_speed_scheduled_event,
+                )
                 fetch_meta = {
                     "D1": _d1_meta or get_candle_fetch_meta(pair, "D1", _lim["D1"]),
                     "H4": _h4_meta or get_candle_fetch_meta(pair, "H4", _lim["H4"]),
@@ -2112,6 +2272,18 @@ def run_full_scan(
                     btc_bias,
                     **_analyze_kwargs,
                 )
+
+                if sig_a:
+                    from timeframe_policy import attach_timeframe_policy_payload
+
+                    attach_timeframe_policy_payload(
+                        sig_a,
+                        pair,
+                        _pair_style,
+                        engine="engine_a",
+                        market_states=preloaded_market_state,
+                        speed_state=_speed_state,
+                    )
 
                 if sig_a:
                     try:
@@ -2226,13 +2398,15 @@ def run_full_scan(
                             _pair_style,
                             score_group=_pair_score_group,
                             asset_type=ptype,
+                            symbol=pair.get("display") or pair.get("symbol") or "",
                             live_entry_tf=True,
                             source=pair.get("source"),
+                            speed_state=_speed_state,
                         )
                     except TypeError as _profile_type_err:
                         if not any(
                             name in str(_profile_type_err)
-                            for name in ("live_entry_tf", "source")
+                            for name in ("live_entry_tf", "source", "symbol", "speed_state")
                         ):
                             raise
                         resolved_style_b, style_profile_b = r.naked_scan_style_profile(
@@ -2771,6 +2945,43 @@ def run_full_scan(
                                     sig_a["combinedConviction"] = round(a_norm * _w_a_fb, 4)
                                     sig_a["enginesAligned"] = False
                                     sig_a["engine_b_verdict"] = res_b.get("structural_verdict", "UNCLEAR")
+                                from timeframe_policy import attach_timeframe_policy_payload
+
+                                _engine_b_policy = attach_timeframe_policy_payload(
+                                    res_b,
+                                    pair,
+                                    resolved_style_b,
+                                    engine="engine_b",
+                                    market_states=preloaded_market_state,
+                                    speed_state=_speed_state,
+                                )
+                                res_b["structure_tf"] = _engine_b_policy.structure_tf.value
+                                res_b["entry_tf"] = _engine_b_policy.setup_tf.value
+                                res_b["trigger_tf"] = _engine_b_policy.trigger_tf.value
+                                res_b["execution_tf"] = _engine_b_policy.execution_tf.value
+                                res_b["atr_tf"] = _engine_b_policy.structure_tf.value
+                                res_b["nearest_support_resistance_timeframe"] = (
+                                    _engine_b_policy.structure_tf.value
+                                )
+                                res_b["signal_price_rr"] = res_b.get("structural_rr")
+                                res_b["live_price_rr"] = (
+                                    res_b.get("execution_rr2")
+                                    or res_b.get("execution_rr")
+                                    or conf_b.get("execution_rr2")
+                                    or conf_b.get("execution_rr")
+                                )
+                                res_b["tp_crosses_opposing_structural_zone"] = (
+                                    res_b.get("tp1_path_clear") is False
+                                )
+                                if engine_b_scan_only:
+                                    attach_timeframe_policy_payload(
+                                        sig_a,
+                                        pair,
+                                        resolved_style_b,
+                                        engine="engine_b",
+                                        market_states=preloaded_market_state,
+                                        speed_state=_speed_state,
+                                    )
                                 _eb_snap["res"] = res_b
                                 _eb_snap["conf"] = conf_b
                                 sig_a["engine_b_status"] = conf_b

@@ -1317,6 +1317,7 @@ CONFIG: dict = {
     "H1_CANDLES": 1000,
     "M30_CANDLES": 500,
     "M15_CANDLES": 500,
+    "M5_CANDLES": 1000,
     # Skip /api/eod-bulk-last-day/{EXCH} for these ticker suffixes (404 on e.g. COMM).
     "CANDLE_BUILDER_BULK_D1_SKIP_EXCHANGES": ["COMM"],
     "SCAN_MAX_WORKERS": 3,
@@ -2980,7 +2981,7 @@ def validate_config(cfg: dict) -> None:
             log.warning(f"[CFG] {k} expected number, got {type(v).__name__!r}")
         elif v <= 0:
             log.warning(f"[CFG] {k}={v} is non-positive — check config.yaml")
-    for k in ("D1_CANDLES", "H4_CANDLES", "H1_CANDLES", "M30_CANDLES", "M15_CANDLES"):
+    for k in ("D1_CANDLES", "H4_CANDLES", "H1_CANDLES", "M30_CANDLES", "M15_CANDLES", "M5_CANDLES"):
         v = cfg.get(k)
         if not isinstance(v, int) or v < 10:
             log.warning(f"[CFG] {k}={v} is too low — minimum 10 candles required")
@@ -3528,6 +3529,7 @@ def scan_candle_limits() -> dict[str, int]:
         "H1": int(CONFIG["H1_CANDLES"]),
         "M30": int(CONFIG["M30_CANDLES"]),
         "M15": int(CONFIG["M15_CANDLES"]),
+        "M5": int(CONFIG["M5_CANDLES"]),
     }
 
 

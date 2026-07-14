@@ -4,6 +4,7 @@ import math
 from scipy.signal import find_peaks
 import logging
 import threading
+from typing import Any
 import config
 from indicators import calc_atr
 from zone_registry import get_zone_registry
@@ -435,29 +436,6 @@ def _engine_b_confirmed_only_struct_candles(
     return []
 
 
-# Engine B timeframe matrix — single source of truth for TF selection across
-# live, execution, scan, and backtest. Maps (asset_type, style) to the four
-# roles: struct (BOS/CHoCH detection), zone (S/R clusters), trigger (entry
-# pattern), atr (SL/TP scale). Callers pre-resolve candles per role.
-_ENGINE_B_TF_MATRIX = {
-    "forex":     {"scalp": ("H1", "H4", "H1", "H1"),
-                  "intraday": ("H4", "H4", "H1", "H4"),
-                  "swing": ("D1", "D1", "H4", "D1")},
-    "crypto":    {"scalp": ("H1", "H4", "H1", "H1"),
-                  "intraday": ("H4", "H4", "H1", "H4"),
-                  "swing": ("D1", "D1", "H4", "D1")},
-    "commodity": {"scalp": ("H1", "H4", "H1", "H1"),
-                  "intraday": ("H4", "H4", "H1", "H4"),
-                  "swing": ("D1", "D1", "H4", "D1")},
-    "index":     {"scalp": ("H1", "H4", "H1", "H1"),
-                  "intraday": ("H4", "H4", "H1", "H4"),
-                  "swing": ("D1", "D1", "H4", "D1")},
-    "stock":     {"scalp": ("H1", "H4", "H1", "H1"),
-                  "intraday": ("H4", "H4", "H1", "H4"),
-                  "swing": ("D1", "D1", "H4", "D1")},
-}
-
-
 # Score groups that are equity ETFs (route through STYLE_ATR_MULTS["etf"] so we
 # can use tighter SL/TP than single stocks). Bond ETFs (TLT) get an even tighter
 # class. All others fall back to the asset_type lookup.
@@ -485,26 +463,46 @@ def resolve_engine_b_asset_class(asset_type: str, score_group: str | None = None
     return a or "forex"
 
 
-def resolve_engine_b_tfs(asset_type: str, style: str) -> dict:
+def resolve_engine_b_tfs(
+    asset_type: str,
+    style: str,
+    *,
+    symbol: str = "",
+    score_group: str | None = None,
+    speed_state: Any | None = None,
+) -> dict:
     """Resolve struct/zone/trigger/atr timeframes for an (asset_type, style) pair.
 
     Single source of truth used by athena, execution, scanner, and backtest_runner.
     Replaces the legacy ``ENGINE_B_FOREX_STRUCTURE_TF`` flag and the per-style
     hardcoded TFs in ``_naked_scan_style_profile``.
     """
+    from timeframe_policy import resolve_timeframe_policy
+
     a = (asset_type or "forex").lower()
     s = (style or "intraday").lower()
     if s == "auto":
         s = "intraday"
-    asset_table = _ENGINE_B_TF_MATRIX.get(a) or _ENGINE_B_TF_MATRIX["forex"]
-    struct_tf, zone_tf, trigger_tf, atr_tf = asset_table.get(
-        s, asset_table["intraday"]
+    policy = resolve_timeframe_policy(
+        symbol,
+        a,
+        score_group,
+        f"engine_b_{s}",
+        speed_state,
     )
+    # Engine B's structural ATR remains tied to its principal structure horizon;
+    # M5/M15 trigger noise must never size an H1/H4 structure trade.
     return {
-        "struct": struct_tf,
-        "zone": zone_tf,
-        "trigger": trigger_tf,
-        "atr": atr_tf,
+        "regime": policy.regime_tf.value,
+        "bias": policy.bias_tf.value,
+        "struct": policy.structure_tf.value,
+        "zone": policy.structure_tf.value,
+        "setup": policy.setup_tf.value,
+        "trigger": policy.trigger_tf.value,
+        "execution": policy.execution_tf.value,
+        "atr": policy.structure_tf.value,
+        "policy_version": policy.policy_version,
+        "policy_profile": policy.profile,
     }
 
 
@@ -541,10 +539,8 @@ def engine_b_candles_for_tf(
     """Return the candle series for a role timeframe.
 
     Production path uses canonical D1/H4/H1 slots. Optional ``extra_by_tf``
-    supplies lower TFs (M15/M30/…) for diagnostic trigger overrides. When
-    ``extra_by_tf`` is provided and the key is absent or empty, returns []
-    (fail closed — never silently substitute H1 for a requested lower TF).
-    When ``extra_by_tf`` is None, unknown TFs fall back to H1 (legacy).
+    supplies lower TFs (M15/M30/…). Missing or empty lower-timeframe data
+    always returns [] so a requested trigger can never silently use H1.
     """
     key = str(tf or "").upper()
     if key == "D1":
@@ -553,12 +549,10 @@ def engine_b_candles_for_tf(
         return h4_candles or []
     if key == "H1":
         return h1_candles or []
-    if isinstance(extra_by_tf, dict):
-        if key not in extra_by_tf:
-            return []
-        series = extra_by_tf.get(key)
-        return list(series) if series else []
-    return h1_candles or []
+    if not isinstance(extra_by_tf, dict) or key not in extra_by_tf:
+        return []
+    series = extra_by_tf.get(key)
+    return list(series) if series else []
 
 
 _DIAGNOSTIC_TRIGGER_TFS = frozenset({"H1", "M15", "M30"})
@@ -4275,7 +4269,26 @@ class NakedEngine:
 
         registry_symbol = self._consume_registry_symbol() if enable_zone_registry else None
 
-        _tfs = dict(resolve_engine_b_tfs(asset_type, style))
+        _pair_symbol = ""
+        _pair_score_group = None
+        if isinstance(pair, dict):
+            _pair_symbol = str(pair.get("display") or pair.get("symbol") or "")
+            _pair_score_group = pair.get("score_group")
+            if not _pair_score_group:
+                try:
+                    from engine_a_groups import resolve_score_group_by_type
+
+                    _pair_score_group = resolve_score_group_by_type(pair)
+                except Exception:
+                    _pair_score_group = None
+        _tfs = dict(
+            resolve_engine_b_tfs(
+                asset_type,
+                style,
+                symbol=_pair_symbol,
+                score_group=str(_pair_score_group) if _pair_score_group else None,
+            )
+        )
         structure_tf = _tfs["struct"]
         if structure_tf == "D1":
             struct_candles = d1_candles
@@ -4330,13 +4343,23 @@ class NakedEngine:
                 )
             _tfs["trigger"] = _override_tf
         else:
+            _resolved_trigger_tf = str(_tfs["trigger"]).upper()
             trigger_candles = engine_b_candles_for_tf(
-                _tfs["trigger"],
+                _resolved_trigger_tf,
                 d1_candles,
                 h4_candles,
                 h1_candles,
-                extra_by_tf=_extras,
+                extra_by_tf=(
+                    _extras
+                    if _extras is not None
+                    else {} if _resolved_trigger_tf not in {"D1", "H4", "H1"} else None
+                ),
             )
+        if not trigger_candles:
+            return {
+                "_error": f"missing_required_trigger_timeframe:{_tfs['trigger']}",
+                "forming_strip_diagnostics": forming_strip_diag,
+            }
         _zone_tf = str(_tfs.get("zone") or structure_tf or "H4").upper()
         _zone_fvg_candles = engine_b_candles_for_tf(
             _zone_tf, d1_candles, h4_candles, h1_candles, extra_by_tf=_extras

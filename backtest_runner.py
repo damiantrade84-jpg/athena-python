@@ -6,6 +6,8 @@ after ``set_runtime()`` has run (normal app / CLI load order).
 from __future__ import annotations
 
 import bisect
+import hashlib
+import json
 import logging
 import math
 import os
@@ -534,17 +536,23 @@ def _backtest_candle_limits(
         "d1": d1,
         "h4": h4,
         "h1": h1,
+        "m30": math.ceil(days * 48) + 100,
+        "m15": math.ceil(days * 96) + 100,
+        "m5": math.ceil(days * 288) + 100,
     }
 
 
 def _log_backtest_lookback(limits: dict[str, int], *, prefix: str = "[BT]") -> None:
     log.info(
-        "%s lookback=%sd limits D1=%s H4=%s H1=%s",
+        "%s lookback=%sd limits D1=%s H4=%s H1=%s M30=%s M15=%s M5=%s",
         prefix,
         limits["days"],
         limits["d1"],
         limits["h4"],
         limits["h1"],
+        limits["m30"],
+        limits["m15"],
+        limits["m5"],
     )
 
 
@@ -1510,6 +1518,7 @@ def _engine_c_select_engine_b_bt_candidate(
     resolved_style: str,
     pair: dict,
     confidence_passes,
+    role_candles: dict[str, list] | None = None,
     direction_hint: str | None = None,
 ) -> tuple[dict, dict, dict] | None:
     """Select Engine B's backtest candidate without inheriting Engine A direction."""
@@ -1541,6 +1550,7 @@ def _engine_c_select_engine_b_bt_candidate(
             # or hard-fail every candidate in a standalone run. Mirrors the
             # standalone Engine B backtest precompute.
             trade_bucket_historical_mode=True,
+            role_candles=role_candles,
         )
 
     candidates: list[tuple[dict, dict, dict]] = []
@@ -2024,7 +2034,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     from engine_a_v3.backtest import engine_a_v3_backtest_costs, run_v3_backtest
 
     _v3_costs = engine_a_v3_backtest_costs(pair.get("type"), CONFIG)
-    return run_v3_backtest(
+    _v3_result = run_v3_backtest(
         pair,
         {"D1": d1_raw, "H4": h4_raw, "H1": h1_raw},
         horizon=effective_style,
@@ -2035,6 +2045,49 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         max_hold_bars=int(_v3_costs.get("MAX_HOLD_BARS", 24)),
         collect_funnel=collect_funnel,
     )
+    # Persist the same deterministic policy identity used by live scans. The
+    # policy is metadata here: it does not alter Engine A scoring or direction.
+    from timeframe_policy import resolve_timeframe_policy
+
+    _v3_policy = resolve_timeframe_policy(
+        pair.get("display") or pair.get("symbol") or "",
+        pair.get("type") or "",
+        get_pair_score_group(pair),
+        effective_style,
+    )
+    _v3_policy_payload = _v3_policy.payload()
+    _v3_config_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "policy": _v3_policy.to_dict(),
+                "style": effective_style,
+                "candle_counts": {
+                    "D1": len(d1_raw),
+                    "H4": len(h4_raw),
+                    "H1": len(h1_raw),
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if isinstance(_v3_result, dict):
+        _v3_result.update(_v3_policy_payload)
+        _v3_result["timeframeConfigHash"] = _v3_config_hash
+        _v3_result["timeframePointInTimePolicy"] = "confirmed_candles_at_decision_time"
+        _v3_result["candleProvider"] = pair.get("source")
+        _v3_result["providerSymbol"] = (
+            pair.get("bybit_symbol")
+            or pair.get("mt5_symbol")
+            or pair.get("symbol")
+        )
+        for _trade in _v3_result.get("trades") or []:
+            if not isinstance(_trade, dict):
+                continue
+            _trade.setdefault("timeframe_policy_version", _v3_policy.policy_version)
+            _trade.setdefault("timeframe_policy_hash", _v3_policy_payload["timeframePolicyHash"])
+            _trade.setdefault("timeframe_config_hash", _v3_config_hash)
+    return _v3_result
 
     bt_vectorized = bool(CONFIG.get("BT_VECTORIZED", False))
     d1_cache: dict[tuple, dict] = {}
@@ -5100,13 +5153,60 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         requested_style,
         score_group=_pair_score_group,
         asset_type=pair.get("type", ""),
+        symbol=pair.get("display") or pair.get("symbol") or "",
     )
     # The Engine B structure gate is mandatory in live; the BT escape hatch
     # was removed (audit H4) to keep parity.
     _pair_type = pair.get("type", "stock")
     _zone_tf = style_profile.get("zone_tf", "H4")
+    _setup_tf = style_profile.get("setup_tf", "M30")
     _entry_tf = style_profile.get("entry_tf", "H1")
+    _execution_tf = style_profile.get("execution_tf", _entry_tf)
     _atr_tf = style_profile.get("atr_tf", "H4")
+    _role_series = {
+        "D1": candles_d1,
+        "H4": candles_h4,
+        "H1": candles_h1,
+    }
+    for _tf in dict.fromkeys((_setup_tf, _entry_tf, _execution_tf)):
+        _tf = str(_tf or "").upper()
+        if _tf in _role_series:
+            continue
+        _limit_key = _tf.lower()
+        _limit = int(_bt_limits.get(_limit_key, 0) or 0)
+        if _limit <= 0:
+            return {
+                "success": False,
+                "error": f"No backtest candle limit for required policy timeframe {_tf}",
+                "trades": [],
+                "totalTrades": 0,
+            }
+        if pair.get("source") == "binance":
+            _raw_role = _crypto_bt_signal_candles(
+                pair,
+                engine="B",
+                tf=_tf,
+                limit=_limit,
+                min_bars=200,
+            )
+        else:
+            _raw_role = _bt_cached_fetch(
+                pair,
+                _tf,
+                _limit,
+                lambda lim, tf=_tf: _rt().fetch_candles(pair, tf, lim),
+                provider=str(pair.get("source") or "source_router"),
+                min_bars=200,
+            )
+        _role_series[_tf] = _bt_confirmed_candles(pair, _tf, _raw_role)
+        if not _role_series[_tf]:
+            return {
+                "success": False,
+                "error": f"Required policy timeframe unavailable: {_tf}",
+                "trades": [],
+                "totalTrades": 0,
+                "timeframePolicyMissing": _tf,
+            }
     # Live parity: under ENGINE_B_PROFILE_TRUST_MODE=score_group the trust check
     # needs the pair's score group (and any per-(group,style) profile_trusted
     # override); asset-type-only always resolved False and silently disabled VP
@@ -5152,8 +5252,20 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
 
     # NEW: Loop over the specific Entry Timeframe (H1 vs H4) configured for this style
     # This matches live discovery where signals are detected and filled on the entry candle.
-    entry_raw = candles_h1 if _entry_tf == "H1" else candles_h4
+    entry_raw = _role_series.get(str(_execution_tf).upper()) or []
     entry_times = [c.get("time", c.get("datetime", "")) for c in entry_raw]
+    _role_epochs = {
+        tf: [candle_timestamp_epoch(candle) for candle in series]
+        for tf, series in _role_series.items()
+    }
+    _tf_seconds = {
+        "D1": 86400,
+        "H4": 14400,
+        "H1": 3600,
+        "M30": 1800,
+        "M15": 900,
+        "M5": 300,
+    }
 
     # PRECOMPUTE ATR SERIES: Compute the full ATR array once per timeframe to avoid O(N^2) complexity.
     # We compute for all three timeframes to ensure we can resolve the _atr_tf at any scan index.
@@ -5207,7 +5319,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         _indicator_cache[key] = result
         return result
 
-    COOLDOWN = 8 if _entry_tf == "H1" else 2  # entries to skip after a trade (H1 vs H4 bars)
+    COOLDOWN = 8 if _execution_tf == "H1" else 2
     trades = []
     same_bar_both_hit = 0
     i = 50
@@ -5245,15 +5357,22 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         # eventual OHLC into the structure snapshot and the ATR lookup. Include a
         # bar only once it has fully closed by entry_time: open <= entry_time - tf.
         _entry_epoch = candle_timestamp_epoch(entry_raw[i])
-        _h4_cut_idx = bisect.bisect_right(_h4_epochs, _entry_epoch - 14400)
-        _d1_cut_idx = bisect.bisect_right(_d1_epochs, _entry_epoch - 86400)
+        _decision_epoch = _entry_epoch + _tf_seconds.get(str(_execution_tf).upper(), 0)
+        _h4_cut_idx = bisect.bisect_right(_h4_epochs, _decision_epoch - 14400)
+        _d1_cut_idx = bisect.bisect_right(_d1_epochs, _decision_epoch - 86400)
         h4_ctx = candles_h4[:_h4_cut_idx]
         d1_ctx = candles_d1[:_d1_cut_idx]
-        _h1_cut_idx = bisect.bisect_right(_h1_epochs, _entry_epoch - 3600)
+        _h1_cut_idx = bisect.bisect_right(_h1_epochs, _decision_epoch - 3600)
         h1_ctx = candles_h1[:_h1_cut_idx]
 
-        # entry_ctx is exactly where we are in the entry loop
-        entry_ctx = entry_raw[:i + 1]
+        _role_contexts = {}
+        for _tf, _series in _role_series.items():
+            _cut = bisect.bisect_right(
+                _role_epochs[_tf],
+                _decision_epoch - _tf_seconds[_tf],
+            )
+            _role_contexts[_tf] = _series[:_cut]
+        entry_ctx = _role_contexts.get(str(_entry_tf).upper()) or []
 
         if len(d1_ctx) < 20 or len(h4_ctx) < 20 or len(h1_ctx) < 20 or len(entry_ctx) < 20:
             i += 1
@@ -5271,8 +5390,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         elif _atr_tf == "H4":
             _idx = _h4_cut_idx
 
-        else: # H1 (entry_tf usually)
-            _idx = i + 1 # Align to the context end bar
+        else:  # H1
+            _idx = _h1_cut_idx
 
         # Pull ATR and the slice needed for the volatility gate
         atr = _atr_full[_idx - 1] if _idx > 0 and _idx <= len(_atr_full) else None
@@ -5299,15 +5418,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 i += 1
                 continue
 
-        # Zone context always uses the configured zone_tf (usually H4)
-
-        # Zone context always uses the configured zone_tf (usually H4)
-        zone_ctx = h4_ctx if _zone_tf == "H4" else d1_ctx
+        # Zone context uses the policy role and the same confirmed-only cut.
+        zone_ctx = _role_contexts.get(str(_zone_tf).upper()) or []
         _d1_end_idx = _d1_cut_idx - 1
         if _zone_tf == "H4":
             _zone_full_candles = candles_h4
             _zone_end_idx = _h4_cut_idx - 1
-
+        elif _zone_tf == "H1":
+            _zone_full_candles = candles_h1
+            _zone_end_idx = _h1_cut_idx - 1
         else:
             _zone_full_candles = candles_d1
             _zone_end_idx = _d1_end_idx
@@ -5360,6 +5479,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             # would read the LIVE bucket store (current CVD applied to past bars)
             # or hard-fail every crypto bar in a standalone run.
             trade_bucket_historical_mode=True,
+            role_candles=_role_contexts,
         )
         candidates = []
         for direction in ["LONG", "SHORT"]:
@@ -6002,6 +6122,33 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         # Advance past the resolved exit bar plus the configured cooldown gap.
         i = i + 2 + exit_bar_offset + COOLDOWN
 
+    from timeframe_policy import resolve_timeframe_policy
+
+    _bt_policy = resolve_timeframe_policy(
+        pair.get("display") or pair.get("symbol") or "",
+        pair.get("type", ""),
+        _pair_score_group,
+        f"engine_b_{resolved_style}",
+    )
+    _bt_policy_payload = _bt_policy.payload()
+    _bt_config_material = {
+        "policy": _bt_policy.to_dict(),
+        "style_profile": style_profile,
+        "candle_limits": {
+            key: _bt_limits[key]
+            for key in ("d1", "h4", "h1", "m30", "m15", "m5")
+        },
+    }
+    _bt_config_hash = hashlib.sha256(
+        json.dumps(_json_safe(_bt_config_material), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    for _trade in trades:
+        _trade.setdefault("timeframe_policy_version", _bt_policy.policy_version)
+        _trade.setdefault("timeframe_policy_hash", _bt_policy_payload["timeframePolicyHash"])
+        _trade.setdefault("timeframe_config_hash", _bt_config_hash)
+        _trade.setdefault("candle_policy", "confirmed_only_point_in_time")
+        _trade.setdefault("provider", pair.get("source"))
+
     result = _format_backtest_results(
         trades,
         pair,
@@ -6018,6 +6165,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         folds=folds,
         mode_warning=_vm_mode_warning,
     )
+    result.update(_bt_policy_payload)
+    result["timeframeConfigHash"] = _bt_config_hash
+    result["backtestPolicyResolution"] = "point_in_time_no_live_speed_leak"
+    result["candlePolicyProvenance"] = "confirmed_only_point_in_time"
+    result["providerProvenance"] = pair.get("source")
     _tp_count = sum(1 for t in trades if t.get("outcome") == "TP1")
     _tp2_count = sum(1 for t in trades if t.get("outcome") == "TP2")
     _sl_count = sum(1 for t in trades if t.get("outcome") == "SL")
@@ -6343,10 +6495,56 @@ def backtest_pair_consensus(
         _ec_bt_style,
         score_group=_pair_score_group,
         asset_type=_ptype,
+        symbol=pair.get("display") or pair.get("symbol") or "",
     )
     _zone_tf = style_profile.get("zone_tf", "H4")
+    _setup_tf = style_profile.get("setup_tf", "M30")
     _entry_tf = style_profile.get("entry_tf", "H1")
+    _execution_tf = style_profile.get("execution_tf", _entry_tf)
     _atr_tf = style_profile.get("atr_tf", "H4")
+    _ec_role_series = {
+        "D1": candles_d1,
+        "H4": candles_h4,
+        "H1": candles_h1,
+    }
+    for _tf in dict.fromkeys((_setup_tf, _entry_tf, _execution_tf)):
+        _tf = str(_tf or "").upper()
+        if _tf in _ec_role_series:
+            continue
+        _limit = int(_bt_limits.get(_tf.lower(), 0) or 0)
+        if _limit <= 0:
+            return {
+                "success": False,
+                "error": f"No backtest candle limit for required consensus timeframe {_tf}",
+                "trades": [],
+                "totalTrades": 0,
+            }
+        if pair.get("source") == "binance":
+            _raw_role = _crypto_bt_signal_candles(
+                pair,
+                engine="C",
+                tf=_tf,
+                limit=_limit,
+                min_bars=200,
+            )
+        else:
+            _raw_role = _bt_cached_fetch(
+                pair,
+                _tf,
+                _limit,
+                lambda lim, tf=_tf: _rt().fetch_candles(pair, tf, lim),
+                provider=str(pair.get("source") or "source_router"),
+                min_bars=200,
+            )
+        _ec_role_series[_tf] = _bt_confirmed_candles(pair, _tf, _raw_role)
+        if not _ec_role_series[_tf]:
+            return {
+                "success": False,
+                "error": f"Required consensus policy timeframe unavailable: {_tf}",
+                "trades": [],
+                "totalTrades": 0,
+                "timeframePolicyMissing": _tf,
+            }
     # Live parity: thread score_group (+ per-(group,style) profile_trusted
     # override) so score_group trust mode does not disable VP context BT-only.
     _bt_enable_profile_context = engine_b_profile_context_enabled(
@@ -6403,6 +6601,22 @@ def backtest_pair_consensus(
     h4_times = pd.to_datetime([c["time"] for c in candles_h4], utc=True, errors="coerce")
     d1_times = pd.to_datetime([c["time"] for c in candles_d1], utc=True, errors="coerce")
     h1_times = pd.to_datetime([c["time"] for c in candles_h1], utc=True, errors="coerce")
+    _ec_role_times = {
+        tf: pd.to_datetime(
+            [c.get("time", c.get("datetime", "")) for c in series],
+            utc=True,
+            errors="coerce",
+        )
+        for tf, series in _ec_role_series.items()
+    }
+    _ec_tf_delta = {
+        "D1": pd.Timedelta(days=1),
+        "H4": pd.Timedelta(hours=4),
+        "H1": pd.Timedelta(hours=1),
+        "M30": pd.Timedelta(minutes=30),
+        "M15": pd.Timedelta(minutes=15),
+        "M5": pd.Timedelta(minutes=5),
+    }
 
     def _full_atr(candles):
         highs = [float(c["high"]) for c in candles]
@@ -6484,9 +6698,21 @@ def backtest_pair_consensus(
         h4_window = candles_h4[max(0, h4_idx - _h4_need): h4_idx]
         h1_window = candles_h1[max(0, h1_idx - _h1_need): h1_idx]
         d1_ctx = candles_d1[max(0, d1_idx - 220): d1_idx]  # Fixed 220 bar lookback for indicators
-        zone_ctx = h4_window
+        _ec_role_contexts = {}
+        for _tf, _series in _ec_role_series.items():
+            _times = _ec_role_times[_tf]
+            _cut = bisect.bisect_right(_times, entry_time - _ec_tf_delta[_tf])
+            _ec_role_contexts[_tf] = _series[max(0, _cut - 1001):_cut]
+        zone_ctx = _ec_role_contexts.get(str(_zone_tf).upper()) or []
+        entry_ctx = _ec_role_contexts.get(str(_entry_tf).upper()) or []
 
-        if len(h4_window) < 50 or len(h1_window) < 50 or len(d1_ctx) < 50:
+        if (
+            len(h4_window) < 50
+            or len(h1_window) < 50
+            or len(d1_ctx) < 50
+            or len(zone_ctx) < 50
+            or len(entry_ctx) < 50
+        ):
             i += 1
             continue
 
@@ -6598,7 +6824,7 @@ def backtest_pair_consensus(
                 d1_ctx=d1_ctx,
                 h4_ctx=h4_window,
                 h1_ctx=h1_window,
-                entry_ctx=h1_window if _entry_tf == "H1" else h4_window,
+                entry_ctx=entry_ctx,
                 current_price=current_price,
                 atr=atr,
                 regime_label=regime_label,
@@ -6610,6 +6836,7 @@ def backtest_pair_consensus(
                 resolved_style=resolved_style,
                 pair=pair,
                 confidence_passes=engine_b_confidence_passes,
+                role_candles=_ec_role_contexts,
                 direction_hint=a_direction,
             )
         except Exception as _be:
