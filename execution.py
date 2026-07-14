@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import time
 import traceback
@@ -750,15 +751,31 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
     }
 
 
-def _engine_b_tp_already_synthetic(sig: dict) -> bool:
+def _engine_b_rr_gate_leg(sig: dict, rr_target: float | None = None) -> str:
+    """Return tp1 or tp2 — whichever price is used for the RR gate target."""
+    try:
+        tp1 = float(sig.get("tp1") or 0)
+        tp2 = float(sig.get("tp2") or tp1)
+    except (TypeError, ValueError):
+        return "tp1"
+    if rr_target is None or tp1 <= 0:
+        return "tp1"
+    if tp2 > 0 and tp2 != tp1:
+        if math.isclose(rr_target, tp2, rel_tol=1e-9, abs_tol=1e-12):
+            return "tp2"
+    return "tp1"
+
+
+def _engine_b_tp_already_synthetic(sig: dict, *, rr_target: float | None = None) -> bool:
+    """True when the RR gate target leg is already a synthetic fallback TP."""
+    leg = _engine_b_rr_gate_leg(sig, rr_target)
+    source_keys = ("tp2_source",) if leg == "tp2" else ("tp1_source", "tp_source")
     for source in (sig, sig.get("engine_b_status"), sig.get("engine_b"), sig.get("naked_data")):
         if not isinstance(source, dict):
             continue
-        for key in ("tp1_source", "tp_source", "tp2_source"):
+        for key in source_keys:
             if str(source.get(key) or "").strip().lower() == "fallback_rr":
                 return True
-        if "fallback_rr" in str(source.get("rr_source") or "").lower():
-            return True
     return False
 
 
@@ -920,8 +937,6 @@ def _reconcile_engine_b_rr_after_broker_entry(sig: dict, cfg: dict) -> str | Non
         pass
     if not bool(cfg.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)):
         return None
-    if _engine_b_tp_already_synthetic(sig):
-        return None
 
     direction = str(sig.get("direction") or "").upper()
     if direction not in ("LONG", "SHORT"):
@@ -936,6 +951,9 @@ def _reconcile_engine_b_rr_after_broker_entry(sig: dict, cfg: dict) -> str | Non
 
     rr_target, plan_floor = _engine_b_reconcile_rr_target(sig, entry)
     if rr_target <= 0:
+        return None
+
+    if _engine_b_tp_already_synthetic(sig, rr_target=rr_target):
         return None
 
     min_rr, fallback_rr = _resolve_engine_b_rr_thresholds(sig, cfg)

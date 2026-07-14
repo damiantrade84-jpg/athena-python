@@ -150,7 +150,7 @@ def test_mt5_max_spread_per_symbol_override(monkeypatch):
     monkeypatch.setitem(
         mt5_executor.CONFIG,
         "MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL",
-        {"XPTUSD": 0.0030, "SUGAR": 0.0037, "LEAD": None, "AMD": 0.0030},
+        {"XPTUSD": 0.0030, "SUGAR": 0.0037, "LEAD": None, "AMD": 0.0030, "USDINR": 0.0015},
     )
     # Display pair normalizes to the compact config key
     assert mt5_executor._mt5_max_spread_pct(
@@ -162,6 +162,9 @@ def test_mt5_max_spread_per_symbol_override(monkeypatch):
     assert mt5_executor._mt5_max_spread_pct(
         {"pair": "AMD", "type": "stock"}
     ) == 0.0030
+    assert mt5_executor._mt5_max_spread_pct(
+        {"pair": "USD/INR", "type": "forex"}
+    ) == 0.0015
     # Unlisted symbol falls back to the asset-class cap
     assert mt5_executor._mt5_max_spread_pct(
         {"pair": "XAU/USD", "type": "commodity"}
