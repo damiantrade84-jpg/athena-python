@@ -604,6 +604,7 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
     if signal_price <= 0:
         return "SIGNAL_PRICE_MISSING", {}
 
+    broker_drift_price = None
     try:
         if venue == "bybit":
             from bybit_executor import (
@@ -645,6 +646,17 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
                 return "BROKER_QUOTE_UNAVAILABLE", {}
             tick = mt5.symbol_info_tick(symbol)
             broker_price = (tick.ask if direction == "LONG" else tick.bid) if tick else None
+            # MT5 scan quotes are recorded as bid/ask midpoints.  Drift must
+            # compare like-for-like so the spread is handled by the dedicated
+            # execution-spread gate rather than misclassified as price movement.
+            if tick:
+                try:
+                    bid = float(tick.bid)
+                    ask = float(tick.ask)
+                    if bid > 0 and ask >= bid:
+                        broker_drift_price = (bid + ask) / 2.0
+                except (AttributeError, TypeError, ValueError):
+                    pass
             broker_quote_age = _mt5_tick_age_seconds(tick) if tick else None
             broker_quote_age_limit = _mt5_max_tick_age_sec()
     except Exception as exc:
@@ -655,6 +667,12 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
     except (TypeError, ValueError):
         broker_price_f = 0.0
     if broker_price_f <= 0:
+        return "BROKER_QUOTE_INVALID", {}
+    try:
+        broker_drift_price_f = float(broker_drift_price or broker_price_f)
+    except (TypeError, ValueError):
+        broker_drift_price_f = broker_price_f
+    if broker_drift_price_f <= 0:
         return "BROKER_QUOTE_INVALID", {}
     if broker_quote_age is None:
         return "BROKER_TICK_TIMESTAMP_MISSING", {}
@@ -683,12 +701,13 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
     if pct_limit <= 0 or atr <= 0 or atr_mult <= 0:
         return "ENGINE_B_DRIFT_LIMIT_UNAVAILABLE", {}
 
-    pct_drift = abs(broker_price_f - signal_price) / signal_price
-    atr_drift = abs(broker_price_f - signal_price) / atr
+    pct_drift = abs(broker_drift_price_f - signal_price) / signal_price
+    atr_drift = abs(broker_drift_price_f - signal_price) / atr
     if pct_drift > pct_limit or atr_drift > atr_mult:
         return "ENGINE_B_BROKER_DRIFT_TOO_LARGE", {
             "signalPrice": signal_price,
             "brokerPrice": broker_price_f,
+            "brokerDriftReferencePrice": broker_drift_price_f,
             "driftPct": round(pct_drift, 6),
             "driftAtr": round(atr_drift, 4),
             "maxDriftPct": pct_limit,
@@ -712,6 +731,7 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
     return None, {
         "signalPrice": signal_price,
         "brokerPrice": broker_price_f,
+        "brokerDriftReferencePrice": broker_drift_price_f,
         "driftPct": round(pct_drift, 6),
         "driftAtr": round(atr_drift, 4),
         "tickAgeSec": round(max(0.0, float(broker_quote_age)), 3),

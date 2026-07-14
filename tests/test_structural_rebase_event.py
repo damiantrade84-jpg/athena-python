@@ -156,3 +156,38 @@ def test_engine_b_broker_preflight_uses_bybit_rest_timestamp_fallback(monkeypatc
     assert error is None
     assert diag["tickAgeSec"] == 0.4
     assert signal["quoteAgeSec"] == 0.4
+
+
+def test_engine_b_mt5_drift_uses_midpoint_and_anchors_execution_side(monkeypatch):
+    import execution
+    import sys
+    from types import SimpleNamespace
+
+    tick = SimpleNamespace(ask=101.0, bid=99.0)
+    fake_mt5 = SimpleNamespace(symbol_info_tick=lambda _symbol: tick)
+    fake_mt5_executor = SimpleNamespace(
+        _get_mt5=lambda: fake_mt5,
+        _mt5_max_tick_age_sec=lambda: 3.0,
+        _mt5_tick_age_seconds=lambda _tick: 0.2,
+        mt5_connect=lambda: True,
+        mt5_map_symbol=lambda _value: "EURX",
+    )
+    monkeypatch.setitem(sys.modules, "mt5_executor", fake_mt5_executor)
+    signal = {
+        "is_naked": True,
+        "pair": "EURX",
+        "type": "index",
+        "direction": "LONG",
+        "price": 100.0,
+        "atr": 2.0,
+    }
+    cfg = {
+        "MAX_SIGNAL_DRIFT_PCT": {"index": 0.05},
+        "MAX_SIGNAL_DRIFT_ATR_MULT": {"index": 0.25},
+    }
+
+    error, diag = execution._engine_b_pre_risk_broker_price(signal, "mt5", cfg)
+
+    assert error is None
+    assert diag["brokerDriftReferencePrice"] == 100.0
+    assert signal["price"] == 101.0
