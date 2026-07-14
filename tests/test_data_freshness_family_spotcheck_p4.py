@@ -149,11 +149,15 @@ def test_family_stale_h4_blocks_execution_freshness(family):
         ("commodity", 60),
         ("index", 60),
         ("stock", 90),
+        ("etf", 90),
+        ("etf_bond", 90),
     ],
 )
 def test_family_stale_live_quote_would_block(asset_type, max_age):
     cfg = {
-        "LIVE_PRICE_MAX_AGE_SEC": {asset_type: max_age},
+        "LIVE_PRICE_MAX_AGE_SEC": {
+            "etf" if asset_type == "etf_bond" else asset_type: max_age
+        },
         "LIVE_PRICE_BLOCK_EXECUTION": True,
         "LIVE_PRICE_BLOCK_EXECUTION_ON_UNKNOWN_AGE": True,
     }

@@ -252,7 +252,10 @@ from config import (
 from athena.datafeeds.ws_ssl import configure_process_ca_bundle  # noqa: E402
 from ai_safe_wrappers import ai_call_with_safe_default  # noqa: E402
 from ai_signal_trace import ensure_trace_id  # noqa: E402
-from athena_app.services.mt5_time_alignment import infer_mt5_rates_time_shift_seconds  # noqa: E402
+from athena_app.services.mt5_time_alignment import (  # noqa: E402
+    infer_mt5_rates_time_shift_seconds,
+    normalize_mt5_tick_epoch_utc,
+)
 from prompt_store import load_prompt  # noqa: E402
 from prompt_versions import get_prompt_version  # noqa: E402
 from regime_shift_monitor import classify_position as _regime_classify  # noqa: E402
@@ -3234,16 +3237,27 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
         live_px = (tick.bid + tick.ask) / 2.0
     elif tick and tick.last > 0:
         live_px = float(tick.last)
-    elif candles:
-        live_px = float(candles[-1]["close"])
     else:
         live_px = None
     if live_px is not None:
+        _tick_epoch = float(getattr(tick, "time_msc", 0) or 0) / 1000.0
+        if _tick_epoch <= 0:
+            _tick_epoch = float(getattr(tick, "time", 0) or 0)
+        _broker_ts = (
+            normalize_mt5_tick_epoch_utc(
+                _tick_epoch,
+                time.time(),
+                int(CONFIG.get("MT5_BROKER_UTC_OFFSET", 3)),
+            )
+            if _tick_epoch > 0
+            else None
+        )
         _record_mt5_live_price(
             symbol,
             live_px,
             bid=float(tick.bid) if tick and tick.bid > 0 else None,
             ask=float(tick.ask) if tick and tick.ask > 0 else None,
+            broker_ts=_broker_ts,
         )
 
     resp = {
@@ -16741,7 +16755,6 @@ from athena_app.api.routes_forex_factor import register_forex_factor_routes  # n
 from execution import register_execution_routes  # noqa: E402
 from ghost_trade.api import register_ghost_trade_routes  # noqa: E402
 from ghost_trade.runtime import build_ghost_trade_service  # noqa: E402
-from ghost_trade.scheduler import GhostScheduler  # noqa: E402
 
 set_runtime(
     SimpleNamespace(
@@ -16982,9 +16995,9 @@ register_ghost_trade_routes(
     app,
     SimpleNamespace(service=_ghost_trade_service),
 )
-_ghost_trade_scheduler = GhostScheduler(_ghost_trade_service)
-if _ghost_trade_service.config.enabled:
-    _ghost_trade_scheduler.start(_ghost_trade_service.config.scan_interval_seconds)
+# Ghost Trade scans are operator-triggered only via /api/ghost-trade/scan.
+# Do not start the periodic/immediate scheduler; this also prevents a startup
+# scan from racing a manual request and returning scan_already_running.
 
 register_ase_routes(app)
 register_tsmom_routes(app)

@@ -191,3 +191,109 @@ def test_engine_b_mt5_drift_uses_midpoint_and_anchors_execution_side(monkeypatch
     assert error is None
     assert diag["brokerDriftReferencePrice"] == 100.0
     assert signal["price"] == 101.0
+
+
+def test_engine_a_pre_risk_refreshes_mt5_quote_for_every_asset_family(monkeypatch):
+    import execution
+    import sys
+    from types import SimpleNamespace
+
+    tick = SimpleNamespace(ask=101.0, bid=99.0)
+    fake_mt5 = SimpleNamespace(symbol_info_tick=lambda _symbol: tick)
+    fake_mt5_executor = SimpleNamespace(
+        _get_mt5=lambda: fake_mt5,
+        _mt5_max_tick_age_sec=lambda: 5.0,
+        _mt5_tick_age_seconds=lambda _tick: 0.2,
+        mt5_connect=lambda: True,
+        mt5_map_symbol=lambda value: value,
+    )
+    monkeypatch.setitem(sys.modules, "mt5_executor", fake_mt5_executor)
+
+    for asset_type in ("forex", "commodity", "index", "stock", "etf", "etf_bond"):
+        signal = {
+            "engine": "engine_a",
+            "verdict": "A_ONLY",
+            "pair": "TEST",
+            "type": asset_type,
+            "direction": "LONG",
+            "price": 100.0,
+            "entry": 100.0,
+        }
+
+        error, diag = execution._engine_b_pre_risk_broker_price(signal, "mt5", {})
+
+        assert error is None
+        assert diag["tickAgeSec"] == 0.2
+        assert signal["price"] == 100.0
+        assert signal["entry"] == 100.0
+        assert signal["brokerPreflightPrice"] == 101.0
+        assert signal["quoteAgeSec"] == 0.2
+        assert signal["quoteFreshness"]["source"] == "mt5_broker_preflight"
+
+
+def test_engine_a_pre_risk_refreshes_bybit_crypto_quote(monkeypatch):
+    import execution
+    import sys
+    from types import SimpleNamespace
+
+    fake_exchange = SimpleNamespace(fetch_ticker=lambda _symbol: {"ask": 100.2, "bid": 100.1})
+    fake_bybit = SimpleNamespace(
+        _get_exchange=lambda: fake_exchange,
+        bybit_map_symbol=lambda _value: "BTC/USDT:USDT",
+        _bybit_execution_side_price=lambda ticker, _direction: ticker["ask"],
+        _bybit_ticker_age_seconds=lambda _ticker: 0.3,
+        _bybit_max_tick_age_sec=lambda: 3.0,
+        _fetch_bybit_ticker=lambda _symbol, category: {"timestamp": 1, "category": category},
+    )
+    monkeypatch.setitem(sys.modules, "bybit_executor", fake_bybit)
+    signal = {
+        "engine": "engine_a",
+        "verdict": "A_ONLY",
+        "pair": "BTC/USDT",
+        "type": "crypto",
+        "direction": "LONG",
+        "price": 100.0,
+        "entry": 100.0,
+    }
+
+    error, diag = execution._engine_b_pre_risk_broker_price(signal, "bybit", {})
+
+    assert error is None
+    assert diag["tickAgeSec"] == 0.3
+    assert signal["price"] == 100.0
+    assert signal["entry"] == 100.0
+    assert signal["brokerPreflightPrice"] == 100.2
+    assert signal["quoteFreshness"]["source"] == "bybit_broker_preflight"
+
+
+def test_engine_a_pre_risk_still_rejects_a_stale_broker_tick(monkeypatch):
+    import execution
+    import sys
+    from types import SimpleNamespace
+
+    tick = SimpleNamespace(ask=2_401.0, bid=2_400.0)
+    fake_mt5 = SimpleNamespace(symbol_info_tick=lambda _symbol: tick)
+    fake_mt5_executor = SimpleNamespace(
+        _get_mt5=lambda: fake_mt5,
+        _mt5_max_tick_age_sec=lambda: 5.0,
+        _mt5_tick_age_seconds=lambda _tick: 6.0,
+        mt5_connect=lambda: True,
+        mt5_map_symbol=lambda _value: "XAUUSD",
+    )
+    monkeypatch.setitem(sys.modules, "mt5_executor", fake_mt5_executor)
+    signal = {
+        "engine": "engine_a",
+        "verdict": "A_ONLY",
+        "pair": "XAU/USD",
+        "type": "commodity",
+        "direction": "LONG",
+        "price": 2_400.0,
+        "quoteTimestamp": 1.0,
+    }
+
+    error, diag = execution._engine_b_pre_risk_broker_price(signal, "mt5", {})
+
+    assert error == "BROKER_TICK_STALE"
+    assert diag == {"tickAgeSec": 6.0, "tickAgeLimitSec": 5.0}
+    assert signal["quoteTimestamp"] == 1.0
+    assert "brokerPreflightPrice" not in signal

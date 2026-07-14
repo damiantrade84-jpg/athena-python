@@ -39,3 +39,5 @@ def test_athena_registers_ghost_routes_with_shared_candle_dependencies():
     assert "register_ghost_trade_routes(" in source
     assert "fetch_bybit_klines=_fetch_bybit_klines" in source
     assert "fetch_mt5=fetch_mt5" in source
+    assert "GhostScheduler" not in source
+    assert "_ghost_trade_scheduler" not in source

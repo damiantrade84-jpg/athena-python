@@ -45,8 +45,14 @@ def fresh_live_gate_quote(
     if price <= 0:
         raise ValueError("ENGINE_B_LIVE_QUOTE_INVALID_PRICE")
 
+    quote_source = str(entry.get("source") or "").strip().lower()
+    # MT5 polling/fetching can repeatedly receive the broker's last known tick
+    # while a market is closed. ``ts`` is the local receipt time, so using it
+    # would make that frozen quote appear fresh on every poll. MT5 entries carry
+    # the normalized broker tick time separately; fail closed when it is absent.
+    timestamp_key = "broker_ts" if quote_source == "mt5" else "ts"
     try:
-        timestamp = float(entry.get("ts"))
+        timestamp = float(entry.get(timestamp_key))
         if timestamp > 1e12:
             timestamp /= 1000.0
     except (TypeError, ValueError):
@@ -58,8 +64,9 @@ def fresh_live_gate_quote(
     age_sec = max(0.0, now_s - timestamp)
     asset_type = str(pair.get("type") or "").strip().lower()
     age_cfg = (config or {}).get("LIVE_PRICE_MAX_AGE_SEC") or {}
+    threshold_type = "etf" if asset_type == "etf_bond" else asset_type
     try:
-        max_age_sec = float(age_cfg.get(asset_type))
+        max_age_sec = float(age_cfg.get(threshold_type))
     except (AttributeError, TypeError, ValueError):
         max_age_sec = 0.0
     if max_age_sec <= 0:
@@ -71,8 +78,10 @@ def fresh_live_gate_quote(
         "source": entry.get("source"),
         "matchedKey": matched_key,
         "timestamp": timestamp,
+        "timestampSource": timestamp_key,
         "ageSec": round(age_sec, 3),
         "maxAgeSec": max_age_sec,
+        "thresholdAssetType": threshold_type,
         "fresh": True,
     }
 

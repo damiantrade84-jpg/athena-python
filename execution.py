@@ -591,9 +591,8 @@ def _is_structural_engine_b_execution(sig: dict, engine_b: dict | None = None) -
 
 
 def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[str | None, dict]:
-    """Validate structural Engine B drift before risk sizing and anchor risk to broker price."""
-    if not _is_structural_engine_b_execution(sig):
-        return None, {}
+    """Refresh the broker quote before risk; also validate structural Engine B drift."""
+    structural_engine_b = _is_structural_engine_b_execution(sig)
     direction = str(sig.get("direction") or "").upper()
     if direction not in ("LONG", "SHORT"):
         return "INVALID_DIRECTION", {}
@@ -682,6 +681,28 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
             "tickAgeLimitSec": float(broker_quote_age_limit),
         }
 
+    broker_quote_ts = time.time() - max(0.0, float(broker_quote_age))
+    sig["brokerPreflightPrice"] = broker_price_f
+    sig["quoteTimestamp"] = broker_quote_ts
+    sig["quoteAgeSec"] = max(0.0, float(broker_quote_age))
+    sig.pop("quoteAgeEval", None)
+    sig["quoteFreshness"] = {
+        "source": f"{venue}_broker_preflight",
+        "timestamp": broker_quote_ts,
+        "ageSec": round(max(0.0, float(broker_quote_age)), 3),
+        "fresh": True,
+    }
+    if not structural_engine_b:
+        # Engine A keeps its analyzed entry and levels.  The executors retain
+        # responsibility for their existing price-drift/rebase checks; only
+        # quote freshness is renewed here immediately before risk sizing.
+        return None, {
+            "signalPrice": signal_price,
+            "brokerPrice": broker_price_f,
+            "brokerDriftReferencePrice": broker_drift_price_f,
+            "tickAgeSec": round(max(0.0, float(broker_quote_age)), 3),
+        }
+
     asset_type = str(sig.get("type") or sig.get("asset_type") or "").lower()
     threshold_type = "etf" if asset_type == "etf_bond" else asset_type
     pct_cfg = cfg.get("MAX_SIGNAL_DRIFT_PCT") or {}
@@ -717,17 +738,6 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
     sig.setdefault("signalPriceRef", signal_price)
     sig["price"] = broker_price_f
     sig["entry"] = broker_price_f
-    sig["brokerPreflightPrice"] = broker_price_f
-    broker_quote_ts = time.time() - max(0.0, float(broker_quote_age))
-    sig["quoteTimestamp"] = broker_quote_ts
-    sig["quoteAgeSec"] = max(0.0, float(broker_quote_age))
-    sig.pop("quoteAgeEval", None)
-    sig["quoteFreshness"] = {
-        "source": f"{venue}_broker_preflight",
-        "timestamp": broker_quote_ts,
-        "ageSec": round(max(0.0, float(broker_quote_age)), 3),
-        "fresh": True,
-    }
     return None, {
         "signalPrice": signal_price,
         "brokerPrice": broker_price_f,

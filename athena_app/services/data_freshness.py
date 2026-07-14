@@ -763,11 +763,12 @@ def evaluate_live_quote_age(
     asset_type = ""
     if isinstance(pair, dict):
         asset_type = str(pair.get("type") or "").strip().lower()
+    threshold_type = "etf" if asset_type == "etf_bond" else asset_type
 
     cfg_root = cfg.get("LIVE_PRICE_MAX_AGE_SEC")
     threshold: float | None = None
-    if isinstance(cfg_root, dict) and asset_type:
-        raw = cfg_root.get(asset_type)
+    if isinstance(cfg_root, dict) and threshold_type:
+        raw = cfg_root.get(threshold_type)
         if isinstance(raw, (int, float)) and raw > 0:
             threshold = float(raw)
 

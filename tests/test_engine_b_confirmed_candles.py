@@ -75,14 +75,43 @@ def test_engine_b_live_gate_quote_uses_fresh_quote_not_confirmed_close():
     pair = {"type": "forex", "display": "EUR/USD", "symbol": "EURUSD=X"}
     price, diag = engine_b_live_gate_quote(
         pair,
-        {"EUR/USD": {"price": 1.125, "ts": 1_000.0, "source": "mt5"}},
+        {
+            "EUR/USD": {
+                "price": 1.125,
+                "ts": 1_003.0,
+                "broker_ts": 1_000.0,
+                "source": "mt5",
+            }
+        },
         {"LIVE_PRICE_MAX_AGE_SEC": {"forex": 5}},
         time_now=1_003.0,
     )
 
     assert price == 1.125
     assert diag["ageSec"] == 3.0
+    assert diag["timestampSource"] == "broker_ts"
     assert diag["fresh"] is True
+
+
+def test_engine_b_live_gate_quote_rejects_frozen_mt5_tick_with_fresh_receipt_time():
+    import pytest
+    from athena_app.services.engine_b_market_state import engine_b_live_gate_quote
+
+    pair = {"type": "commodity", "display": "Coffee", "symbol": "Coffee"}
+    with pytest.raises(ValueError, match="ENGINE_B_LIVE_QUOTE_STALE"):
+        engine_b_live_gate_quote(
+            pair,
+            {
+                "Coffee": {
+                    "price": 324.04,
+                    "ts": 40_000.0,
+                    "broker_ts": 1_000.0,
+                    "source": "mt5",
+                }
+            },
+            {"LIVE_PRICE_MAX_AGE_SEC": {"commodity": 60}},
+            time_now=40_000.0,
+        )
 
 
 def test_engine_b_live_gate_quote_rejects_stale_and_unknown_age():
@@ -101,3 +130,24 @@ def test_engine_b_live_gate_quote_rejects_stale_and_unknown_age():
         )
     with pytest.raises(ValueError, match="ENGINE_B_LIVE_QUOTE_AGE_UNKNOWN"):
         engine_b_live_gate_quote(pair, {"HBARUSDT": {"price": 0.0687}}, config, time_now=1_001.0)
+
+
+def test_engine_b_live_gate_quote_uses_etf_threshold_for_bond_etf():
+    from athena_app.services.engine_b_market_state import engine_b_live_gate_quote
+
+    price, diag = engine_b_live_gate_quote(
+        {"type": "etf_bond", "display": "TLT", "symbol": "TLT.US"},
+        {
+            "TLT": {
+                "price": 84.45,
+                "ts": 1_000.0,
+                "broker_ts": 1_000.0,
+                "source": "mt5",
+            }
+        },
+        {"LIVE_PRICE_MAX_AGE_SEC": {"etf": 90}},
+        time_now=1_001.0,
+    )
+
+    assert price == 84.45
+    assert diag["thresholdAssetType"] == "etf"
