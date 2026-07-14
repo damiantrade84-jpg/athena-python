@@ -258,7 +258,7 @@ def test_naive_provider_timestamp_is_normalized_as_utc() -> None:
     assert candle_timestamp_epoch({"time": "2026-07-13T10:00:00"}) == expected
 
 
-def test_equity_h4_is_not_mandatory_structure_and_engine_roles_are_preserved() -> None:
+def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     equity = resolve_timeframe_policy("MSFT", "stock", "us_stock_single", "intraday")
     engine_b_intraday = resolve_engine_b_tfs(
         "forex", "intraday", symbol="EUR/USD", score_group="forex_majors"
@@ -269,12 +269,15 @@ def test_equity_h4_is_not_mandatory_structure_and_engine_roles_are_preserved() -
     engine_d = resolve_timeframe_policy("BTC/USDT", "crypto", "crypto_btc", "engine_d")
 
     assert equity.structure_tf == Timeframe.H1
-    assert engine_b_intraday["struct"] == "H4"
-    assert engine_b_intraday["trigger"] == "H1"
-    assert engine_b_intraday["atr"] == "H4"
-    assert engine_b_intraday["policy_mode"] == "shadow"
-    assert engine_b_swing["struct"] == "D1"
-    assert engine_b_swing["trigger"] == "H4"
+    assert engine_b_intraday["bias"] == "H4"
+    assert engine_b_intraday["struct"] == "H1"
+    assert engine_b_intraday["zone"] == "H1"
+    assert engine_b_intraday["setup"] == "M30"
+    assert engine_b_intraday["trigger"] == "M15"
+    assert engine_b_intraday["execution"] == "M15"
+    assert engine_b_intraday["atr"] == "H1"
+    assert engine_b_swing["struct"] == "H4"
+    assert engine_b_swing["trigger"] == "H1"
     assert engine_d.bias_tf == Timeframe.H1
     assert engine_d.structure_tf == Timeframe.M15
     assert engine_d.trigger_tf == Timeframe.M5

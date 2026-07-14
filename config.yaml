@@ -3835,8 +3835,10 @@ ENGINE_B_BOS_VOLUME_FOR_TICKVOL: false
 # symbol/group/style by timeframe_policy.resolve_timeframe_policy().
 # Legacy ENGINE_B_FOREX_STRUCTURE_TF is no longer read.
 
-# Timeframe policy is diagnostics-only until an explicit promotion decision.
-TF_POLICY_MODE: shadow
+# Promoted for this deployment: Engine B uses the resolver's policy timeframes
+# (H4 bias, H1 structure, M30 setup, M15 trigger/execution, H1 ATR) rather
+# than the legacy intraday H4/H4/H1/H4 matrix.
+TF_POLICY_MODE: enforced
 TF_POLICY_AUTOTRADE_ENABLED: false
 TF_POLICY_SPEED_THRESHOLDS:
   default:
