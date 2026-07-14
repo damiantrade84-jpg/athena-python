@@ -2087,6 +2087,10 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
             _trade.setdefault("timeframe_policy_version", _v3_policy.policy_version)
             _trade.setdefault("timeframe_policy_hash", _v3_policy_payload["timeframePolicyHash"])
             _trade.setdefault("timeframe_config_hash", _v3_config_hash)
+            _trade.setdefault("timeframe_policy_promotion_status", "NON_PROMOTABLE")
+            _trade.setdefault("timeframe_policy_harness_status", "HARNESS_INTEGRITY_BLOCKED")
+        _v3_result["timeframePolicyPromotionStatus"] = "NON_PROMOTABLE"
+        _v3_result["timeframePolicyHarnessStatus"] = "HARNESS_INTEGRITY_BLOCKED"
     return _v3_result
 
     bt_vectorized = bool(CONFIG.get("BT_VECTORIZED", False))
@@ -6148,6 +6152,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         _trade.setdefault("timeframe_config_hash", _bt_config_hash)
         _trade.setdefault("candle_policy", "confirmed_only_point_in_time")
         _trade.setdefault("provider", pair.get("source"))
+        _trade.setdefault("timeframe_policy_promotion_status", "NON_PROMOTABLE")
+        _trade.setdefault("timeframe_policy_harness_status", "HARNESS_INTEGRITY_BLOCKED")
 
     result = _format_backtest_results(
         trades,
@@ -6170,6 +6176,8 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
     result["backtestPolicyResolution"] = "point_in_time_no_live_speed_leak"
     result["candlePolicyProvenance"] = "confirmed_only_point_in_time"
     result["providerProvenance"] = pair.get("source")
+    result["timeframePolicyPromotionStatus"] = "NON_PROMOTABLE"
+    result["timeframePolicyHarnessStatus"] = "HARNESS_INTEGRITY_BLOCKED"
     _tp_count = sum(1 for t in trades if t.get("outcome") == "TP1")
     _tp2_count = sum(1 for t in trades if t.get("outcome") == "TP2")
     _sl_count = sum(1 for t in trades if t.get("outcome") == "SL")

@@ -8,6 +8,7 @@ build it from information available at the historical decision timestamp.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
@@ -15,9 +16,14 @@ import json
 import math
 import statistics
 from typing import Any, Iterable, Mapping, Sequence
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-POLICY_VERSION = "timeframe_policy.v1"
+POLICY_VERSION = "timeframe_policy.v2"
+
+
+class PolicyConfigurationError(ValueError):
+    """Raised for deterministic symbol/group policy configuration conflicts."""
 
 
 class Timeframe(str, Enum):
@@ -27,6 +33,16 @@ class Timeframe(str, Enum):
     M30 = "M30"
     M15 = "M15"
     M5 = "M5"
+
+
+TIMEFRAME_LADDER = (
+    Timeframe.D1,
+    Timeframe.H4,
+    Timeframe.H1,
+    Timeframe.M30,
+    Timeframe.M15,
+    Timeframe.M5,
+)
 
 
 class TimeframeRole(str, Enum):
@@ -43,13 +59,124 @@ class SpeedClass(str, Enum):
     NORMAL = "NORMAL"
     FAST = "FAST"
     EXTREME = "EXTREME"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class LiquidityClass(str, Enum):
+    DEEP = "DEEP"
+    NORMAL = "NORMAL"
+    THIN = "THIN"
+    UNAVAILABLE = "UNAVAILABLE"
 
 
 class M5Role(str, Enum):
-    DISABLED = "DISABLED"
-    ADVISORY = "ADVISORY"
-    REFINEMENT = "REFINEMENT"
-    EXECUTION = "EXECUTION"
+    EXECUTION = "execution"
+    REFINEMENT = "refinement"
+    ADVISORY = "advisory"
+    DISABLED = "disabled"
+
+
+def parse_m5_matrix_language(value: str) -> tuple[M5Role, Timeframe | None]:
+    """Map the approved policy-matrix language without heuristic authority."""
+    normalized = " ".join(str(value or "").strip().lower().split())
+    exact = {
+        "m5": (M5Role.EXECUTION, None),
+        "m5 after m15 confirmation": (M5Role.EXECUTION, Timeframe.M15),
+        "m5 refinement optional": (M5Role.REFINEMENT, None),
+        "m5 refinement only": (M5Role.REFINEMENT, None),
+        "m5 advisory": (M5Role.ADVISORY, None),
+        "m5 disabled": (M5Role.DISABLED, None),
+        "no m5 authority": (M5Role.DISABLED, None),
+    }
+    if normalized not in exact:
+        raise ValueError(f"unsupported M5 matrix language: {value!r}")
+    return exact[normalized]
+
+
+class PolicyMode(str, Enum):
+    OFF = "off"
+    SHADOW = "shadow"
+    ENFORCED = "enforced"
+
+
+class SessionCalendarSource(str, Enum):
+    PROVIDER_METADATA = "PROVIDER_METADATA"
+    PROVIDER_CONFIG = "PROVIDER_CONFIG"
+    UNDERLYING_EXCHANGE_FALLBACK = "UNDERLYING_EXCHANGE_FALLBACK"
+    SESSION_UNAVAILABLE = "SESSION_UNAVAILABLE"
+
+
+@dataclass(frozen=True)
+class SessionCalendarResolution:
+    calendar_id: str | None
+    source: SessionCalendarSource
+    provider_timezone: str | None
+    session_state: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sessionCalendarId": self.calendar_id,
+            "sessionCalendarSource": self.source.value,
+            "providerSessionTimezone": self.provider_timezone,
+            "sessionState": self.session_state,
+        }
+
+
+def _validated_timezone(value: Any) -> str | None:
+    name = str(value or "").strip()
+    if not name:
+        return None
+    try:
+        ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return None
+    return name
+
+
+def resolve_session_calendar(
+    *,
+    provider_metadata: Mapping[str, Any] | None = None,
+    provider_calendar: Mapping[str, Any] | None = None,
+    underlying_exchange_calendar: Mapping[str, Any] | None = None,
+) -> SessionCalendarResolution:
+    """Resolve timezone-aware calendars in provider-first precedence order."""
+    candidates = (
+        (SessionCalendarSource.PROVIDER_METADATA, provider_metadata),
+        (SessionCalendarSource.PROVIDER_CONFIG, provider_calendar),
+        (
+            SessionCalendarSource.UNDERLYING_EXCHANGE_FALLBACK,
+            underlying_exchange_calendar,
+        ),
+    )
+    for source, candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        timezone_name = _validated_timezone(
+            candidate.get("providerSessionTimezone")
+            or candidate.get("timezone")
+        )
+        calendar_id = str(
+            candidate.get("sessionCalendarId")
+            or candidate.get("calendar_id")
+            or ""
+        ).strip()
+        if calendar_id and timezone_name:
+            return SessionCalendarResolution(
+                calendar_id=calendar_id,
+                source=source,
+                provider_timezone=timezone_name,
+                session_state=str(
+                    candidate.get("sessionState")
+                    or candidate.get("state")
+                    or "UNKNOWN"
+                ).upper(),
+            )
+    return SessionCalendarResolution(
+        calendar_id=None,
+        source=SessionCalendarSource.SESSION_UNAVAILABLE,
+        provider_timezone=None,
+        session_state="SESSION_UNAVAILABLE",
+    )
 
 
 class PolicySource(str, Enum):
@@ -57,24 +184,96 @@ class PolicySource(str, Enum):
     SCORE_GROUP_OVERRIDE = "SCORE_GROUP_OVERRIDE"
     ASSET_STYLE_DEFAULT = "ASSET_STYLE_DEFAULT"
     SAFE_FALLBACK = "SAFE_FALLBACK"
+    CONFIG_CONFLICT = "CONFIG_CONFLICT"
 
 
 @dataclass(frozen=True)
 class SpeedThresholds:
-    slow_max: float = 40.0
-    normal_max: float = 70.0
-    fast_max: float = 90.0
+    slow_to_normal_min: float = 45.0
+    normal_to_slow_max: float = 35.0
+    normal_to_fast_min: float = 75.0
+    fast_to_normal_max: float = 65.0
+    fast_to_extreme_min: float = 92.0
+    extreme_to_fast_max: float = 88.0
     hysteresis_closes: int = 2
+    required_h1_bars: int = 214
+    required_m15_bars: int = 214
+
+
+@dataclass(frozen=True)
+class LiquidityThresholds:
     max_quote_age_sec: float = 15.0
-    max_spread_m15_atr: float = 0.20
+    deep_max_spread_trigger_atr: float = 0.05
+    normal_max_spread_trigger_atr: float = 0.20
+    deep_min_relative_volume: float = 1.25
+    thin_max_relative_volume: float = 0.50
+    required_volume_bars: int = 21
+
+
+def thresholds_for_group(
+    config: Mapping[str, Any],
+    score_group: str | None,
+) -> tuple[SpeedThresholds, LiquidityThresholds]:
+    """Load configurable default plus score-group threshold overrides."""
+    group = str(score_group or "").strip().lower()
+
+    def _values(key: str) -> dict[str, Any]:
+        section = config.get(key)
+        if not isinstance(section, Mapping):
+            return {}
+        values = dict(section.get("default") or {})
+        override = section.get(group)
+        if isinstance(override, Mapping):
+            values.update(override)
+        return values
+
+    speed_fields = SpeedThresholds.__dataclass_fields__
+    liquidity_fields = LiquidityThresholds.__dataclass_fields__
+    speed = SpeedThresholds(
+        **{
+            key: value
+            for key, value in _values("TF_POLICY_SPEED_THRESHOLDS").items()
+            if key in speed_fields
+        }
+    )
+    liquidity = LiquidityThresholds(
+        **{
+            key: value
+            for key, value in _values("TF_POLICY_LIQUIDITY_THRESHOLDS").items()
+            if key in liquidity_fields
+        }
+    )
+    return speed, liquidity
+
+
+def baseline_liquidity_for_group(
+    config: Mapping[str, Any],
+    score_group: str | None,
+) -> LiquidityClass:
+    section = config.get("TF_POLICY_BASELINE_LIQUIDITY")
+    if not isinstance(section, Mapping):
+        return LiquidityClass.NORMAL
+    value = section.get(str(score_group or "").strip().lower(), section.get("default"))
+    try:
+        return LiquidityClass(str(value or LiquidityClass.NORMAL.value).upper())
+    except ValueError:
+        return LiquidityClass.NORMAL
 
 
 @dataclass(frozen=True)
 class SpeedState:
     """Point-in-time speed inputs derived from confirmed H1/M15 bars only."""
 
-    live_speed_class: SpeedClass | None = None
+    live_speed_class: SpeedClass | None = SpeedClass.UNAVAILABLE
     candidate_speed_class: SpeedClass | None = None
+    candidate_age_h1_bars: int = 0
+    transition_pending: bool = False
+    last_speed_transition_utc: str | None = None
+    liquidity_class: LiquidityClass = LiquidityClass.UNAVAILABLE
+    baseline_liquidity_class: LiquidityClass = LiquidityClass.NORMAL
+    history_ready: bool = False
+    adaptation_applied: bool = False
+    adaptation_reason: str = "INSUFFICIENT_HISTORY"
     speed_percentile: float | None = None
     h1_atr14_pct: float | None = None
     h1_atr_pct_percentile: float | None = None
@@ -95,6 +294,7 @@ class SpeedState:
     updated_on_new_h1_close: bool = False
     missing_inputs: tuple[str, ...] = ()
     thresholds: SpeedThresholds = field(default_factory=SpeedThresholds)
+    liquidity_thresholds: LiquidityThresholds = field(default_factory=LiquidityThresholds)
 
 
 @dataclass(frozen=True)
@@ -109,6 +309,10 @@ class PolicyDiagnostics:
     speed_thresholds: Mapping[str, Any] = field(default_factory=dict)
     m15_confirmation_required_for_m5: bool = False
     safe_fallback: bool = False
+    config_conflict: bool = False
+    adaptation_applied: bool = False
+    adaptation_reason: str = "INSUFFICIENT_HISTORY"
+    liquidity_class: LiquidityClass = LiquidityClass.UNAVAILABLE
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -122,6 +326,10 @@ class PolicyDiagnostics:
             "speedThresholds": dict(self.speed_thresholds),
             "m15ConfirmationRequiredForM5": self.m15_confirmation_required_for_m5,
             "safeFallback": self.safe_fallback,
+            "configConflict": self.config_conflict,
+            "adaptationApplied": self.adaptation_applied,
+            "adaptationReason": self.adaptation_reason,
+            "liquidityClass": self.liquidity_class.value,
         }
 
 
@@ -142,6 +350,11 @@ class TimeframePolicy:
     live_speed_class: SpeedClass
     policy_source: PolicySource
     diagnostics: PolicyDiagnostics
+    canonical_symbol: str
+    engine_id: str
+    style: str
+    policy_key: str
+    execution_prerequisite_tf: Timeframe | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -159,12 +372,26 @@ class TimeframePolicy:
             "baseline_speed_class": self.baseline_speed_class.value,
             "live_speed_class": self.live_speed_class.value,
             "policy_source": self.policy_source.value,
+            "canonical_symbol": self.canonical_symbol,
+            "engine_id": self.engine_id,
+            "style": self.style,
+            "policy_key": self.policy_key,
+            "execution_prerequisite_tf": (
+                self.execution_prerequisite_tf.value
+                if self.execution_prerequisite_tf
+                else None
+            ),
             "diagnostics": self.diagnostics.to_dict(),
         }
 
     def payload(self) -> dict[str, Any]:
         data = self.to_dict()
-        stable = json.dumps(data, sort_keys=True, separators=(",", ":"))
+        stable_policy = {
+            key: value
+            for key, value in data.items()
+            if key != "diagnostics"
+        }
+        stable = json.dumps(stable_policy, sort_keys=True, separators=(",", ":"))
         return {
             "timeframePolicyVersion": self.policy_version,
             "timeframePolicyHash": sha256(stable.encode("utf-8")).hexdigest(),
@@ -180,6 +407,18 @@ class TimeframePolicy:
             "liveSpeedClass": self.live_speed_class.value,
             "speedPercentile": None,
             "policySource": self.policy_source.value,
+            "canonicalSymbol": self.canonical_symbol,
+            "engineId": self.engine_id,
+            "style": self.style,
+            "policyKey": self.policy_key,
+            "executionPrerequisiteTf": (
+                self.execution_prerequisite_tf.value
+                if self.execution_prerequisite_tf
+                else None
+            ),
+            "liquidityClass": self.diagnostics.liquidity_class.value,
+            "adaptationApplied": self.diagnostics.adaptation_applied,
+            "adaptationReason": self.diagnostics.adaptation_reason,
             "timeframePolicyDiagnostics": self.diagnostics.to_dict(),
         }
 
@@ -271,11 +510,20 @@ def _key(value: Any) -> str:
 # Aliases are identities, not policies.  Every alias set points to one canonical
 # instrument; unknown keys are never matched by prefix or nearest-neighbour logic.
 _ALIASES: dict[str, str] = {}
+_CANONICAL_DISPLAY: dict[str, str] = {}
 
 
 def _aliases(canonical: str, *values: str) -> None:
+    _CANONICAL_DISPLAY[canonical] = values[0] if values else canonical
     for value in (canonical, *values):
-        _ALIASES[_key(value)] = canonical
+        alias_key = _key(value)
+        existing = _ALIASES.get(alias_key)
+        if existing and existing != canonical:
+            raise PolicyConfigurationError(
+                f"alias {value!r} maps to conflicting canonical symbols: "
+                f"{existing}, {canonical}"
+            )
+        _ALIASES[alias_key] = canonical
 
 
 for _canonical, _values in {
@@ -386,30 +634,76 @@ _ASSET_DEFAULTS: dict[str, _Template] = {
 }
 
 
-_TF_ORDER = (
-    Timeframe.D1,
-    Timeframe.H4,
-    Timeframe.H1,
-    Timeframe.M30,
-    Timeframe.M15,
-    Timeframe.M5,
-)
-
-
 def canonical_symbol(symbol: str) -> str | None:
     """Return a known canonical identity, or ``None`` for an unknown alias."""
     return _ALIASES.get(_key(symbol))
 
 
 def _adjacent(tf: Timeframe, faster: bool) -> Timeframe:
-    index = _TF_ORDER.index(tf)
-    index = min(len(_TF_ORDER) - 1, index + 1) if faster else max(0, index - 1)
-    return _TF_ORDER[index]
+    index = TIMEFRAME_LADDER.index(tf)
+    index = min(len(TIMEFRAME_LADDER) - 1, index + 1) if faster else max(0, index - 1)
+    return TIMEFRAME_LADDER[index]
 
 
-def _engine_template(base: _Template, style: str) -> _Template:
-    normalized = style.strip().lower().replace("-", "_")
-    if normalized in {"engine_d", "d", "scalp_engine", "engine_d_scalp"}:
+def _normalize_policy_identity(engine_id: str, style: str) -> tuple[str, str]:
+    engine = str(engine_id or "engine_a").strip().lower().replace("-", "_")
+    normalized_style = str(style or "intraday").strip().lower().replace("-", "_")
+    if normalized_style.startswith("engine_b_"):
+        engine = "engine_b"
+        normalized_style = normalized_style.removeprefix("engine_b_")
+    elif normalized_style in {"engine_d", "d", "scalp_engine", "engine_d_scalp"}:
+        engine = "engine_d"
+        normalized_style = "scalp"
+    if engine in {"a", "enginea"}:
+        engine = "engine_a"
+    elif engine in {"b", "engineb"}:
+        engine = "engine_b"
+    elif engine in {"d", "scalp", "engined"}:
+        engine = "engine_d"
+    if normalized_style == "auto":
+        normalized_style = "intraday"
+    return engine, normalized_style
+
+
+def policy_key_for(canonical: str, engine_id: str, style: str) -> str:
+    """Return the only authoritative cache/serialization identity."""
+    return f"{canonical}:{engine_id}:{style}"
+
+
+def validate_timeframe_role_order(
+    regime: Timeframe,
+    bias: Timeframe,
+    structure: Timeframe,
+    setup: Timeframe,
+    trigger: Timeframe,
+    execution: Timeframe,
+) -> None:
+    """Reject a policy whose roles reverse the slower-to-faster ladder."""
+    roles = (regime, bias, structure, setup, trigger, execution)
+    indexes = [TIMEFRAME_LADDER.index(tf) for tf in roles]
+    if indexes != sorted(indexes):
+        rendered = " -> ".join(tf.value for tf in roles)
+        raise ValueError(f"timeframe role order reverses slower-to-faster ladder: {rendered}")
+
+
+def _clamp_adaptive_roles(
+    structure: Timeframe,
+    setup: Timeframe,
+    trigger: Timeframe,
+    execution: Timeframe,
+) -> tuple[Timeframe, Timeframe, Timeframe]:
+    """Clamp adaptive roles to their permitted slower-to-faster ordering."""
+    previous = TIMEFRAME_LADDER.index(structure)
+    clamped: list[Timeframe] = []
+    for tf in (setup, trigger, execution):
+        index = max(previous, TIMEFRAME_LADDER.index(tf))
+        clamped.append(TIMEFRAME_LADDER[index])
+        previous = index
+    return clamped[0], clamped[1], clamped[2]
+
+
+def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
+    if engine_id == "engine_d":
         return _Template(
             profile="ENGINE_D_NATIVE",
             regime=Timeframe.H1,
@@ -421,7 +715,7 @@ def _engine_template(base: _Template, style: str) -> _Template:
             m5_role=M5Role.EXECUTION,
             baseline_speed=base.baseline_speed,
         )
-    if normalized in {"engine_b_swing", "b_swing"}:
+    if engine_id == "engine_b" and style == "swing":
         return _Template(
             profile=f"ENGINE_B_SWING_{base.profile}",
             regime=Timeframe.D1,
@@ -433,7 +727,7 @@ def _engine_template(base: _Template, style: str) -> _Template:
             m5_role=M5Role.DISABLED,
             baseline_speed=base.baseline_speed,
         )
-    if normalized in {"engine_b_intraday", "b_intraday"}:
+    if engine_id == "engine_b" and style == "intraday":
         return replace(
             base,
             profile=f"ENGINE_B_INTRADAY_{base.profile}",
@@ -444,7 +738,7 @@ def _engine_template(base: _Template, style: str) -> _Template:
             execution=Timeframe.M15,
             m5_role=M5Role.REFINEMENT if base.m5_role != M5Role.DISABLED else M5Role.DISABLED,
         )
-    if normalized in {"engine_b_scalp", "b_scalp"}:
+    if engine_id == "engine_b" and style == "scalp":
         return _Template(
             profile=f"ENGINE_B_SCALP_{base.profile}",
             regime=Timeframe.H4,
@@ -465,15 +759,27 @@ def resolve_timeframe_policy(
     score_group: str | None,
     style: str,
     speed_state: SpeedState | None = None,
+    *,
+    engine_id: str = "engine_a",
+    authoritative_group: str | None = None,
 ) -> TimeframePolicy:
     """Resolve the deterministic policy using the documented precedence."""
     requested = str(symbol or "").strip()
     canonical = canonical_symbol(requested)
     asset = str(asset_type or "").strip().lower()
     group = str(score_group or "").strip().lower() or None
+    authoritative = str(authoritative_group or "").strip().lower() or None
+    resolved_engine, resolved_style = _normalize_policy_identity(engine_id, style)
     messages: list[str] = []
 
-    if canonical and canonical in _SYMBOL_OVERRIDES:
+    config_conflict = bool(authoritative and group != authoritative)
+    if config_conflict:
+        base = replace(_NO_M5, profile="CONFIG_CONFLICT", baseline_speed=SpeedClass.SLOW)
+        source = PolicySource.CONFIG_CONFLICT
+        messages.append(
+            f"canonical group conflict: requested={group or 'none'} authoritative={authoritative}"
+        )
+    elif canonical and canonical in _SYMBOL_OVERRIDES:
         base = _SYMBOL_OVERRIDES[canonical]
         source = PolicySource.SYMBOL_OVERRIDE
     elif group and group in _GROUP_OVERRIDES:
@@ -489,39 +795,67 @@ def resolve_timeframe_policy(
         source = PolicySource.SAFE_FALLBACK
         messages.append("unknown symbol/asset; fail-closed higher-timeframe fallback")
 
-    selected = _engine_template(base, style)
-    live_speed = (
+    selected = _engine_template(base, resolved_engine, resolved_style)
+    reported_speed = (
         speed_state.live_speed_class
         if speed_state and speed_state.live_speed_class is not None
-        else selected.baseline_speed
+        else SpeedClass.UNAVAILABLE
     )
+    adaptation_ready = bool(
+        speed_state
+        and speed_state.history_ready
+        and reported_speed != SpeedClass.UNAVAILABLE
+    )
+    effective_speed = reported_speed if adaptation_ready else selected.baseline_speed
     setup = selected.setup
     trigger = selected.trigger
     execution = selected.execution
     m5_role = selected.m5_role
 
-    if speed_state is None or speed_state.live_speed_class is None:
-        messages.append("live speed unavailable; baseline policy retained")
-    elif live_speed == SpeedClass.SLOW:
+    if not adaptation_ready:
+        messages.append("INSUFFICIENT_HISTORY: baseline policy retained")
+    elif effective_speed == SpeedClass.SLOW:
         setup = _adjacent(setup, faster=False)
         trigger = _adjacent(trigger, faster=False)
         execution = _adjacent(execution, faster=False)
         if execution != Timeframe.M5 and m5_role == M5Role.EXECUTION:
             m5_role = M5Role.REFINEMENT
-    elif live_speed in {SpeedClass.FAST, SpeedClass.EXTREME}:
+    elif effective_speed in {SpeedClass.FAST, SpeedClass.EXTREME}:
         if selected.m5_role in {M5Role.EXECUTION, M5Role.REFINEMENT}:
-            if speed_state.m5_quality_acceptable and not speed_state.thin_liquidity:
+            if (
+                speed_state.m5_quality_acceptable
+                and speed_state.liquidity_class in {LiquidityClass.DEEP, LiquidityClass.NORMAL}
+            ):
                 execution = _adjacent(execution, faster=True)
                 if execution == Timeframe.M5:
                     m5_role = M5Role.EXECUTION
             else:
                 messages.append("M5 authority withheld: quote/spread/liquidity quality unacceptable")
 
-    if live_speed == SpeedClass.EXTREME and speed_state and speed_state.thin_liquidity:
+    if speed_state and speed_state.liquidity_class in {
+        LiquidityClass.THIN,
+        LiquidityClass.UNAVAILABLE,
+    }:
         if execution == Timeframe.M5:
             execution = Timeframe.M15
-        m5_role = M5Role.DISABLED
-        messages.append("EXTREME+thin liquidity forced execution away from M5")
+        if m5_role == M5Role.EXECUTION:
+            m5_role = M5Role.DISABLED
+        messages.append("THIN or UNAVAILABLE liquidity removed M5 execution authority")
+
+    setup, trigger, execution = _clamp_adaptive_roles(
+        selected.structure,
+        setup,
+        trigger,
+        execution,
+    )
+    validate_timeframe_role_order(
+        selected.regime,
+        selected.bias,
+        selected.structure,
+        setup,
+        trigger,
+        execution,
+    )
 
     required = tuple(dict.fromkeys((
         selected.regime,
@@ -540,13 +874,32 @@ def resolve_timeframe_policy(
         requested_symbol=requested,
         asset_type=asset or "unknown",
         score_group=group,
-        style=str(style or "intraday"),
+        style=resolved_style,
         messages=tuple(messages),
         missing_speed_inputs=speed_state.missing_inputs if speed_state else ("speed_state",),
         speed_thresholds=asdict(thresholds),
         m15_confirmation_required_for_m5=selected.m15_confirmation_required_for_m5,
         safe_fallback=source == PolicySource.SAFE_FALLBACK,
+        config_conflict=config_conflict,
+        adaptation_applied=adaptation_ready and (
+            setup != selected.setup
+            or trigger != selected.trigger
+            or execution != selected.execution
+            or m5_role != selected.m5_role
+        ),
+        adaptation_reason=(
+            "SPEED_AND_LIQUIDITY"
+            if adaptation_ready
+            else "INSUFFICIENT_HISTORY"
+        ),
+        liquidity_class=(
+            speed_state.liquidity_class
+            if speed_state
+            else LiquidityClass.UNAVAILABLE
+        ),
     )
+    canonical_identity = canonical or _key(requested) or "UNKNOWN"
+    policy_key = policy_key_for(canonical_identity, resolved_engine, resolved_style)
     return TimeframePolicy(
         policy_version=POLICY_VERSION,
         profile=selected.profile,
@@ -560,9 +913,18 @@ def resolve_timeframe_policy(
         required_closed_tfs=required,
         forming_tf=forming_tf,
         baseline_speed_class=selected.baseline_speed,
-        live_speed_class=live_speed,
+        live_speed_class=reported_speed,
         policy_source=source,
         diagnostics=diagnostics,
+        canonical_symbol=canonical_identity,
+        engine_id=resolved_engine,
+        style=resolved_style,
+        policy_key=policy_key,
+        execution_prerequisite_tf=(
+            Timeframe.M15
+            if selected.m15_confirmation_required_for_m5
+            else None
+        ),
     )
 
 
@@ -572,13 +934,40 @@ def speed_class_for_percentile(
 ) -> SpeedClass:
     cfg = thresholds or SpeedThresholds()
     value = max(0.0, min(100.0, float(percentile)))
-    if value < cfg.slow_max:
+    if value <= cfg.normal_to_slow_max:
         return SpeedClass.SLOW
-    if value < cfg.normal_max:
+    if value < cfg.normal_to_fast_min:
         return SpeedClass.NORMAL
-    if value < cfg.fast_max:
+    if value < cfg.fast_to_extreme_min:
         return SpeedClass.FAST
     return SpeedClass.EXTREME
+
+
+def speed_transition_candidate(
+    previous: SpeedClass | None,
+    percentile: float,
+    thresholds: SpeedThresholds,
+) -> SpeedClass:
+    value = max(0.0, min(100.0, float(percentile)))
+    if previous in {None, SpeedClass.UNAVAILABLE}:
+        return speed_class_for_percentile(value, thresholds)
+    if previous == SpeedClass.SLOW:
+        return SpeedClass.NORMAL if value >= thresholds.slow_to_normal_min else previous
+    if previous == SpeedClass.NORMAL:
+        if value <= thresholds.normal_to_slow_max:
+            return SpeedClass.SLOW
+        if value >= thresholds.normal_to_fast_min:
+            return SpeedClass.FAST
+        return previous
+    if previous == SpeedClass.FAST:
+        if value <= thresholds.fast_to_normal_max:
+            return SpeedClass.NORMAL
+        if value >= thresholds.fast_to_extreme_min:
+            return SpeedClass.EXTREME
+        return previous
+    if previous == SpeedClass.EXTREME:
+        return SpeedClass.FAST if value <= thresholds.extreme_to_fast_max else previous
+    return SpeedClass.UNAVAILABLE
 
 
 def apply_speed_hysteresis(
@@ -589,12 +978,79 @@ def apply_speed_hysteresis(
 ) -> tuple[SpeedClass, int]:
     """Persist a class only after consecutive newly closed H1 observations."""
     cfg = thresholds or SpeedThresholds()
-    if previous is None or candidate == previous:
+    if previous is None or previous == SpeedClass.UNAVAILABLE:
         return candidate, 0
+    speed_ladder = (
+        SpeedClass.SLOW,
+        SpeedClass.NORMAL,
+        SpeedClass.FAST,
+        SpeedClass.EXTREME,
+    )
+    previous_index = speed_ladder.index(previous)
+    candidate_index = speed_ladder.index(candidate)
+    if abs(candidate_index - previous_index) > 1:
+        candidate = speed_ladder[
+            previous_index + (1 if candidate_index > previous_index else -1)
+        ]
+    if candidate == previous:
+        return previous, 0
     streak = max(0, int(candidate_streak)) + 1
     if streak >= max(1, int(cfg.hysteresis_closes)):
         return candidate, 0
     return previous, streak
+
+
+def classify_liquidity(
+    *,
+    quote_age_sec: float | None,
+    spread_trigger_atr: float | None,
+    relative_volume: float | None,
+    provider_market_state: str | None,
+    baseline: LiquidityClass = LiquidityClass.NORMAL,
+    relative_volume_reliable: bool = True,
+    thresholds: LiquidityThresholds | None = None,
+) -> LiquidityClass:
+    cfg = thresholds or LiquidityThresholds()
+    state = str(provider_market_state or "").strip().lower()
+    if not state:
+        return LiquidityClass.UNAVAILABLE
+    if state in {"closed", "halted", "suspended", "unavailable"}:
+        return LiquidityClass.THIN
+    if quote_age_sec is None or spread_trigger_atr is None:
+        return LiquidityClass.UNAVAILABLE
+    if quote_age_sec > cfg.max_quote_age_sec:
+        return LiquidityClass.THIN
+    if relative_volume_reliable and relative_volume is None:
+        return LiquidityClass.UNAVAILABLE
+    if (
+        spread_trigger_atr > cfg.normal_max_spread_trigger_atr
+        or (
+            relative_volume_reliable
+            and relative_volume is not None
+            and relative_volume <= cfg.thin_max_relative_volume
+        )
+    ):
+        observed = LiquidityClass.THIN
+    elif (
+        spread_trigger_atr <= cfg.deep_max_spread_trigger_atr
+        and (
+            not relative_volume_reliable
+            or (
+                relative_volume is not None
+                and relative_volume >= cfg.deep_min_relative_volume
+            )
+        )
+    ):
+        observed = LiquidityClass.DEEP
+    else:
+        observed = LiquidityClass.NORMAL
+    restriction_order = {
+        LiquidityClass.DEEP: 0,
+        LiquidityClass.NORMAL: 1,
+        LiquidityClass.THIN: 2,
+        LiquidityClass.UNAVAILABLE: 3,
+    }
+    return max((observed, baseline), key=restriction_order.__getitem__)
 
 
 def _number(candle: Mapping[str, Any], key: str) -> float | None:
@@ -655,12 +1111,21 @@ def calculate_speed_state(
     current_session: str | None = None,
     gap_status: str | None = None,
     scheduled_event: bool | None = None,
+    provider_market_state: str | None = None,
+    baseline_speed_class: SpeedClass = SpeedClass.NORMAL,
+    baseline_liquidity_class: LiquidityClass = LiquidityClass.NORMAL,
+    relative_volume_reliable: bool = True,
     previous: SpeedState | None = None,
     last_closed_h1_open_time: int | None = None,
+    decision_utc: str | None = None,
     thresholds: SpeedThresholds | None = None,
+    liquidity_thresholds: LiquidityThresholds | None = None,
 ) -> SpeedState:
     """Calculate point-in-time speed from confirmed bars; never reads wall time."""
     cfg = thresholds or (previous.thresholds if previous else SpeedThresholds())
+    liquidity_cfg = liquidity_thresholds or (
+        previous.liquidity_thresholds if previous else LiquidityThresholds()
+    )
     missing: list[str] = []
     h1_atrs = _rolling_atr_pct(list(h1_confirmed), 14)
     h1_atr_pct = h1_atrs[-1] if h1_atrs else None
@@ -747,7 +1212,20 @@ def calculate_speed_state(
         if value is not None
     ]
     speed_percentile = statistics.median(speed_components) if speed_components else None
-    candidate = speed_class_for_percentile(speed_percentile, cfg) if speed_percentile is not None else None
+    history_ready = bool(
+        len(h1_confirmed) >= cfg.required_h1_bars
+        and len(m15_confirmed) >= cfg.required_m15_bars
+    )
+    previous_speed = (
+        previous.live_speed_class
+        if previous and previous.live_speed_class not in {None, SpeedClass.UNAVAILABLE}
+        else baseline_speed_class
+    )
+    candidate = (
+        speed_transition_candidate(previous_speed, speed_percentile, cfg)
+        if history_ready and speed_percentile is not None
+        else None
+    )
 
     new_h1_close = bool(
         candidate is not None
@@ -759,39 +1237,99 @@ def calculate_speed_state(
         for name in (
             "h1_atr14_pct",
             "m15_median_true_range_pct",
-            "spread_m15_atr",
-            "quote_age_sec",
+            "price_velocity_percentile",
         )
     )
-    if candidate is None or required_speed_missing:
-        persistent = previous.live_speed_class if previous else None
-        streak = previous.candidate_streak if previous else 0
+    if not history_ready or candidate is None or required_speed_missing:
+        persistent = SpeedClass.UNAVAILABLE
+        streak = 0
     elif not new_h1_close and previous and previous.live_speed_class is not None:
         persistent = previous.live_speed_class
         streak = previous.candidate_streak
     else:
+        prior_age = (
+            previous.candidate_age_h1_bars
+            if previous and previous.candidate_speed_class == candidate
+            else 0
+        )
         persistent, streak = apply_speed_hysteresis(
-            previous.live_speed_class if previous else None,
+            previous_speed,
             candidate,
-            previous.candidate_streak if previous else 0,
+            prior_age,
             cfg,
         )
 
     gap = str(gap_status or "").strip().lower()
     session = str(current_session or "").strip().lower()
-    thin = bool(
+    hard_liquidity_failure = bool(
         quote_age_sec is None
-        or float(quote_age_sec) > cfg.max_quote_age_sec
+        or float(quote_age_sec) > liquidity_cfg.max_quote_age_sec
         or spread_ratio is None
-        or spread_ratio > cfg.max_spread_m15_atr
+        or spread_ratio > liquidity_cfg.normal_max_spread_trigger_atr
         or gap not in {"", "none", "normal", "open"}
         or session in {"closed", "avoid", "off_hours"}
+        or not str(provider_market_state or "").strip()
+        or str(provider_market_state or "").strip().lower()
+        in {"closed", "halted", "suspended", "unavailable"}
         or scheduled_event is True
     )
-    m5_ok = not thin and spread_ratio is not None and quote_age_sec is not None
+    if hard_liquidity_failure:
+        liquidity_class = (
+            LiquidityClass.UNAVAILABLE
+            if quote_age_sec is None or spread_ratio is None
+            else LiquidityClass.THIN
+        )
+    elif not history_ready:
+        liquidity_class = baseline_liquidity_class
+    else:
+        liquidity_class = classify_liquidity(
+            quote_age_sec=float(quote_age_sec) if quote_age_sec is not None else None,
+            spread_trigger_atr=spread_ratio,
+            relative_volume=resolved_relative_volume,
+            provider_market_state=provider_market_state,
+            baseline=baseline_liquidity_class,
+            relative_volume_reliable=relative_volume_reliable,
+            thresholds=liquidity_cfg,
+        )
+    thin = liquidity_class in {LiquidityClass.THIN, LiquidityClass.UNAVAILABLE}
+    m5_ok = bool(
+        history_ready
+        and not thin
+        and spread_ratio is not None
+        and quote_age_sec is not None
+    )
+    transitioned = bool(
+        previous
+        and previous.live_speed_class not in {None, SpeedClass.UNAVAILABLE}
+        and persistent != previous.live_speed_class
+    )
+    transition_time = previous.last_speed_transition_utc if previous else None
+    if transitioned:
+        transition_time = decision_utc
+        if transition_time is None and last_closed_h1_open_time is not None:
+            transition_time = datetime.fromtimestamp(
+                last_closed_h1_open_time, tz=timezone.utc
+            ).isoformat()
+    transition_pending = bool(candidate is not None and persistent != candidate)
     return SpeedState(
         live_speed_class=persistent,
         candidate_speed_class=candidate,
+        candidate_age_h1_bars=streak,
+        transition_pending=transition_pending,
+        last_speed_transition_utc=transition_time,
+        liquidity_class=liquidity_class,
+        baseline_liquidity_class=baseline_liquidity_class,
+        history_ready=history_ready,
+        adaptation_applied=bool(
+            history_ready and persistent != baseline_speed_class
+        ),
+        adaptation_reason=(
+            "SPEED_CLASS_CHANGED"
+            if history_ready and persistent != baseline_speed_class
+            else "BASELINE_MATCH"
+            if history_ready
+            else "INSUFFICIENT_HISTORY"
+        ),
         speed_percentile=speed_percentile,
         h1_atr14_pct=h1_atr_pct,
         h1_atr_pct_percentile=h1_percentile,
@@ -812,7 +1350,83 @@ def calculate_speed_state(
         updated_on_new_h1_close=new_h1_close,
         missing_inputs=tuple(dict.fromkeys(missing)),
         thresholds=cfg,
+        liquidity_thresholds=liquidity_cfg,
     )
+
+
+def _policy_runtime_settings(
+    policy_mode: str | PolicyMode | None,
+    config: Mapping[str, Any] | None,
+) -> tuple[PolicyMode, bool]:
+    cfg = config
+    if cfg is None:
+        try:
+            from config import CONFIG
+
+            cfg = CONFIG
+        except Exception:
+            cfg = {}
+    raw_mode = policy_mode.value if isinstance(policy_mode, PolicyMode) else policy_mode
+    if raw_mode is None:
+        raw_mode = cfg.get("TF_POLICY_MODE", PolicyMode.SHADOW.value)
+    try:
+        mode = PolicyMode(str(raw_mode).strip().lower())
+    except ValueError:
+        mode = PolicyMode.SHADOW
+    autotrade_enabled = bool(cfg.get("TF_POLICY_AUTOTRADE_ENABLED", False))
+    return mode, autotrade_enabled
+
+
+def timeframe_policy_execution_block_reason(
+    signal: Mapping[str, Any],
+    config: Mapping[str, Any],
+) -> str | None:
+    """Fail closed only for policy config errors or explicitly enforced rollout."""
+    if (
+        signal.get("policySource") == PolicySource.CONFIG_CONFLICT.value
+        or signal.get("entryReadiness") == "CONFIG_ERROR"
+    ):
+        return "TF_POLICY_CONFIG_CONFLICT"
+    mode, autotrade_enabled = _policy_runtime_settings(None, config)
+    if mode == PolicyMode.ENFORCED and not autotrade_enabled:
+        return "TF_POLICY_AUTOTRADE_DISABLED"
+    return None
+
+
+def _signal_id(
+    signal: Mapping[str, Any],
+    policy_key: str,
+) -> str:
+    existing = signal.get("signalId") or signal.get("signal_id") or signal.get("id")
+    if existing not in {None, ""}:
+        return str(existing)
+    material = {
+        "policyKey": policy_key,
+        "timestamp": signal.get("timestamp") or signal.get("ts") or signal.get("time"),
+        "direction": signal.get("direction"),
+        "entry": signal.get("entry") or signal.get("price"),
+    }
+    stable = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str)
+    return sha256(stable.encode("utf-8")).hexdigest()[:24]
+
+
+def _configured_session_candidate(
+    config: Mapping[str, Any] | None,
+    section_key: str,
+    pair: Mapping[str, Any],
+    canonical: str,
+) -> Mapping[str, Any] | None:
+    if not isinstance(config, Mapping):
+        return None
+    section = config.get(section_key)
+    if not isinstance(section, Mapping):
+        return None
+    provider = str(pair.get("source") or pair.get("provider") or "").strip().lower()
+    provider_section = section.get(provider)
+    if not isinstance(provider_section, Mapping):
+        return None
+    candidate = provider_section.get(canonical) or provider_section.get("default")
+    return candidate if isinstance(candidate, Mapping) else None
 
 
 def attach_timeframe_policy_payload(
@@ -823,21 +1437,93 @@ def attach_timeframe_policy_payload(
     engine: str = "engine_a",
     market_states: Mapping[str, Mapping[str, Any]] | None = None,
     speed_state: SpeedState | None = None,
+    policy_mode: str | PolicyMode | None = None,
+    config: Mapping[str, Any] | None = None,
+    session_calendar: SessionCalendarResolution | None = None,
 ) -> TimeframePolicy:
     """Attach server-authoritative policy/readiness fields without altering scores."""
     symbol = str(pair.get("display") or pair.get("symbol") or signal.get("display") or "")
     asset_type = str(pair.get("type") or pair.get("asset_type") or signal.get("type") or "")
     score_group = pair.get("score_group") or signal.get("scoreGroup") or signal.get("score_group")
-    style_key = str(style or "intraday")
-    engine_key = str(engine or "engine_a").strip().lower()
-    if engine_key in {"engine_b", "b"}:
-        style_key = f"engine_b_{style_key.lower()}"
-    elif engine_key in {"engine_d", "d", "scalp"}:
-        style_key = "engine_d"
-    policy = resolve_timeframe_policy(symbol, asset_type, str(score_group) if score_group else None, style_key, speed_state)
+    engine_key, style_key = _normalize_policy_identity(engine, str(style or "intraday"))
+    mode, policy_autotrade_enabled = _policy_runtime_settings(policy_mode, config)
+    authoritative_group = pair.get("authoritative_score_group")
+    if not authoritative_group:
+        try:
+            from engine_a_groups import resolve_score_group_by_type
+
+            canonical = canonical_symbol(symbol)
+            canonical_pair = dict(pair)
+            if canonical:
+                canonical_pair["display"] = _CANONICAL_DISPLAY.get(canonical, canonical)
+            authoritative_group = resolve_score_group_by_type(canonical_pair)
+        except Exception:
+            authoritative_group = None
+    if not score_group and authoritative_group:
+        score_group = authoritative_group
+    policy = resolve_timeframe_policy(
+        symbol,
+        asset_type,
+        str(score_group) if score_group else None,
+        style_key,
+        speed_state,
+        engine_id=engine_key,
+        authoritative_group=(
+            str(authoritative_group) if authoritative_group else None
+        ),
+    )
+    legacy = {
+        "structureTf": signal.get("structure_tf") or signal.get("structureTf"),
+        "setupTf": (
+            signal.get("entry_tf")
+            or signal.get("setupTf")
+            or signal.get("entryTimeframe")
+        ),
+        "triggerTf": (
+            signal.get("trigger_tf")
+            or signal.get("triggerTf")
+            or signal.get("timeframe")
+        ),
+        "executionTf": (
+            signal.get("execution_tf")
+            or signal.get("executionTf")
+            or signal.get("executionTimeframe")
+            or signal.get("entryTimeframe")
+        ),
+    }
     payload = policy.payload()
     payload["speedPercentile"] = speed_state.speed_percentile if speed_state else None
+    payload["currentSpeedClass"] = (
+        speed_state.live_speed_class.value
+        if speed_state and speed_state.live_speed_class
+        else SpeedClass.UNAVAILABLE.value
+    )
+    payload["candidateSpeedClass"] = (
+        speed_state.candidate_speed_class.value
+        if speed_state and speed_state.candidate_speed_class
+        else None
+    )
+    payload["candidateAgeH1Bars"] = speed_state.candidate_age_h1_bars if speed_state else 0
+    payload["transitionPending"] = speed_state.transition_pending if speed_state else False
+    payload["lastSpeedTransitionUtc"] = (
+        speed_state.last_speed_transition_utc if speed_state else None
+    )
+    payload["timeframePolicyMode"] = mode.value
+    payload["timeframePolicyAutotradeEnabled"] = bool(
+        mode == PolicyMode.ENFORCED
+        and policy_autotrade_enabled
+        and policy.policy_source != PolicySource.CONFIG_CONFLICT
+    )
+    payload["proposedVersusLegacy"] = {
+        key: {"legacy": legacy.get(key), "proposed": payload.get(key)}
+        for key in ("structureTf", "setupTf", "triggerTf", "executionTf")
+        if legacy.get(key) != payload.get(key)
+    }
     signal.update(payload)
+    signal["signalId"] = _signal_id(signal, policy.policy_key)
+    signal["engineId"] = policy.engine_id
+    signal["style"] = policy.style
+    signal["policyKey"] = policy.policy_key
 
     states = market_states or {}
     confirmed_times: dict[str, Any] = {}
@@ -878,7 +1564,10 @@ def attach_timeframe_policy_payload(
             None,
         )
     trigger_confirmed = bool(explicit_trigger) if explicit_trigger is not None else False
-    if missing:
+    if policy.policy_source == PolicySource.CONFIG_CONFLICT:
+        readiness = "CONFIG_ERROR"
+        reason = "CONFIG_CONFLICT"
+    elif missing:
         readiness = "UNAVAILABLE"
         reason = "missing_required_closed_timeframes:" + ",".join(missing)
     elif stale:
@@ -894,21 +1583,84 @@ def attach_timeframe_policy_payload(
     signal["entryReadinessReason"] = reason
     signal["triggerConfirmed"] = trigger_confirmed
     signal["triggerCandleClosed"] = trigger_closed
+    if readiness == "CONFIG_ERROR":
+        signal["timeframePolicyAutotradeEnabled"] = False
+        signal["automatedExecutionDisabledReason"] = "CONFIG_CONFLICT"
 
     atr_diag = signal.get("atrDiagnostics") if isinstance(signal.get("atrDiagnostics"), Mapping) else {}
     atr_value = atr_diag.get("atr_value", signal.get("atr"))
-    atr_tf = atr_diag.get("atr_tf") or policy.structure_tf.value
-    signal["atrValue"] = atr_value
-    signal["atrTimeframe"] = atr_tf
+    atr_tf = str(atr_diag.get("atr_tf") or policy.structure_tf.value).upper()
+    entry_drift_atr = signal.get("entryDriftAtr") or atr_diag.get("entry_drift_atr")
+    entry_drift_tf = (
+        signal.get("entryDriftAtrTimeframe")
+        or atr_diag.get("entry_drift_atr_tf")
+    )
+    risk_atr = signal.get("riskAtr") or atr_diag.get("risk_atr")
+    risk_atr_tf = signal.get("riskAtrTimeframe") or atr_diag.get("risk_atr_tf")
+    execution_move_atr = signal.get("executionMoveAtr") or atr_diag.get("execution_move_atr")
+    execution_move_tf = (
+        signal.get("executionMoveAtrTimeframe")
+        or atr_diag.get("execution_move_atr_tf")
+    )
+    if entry_drift_atr is None and atr_tf == policy.trigger_tf.value:
+        entry_drift_atr, entry_drift_tf = atr_value, policy.trigger_tf.value
+    if risk_atr is None and atr_tf == policy.structure_tf.value:
+        risk_atr, risk_atr_tf = atr_value, policy.structure_tf.value
+    if execution_move_atr is None and atr_tf == policy.execution_tf.value:
+        execution_move_atr, execution_move_tf = atr_value, policy.execution_tf.value
+    signal["entryDriftAtr"] = entry_drift_atr
+    signal["entryDriftAtrTimeframe"] = entry_drift_tf or policy.trigger_tf.value
+    signal["riskAtr"] = risk_atr
+    signal["riskAtrTimeframe"] = risk_atr_tf or policy.structure_tf.value
+    signal["executionMoveAtr"] = execution_move_atr
+    signal["executionMoveAtrTimeframe"] = execution_move_tf or policy.execution_tf.value
+    signal["atrValue"] = risk_atr
+    signal["atrTimeframe"] = signal["riskAtrTimeframe"]
     signal.setdefault("structureAgeBars", None)
     signal.setdefault("quoteAgeSec", speed_state.quote_age_sec if speed_state else None)
     try:
         entry = float(signal.get("entry") or signal.get("price"))
         live = float(signal.get("livePrice") or signal.get("price"))
-        atr = float(atr_value)
+        atr = float(entry_drift_atr)
         signal["livePriceDriftAtr"] = abs(live - entry) / atr if atr > 0 else None
     except (TypeError, ValueError):
         signal["livePriceDriftAtr"] = None
+    runtime_config = config
+    if runtime_config is None:
+        try:
+            from config import CONFIG
+
+            runtime_config = CONFIG
+        except Exception:
+            runtime_config = {}
+    resolved_session = session_calendar or resolve_session_calendar(
+        provider_metadata=(
+            pair.get("provider_session_metadata")
+            if isinstance(pair.get("provider_session_metadata"), Mapping)
+            else None
+        ),
+        provider_calendar=(
+            pair.get("provider_session_calendar")
+            if isinstance(pair.get("provider_session_calendar"), Mapping)
+            else _configured_session_candidate(
+                runtime_config,
+                "TF_POLICY_SESSION_CALENDARS",
+                pair,
+                policy.canonical_symbol,
+            )
+        ),
+        underlying_exchange_calendar=(
+            pair.get("underlying_exchange_calendar")
+            if isinstance(pair.get("underlying_exchange_calendar"), Mapping)
+            else _configured_session_candidate(
+                runtime_config,
+                "TF_POLICY_UNDERLYING_EXCHANGE_CALENDARS",
+                pair,
+                policy.canonical_symbol,
+            )
+        ),
+    )
+    signal.update(resolved_session.to_dict())
     return policy
 
 
@@ -930,6 +1682,8 @@ def reconcile_symbol_universe(
     pairs: Sequence[Mapping[str, Any]],
     *,
     style: str = "intraday",
+    engine_id: str = "engine_a",
+    strict: bool = True,
 ) -> dict[str, Any]:
     """Return a deterministic reconciliation suitable for tests and reports."""
     rows: list[dict[str, Any]] = []
@@ -943,10 +1697,22 @@ def reconcile_symbol_universe(
         if not score_group:
             try:
                 from engine_a_groups import resolve_score_group_by_type
-                score_group = resolve_score_group_by_type(dict(pair))
+                canonical_pair = dict(pair)
+                resolved_canonical = canonical_symbol(display)
+                if resolved_canonical:
+                    canonical_pair["display"] = _CANONICAL_DISPLAY.get(
+                        resolved_canonical, resolved_canonical
+                    )
+                score_group = resolve_score_group_by_type(canonical_pair)
             except Exception:
                 score_group = None
-        policy = resolve_timeframe_policy(display, asset_type, str(score_group) if score_group else None, style)
+        policy = resolve_timeframe_policy(
+            display,
+            asset_type,
+            str(score_group) if score_group else None,
+            style,
+            engine_id=engine_id,
+        )
         canonical = policy.diagnostics.canonical_symbol
         if canonical == "UNKNOWN":
             canonical = _key(pair.get("symbol") or display) or "UNKNOWN"
@@ -961,6 +1727,9 @@ def reconcile_symbol_universe(
             "supported_styles": ("intraday", "swing", "engine_b_intraday", "engine_b_swing", "engine_d"),
             "baseline_profile": policy.profile,
             "policy_source": policy.policy_source.value,
+            "engine_id": policy.engine_id,
+            "style": policy.style,
+            "policy_key": policy.policy_key,
             "safe_fallback": policy.diagnostics.safe_fallback,
         })
     duplicates = sorted(
@@ -974,9 +1743,15 @@ def reconcile_symbol_universe(
         for canonical, groups in canonical_groups.items()
         if len(groups) > 1
     }
-    return {
+    result = {
         "rows": rows,
         "duplicate_canonical_symbols": duplicates,
         "aliases_mapping_to_multiple_groups": multi_group,
         "unsafe_symbols": [row["display_symbol"] for row in rows if row["safe_fallback"]],
     }
+    if strict and (multi_group or result["unsafe_symbols"]):
+        raise PolicyConfigurationError(
+            "timeframe policy configuration invalid: "
+            f"group_conflicts={multi_group}; fallback_symbols={result['unsafe_symbols']}"
+        )
+    return result

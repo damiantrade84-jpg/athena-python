@@ -463,6 +463,16 @@ def resolve_engine_b_asset_class(asset_type: str, score_group: str | None = None
     return a or "forex"
 
 
+_ENGINE_B_LEGACY_TF_MATRIX = {
+    asset: {
+        "scalp": ("H1", "H4", "H1", "H1"),
+        "intraday": ("H4", "H4", "H1", "H4"),
+        "swing": ("D1", "D1", "H4", "D1"),
+    }
+    for asset in ("forex", "crypto", "commodity", "index", "stock", "etf", "etf_bond")
+}
+
+
 def resolve_engine_b_tfs(
     asset_type: str,
     style: str,
@@ -487,9 +497,29 @@ def resolve_engine_b_tfs(
         symbol,
         a,
         score_group,
-        f"engine_b_{s}",
+        s,
         speed_state,
+        engine_id="engine_b",
     )
+    if str(config.CONFIG.get("TF_POLICY_MODE", "shadow")).strip().lower() != "enforced":
+        asset_table = _ENGINE_B_LEGACY_TF_MATRIX.get(a) or _ENGINE_B_LEGACY_TF_MATRIX["forex"]
+        struct_tf, zone_tf, trigger_tf, atr_tf = asset_table.get(
+            s, asset_table["intraday"]
+        )
+        return {
+            "regime": "D1",
+            "bias": struct_tf,
+            "struct": struct_tf,
+            "zone": zone_tf,
+            "setup": trigger_tf,
+            "trigger": trigger_tf,
+            "execution": trigger_tf,
+            "atr": atr_tf,
+            "policy_version": policy.policy_version,
+            "policy_profile": policy.profile,
+            "policy_mode": str(config.CONFIG.get("TF_POLICY_MODE", "shadow")).lower(),
+            "proposed": policy.payload(),
+        }
     # Engine B's structural ATR remains tied to its principal structure horizon;
     # M5/M15 trigger noise must never size an H1/H4 structure trade.
     return {

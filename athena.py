@@ -17577,6 +17577,12 @@ def ensure_runtime_services_started() -> None:
 
 
 if __name__ == "__main__":
+    from timeframe_policy import reconcile_symbol_universe
+
+    # Development startup is strict: aliases/group conflicts and production
+    # fallback policies are configuration errors, not runtime fallbacks.
+    reconcile_symbol_universe(ALL_PAIRS, strict=True)
+
     log.info("=" * 60)
 
     log.info("Sentinel Pro v4.0 - Python Edition")

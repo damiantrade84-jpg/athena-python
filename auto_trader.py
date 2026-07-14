@@ -1601,6 +1601,12 @@ class AutoTrader:
     def _can_execute(self, signal: dict, cfg: dict) -> tuple[bool, str]:
         """Check deterministic auto-execution gates without mutating Engine A score."""
 
+        from timeframe_policy import timeframe_policy_execution_block_reason
+
+        timeframe_policy_block = timeframe_policy_execution_block_reason(signal, cfg)
+        if timeframe_policy_block:
+            return False, timeframe_policy_block
+
         if (
             str(signal.get("engine") or "").upper() == "ENGINE_A_V3"
             and str(signal.get("contractVersion") or "").startswith("3.")

@@ -3828,6 +3828,40 @@ ENGINE_B_BOS_VOLUME_FOR_TICKVOL: false
 # symbol/group/style by timeframe_policy.resolve_timeframe_policy().
 # Legacy ENGINE_B_FOREX_STRUCTURE_TF is no longer read.
 
+# Timeframe policy is diagnostics-only until an explicit promotion decision.
+TF_POLICY_MODE: shadow
+TF_POLICY_AUTOTRADE_ENABLED: false
+TF_POLICY_SPEED_THRESHOLDS:
+  default:
+    slow_to_normal_min: 45
+    normal_to_slow_max: 35
+    normal_to_fast_min: 75
+    fast_to_normal_max: 65
+    fast_to_extreme_min: 92
+    extreme_to_fast_max: 88
+    hysteresis_closes: 2
+    required_h1_bars: 214
+    required_m15_bars: 214
+TF_POLICY_LIQUIDITY_THRESHOLDS:
+  default:
+    max_quote_age_sec: 15
+    deep_max_spread_trigger_atr: 0.05
+    normal_max_spread_trigger_atr: 0.20
+    deep_min_relative_volume: 1.25
+    thin_max_relative_volume: 0.50
+    required_volume_bars: 21
+TF_POLICY_BASELINE_LIQUIDITY:
+  default: NORMAL
+  forex_exotics: THIN
+  nat_gas: THIN
+  pgm_metals: THIN
+  base_metals: THIN
+  softs: THIN
+# Intentionally empty until verified provider instrument metadata/calendars are
+# supplied. Broker instruments must not inherit assumed US cash hours.
+TF_POLICY_SESSION_CALENDARS: {}
+TF_POLICY_UNDERLYING_EXCHANGE_CALENDARS: {}
+
 # Minimum ADX for forex Engine B (D1 snap preferred, else H4/zone snap; else
 
 # candle-derived). Set to 0.0 to disable the veto and restore the pre-gate

@@ -7,19 +7,30 @@ from pathlib import Path
 from athena_app.services.market_state import candle_timestamp_epoch, split_market_state
 from market_structure import engine_b_candles_for_tf, resolve_engine_b_tfs
 from timeframe_policy import (
+    LiquidityClass,
     M5Role,
+    PolicyConfigurationError,
+    PolicyMode,
     PolicySource,
+    SessionCalendarSource,
     SpeedClass,
     SpeedState,
+    TIMEFRAME_LADDER,
     Timeframe,
     apply_speed_hysteresis,
     attach_timeframe_policy_payload,
     calculate_speed_state,
+    classify_liquidity,
     canonical_symbol,
     derive_warmup_bars,
+    parse_m5_matrix_language,
     reconcile_symbol_universe,
+    resolve_session_calendar,
     resolve_timeframe_policy,
     speed_class_for_percentile,
+    speed_transition_candidate,
+    timeframe_policy_execution_block_reason,
+    validate_timeframe_role_order,
 )
 
 
@@ -65,6 +76,8 @@ def test_aliases_resolve_to_same_canonical_policy() -> None:
     assert canonical_symbol("MT5:EURUSD") == "EURUSD"
     assert left.profile == right.profile
     assert left.execution_tf == right.execution_tf
+    assert left.policy_key == right.policy_key
+    assert left.payload()["timeframePolicyHash"] == right.payload()["timeframePolicyHash"]
     assert crypto_old.diagnostics.canonical_symbol == "POLUSDT"
 
 
@@ -105,10 +118,11 @@ def test_required_baseline_matrix() -> None:
 
 def test_speed_class_boundaries_and_hysteresis() -> None:
     assert speed_class_for_percentile(0) == SpeedClass.SLOW
-    assert speed_class_for_percentile(39.999) == SpeedClass.SLOW
-    assert speed_class_for_percentile(40) == SpeedClass.NORMAL
-    assert speed_class_for_percentile(70) == SpeedClass.FAST
-    assert speed_class_for_percentile(90) == SpeedClass.EXTREME
+    assert speed_class_for_percentile(35) == SpeedClass.SLOW
+    assert speed_class_for_percentile(36) == SpeedClass.NORMAL
+    assert speed_class_for_percentile(75) == SpeedClass.FAST
+    assert speed_class_for_percentile(91.999) == SpeedClass.FAST
+    assert speed_class_for_percentile(92) == SpeedClass.EXTREME
     assert speed_class_for_percentile(100) == SpeedClass.EXTREME
 
     first, streak = apply_speed_hysteresis(SpeedClass.NORMAL, SpeedClass.FAST, 0)
@@ -117,11 +131,27 @@ def test_speed_class_boundaries_and_hysteresis() -> None:
     assert second == SpeedClass.FAST
     assert streak == 0
 
+    cfg = SpeedState().thresholds
+    assert speed_transition_candidate(SpeedClass.SLOW, 44.9, cfg) == SpeedClass.SLOW
+    assert speed_transition_candidate(SpeedClass.SLOW, 45, cfg) == SpeedClass.NORMAL
+    assert speed_transition_candidate(SpeedClass.NORMAL, 35, cfg) == SpeedClass.SLOW
+    assert speed_transition_candidate(SpeedClass.NORMAL, 74.9, cfg) == SpeedClass.NORMAL
+    assert speed_transition_candidate(SpeedClass.NORMAL, 75, cfg) == SpeedClass.FAST
+    assert speed_transition_candidate(SpeedClass.FAST, 65, cfg) == SpeedClass.NORMAL
+    assert speed_transition_candidate(SpeedClass.FAST, 92, cfg) == SpeedClass.EXTREME
+    assert speed_transition_candidate(SpeedClass.EXTREME, 88, cfg) == SpeedClass.FAST
+    pending, age = apply_speed_hysteresis(SpeedClass.SLOW, SpeedClass.EXTREME, 0)
+    transitioned, _ = apply_speed_hysteresis(pending, SpeedClass.EXTREME, age)
+    assert pending == SpeedClass.SLOW
+    assert transitioned == SpeedClass.NORMAL
+
 
 def test_extreme_thin_market_cannot_gain_m5_authority() -> None:
     state = SpeedState(
         live_speed_class=SpeedClass.EXTREME,
         speed_percentile=95.0,
+        history_ready=True,
+        liquidity_class=LiquidityClass.THIN,
         thin_liquidity=True,
         m5_quality_acceptable=False,
     )
@@ -129,19 +159,23 @@ def test_extreme_thin_market_cannot_gain_m5_authority() -> None:
 
     assert policy.execution_tf == Timeframe.M15
     assert policy.m5_role == M5Role.DISABLED
-    assert any("EXTREME+thin" in message for message in policy.diagnostics.messages)
+    assert any("liquidity removed" in message for message in policy.diagnostics.messages)
 
 
 def test_dynamic_policy_moves_only_one_adjacent_execution_timeframe() -> None:
     slow = SpeedState(
         live_speed_class=SpeedClass.SLOW,
         speed_percentile=20.0,
+        history_ready=True,
+        liquidity_class=LiquidityClass.NORMAL,
         thin_liquidity=False,
         m5_quality_acceptable=True,
     )
     fast = SpeedState(
         live_speed_class=SpeedClass.FAST,
         speed_percentile=80.0,
+        history_ready=True,
+        liquidity_class=LiquidityClass.NORMAL,
         thin_liquidity=False,
         m5_quality_acceptable=True,
     )
@@ -167,13 +201,14 @@ def test_speed_state_uses_confirmed_volatility_velocity_volume_and_quote_quality
         ]
 
     state = calculate_speed_state(
-        bars(80, 0.2),
-        bars(160, 0.08),
+        bars(240, 0.2),
+        bars(240, 0.08),
         spread=0.02,
         quote_age_sec=1.0,
         current_session="london_ny",
         gap_status="normal",
         scheduled_event=False,
+        provider_market_state="open",
         last_closed_h1_open_time=123,
     )
 
@@ -181,6 +216,8 @@ def test_speed_state_uses_confirmed_volatility_velocity_volume_and_quote_quality
     assert state.price_velocity_percentile is not None
     assert state.relative_volume is not None
     assert state.live_speed_class is not None
+    assert state.live_speed_class != SpeedClass.UNAVAILABLE
+    assert state.liquidity_class in {LiquidityClass.DEEP, LiquidityClass.NORMAL}
     assert state.m5_quality_acceptable is True
 
 
@@ -232,12 +269,12 @@ def test_equity_h4_is_not_mandatory_structure_and_engine_roles_are_preserved() -
     engine_d = resolve_timeframe_policy("BTC/USDT", "crypto", "crypto_btc", "engine_d")
 
     assert equity.structure_tf == Timeframe.H1
-    assert engine_b_intraday["struct"] == "H1"
-    assert engine_b_intraday["setup"] == "M30"
-    assert engine_b_intraday["trigger"] == "M15"
-    assert engine_b_intraday["atr"] == "H1"
-    assert engine_b_swing["struct"] == "H4"
-    assert engine_b_swing["trigger"] == "H1"
+    assert engine_b_intraday["struct"] == "H4"
+    assert engine_b_intraday["trigger"] == "H1"
+    assert engine_b_intraday["atr"] == "H4"
+    assert engine_b_intraday["policy_mode"] == "shadow"
+    assert engine_b_swing["struct"] == "D1"
+    assert engine_b_swing["trigger"] == "H4"
     assert engine_d.bias_tf == Timeframe.H1
     assert engine_d.structure_tf == Timeframe.M15
     assert engine_d.trigger_tf == Timeframe.M5
@@ -323,8 +360,27 @@ def test_payload_contract_and_warmup_derivation() -> None:
         "m5Role",
         "baselineSpeedClass",
         "liveSpeedClass",
+        "currentSpeedClass",
+        "candidateSpeedClass",
+        "candidateAgeH1Bars",
+        "transitionPending",
+        "lastSpeedTransitionUtc",
         "speedPercentile",
         "policySource",
+        "signalId",
+        "engineId",
+        "style",
+        "policyKey",
+        "entryDriftAtr",
+        "entryDriftAtrTimeframe",
+        "riskAtr",
+        "riskAtrTimeframe",
+        "executionMoveAtr",
+        "executionMoveAtrTimeframe",
+        "sessionCalendarId",
+        "sessionCalendarSource",
+        "providerSessionTimezone",
+        "sessionState",
         "confirmedBarTimes",
         "formingBarTime",
         "entryReadiness",
@@ -338,3 +394,214 @@ def test_payload_contract_and_warmup_derivation() -> None:
     assert signal["timeframePolicyHash"]
     assert policy.structure_tf == Timeframe.H1
     assert derive_warmup_bars(ema_periods=(21, 50, 200), safety_margin=20) == 220
+
+
+def test_policy_identity_is_canonical_engine_and_style_scoped() -> None:
+    intraday = resolve_timeframe_policy(
+        "EURUSD=X", "forex", "forex_majors", "intraday", engine_id="engine_a"
+    )
+    swing = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "swing", engine_id="engine_a"
+    )
+    engine_b = resolve_timeframe_policy(
+        "MT5:EURUSD", "forex", "forex_majors", "intraday", engine_id="engine_b"
+    )
+
+    assert intraday.policy_key == "EURUSD:engine_a:intraday"
+    assert len({intraday.policy_key, swing.policy_key, engine_b.policy_key}) == 3
+
+
+def test_m5_matrix_language_maps_only_approved_authority() -> None:
+    assert [role.value for role in M5Role] == [
+        "execution",
+        "refinement",
+        "advisory",
+        "disabled",
+    ]
+    assert parse_m5_matrix_language("M5") == (M5Role.EXECUTION, None)
+    assert parse_m5_matrix_language("M5 after M15 confirmation") == (
+        M5Role.EXECUTION,
+        Timeframe.M15,
+    )
+    assert parse_m5_matrix_language("M5 refinement optional")[0] == M5Role.REFINEMENT
+    assert parse_m5_matrix_language("M5 refinement only")[0] == M5Role.REFINEMENT
+    assert parse_m5_matrix_language("M5 advisory")[0] == M5Role.ADVISORY
+    assert parse_m5_matrix_language("no M5 authority")[0] == M5Role.DISABLED
+
+
+def test_role_order_and_ladder_are_canonical_and_reversals_are_rejected() -> None:
+    assert TIMEFRAME_LADDER == (
+        Timeframe.D1,
+        Timeframe.H4,
+        Timeframe.H1,
+        Timeframe.M30,
+        Timeframe.M15,
+        Timeframe.M5,
+    )
+    try:
+        validate_timeframe_role_order(
+            Timeframe.D1,
+            Timeframe.H4,
+            Timeframe.M15,
+            Timeframe.H1,
+            Timeframe.M5,
+            Timeframe.M5,
+        )
+    except ValueError as exc:
+        assert "reverses" in str(exc)
+    else:
+        raise AssertionError("reversed policy was accepted")
+
+
+def test_cold_start_keeps_baseline_and_reports_unavailable() -> None:
+    bars = [{"high": 101, "low": 99, "close": 100, "vol": 1000}] * 40
+    state = calculate_speed_state(
+        bars,
+        bars,
+        spread=0.1,
+        quote_age_sec=1,
+        relative_volume=1.0,
+        provider_market_state="open",
+        current_session="open",
+        gap_status="normal",
+        scheduled_event=False,
+        last_closed_h1_open_time=1,
+    )
+    policy = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "intraday", state
+    )
+
+    assert state.live_speed_class == SpeedClass.UNAVAILABLE
+    assert state.history_ready is False
+    assert state.adaptation_reason == "INSUFFICIENT_HISTORY"
+    assert policy.execution_tf == Timeframe.M15
+    assert policy.diagnostics.adaptation_applied is False
+
+
+def test_hard_liquidity_failure_does_not_reclassify_persistent_speed() -> None:
+    def bars(count: int) -> list[dict]:
+        return [
+            {
+                "high": 101 + index * 0.01,
+                "low": 99 + index * 0.01,
+                "close": 100 + index * 0.01,
+                "vol": 1000 + index,
+            }
+            for index in range(count)
+        ]
+
+    previous = SpeedState(
+        live_speed_class=SpeedClass.FAST,
+        history_ready=True,
+        last_closed_h1_open_time=1,
+    )
+    state = calculate_speed_state(
+        bars(240),
+        bars(240),
+        spread=None,
+        quote_age_sec=None,
+        current_session="open",
+        gap_status="normal",
+        scheduled_event=False,
+        previous=previous,
+        last_closed_h1_open_time=2,
+    )
+
+    assert state.live_speed_class == SpeedClass.FAST
+    assert state.liquidity_class == LiquidityClass.UNAVAILABLE
+    assert state.m5_quality_acceptable is False
+
+
+def test_liquidity_is_separate_from_speed_and_fail_closed_for_m5() -> None:
+    liquidity = classify_liquidity(
+        quote_age_sec=1,
+        spread_trigger_atr=0.25,
+        relative_volume=2.0,
+        provider_market_state="open",
+    )
+    assert liquidity == LiquidityClass.THIN
+    state = SpeedState(
+        live_speed_class=SpeedClass.FAST,
+        history_ready=True,
+        liquidity_class=liquidity,
+        m5_quality_acceptable=False,
+    )
+    policy = resolve_timeframe_policy(
+        "BTC/USDT", "crypto", "crypto_btc", "intraday", state
+    )
+    assert policy.execution_tf != Timeframe.M5
+    assert policy.m5_role == M5Role.DISABLED
+
+
+def test_alias_group_conflict_sets_config_error_and_disables_policy_autotrade() -> None:
+    signal = {"score": 2.0, "direction": "LONG"}
+    policy = attach_timeframe_policy_payload(
+        signal,
+        {
+            "display": "EURUSD=X",
+            "type": "forex",
+            "score_group": "forex_exotics",
+        },
+        "intraday",
+        config={"TF_POLICY_MODE": "enforced", "TF_POLICY_AUTOTRADE_ENABLED": True},
+    )
+
+    assert policy.policy_source == PolicySource.CONFIG_CONFLICT
+    assert signal["entryReadiness"] == "CONFIG_ERROR"
+    assert signal["timeframePolicyAutotradeEnabled"] is False
+    assert timeframe_policy_execution_block_reason(
+        signal, {"TF_POLICY_MODE": "shadow", "TF_POLICY_AUTOTRADE_ENABLED": False}
+    ) == "TF_POLICY_CONFIG_CONFLICT"
+
+
+def test_reconciliation_rejects_aliases_assigned_to_conflicting_groups() -> None:
+    pairs = [
+        {
+            "display": "EUR/USD",
+            "symbol": "EURUSD=X",
+            "type": "forex",
+            "score_group": "forex_majors",
+        },
+        {
+            "display": "EURUSD=X",
+            "symbol": "EURUSD",
+            "type": "forex",
+            "score_group": "forex_exotics",
+        },
+    ]
+    try:
+        reconcile_symbol_universe(pairs)
+    except PolicyConfigurationError as exc:
+        assert "EURUSD" in str(exc)
+    else:
+        raise AssertionError("conflicting alias groups were accepted")
+
+
+def test_session_calendar_resolution_is_provider_first_and_timezone_aware() -> None:
+    resolved = resolve_session_calendar(
+        provider_metadata={
+            "sessionCalendarId": "broker-x-aapl",
+            "timezone": "America/New_York",
+            "state": "open",
+        },
+        underlying_exchange_calendar={
+            "sessionCalendarId": "XNYS",
+            "timezone": "America/New_York",
+        },
+    )
+    assert resolved.source == SessionCalendarSource.PROVIDER_METADATA
+    assert resolved.calendar_id == "broker-x-aapl"
+    unavailable = resolve_session_calendar(
+        provider_calendar={"sessionCalendarId": "bad", "timezone": "Not/AZone"}
+    )
+    assert unavailable.source == SessionCalendarSource.SESSION_UNAVAILABLE
+
+
+def test_enforced_policy_requires_separate_autotrade_promotion() -> None:
+    signal = {"policySource": PolicySource.SYMBOL_OVERRIDE.value}
+    assert timeframe_policy_execution_block_reason(
+        signal, {"TF_POLICY_MODE": PolicyMode.SHADOW.value, "TF_POLICY_AUTOTRADE_ENABLED": False}
+    ) is None
+    assert timeframe_policy_execution_block_reason(
+        signal, {"TF_POLICY_MODE": PolicyMode.ENFORCED.value, "TF_POLICY_AUTOTRADE_ENABLED": False}
+    ) == "TF_POLICY_AUTOTRADE_DISABLED"

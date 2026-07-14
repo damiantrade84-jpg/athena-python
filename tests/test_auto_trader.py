@@ -246,6 +246,29 @@ class TestAutoTradeMinConvictionConfig:
 # _can_execute — gate tests
 # ═══════════════════════════════════════════════════════════════════════════
 
+class TestTimeframePolicyExecutionGate:
+    def test_config_conflict_fails_closed_even_in_shadow(self):
+        trader = AutoTrader()
+        cfg = _base_cfg()
+        cfg.update({"TF_POLICY_MODE": "shadow", "TF_POLICY_AUTOTRADE_ENABLED": False})
+        sig = _passing_signal(policySource="CONFIG_CONFLICT", entryReadiness="CONFIG_ERROR")
+
+        ok, reason = trader._can_execute(sig, cfg)
+
+        assert not ok
+        assert reason == "TF_POLICY_CONFIG_CONFLICT"
+
+    def test_enforced_mode_requires_separate_autotrade_enablement(self):
+        trader = AutoTrader()
+        cfg = _base_cfg()
+        cfg.update({"TF_POLICY_MODE": "enforced", "TF_POLICY_AUTOTRADE_ENABLED": False})
+
+        ok, reason = trader._can_execute(_passing_signal(), cfg)
+
+        assert not ok
+        assert reason == "TF_POLICY_AUTOTRADE_DISABLED"
+
+
 class TestCanExecuteConvictionGate:
     def test_rejects_below_min_conviction(self):
         trader = AutoTrader()

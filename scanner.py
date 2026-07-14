@@ -66,7 +66,14 @@ def _scan_speed_state(
 ):
     """Build persistent speed state from confirmed bars and quote quality."""
     from athena_app.services.market_state import candle_timestamp_epoch
-    from timeframe_policy import calculate_speed_state, canonical_symbol
+    from timeframe_policy import (
+        baseline_liquidity_for_group,
+        calculate_speed_state,
+        canonical_symbol,
+        resolve_timeframe_policy,
+        thresholds_for_group,
+    )
+    from engine_a_groups import resolve_score_group_by_type
 
     requested_symbol = pair.get("display") or pair.get("symbol") or ""
     key = canonical_symbol(requested_symbol) or "".join(
@@ -110,6 +117,17 @@ def _scan_speed_state(
     gap_status = "stale" if any(
         bool((market_states.get(tf) or {}).get("stale")) for tf in ("H1", "M15")
     ) else "normal"
+    score_group = resolve_score_group_by_type(pair)
+    speed_thresholds, liquidity_thresholds = thresholds_for_group(
+        CONFIG,
+        score_group,
+    )
+    baseline_policy = resolve_timeframe_policy(
+        requested_symbol,
+        pair.get("type", ""),
+        score_group,
+        "intraday",
+    )
     with _SPEED_STATE_LOCK:
         previous = _SPEED_STATE_BY_SYMBOL.get(key)
     state = calculate_speed_state(
@@ -122,6 +140,11 @@ def _scan_speed_state(
         last_closed_h1_open_time=int(last_h1_epoch) if last_h1_epoch else None,
         gap_status=gap_status,
         scheduled_event=scheduled_event,
+        provider_market_state=quote.get("market_state"),
+        baseline_speed_class=baseline_policy.baseline_speed_class,
+        baseline_liquidity_class=baseline_liquidity_for_group(CONFIG, score_group),
+        thresholds=speed_thresholds,
+        liquidity_thresholds=liquidity_thresholds,
     )
     with _SPEED_STATE_LOCK:
         _SPEED_STATE_BY_SYMBOL[key] = state
@@ -2955,14 +2978,15 @@ def run_full_scan(
                                     market_states=preloaded_market_state,
                                     speed_state=_speed_state,
                                 )
-                                res_b["structure_tf"] = _engine_b_policy.structure_tf.value
-                                res_b["entry_tf"] = _engine_b_policy.setup_tf.value
-                                res_b["trigger_tf"] = _engine_b_policy.trigger_tf.value
-                                res_b["execution_tf"] = _engine_b_policy.execution_tf.value
-                                res_b["atr_tf"] = _engine_b_policy.structure_tf.value
-                                res_b["nearest_support_resistance_timeframe"] = (
-                                    _engine_b_policy.structure_tf.value
-                                )
+                                if str(CONFIG.get("TF_POLICY_MODE", "shadow")).lower() == "enforced":
+                                    res_b["structure_tf"] = _engine_b_policy.structure_tf.value
+                                    res_b["entry_tf"] = _engine_b_policy.setup_tf.value
+                                    res_b["trigger_tf"] = _engine_b_policy.trigger_tf.value
+                                    res_b["execution_tf"] = _engine_b_policy.execution_tf.value
+                                    res_b["atr_tf"] = _engine_b_policy.structure_tf.value
+                                    res_b["nearest_support_resistance_timeframe"] = (
+                                        _engine_b_policy.structure_tf.value
+                                    )
                                 res_b["signal_price_rr"] = res_b.get("structural_rr")
                                 res_b["live_price_rr"] = (
                                     res_b.get("execution_rr2")

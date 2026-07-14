@@ -2346,6 +2346,41 @@ CONFIG: dict = {
     "DRAWDOWN_STOP_THRESHOLD": 0.15,  # At 15% drawdown, reject ALL new trades
     "DRAWDOWN_STOP_ENABLED": True,  # Set false only for paper/debug — disables stop + size reduction
     # ── Auto-Trade Bot ────────────────────────────────────────────────────────
+    "TF_POLICY_MODE": "shadow",
+    "TF_POLICY_AUTOTRADE_ENABLED": False,
+    "TF_POLICY_SPEED_THRESHOLDS": {
+        "default": {
+            "slow_to_normal_min": 45.0,
+            "normal_to_slow_max": 35.0,
+            "normal_to_fast_min": 75.0,
+            "fast_to_normal_max": 65.0,
+            "fast_to_extreme_min": 92.0,
+            "extreme_to_fast_max": 88.0,
+            "hysteresis_closes": 2,
+            "required_h1_bars": 214,
+            "required_m15_bars": 214,
+        },
+    },
+    "TF_POLICY_LIQUIDITY_THRESHOLDS": {
+        "default": {
+            "max_quote_age_sec": 15.0,
+            "deep_max_spread_trigger_atr": 0.05,
+            "normal_max_spread_trigger_atr": 0.20,
+            "deep_min_relative_volume": 1.25,
+            "thin_max_relative_volume": 0.50,
+            "required_volume_bars": 21,
+        },
+    },
+    "TF_POLICY_BASELINE_LIQUIDITY": {
+        "default": "NORMAL",
+        "forex_exotics": "THIN",
+        "nat_gas": "THIN",
+        "pgm_metals": "THIN",
+        "base_metals": "THIN",
+        "softs": "THIN",
+    },
+    "TF_POLICY_SESSION_CALENDARS": {},
+    "TF_POLICY_UNDERLYING_EXCHANGE_CALENDARS": {},
     "AUTO_TRADE_ENABLED": False,  # Master toggle (also togglable via UI/API)
     "AUTO_TRADE_MIN_SCORE": {  # Informational scan floor; live gate is AUTO_TRADE_MIN_CONVICTION
         "crypto": 2.0,
