@@ -7583,6 +7583,128 @@ def _compute_naked_analysis(
         return None, pair_obj, "Naked Structure Analysis failed"
 
 
+def _revalidate_engine_b_scan_signal(
+    signal: dict,
+) -> tuple[dict | None, dict | None, str | None]:
+    """Re-score an emitted Engine B card with the execute-time analysis path.
+
+    A universe scan timestamps each pair when its worker completes. Passing rows
+    can therefore be several minutes old by the time the last worker finishes.
+    Revalidation removes rows whose live trigger/gates no longer pass and stamps
+    surviving rows with the price, score, and levels execution will consume.
+    """
+    refreshed, _pair_obj, err = _compute_naked_analysis(
+        dict(signal or {}),
+        force_ai=False,
+        execution_mode=True,
+        overlay_only=True,
+    )
+    if err or not isinstance(refreshed, dict) or not refreshed:
+        return None, refreshed if isinstance(refreshed, dict) else None, str(
+            err or "no refreshed Engine B context"
+        )
+    if not bool(refreshed.get("passed")):
+        failed = [str(name) for name in (refreshed.get("failed_gate_names") or []) if name]
+        reason = "gate_failures:" + ",".join(failed) if failed else "engine_b_not_confirmed"
+        return None, refreshed, reason
+    if (
+        refreshed.get("canonical_trade_ok") is False
+        or refreshed.get("suggested_levels_executable") is False
+    ):
+        canonical_status = str(
+            refreshed.get("engine_b_canonical_status")
+            or refreshed.get("canonical_status")
+            or "not_actionable"
+        )
+        return None, refreshed, f"canonical:{canonical_status}"
+
+    try:
+        price = float(refreshed.get("current_price") or refreshed.get("price") or 0.0)
+        sl = float(
+            refreshed.get("execution_sl")
+            or refreshed.get("final_stop_loss")
+            or refreshed.get("recommended_stop_loss")
+            or 0.0
+        )
+        tp2 = float(
+            refreshed.get("execution_tp2")
+            or refreshed.get("execution_tp")
+            or refreshed.get("final_take_profit")
+            or refreshed.get("recommended_take_profit")
+            or 0.0
+        )
+        tp1 = float(refreshed.get("execution_tp1") or tp2)
+    except (TypeError, ValueError):
+        return None, refreshed, "invalid_refreshed_levels"
+    if price <= 0 or sl <= 0 or tp1 <= 0 or tp2 <= 0:
+        return None, refreshed, "invalid_refreshed_levels"
+
+    risk = abs(price - sl)
+    if risk <= 0:
+        return None, refreshed, "invalid_refreshed_risk"
+
+    updated = dict(signal or {})
+    now_iso = datetime.now(timezone.utc).isoformat()
+    updated.update(
+        {
+            "engine": "engine_b",
+            "source_engine": "engine_b",
+            "source": "engine_b",
+            "is_naked": True,
+            "timestamp": now_iso,
+            "scanRevalidatedAt": now_iso,
+            "direction": str(refreshed.get("direction") or updated.get("direction") or "").upper(),
+            "price": price,
+            "entry": price,
+            "quoteAgeSec": refreshed.get("quoteAgeSec"),
+            "quoteTimestamp": refreshed.get("quoteTimestamp"),
+            "engine_b_price_source": refreshed.get("priceSource") or "fresh_live_quote",
+            "confluenceScore": refreshed.get("score"),
+            "confluencePct": refreshed.get("pct"),
+            "score_pct": refreshed.get("pct"),
+            "gate_pct": refreshed.get("gate_pct"),
+            "quality_pct": refreshed.get("pct"),
+            "maxScore": refreshed.get("max_possible"),
+            "threshold": refreshed.get("min_score_used"),
+            "style": refreshed.get("style") or updated.get("style"),
+            "atr": refreshed.get("atr", updated.get("atr")),
+            "sl": sl,
+            "tp1": tp1,
+            "tp2": tp2,
+            "rr1": round(abs(tp1 - price) / risk, 4),
+            "rr2": round(abs(tp2 - price) / risk, 4),
+            "exitStrategy": refreshed.get("exit_strategy"),
+            "exit_strategy": refreshed.get("exit_strategy"),
+            "naked_data": refreshed,
+            "engine_b": refreshed,
+            "executable": True,
+        }
+    )
+    for canonical_key in (
+        "is_actionable",
+        "engine_b_canonical_actionable",
+        "engine_b_canonical_status",
+        "engine_b_rejection_reasons",
+        "engine_b_canonical_diagnostics",
+        "canonical_structure_ok",
+        "canonical_location_ok",
+        "canonical_trigger_ok",
+        "canonical_room_ok",
+        "canonical_rr_ok",
+        "canonical_trade_ok",
+        "canonical_status",
+        "canonical_primary_reject_reason",
+        "canonical_secondary_reject_reasons",
+        "canonical_badge_state",
+        "canonical_room_rr_ok",
+        "confidence_passed",
+        "suggested_levels_executable",
+    ):
+        if canonical_key in refreshed:
+            updated[canonical_key] = refreshed[canonical_key]
+    return updated, refreshed, None
+
+
 @app.route("/api/naked-analysis", methods=["POST"])
 def api_naked_analysis():
     d = request.json
@@ -8399,6 +8521,9 @@ def api_scan_naked():
                 signal = {
                     "id": f"NKD_{pair['display']}_{direction}_{int(time.time())}",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "engine": "engine_b",
+                    "source_engine": "engine_b",
+                    "source": "engine_b",
                     "pair": pair.get("display"),
                     "display": pair.get("display"),
                     "symbol": pair.get("symbol"),
@@ -8722,6 +8847,47 @@ def api_scan_naked():
         key=lambda x: x.get("confluenceScore", 0),
         reverse=True,
     )
+
+    # A full universe scan can outlive a forming entry candle. Re-run only the
+    # emitted rows through the same analysis path execution uses so the cards
+    # returned to the UI are confirmed at response time, not merely when an
+    # individual worker happened to finish.
+    if results:
+        if refresh_market_data:
+            clear_bybit_kline_cache()
+        _revalidated_results = []
+        for _row in results:
+            _fresh_row, _fresh_context, _fresh_err = _revalidate_engine_b_scan_signal(_row)
+            if _fresh_row is not None:
+                _revalidated_results.append(_fresh_row)
+                continue
+
+            _failed_names = (
+                list((_fresh_context or {}).get("failed_gate_names") or [])
+                if isinstance(_fresh_context, dict)
+                else []
+            )
+            _bucket = _gate_bucket_from_failed_names(_failed_names)
+            with _funnel_lock:
+                engine_b_funnel["passed"] = max(0, int(engine_b_funnel.get("passed", 0)) - 1)
+                engine_b_funnel[f"gate_fail_{_bucket}"] += 1
+            _rejected = dict(_row)
+            _rejected["executable"] = False
+            _rejected["rejectionReason"] = f"scan_completion_revalidation:{_fresh_err}"
+            if isinstance(_fresh_context, dict):
+                _rejected["naked_data"] = _fresh_context
+                _rejected["engine_b"] = _fresh_context
+            rejected_diagnostics.append(_rejected)
+            log.info(
+                "[NAKED SCAN] %s removed by completion revalidation: %s",
+                _row.get("display") or _row.get("pair") or "?",
+                _fresh_err,
+            )
+        results = sorted(
+            _revalidated_results,
+            key=lambda x: x.get("confluenceScore", 0),
+            reverse=True,
+        )
 
     # Warm the Engine B cache so the Live Cockpit snapshot reflects this universe
     # scan (the snapshot reads _engine_b_cache_get(display); see
@@ -14380,6 +14546,40 @@ def analyze_pair(
             _mark_confirmed_split_failed("H1", str(_h1_split_err))
             h1 = []
             is_forming = False
+    elif refresh_market_data:
+        h1_raw, _h1_sig_meta = _fetch_ab_crypto_signal_candles(
+            pair,
+            "H1",
+            _lim["H1"],
+            engine="A",
+            force_refresh=True,
+        )
+        if _h1_sig_meta:
+            preloaded_fetch_meta["H1"] = _h1_sig_meta
+        try:
+            from athena_app.services.market_state import (
+                market_state_offset_hours,
+                split_market_state,
+            )
+
+            _h1_state = split_market_state(
+                list(h1_raw or []),
+                "H1",
+                pair.get("display") or pair.get("symbol") or "",
+                offset_hours=market_state_offset_hours(pair, "H1"),
+            )
+            preloaded_candles["H1"] = list(h1_raw or [])
+            preloaded_market_state["H1"] = _h1_state
+            h1 = engine_a_scoring_candles_from_state(
+                pair,
+                _h1_state,
+                fallback=list(h1_raw or []),
+            )
+            is_forming = bool(_h1_state.get("is_live"))
+        except Exception as _h1_split_err:
+            _mark_confirmed_split_failed("H1", str(_h1_split_err))
+            h1 = []
+            is_forming = False
     else:
         try:
             from candle_manager import fetch_market_state as _fms
@@ -14388,7 +14588,11 @@ def analyze_pair(
             is_forming = h1_state["is_live"]
         except Exception:
             h1, _h1_sig_meta = _fetch_ab_crypto_signal_candles(
-                pair, "H1", _lim["H1"], engine="A"
+                pair,
+                "H1",
+                _lim["H1"],
+                engine="A",
+                force_refresh=refresh_market_data,
             )
             if _h1_sig_meta:
                 preloaded_fetch_meta["H1"] = _h1_sig_meta
@@ -14407,7 +14611,11 @@ def analyze_pair(
 
     if d1_raw is None:
         d1_raw, _d1_sig_meta = _fetch_ab_crypto_signal_candles(
-            pair, "D1", _lim["D1"], engine="A"
+            pair,
+            "D1",
+            _lim["D1"],
+            engine="A",
+            force_refresh=refresh_market_data,
         )
         if _d1_sig_meta:
             preloaded_fetch_meta["D1"] = _d1_sig_meta
@@ -14438,7 +14646,11 @@ def analyze_pair(
         h4 = _engine_a_confirmed_candles("H4", h4)
     if h4 is None:
         h4, _h4_sig_meta = _fetch_ab_crypto_signal_candles(
-            pair, "H4", _lim["H4"], engine="A"
+            pair,
+            "H4",
+            _lim["H4"],
+            engine="A",
+            force_refresh=refresh_market_data,
         )
         if _h4_sig_meta:
             preloaded_fetch_meta["H4"] = _h4_sig_meta
@@ -14455,6 +14667,7 @@ def analyze_pair(
                     _v3_live_entry_tf,
                     _lim[_v3_live_entry_tf],
                     engine="A",
+                    force_refresh=refresh_market_data,
                 )
                 if _v3_entry_meta:
                     preloaded_fetch_meta[_v3_live_entry_tf] = _v3_entry_meta
@@ -16857,6 +17070,7 @@ register_ai_chart_review_routes(
             pair,
             btc_bias,
             style=style,
+            refresh_market_data=True,
             # Capture cache metadata before analyze_pair's own fetch overwrites it
             # so AI-review payloads surface cacheHit. Diagnostics only, advisory path.
             preloaded_fetch_meta={

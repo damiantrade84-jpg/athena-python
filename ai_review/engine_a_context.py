@@ -593,6 +593,18 @@ def _ema_levels(signal: dict[str, Any], factor_diag: dict[str, Any]) -> dict[str
 
 
 def _engine_a_passed(signal: dict[str, Any]) -> bool:
+    if (
+        str(signal.get("engine") or "").upper() == "ENGINE_A_V3"
+        and str(signal.get("contractVersion") or "").startswith("3.")
+    ):
+        freshness = signal.get("dataFreshness")
+        return bool(
+            signal.get("decision") == "TRADE"
+            and signal.get("qualified") is True
+            and signal.get("engineATradeEnabled") is True
+            and isinstance(freshness, dict)
+            and freshness.get("allowed") is True
+        )
     direction = str(signal.get("direction") or "NONE").upper()
     score = _to_float(signal.get("confluenceScore"))
     threshold = _to_float(

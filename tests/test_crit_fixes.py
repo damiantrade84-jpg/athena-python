@@ -537,6 +537,21 @@ def test_athena_runtime_exposes_engine_b_refresh_function():
     assert "compute_naked_analysis=_compute_naked_analysis" in src
 
 
+def test_scan_naked_revalidates_emitted_engine_b_cards_before_response():
+    src = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
+    helper = src.split("def _revalidate_engine_b_scan_signal(", 1)[1].split(
+        '@app.route("/api/naked-analysis"', 1
+    )[0]
+    route = src.split('def api_scan_naked():', 1)[1].split(
+        '@app.route("/api/webhook"', 1
+    )[0]
+
+    assert "execution_mode=True" in helper
+    assert 'refreshed.get("canonical_trade_ok") is False' in helper
+    assert '"engine": "engine_b"' in route
+    assert "_revalidate_engine_b_scan_signal(_row)" in route
+
+
 def test_naked_execution_refresh_is_fail_closed_for_direction_and_atr():
     src = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
 

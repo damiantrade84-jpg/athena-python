@@ -625,10 +625,9 @@ export default function SignalsPanel() {
   const scanEngineA = useCallback(async () => {
     const ac = assetClass === 'all' ? '' : assetClass;
     try {
-      // Use the scanner's freshness-aware caches. A forced refresh blocks on
-      // slow global/vendor updates and bypasses per-market candle caches for
-      // every pair, which can make a full-universe scan take several minutes.
-      const result = await postScanA('/api/scan', { asset_class: ac, refresh_market_data: false, style });
+      // A manual Scan A request is an explicit request for a new market
+      // snapshot, not a replay of still-valid per-market cache entries.
+      const result = await postScanA('/api/scan', { asset_class: ac, refresh_market_data: true, style });
       if (!result) return null;
       const tradeSignals = Array.isArray(result.signals) ? result.signals : [];
       const displaySignals = tradeSignals.map((s) => ({

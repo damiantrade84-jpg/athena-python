@@ -334,6 +334,7 @@ export function buildQuickExecutePayload(args: {
   const payload: Record<string, unknown> = {
     signal: {
       ...signalPayload,
+      engine: isEngineBOnly ? 'engine_b' : resolved.engine,
       symbol: resolved.symbol || resolved.pair || resolved.display,
       pair: resolved.pair || resolved.display,
       display: resolved.display || resolved.pair,
@@ -444,6 +445,7 @@ function reviewContextFromAiReview(review: AIChartReviewResponse | null): {
   symbol: string | null;
   timeframe: string | null;
   primaryEngine: 'A' | 'B';
+  primaryPassed: boolean | null;
 } {
   const primaryEngine = String(review?.primaryEngine || 'A').toUpperCase() === 'B' ? 'B' : 'A';
   const ctx = primaryEngine === 'B'
@@ -454,6 +456,9 @@ function reviewContextFromAiReview(review: AIChartReviewResponse | null): {
     primaryEngine,
     symbol: typeof record.symbol === 'string' ? record.symbol : null,
     timeframe: typeof record.timeframe === 'string' ? record.timeframe : null,
+    primaryPassed: typeof record.passed === 'boolean'
+      ? record.passed
+      : null,
   };
 }
 
@@ -507,11 +512,6 @@ export function evaluateTvChartExecuteBlock(args: {
   }
 
   if (isPaper) return 'Paper mode';
-  const isV3 = !isEngineBOnly
-    && String(signal.engine || '').toUpperCase() === 'ENGINE_A_V3'
-    && String(signal.contractVersion || '').startsWith('3.');
-  if (isV3) return null;
-
   const reviewCtx = reviewContextFromAiReview(aiReview);
   const reviewSymbolKey = normalizeSymbolKey(reviewCtx.symbol);
   if (aiReview && reviewSymbolKey && chartSymbolKey && reviewSymbolKey !== chartSymbolKey) {
@@ -521,6 +521,12 @@ export function evaluateTvChartExecuteBlock(args: {
   const currentTf = normalizeBackendTf(chartTimeframe);
   if (aiReview && reviewTimeframe && currentTf && reviewTimeframe !== currentTf) {
     return 'Review not current (timeframe mismatch)';
+  }
+  if (isEngineBOnly && reviewCtx.primaryEngine === 'B' && reviewCtx.primaryPassed === false) {
+    return 'Engine B no longer confirmed after AI review';
+  }
+  if (!isEngineBOnly && reviewCtx.primaryEngine === 'A' && reviewCtx.primaryPassed === false) {
+    return 'Engine A no longer confirmed after AI review';
   }
   if (aiReviewBlocksManualExecute(aiReview)) return 'AI review: no trade';
   return null;

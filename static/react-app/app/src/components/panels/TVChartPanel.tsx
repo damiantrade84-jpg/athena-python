@@ -2950,7 +2950,7 @@ export default function TVChartPanel() {
       return;
     }
     const effectiveStyle = String(chartCandidate.style || 'swing');
-    const isEngineBOnly = useEngineBPrimary && isEngineBOnlySignal(chartCandidate);
+    const isEngineBOnly = isEngineBOnlySignal(chartCandidate);
     const bLevels = isEngineBOnly
       ? resolveEngineBExecutionPreviewLevels(chartCandidate, { engineBOnly: true })
       : null;
@@ -2984,7 +2984,7 @@ export default function TVChartPanel() {
     if (!chartCandidate || executeBlockReason) return;
     setExecuting(true);
     try {
-      const isEngineBOnly = useEngineBPrimary && isEngineBOnlySignal(chartCandidate);
+      const isEngineBOnly = isEngineBOnlySignal(chartCandidate);
       const payload = buildQuickExecutePayload({
         signal: chartCandidate,
         isEngineBOnly,

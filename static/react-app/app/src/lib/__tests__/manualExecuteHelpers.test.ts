@@ -6,6 +6,7 @@ import {
   canExecuteEngineBSignal,
   computeLevelOverrideRR,
   engineBExecuteBlockReason,
+  evaluateTvChartExecuteBlock,
   parseAiLevelString,
 } from '../manualExecuteHelpers';
 import type { AiTextReviewResponse, EngineASignal } from '@/types/athena';
@@ -145,6 +146,63 @@ describe('engine B execute gating', () => {
     expect(canExecuteEngineBSignal(actionable)).toBe(true);
     expect(engineBExecuteBlockReason(actionable)).toBeNull();
   });
+
+  it('preserves Engine B identity in the quick-execute payload', () => {
+    const actionable = {
+      ...bchLike,
+      canonical_trade_ok: true,
+      engine_b_canonical_status: 'ACTIONABLE',
+      naked_data: {
+        ...bchLike.naked_data,
+        canonical_trade_ok: true,
+        engine_b_canonical_actionable: true,
+        engine_b_canonical_status: 'ACTIONABLE',
+      },
+    } as EngineASignal;
+
+    const payload = buildQuickExecutePayload({
+      signal: actionable,
+      isEngineBOnly: true,
+      pipMode: 'intraday',
+    });
+
+    expect((payload.signal as Record<string, unknown>).engine).toBe('engine_b');
+    expect((payload.signal as Record<string, unknown>).source).toBe('engine_b');
+    expect(payload.engine_b).toEqual(actionable.naked_data);
+  });
+
+  it('blocks execute when the AI review refresh no longer confirms Engine B', () => {
+    const actionable = {
+      ...bchLike,
+      symbol: 'BCHUSDT',
+      canonical_trade_ok: true,
+      engine_b_canonical_status: 'ACTIONABLE',
+      naked_data: {
+        ...bchLike.naked_data,
+        canonical_trade_ok: true,
+        engine_b_canonical_actionable: true,
+        engine_b_canonical_status: 'ACTIONABLE',
+      },
+    } as EngineASignal;
+    const aiReview = {
+      primaryEngine: 'B',
+      engine_b_context: {
+        symbol: 'BCHUSDT',
+        timeframe: 'H1',
+        passed: false,
+      },
+      ai_review: { verdict: 'VALID' },
+    } as Parameters<typeof evaluateTvChartExecuteBlock>[0]['aiReview'];
+
+    expect(evaluateTvChartExecuteBlock({
+      signal: actionable,
+      chartSymbolKey: 'BCHUSDT',
+      chartTimeframe: 'H1',
+      aiReview,
+      isTestMode: false,
+      isPaper: false,
+    })).toBe('Engine B no longer confirmed after AI review');
+  });
 });
 
 describe('Engine A V3 scanner tier gating', () => {
@@ -159,6 +217,42 @@ describe('Engine A V3 scanner tier gating', () => {
     } as EngineASignal;
 
     expect(canExecuteEngineASignalTier(signal)).toBe(false);
+  });
+
+  it('blocks execute when AI review refresh no longer confirms Engine A', () => {
+    const signal = {
+      engine: 'ENGINE_A_V3',
+      contractVersion: '3.1.0',
+      pair: 'EUR/USD',
+      symbol: 'EURUSD',
+      type: 'forex',
+      direction: 'LONG',
+      price: 1.1,
+      sl: 1.09,
+      tp1: 1.12,
+      signalTier: 'trade',
+      decision: 'TRADE',
+      qualified: true,
+      engineATradeEnabled: true,
+    } as EngineASignal;
+    const aiReview = {
+      primaryEngine: 'A',
+      engine_a_context: {
+        symbol: 'EURUSD',
+        timeframe: 'H1',
+        passed: false,
+      },
+      ai_review: { verdict: 'VALID' },
+    } as Parameters<typeof evaluateTvChartExecuteBlock>[0]['aiReview'];
+
+    expect(evaluateTvChartExecuteBlock({
+      signal,
+      chartSymbolKey: 'EURUSD',
+      chartTimeframe: 'H1',
+      aiReview,
+      isTestMode: false,
+      isPaper: false,
+    })).toBe('Engine A no longer confirmed after AI review');
   });
 
   it('routes a V3 chart review to the signal entry timeframe', async () => {
