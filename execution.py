@@ -47,6 +47,7 @@ from indicators import calc_atr, calc_indicators_with_normalized
 from intermarket import build_scan_snapshot
 from market_structure import (
     NakedEngine,
+    _synthesize_tp_from_sl,
     engine_b_confidence_passes,
     engine_b_live_trigger_kwargs,
 )
@@ -747,6 +748,148 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
         "driftAtr": round(atr_drift, 4),
         "tickAgeSec": round(max(0.0, float(broker_quote_age)), 3),
     }
+
+
+def _engine_b_tp_already_synthetic(sig: dict) -> bool:
+    for source in (sig, sig.get("engine_b_status"), sig.get("engine_b"), sig.get("naked_data")):
+        if not isinstance(source, dict):
+            continue
+        for key in ("tp1_source", "tp_source", "tp2_source"):
+            if str(source.get(key) or "").strip().lower() == "fallback_rr":
+                return True
+        if "fallback_rr" in str(source.get("rr_source") or "").lower():
+            return True
+    return False
+
+
+def _resolve_engine_b_rr_thresholds(sig: dict) -> tuple[float | None, float | None]:
+    min_rr = None
+    fallback_rr = None
+    for source in (sig, sig.get("engine_b_status"), sig.get("engine_b"), sig.get("naked_data")):
+        if not isinstance(source, dict):
+            continue
+        for key in ("engine_b_min_rr", "min_rr", "required_rr"):
+            if min_rr is None and source.get(key) is not None:
+                try:
+                    min_rr = float(source.get(key))
+                except (TypeError, ValueError):
+                    pass
+        for key in ("fallback_rr", "engine_b_fallback_rr"):
+            if fallback_rr is None and source.get(key) is not None:
+                try:
+                    fallback_rr = float(source.get(key))
+                except (TypeError, ValueError):
+                    pass
+
+    if min_rr is not None and fallback_rr is not None:
+        return min_rr, fallback_rr
+
+    style = str(sig.get("style") or "intraday").lower()
+    asset_type = str(sig.get("type") or sig.get("asset_type") or "forex").lower()
+    score_group = None
+    if sig.get("pair"):
+        score_group = get_pair_score_group(
+            {"display": sig.get("pair"), "type": asset_type}
+        )
+    profile_fn = None
+    try:
+        profile_fn = getattr(rt(), "naked_scan_style_profile", None)
+    except RuntimeError:
+        pass
+    if callable(profile_fn):
+        try:
+            _, profile = profile_fn(
+                style,
+                score_group=score_group,
+                asset_type=asset_type,
+                symbol=str(sig.get("pair") or ""),
+            )
+            if min_rr is None:
+                min_rr = float(profile.get("min_rr") or 0)
+            if fallback_rr is None:
+                fallback_rr = float(profile.get("fallback_rr") or 2.0)
+        except Exception:
+            pass
+    return min_rr, fallback_rr
+
+
+def _geometric_rr(entry: float, sl: float, tp: float) -> float | None:
+    risk_abs = abs(entry - sl)
+    if risk_abs <= 0:
+        return None
+    return abs(tp - entry) / risk_abs
+
+
+def _reconcile_engine_b_rr_after_broker_entry(sig: dict, cfg: dict) -> str | None:
+    """Resynthesize TP when broker entry rebase drops geometric RR below min_rr."""
+    if not _is_structural_engine_b_execution(sig):
+        return None
+    try:
+        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+
+        if tp_sl_rr_gates_disabled(cfg, signal=sig):
+            return None
+    except Exception:
+        pass
+    if not bool(cfg.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)):
+        return None
+    if _engine_b_tp_already_synthetic(sig):
+        return None
+
+    direction = str(sig.get("direction") or "").upper()
+    if direction not in ("LONG", "SHORT"):
+        return "INVALID_DIRECTION"
+    try:
+        entry = float(sig.get("price") or sig.get("entry") or 0)
+        sl = float(sig.get("sl") or 0)
+        tp1 = float(sig.get("tp1") or 0)
+    except (TypeError, ValueError):
+        return None
+    if entry <= 0 or sl <= 0 or tp1 <= 0:
+        return None
+
+    min_rr, fallback_rr = _resolve_engine_b_rr_thresholds(sig)
+    if min_rr is None or min_rr <= 0 or fallback_rr is None or fallback_rr <= 0:
+        return None
+
+    rr_geom = _geometric_rr(entry, sl, tp1)
+    if rr_geom is None or rr_geom + 1e-12 >= min_rr:
+        return None
+
+    synth_tp, _target_rr = _synthesize_tp_from_sl(
+        entry, sl, direction, fallback_rr, min_rr
+    )
+    if synth_tp is None:
+        return "ENGINE_B_RR_BELOW_MINIMUM_AFTER_REBASE"
+
+    asset_type = str(sig.get("type") or sig.get("asset_type") or "").lower()
+    from risk_engine import validate_tp_exchange_bounds
+
+    bounds_ok, _bounds_err = validate_tp_exchange_bounds(
+        entry, synth_tp, asset_type, cfg
+    )
+    if not bounds_ok:
+        return "ENGINE_B_RR_BELOW_MINIMUM_AFTER_REBASE"
+    if not _engine_b_execution_tp_side_ok(sig, synth_tp, entry=entry):
+        return "ENGINE_B_RR_BELOW_MINIMUM_AFTER_REBASE"
+
+    new_rr = _geometric_rr(entry, sl, synth_tp)
+    if new_rr is None or new_rr + 1e-12 < min_rr:
+        return "ENGINE_B_RR_BELOW_MINIMUM_AFTER_REBASE"
+
+    sig["tp1"] = synth_tp
+    sig["tp2"] = synth_tp
+    sig["engine_b_broker_rebase_rr_resynth"] = True
+    sig["engine_b_broker_rebase_rr_before"] = round(rr_geom, 4)
+    sig["engine_b_broker_rebase_rr_after"] = round(new_rr, 4)
+    try:
+        rt().log.warning(
+            f"[EXEC] {sig.get('pair')}: broker entry rebase dropped RR to "
+            f"{rr_geom:.3f}; resynthesized TP1={synth_tp:.6f} (RR {new_rr:.3f})"
+        )
+    except RuntimeError:
+        pass
+    return None
 
 
 def _signal_has_engine_b_context(sig: dict, engine_b: dict | None = None) -> bool:
@@ -1996,6 +2139,10 @@ def api_quick_execute():
         if _drift_diag:
             sig["brokerDriftPreRisk"] = _drift_diag
 
+        _rr_reconcile_error = _reconcile_engine_b_rr_after_broker_entry(sig, _r.CONFIG)
+        if _rr_reconcile_error:
+            return jsonify({"error": _rr_reconcile_error, "pair": sig.get("pair")}), 409
+
         approval = risk_check(
             signal=sig,
             account_balance=account["balance"],
@@ -3196,6 +3343,10 @@ def api_execute():
             return jsonify({"error": _drift_error, "brokerDrift": _drift_diag}), 409
         if _drift_diag:
             sig["brokerDriftPreRisk"] = _drift_diag
+
+        _rr_reconcile_error = _reconcile_engine_b_rr_after_broker_entry(sig, _r.CONFIG)
+        if _rr_reconcile_error:
+            return jsonify({"error": _rr_reconcile_error, "pair": sig.get("pair")}), 409
 
         approval = risk_check(
             signal=sig,

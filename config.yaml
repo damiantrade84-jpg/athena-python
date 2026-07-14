@@ -2248,6 +2248,29 @@ MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL:
   CORN: 0.0025        # resting ~0.18%
   ALUMINIUM: 0.0023   # resting ~0.17%
   ZINC: 0.0021        # resting ~0.15%
+  # US CFD stocks (Pepperstone MT5). Global stock cap 0.20% rejects normal resting spreads.
+  # AMD measured 0.2365% on 2026-07-14; cap 0.0030 (~1.27x measured).
+  AAPL: 0.0030
+  TSLA: 0.0030
+  NVDA: 0.0030
+  MSFT: 0.0030
+  AMZN: 0.0030
+  META: 0.0030
+  GOOGL: 0.0030
+  AVGO: 0.0030
+  JPM: 0.0030
+  V: 0.0030
+  XOM: 0.0030
+  NFLX: 0.0030
+  AMD: 0.0030
+  CRM: 0.0030
+  DIS: 0.0030
+  BA: 0.0030
+  COIN: 0.0030
+  PYPL: 0.0030
+  INTC: 0.0030
+  UBER: 0.0030
+  PLTR: 0.0030
 
 # ── Signal-to-execution drift cap (GAP-7) ───────────────────────────────────
 # Per-asset-type ceiling on |broker_price - signal_price| / signal_price.

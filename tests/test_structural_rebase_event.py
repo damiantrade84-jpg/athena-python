@@ -297,3 +297,76 @@ def test_engine_a_pre_risk_still_rejects_a_stale_broker_tick(monkeypatch):
     assert diag == {"tickAgeSec": 6.0, "tickAgeLimitSec": 5.0}
     assert signal["quoteTimestamp"] == 1.0
     assert "brokerPreflightPrice" not in signal
+
+
+def test_reconcile_engine_b_rr_resynthesizes_tp_when_broker_entry_drops_rr():
+    import execution
+
+    cfg = {"ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP": True}
+    sig = {
+        "is_naked": True,
+        "pair": "XAG/USD",
+        "type": "commodity",
+        "direction": "SHORT",
+        "style": "intraday",
+        "price": 59.4,
+        "entry": 59.4,
+        "sl": 60.0,
+        "tp1": 58.7,
+        "tp2": 58.7,
+        "min_rr": 1.3,
+        "fallback_rr": 1.8,
+        "engine_b_status": {"tp1_source": "structural", "min_rr": 1.3},
+    }
+
+    err = execution._reconcile_engine_b_rr_after_broker_entry(sig, cfg)
+
+    assert err is None
+    assert sig.get("engine_b_broker_rebase_rr_resynth") is True
+    assert sig["tp1"] < 58.7
+    new_rr = (59.4 - sig["tp1"]) / (60.0 - 59.4)
+    assert new_rr >= 1.3 - 1e-9
+
+
+def test_reconcile_engine_b_rr_noop_when_rr_still_meets_floor():
+    import execution
+
+    cfg = {"ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP": True}
+    sig = {
+        "is_naked": True,
+        "pair": "XAG/USD",
+        "type": "commodity",
+        "direction": "SHORT",
+        "price": 59.5,
+        "sl": 60.0,
+        "tp1": 58.7,
+        "min_rr": 1.3,
+        "engine_b_status": {"tp1_source": "structural"},
+    }
+    original_tp = sig["tp1"]
+
+    err = execution._reconcile_engine_b_rr_after_broker_entry(sig, cfg)
+
+    assert err is None
+    assert sig["tp1"] == original_tp
+    assert "engine_b_broker_rebase_rr_resynth" not in sig
+
+
+def test_reconcile_skips_when_tp_already_synthetic():
+    import execution
+
+    cfg = {"ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP": True}
+    sig = {
+        "is_naked": True,
+        "direction": "SHORT",
+        "price": 59.4,
+        "sl": 60.0,
+        "tp1": 58.7,
+        "min_rr": 1.3,
+        "engine_b_status": {"tp1_source": "fallback_rr"},
+    }
+
+    err = execution._reconcile_engine_b_rr_after_broker_entry(sig, cfg)
+
+    assert err is None
+    assert sig["tp1"] == 58.7
