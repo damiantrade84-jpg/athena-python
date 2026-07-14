@@ -41,15 +41,18 @@ class TestEngineBScaleOutPlan:
     """_engine_b_scale_out_plan is fail-closed on every field."""
 
     def test_disabled_by_default(self):
-        assert bybit_executor.CONFIG.get("ENGINE_B_LIVE_SCALE_OUT_ENABLED", False) is False
-        assert bybit_executor._engine_b_scale_out_plan(_signal()) is None
+        assert bybit_executor._engine_b_scale_out_plan(
+            _signal(type="forex")
+        ) is None
 
     def test_valid_static_plan_resolves_runner_to_tp2(self, monkeypatch):
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)
+        monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", True)
         assert bybit_executor._engine_b_scale_out_plan(_signal()) == "runner_to_tp2"
 
     def test_short_direction_requires_tp2_below_tp1(self, monkeypatch):
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)
+        monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", True)
         ok = _signal(direction="SHORT", sl=68000.0, tp1=66000.0, tp2=65000.0)
         assert bybit_executor._engine_b_scale_out_plan(ok) == "runner_to_tp2"
         bad = _signal(direction="SHORT", sl=68000.0, tp1=65000.0, tp2=66000.0)
@@ -57,6 +60,7 @@ class TestEngineBScaleOutPlan:
 
     def test_fail_closed_matrix(self, monkeypatch):
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)
+        monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", True)
         # Non-Engine-B identity
         assert bybit_executor._engine_b_scale_out_plan(_signal(engine="engine_a")) is None
         assert bybit_executor._engine_b_scale_out_plan(_signal(engine="")) is None
@@ -91,11 +95,13 @@ class TestEngineBScaleOutPlan:
 
     def test_timed_mode_degrades_to_fixed_tp2_bracket(self, monkeypatch):
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)
+        monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", True)
         sig = _signal(exit_mode="time_based")
         assert bybit_executor._engine_b_scale_out_plan(sig) == "runner_to_tp2"
 
     def test_trail_mode_degrades_when_no_trailing_manager(self, monkeypatch):
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)
+        monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", True)
         # TIMED_EXIT.tp_mode default is "fixed": no chandelier runs, so the
         # runner must keep the fixed TP2 bracket rather than run unmanaged.
         monkeypatch.setitem(bybit_executor.CONFIG, "TIMED_EXIT", {"tp_mode": "fixed"})
@@ -104,6 +110,7 @@ class TestEngineBScaleOutPlan:
 
     def test_trail_mode_with_trailing_manager_resolves_runner_trail(self, monkeypatch):
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)
+        monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", True)
         monkeypatch.setitem(
             bybit_executor.CONFIG, "TIMED_EXIT", {"tp_mode": "trailing_atr"}
         )
@@ -174,7 +181,8 @@ class TestEngineBScaleOutExecution:
         self, monkeypatch
     ):
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)
-        monkeypatch.setitem(bybit_executor.CONFIG, "EXECUTION_SINGLE_LEG_ONLY", False)
+        monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", True)
+        monkeypatch.setitem(bybit_executor.CONFIG, "EXECUTION_SINGLE_LEG_ONLY", True)
         partial_calls, stop_calls = [], []
 
         result = _run_execute(
@@ -211,8 +219,9 @@ class TestEngineBScaleOutExecution:
         assert stop_calls and stop_calls[-1]["tp"] == pytest.approx(68000.0)
         assert partial_calls == []
 
-    def test_single_leg_only_blocks_scale_out(self, monkeypatch):
+    def test_single_leg_only_allows_one_position_partial_scale_out(self, monkeypatch):
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)
+        monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", True)
         monkeypatch.setitem(bybit_executor.CONFIG, "EXECUTION_SINGLE_LEG_ONLY", True)
         partial_calls, stop_calls = [], []
 
@@ -221,12 +230,27 @@ class TestEngineBScaleOutExecution:
         )
 
         assert result["success"] is True
+        assert result["engineBScaleOut"] is True
+        assert stop_calls and stop_calls[-1]["tp"] == pytest.approx(69000.0)
+        assert len(partial_calls) == 1
+
+    def test_partial_opt_in_off_blocks_scale_out(self, monkeypatch):
+        monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)
+        monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", False)
+        monkeypatch.setitem(bybit_executor.CONFIG, "EXECUTION_SINGLE_LEG_ONLY", True)
+        partial_calls, stop_calls = [], []
+
+        result = _run_execute(
+            monkeypatch, _signal(), partial_calls=partial_calls, stop_calls=stop_calls
+        )
+
         assert result["engineBScaleOut"] is False
         assert stop_calls and stop_calls[-1]["tp"] == pytest.approx(68000.0)
         assert partial_calls == []
 
     def test_malformed_tp2_falls_back_to_legacy_single_tp(self, monkeypatch):
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)
+        monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", True)
         monkeypatch.setitem(bybit_executor.CONFIG, "EXECUTION_SINGLE_LEG_ONLY", False)
         partial_calls, stop_calls = [], []
 

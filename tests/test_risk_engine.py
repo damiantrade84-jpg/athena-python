@@ -73,6 +73,61 @@ def _make_signal(**overrides):
     return base
 
 
+class TestEngineBVenueAwareRiskPlans:
+    def test_verified_crypto_scale_out_uses_tp2_runner_rr(self):
+        sig = _make_signal(
+            engine="engine_b",
+            tp1=60500.0,
+            tp2=62000.0,
+            engine_b_execution_plan="scale_out",
+            engine_b_execution_tp1=60500.0,
+            engine_b_execution_tp2=62000.0,
+            engine_b_execution_tp=62000.0,
+            engine_b_rr_required=1.0,
+            engine_b_rr_passed=True,
+            engine_b_status={"checklist_passed": True},
+        )
+
+        result = risk_check(sig, 100000, 100000, [])
+
+        assert result.approved is True
+
+    def test_unverified_crypto_scale_out_is_rejected(self):
+        sig = _make_signal(
+            engine="engine_b",
+            tp1=60500.0,
+            tp2=62000.0,
+            engine_b_execution_plan="scale_out",
+            engine_b_status={"checklist_passed": True},
+        )
+
+        result = risk_check(sig, 100000, 100000, [])
+
+        assert result.approved is False
+        assert result.reason == "ENGINE_B_EXECUTION_PLAN_UNVERIFIED"
+
+    def test_verified_non_crypto_structural_tp1_uses_tp1_floor(self):
+        sig = _make_signal(
+            pair="EUR/USD",
+            type="forex",
+            engine="engine_b",
+            price=1.1000,
+            sl=1.0900,
+            tp1=1.1040,
+            tp2=1.1040,
+            engine_b_execution_plan="single_structural_tp1",
+            engine_b_rr_passed=True,
+            engine_b_single_target_valid=True,
+            engine_b_single_target_execution_tp=1.1040,
+            engine_b_single_target_rr_floor=0.3,
+            engine_b_status={"checklist_passed": True},
+        )
+
+        result = risk_check(sig, 100000, 100000, [])
+
+        assert result.approved is True
+
+
 # ── Direction validation ─────────────────────────────────────────────────────
 
 

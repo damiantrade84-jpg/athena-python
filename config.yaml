@@ -1974,6 +1974,13 @@ EXECUTION_ENABLED: true       # Enable manual execution via dashboard
 # Fail-closed: never open multiple broker legs on the same symbol from one execution.
 # Covers hybrid scale-out, legacy TP1+TP2 split, and Engine A v3 SPLIT_50_50.
 EXECUTION_SINGLE_LEG_ONLY: true
+# Engine B crypto scale-out is one Bybit position: a reduce-only TP1 partial
+# plus the remaining position bracketed at TP2. Non-crypto venues remain
+# single-target and may only use a resolver-validated structural TP1.
+ENGINE_B_LIVE_SCALE_OUT_ENABLED: true
+ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL: true
+ENGINE_B_LIVE_SCALE_OUT_TP1_SIZE: 0.50
+ENGINE_B_SINGLE_TARGET_STRUCTURAL_FALLBACK_ENABLED: true
 
 EXECUTION_VOLUME:
   DEFAULT_MODE: min_lot          # min_lot | calculated — manual default

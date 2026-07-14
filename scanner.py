@@ -608,6 +608,19 @@ def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict |
     signal["engine_b_exit_strategy"] = exit_strategy
     signal["engine_b_level_source"] = "engine_b_execution"
     signal["engine_b_rr_used_for_gate"] = (conf_b or {}).get("rr_used_for_gate")
+    # Execution must consume the same venue-aware plan that Engine B gated.
+    # Keep this annotation separate from generic levels so Engine A/C overlays
+    # cannot inherit an Engine B runner exception.
+    for key in (
+        "execution_plan",
+        "execution_plan_reason",
+        "rr_required",
+        "rr_passed",
+        "single_target_rr_floor",
+        "single_target_execution_tp",
+        "single_target_valid",
+    ):
+        signal[f"engine_b_{key}"] = (conf_b or {}).get(key)
 
     # Stamp the resolved Engine B exit mode + runner directive. The helper
     # no-ops for non-Engine-B rows, so Engine A rows carrying a B overlay

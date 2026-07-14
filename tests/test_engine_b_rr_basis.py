@@ -2,11 +2,13 @@ import os
 import sys
 import pytest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import risk_engine
 import config
+import execution
 from risk_engine import risk_check
 from indicators import calc_atr
 from market_structure import (
@@ -41,6 +43,30 @@ def _make_signal(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def test_non_crypto_stale_scale_out_payload_collapses_to_structural_tp1(monkeypatch):
+    cfg = dict(config.CONFIG)
+    cfg["ENGINE_B_SINGLE_TARGET_STRUCTURAL_FALLBACK_ENABLED"] = True
+    monkeypatch.setattr(execution, "rt", lambda: SimpleNamespace(CONFIG=cfg))
+    signal = {"direction": "LONG", "type": "forex", "price": 100.0}
+    stale = {
+        "execution_sl": 95.0,
+        "execution_tp": 110.0,
+        "execution_tp1": 102.0,
+        "execution_tp2": 110.0,
+        "execution_rr1": 0.4,
+        "exit_strategy": "scale_out_structural_tp1_fallback_tp2",
+        "structural_tp_valid": True,
+        "tp1_source": "structural",
+    }
+
+    levels = execution._extract_engine_b_execution_levels(signal, stale)
+
+    assert levels is not None
+    assert levels["tp1"] == pytest.approx(102.0)
+    assert levels["tp2"] == pytest.approx(102.0)
+    assert levels["execution_plan"] == "single_structural_tp1"
 
 
 def test_engine_a_correlated_overlay_guard_config_does_not_change_engine_b_confidence(monkeypatch):

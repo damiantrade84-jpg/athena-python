@@ -1082,6 +1082,83 @@ def validate_tp_exchange_bounds(
     return True, None
 
 
+def _direct_engine_b_identity(signal: dict) -> bool:
+    return str((signal or {}).get("engine") or "").strip().lower() in {
+        "engine_b", "naked", "naked_structure", "structure", "smc", "b"
+    }
+
+
+def _engine_b_resolver_plan_for_risk(signal: dict, entry: float, asset_type: str):
+    """Return a verified direct-Engine-B plan tuple, or an invalid plan marker.
+
+    Runner and TP1-floor exceptions are allowed only for resolver-stamped direct
+    Engine B signals. Engine A/C overlays intentionally never enter here.
+    """
+    if not _direct_engine_b_identity(signal):
+        return None
+    plan = str(signal.get("engine_b_execution_plan") or signal.get("execution_plan") or "").strip().lower()
+    if plan not in {"scale_out", "single_structural_tp1"}:
+        return None
+    direction = str(signal.get("direction") or "").upper()
+    try:
+        live_tp1 = float(signal.get("tp1"))
+        live_tp2 = float(signal.get("tp2"))
+    except (TypeError, ValueError):
+        return ("invalid", None, None)
+
+    def _same(left, right) -> bool:
+        try:
+            return math.isclose(float(left), float(right), rel_tol=1e-9, abs_tol=1e-9)
+        except (TypeError, ValueError):
+            return False
+
+    sources = [signal]
+    for key in ("engine_b_status", "engine_b", "naked_data"):
+        source = signal.get(key)
+        if isinstance(source, dict):
+            sources.append(source)
+    for source in sources:
+        source_plan = str(source.get("execution_plan") or source.get("engine_b_execution_plan") or plan).strip().lower()
+        if source_plan != plan:
+            continue
+        rr_passed = source.get("rr_passed", source.get("engine_b_rr_passed"))
+        if rr_passed is not True:
+            continue
+        if plan == "scale_out":
+            if str(asset_type or "").lower() != "crypto":
+                continue
+            expected_tp1 = source.get("execution_tp1", source.get("engine_b_execution_tp1"))
+            expected_tp2 = source.get("execution_tp2", source.get("engine_b_execution_tp2"))
+            expected_exec = source.get("execution_tp", source.get("engine_b_execution_tp"))
+            if not (_same(live_tp1, expected_tp1) and _same(live_tp2, expected_tp2) and _same(live_tp2, expected_exec)):
+                continue
+            if not ((direction == "LONG" and entry < live_tp1 < live_tp2) or (direction == "SHORT" and entry > live_tp1 > live_tp2)):
+                continue
+            try:
+                required = float(source.get("rr_required", source.get("engine_b_rr_required")))
+            except (TypeError, ValueError):
+                continue
+            return ("scale_out", required, live_tp2)
+
+        single_valid = source.get("single_target_valid", source.get("engine_b_single_target_valid"))
+        if str(asset_type or "").lower() == "crypto" or single_valid is not True:
+            continue
+        expected = source.get("single_target_execution_tp", source.get("engine_b_single_target_execution_tp"))
+        floor = source.get("single_target_rr_floor", source.get("engine_b_single_target_rr_floor"))
+        if not (_same(live_tp1, expected) and _same(live_tp2, expected)):
+            continue
+        if not ((direction == "LONG" and live_tp1 > entry) or (direction == "SHORT" and live_tp1 < entry)):
+            continue
+        try:
+            required = float(floor)
+        except (TypeError, ValueError):
+            continue
+        if required < 0:
+            continue
+        return ("single_structural_tp1", required, live_tp1)
+    return ("invalid", None, None)
+
+
 def risk_check(
     signal: dict,
     account_balance: float,
@@ -1430,6 +1507,22 @@ def risk_check(
                     False, 0.0, 0.0, 0.0, 0.0, dd, _tp_bounds_err or "INVALID_LEVELS"
                 )
 
+    _resolver_plan = _engine_b_resolver_plan_for_risk(signal, entry, asset_type)
+    if _resolver_plan and _resolver_plan[0] == "invalid":
+        log.warning(f"{prefix} REJECTED: Engine B execution plan is not resolver-verified")
+        return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "ENGINE_B_EXECUTION_PLAN_UNVERIFIED")
+    if _resolver_plan and _resolver_plan[0] == "scale_out" and not _tp_sl_rr_relaxed:
+        _runner_tp = _resolver_plan[2]
+        _runner_bounds_ok, _runner_bounds_err = validate_tp_exchange_bounds(
+            entry, _runner_tp, asset_type, CONFIG
+        )
+        if not _runner_bounds_ok:
+            log.warning(f"{prefix} REJECTED: {_runner_bounds_err}")
+            return RiskApproval(
+                False, 0.0, 0.0, 0.0, 0.0, dd,
+                _runner_bounds_err or "INVALID_LEVELS",
+            )
+
     # Engine C / consensus minimum R:R from geometry (defense in depth)
     try:
         _min_exec_rr = float(CONFIG.get("ENGINE_C_EXEC_MIN_RR", 1.0) or 1.0)
@@ -1464,14 +1557,23 @@ def risk_check(
                 except (TypeError, ValueError):
                     pass
 
+    # Resolver-stamped direct Engine B plans have a venue-specific target basis:
+    # crypto scale-out is measured at TP2 (the runner bracket), while a
+    # non-crypto structural fallback is measured against its verified TP1 floor.
+    _rr_target = tp1
+    if _resolver_plan and _resolver_plan[0] == "scale_out":
+        _rr_target = _resolver_plan[2]
+    elif _resolver_plan and _resolver_plan[0] == "single_structural_tp1":
+        _min_exec_rr = _resolver_plan[1]
+
     # Defense in depth: the geometric RR floor applies to EVERY execution
     # signal, not only consensus/Engine B. Pure Engine A signals (no verdict,
     # no components) previously bypassed this and could execute with RR < 1
     # (SL further than TP) as long as SL/TP were on the correct side.
-    if not _tp_sl_rr_relaxed and _min_exec_rr > 0 and tp1 > 0:
+    if not _tp_sl_rr_relaxed and _min_exec_rr > 0 and _rr_target > 0:
         risk_abs = abs(entry - sl)
         if risk_abs > 0:
-            rr_geom = abs(tp1 - entry) / risk_abs
+            rr_geom = abs(_rr_target - entry) / risk_abs
             if rr_geom + 1e-12 < _min_exec_rr:
                 log.warning(
                     f"{prefix} REJECTED: R:R {rr_geom:.3f} < min {_min_exec_rr}"

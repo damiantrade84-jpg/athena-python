@@ -86,7 +86,9 @@ def _engine_b_scale_out_plan(signal: dict) -> str | None:
     ambiguous returns None so the executor keeps its legacy single-TP path
     (no new order behavior is ever invented for an unqualified signal).
     """
-    if not bool(CONFIG.get("ENGINE_B_LIVE_SCALE_OUT_ENABLED", False)):
+    if not exit_policy.engine_b_scaleout_execution_supported(
+        (signal or {}).get("type") or (signal or {}).get("asset_type"), CONFIG
+    ):
         return None
     engine = str((signal or {}).get("engine") or "").strip().lower()
     if engine not in ("engine_b", "naked", "naked_structure", "structure", "smc", "b"):
@@ -1963,8 +1965,7 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         # returns None for anything unqualified and the legacy path applies.
         _b_scale_out_directive = None
         if (
-            not _single_leg_only
-            and not _v3_exit_policy
+            not _v3_exit_policy
             and not _is_scalp
             and not _hybrid_on
         ):

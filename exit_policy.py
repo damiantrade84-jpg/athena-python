@@ -36,6 +36,21 @@ RUNNER_NONE = "runner_none"
 DEFAULT_EXIT_MODE = EXIT_MODE_STATIC
 
 
+def engine_b_scaleout_execution_supported(asset_type: str | None, config: dict | None) -> bool:
+    """Whether this venue can execute Engine B's one-position scale-out plan.
+
+    Only Bybit-routed crypto supports the reduce-only TP1 partial plus TP2
+    runner bracket. The two explicit flags keep the capability fail-closed and
+    separate it from generic multi-entry-leg policy.
+    """
+    if str(asset_type or "").strip().lower() != "crypto" or not isinstance(config, dict):
+        return False
+    return bool(
+        config.get("ENGINE_B_LIVE_SCALE_OUT_ENABLED", False)
+        and config.get("ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", False)
+    )
+
+
 def normalize_mode(mode: str | None) -> str | None:
     """Return the canonical exit-mode string, or None if unrecognized."""
     if not mode:

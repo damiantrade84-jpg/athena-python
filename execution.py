@@ -53,6 +53,7 @@ from market_structure import (
 from guardian import pre_trade_check as _guardian_pre_trade
 from scoring import get_pair_score_group
 from exit_mode_apply import apply_engine_a_exit_mode
+from exit_policy import engine_b_scaleout_execution_supported
 from sqlite_instrumentation import (
     timed_sqlite_connect,
     timed_sqlite_commit,
@@ -806,9 +807,7 @@ def _engine_b_execution_tp_side_ok(
 def _apply_scale_out_tp_split(sig: dict, source: dict | None, levels: dict) -> None:
     """Upgrade collapsed tp1/tp2 to the resolver's dual-TP scale-out plan.
 
-    Gated on the same ENGINE_B_LIVE_SCALE_OUT_ENABLED flag the executors honour
-    (Bybit reduce-only TP1 partial + runner TP; MT5 volume split). Default off
-    keeps today's behavior: tp1 == tp2 == execution_tp (single runner bracket).
+    Gated on the shared crypto venue capability the Bybit executor honours.
     Fail-closed: any missing, malformed, or mis-ordered field leaves the
     collapsed levels untouched. 2026-07-10 audit — without this, the scale-out
     plan the RR/space gates approved and the backtest models never reached the
@@ -817,7 +816,9 @@ def _apply_scale_out_tp_split(sig: dict, source: dict | None, levels: dict) -> N
     if not isinstance(source, dict) or not isinstance(levels, dict):
         return
     try:
-        if not bool(rt().CONFIG.get("ENGINE_B_LIVE_SCALE_OUT_ENABLED", False)):
+        if not engine_b_scaleout_execution_supported(
+            sig.get("type") or sig.get("asset_type"), rt().CONFIG
+        ):
             return
     except Exception:
         return
@@ -866,6 +867,71 @@ def _apply_scale_out_tp_split(sig: dict, source: dict | None, levels: dict) -> N
         return
     levels["tp1"] = tp1
     levels["tp2"] = tp2
+    levels["execution_plan"] = "scale_out"
+
+
+def _engine_b_tp1_rr_floor(sig: dict, cfg: dict) -> float:
+    raw = cfg.get("ENGINE_B_TP1_MIN_RR", 0.3)
+    if isinstance(raw, dict):
+        raw = raw.get(str(sig.get("style") or "").lower(), raw.get("default", 0.3))
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 0.3
+
+
+def _collapse_engine_b_single_target_plan(sig: dict, source: dict | None, levels: dict) -> None:
+    """Collapse non-crypto canonical scale-out payloads to validated TP1 only."""
+    if not isinstance(source, dict) or not isinstance(levels, dict):
+        return
+    cfg = rt().CONFIG
+    if engine_b_scaleout_execution_supported(sig.get("type") or sig.get("asset_type"), cfg):
+        return
+    if not bool(cfg.get("ENGINE_B_SINGLE_TARGET_STRUCTURAL_FALLBACK_ENABLED", False)):
+        return
+    plan = str(source.get("execution_plan") or source.get("engine_b_execution_plan") or sig.get("engine_b_execution_plan") or "").strip().lower()
+    strategy = str(source.get("exit_strategy") or source.get("engine_b_exit_strategy") or "").strip().lower()
+    direct_single = plan == "single_structural_tp1"
+    stale_scale_out = strategy == "scale_out_structural_tp1_fallback_tp2"
+    if not direct_single and not stale_scale_out:
+        return
+    if direct_single:
+        if source.get("single_target_valid") is not True:
+            return
+        raw_tp = source.get("single_target_execution_tp")
+        raw_rr = source.get("rr_actual", source.get("execution_rr1"))
+        raw_floor = source.get("single_target_rr_floor", source.get("rr_required"))
+    else:
+        if source.get("structural_tp_valid") is not True or str(source.get("tp1_source") or "").lower() != "structural":
+            return
+        raw_tp = source.get("execution_tp1")
+        raw_rr = source.get("execution_rr1")
+        raw_floor = _engine_b_tp1_rr_floor(sig, cfg)
+    try:
+        tp, rr, floor = float(raw_tp), float(raw_rr), float(raw_floor)
+    except (TypeError, ValueError):
+        return
+    if tp <= 0 or not _engine_b_execution_tp_side_ok(sig, tp) or rr + 1e-12 < floor:
+        return
+    levels["tp1"] = tp
+    levels["tp2"] = tp
+    levels["execution_plan"] = "single_structural_tp1"
+    levels["execution_plan_reason"] = "non_crypto_structural_tp1" if direct_single else "stale_scale_out_collapsed"
+    levels["rr_required"] = floor
+    levels["rr_passed"] = True
+
+
+def _stamp_engine_b_execution_plan(sig: dict, source: dict | None, levels: dict) -> None:
+    """Carry resolver execution-plan metadata through execution and refresh."""
+    if not isinstance(source, dict) or not isinstance(levels, dict):
+        return
+    plan = levels.get("execution_plan") or source.get("execution_plan")
+    if plan:
+        sig["engine_b_execution_plan"] = plan
+    for key in ("execution_plan_reason", "rr_required", "rr_passed", "single_target_rr_floor", "single_target_execution_tp", "single_target_valid"):
+        value = levels.get(key, source.get(key))
+        if value is not None:
+            sig[f"engine_b_{key}"] = value
 
 
 def _extract_engine_b_execution_levels(
@@ -920,6 +986,8 @@ def _extract_engine_b_execution_levels(
             # ENGINE_B_LIVE_SCALE_OUT_ENABLED and the source carries a valid
             # dual-TP plan) — see _apply_scale_out_tp_split.
             _apply_scale_out_tp_split(sig, source, levels)
+            _collapse_engine_b_single_target_plan(sig, source, levels)
+            _stamp_engine_b_execution_plan(sig, source, levels)
             return levels
         return None
 
@@ -1377,6 +1445,14 @@ def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) ->
     sig["sl"] = levels["sl"]
     sig["tp1"] = levels["tp1"]
     sig["tp2"] = levels["tp2"]
+    if levels.get("execution_plan"):
+        sig["engine_b_execution_plan"] = levels["execution_plan"]
+    if levels.get("execution_plan_reason"):
+        sig["engine_b_execution_plan_reason"] = levels["execution_plan_reason"]
+    if levels.get("rr_required") is not None:
+        sig["engine_b_rr_required"] = levels["rr_required"]
+    if levels.get("rr_passed") is not None:
+        sig["engine_b_rr_passed"] = levels["rr_passed"]
     sig["level_source"] = "engine_b_execution"
     return True
 
@@ -1476,6 +1552,8 @@ def _refresh_engine_b_execution_context(
     # (no-op unless ENGINE_B_LIVE_SCALE_OUT_ENABLED and the plan is valid).
     _refresh_levels = {"sl": sl, "tp1": tp, "tp2": tp}
     _apply_scale_out_tp_split(sig, refreshed, _refresh_levels)
+    _collapse_engine_b_single_target_plan(sig, refreshed, _refresh_levels)
+    _stamp_engine_b_execution_plan(sig, refreshed, _refresh_levels)
     sig["tp1"] = _refresh_levels["tp1"]
     sig["tp2"] = _refresh_levels["tp2"]
     return refreshed, None

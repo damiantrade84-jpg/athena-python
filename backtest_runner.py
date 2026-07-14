@@ -5567,7 +5567,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             _rr_sl_dist = abs(entry - sl)
             _rr_tp_dist = abs(tp - entry)
             rr = (_rr_tp_dist / _rr_sl_dist) if _rr_sl_dist > 0 else 0.0
-            if not _bt_tp_sl_rr_gates_relaxed() and (rr <= 0 or rr < float(style_profile.get("min_rr", 1.0))):
+            try:
+                rr_required = float(conf_data.get("rr_required"))
+            except (TypeError, ValueError):
+                rr_required = float(style_profile.get("min_rr", 1.0))
+            if not _bt_tp_sl_rr_gates_relaxed() and (rr <= 0 or rr < rr_required):
                 continue
 
             candidates.append(
@@ -5583,6 +5587,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                     "rr1": conf_data.get("execution_rr1"),
                     "rr2": conf_data.get("execution_rr2"),
                     "rr": rr,
+                    "rr_required": rr_required,
                     "res": res,
                     "conf": conf_data,
                     "regime_label": regime_label,
@@ -5691,7 +5696,11 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         if target_rr <= 0:
             i += 1
             continue
-        if not _bt_tp_sl_rr_gates_relaxed() and target_rr < float(style_profile.get("min_rr", 1.0)):
+        try:
+            _required_rr = float(best.get("rr_required"))
+        except (TypeError, ValueError):
+            _required_rr = float(style_profile.get("min_rr", 1.0))
+        if not _bt_tp_sl_rr_gates_relaxed() and target_rr < _required_rr:
             i += 1
             continue
 

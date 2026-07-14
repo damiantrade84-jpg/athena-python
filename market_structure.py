@@ -1162,6 +1162,114 @@ def _engine_b_clamp_tp1_to_opposing_zone(
     return diag
 
 
+def _engine_b_adapt_execution_plan_for_venue(
+    exec_lvl: dict,
+    *,
+    direction: str,
+    entry: float,
+    asset_type: str,
+    exec_style: str,
+) -> None:
+    """Adapt an already wall-clamped canonical Engine B plan to venue capability.
+
+    The resolver remains the source of canonical structural-TP1/synthetic-TP2
+    diagnostics.  Only the emitted executable plan changes: crypto can retain
+    the one-position scale-out, while non-crypto may use its validated
+    structural TP1 as a single target when explicitly enabled.
+    """
+    if not isinstance(exec_lvl, dict):
+        return
+
+    canonical_keys = (
+        "execution_sl", "execution_tp", "execution_tp1", "execution_tp2",
+        "execution_rr", "execution_rr1", "execution_rr2", "rr_required",
+        "rr_actual", "rr_passed", "exit_strategy", "execution_levels_valid",
+    )
+    for key in canonical_keys:
+        exec_lvl[f"canonical_{key}"] = exec_lvl.get(key)
+    is_canonical_scale_out = (
+        exec_lvl.get("exit_strategy") == "scale_out_structural_tp1_fallback_tp2"
+        and exec_lvl.get("scale_out_guard_reason") is None
+    )
+    exec_lvl["canonical_execution_plan"] = (
+        "scale_out" if is_canonical_scale_out else "single_target"
+    )
+    exec_lvl["execution_plan"] = "single_target"
+    exec_lvl["execution_plan_reason"] = "canonical_single_target"
+    exec_lvl["single_target_rr_floor"] = None
+    exec_lvl["single_target_execution_tp"] = None
+    exec_lvl["single_target_valid"] = False
+    if not is_canonical_scale_out:
+        return
+
+    try:
+        from exit_policy import engine_b_scaleout_execution_supported
+
+        scale_out_supported = engine_b_scaleout_execution_supported(
+            asset_type, config.CONFIG
+        )
+    except Exception:
+        scale_out_supported = False
+    if scale_out_supported:
+        exec_lvl["execution_plan"] = "scale_out"
+        exec_lvl["execution_plan_reason"] = "crypto_scale_out_supported"
+        return
+
+    if not bool(config.CONFIG.get("ENGINE_B_SINGLE_TARGET_STRUCTURAL_FALLBACK_ENABLED", False)):
+        exec_lvl["execution_plan"] = "scale_out_unavailable"
+        exec_lvl["execution_plan_reason"] = "single_target_structural_fallback_disabled"
+        return
+
+    try:
+        tp1 = float(exec_lvl.get("execution_tp1"))
+        rr1 = float(exec_lvl.get("execution_rr1"))
+        floor = float(_engine_b_style_threshold(
+            config.CONFIG.get("ENGINE_B_TP1_MIN_RR"), exec_style
+        ))
+    except (TypeError, ValueError):
+        exec_lvl["execution_plan"] = "scale_out_unavailable"
+        exec_lvl["execution_plan_reason"] = "single_target_structural_tp1_malformed"
+        return
+    side_ok = (direction == "LONG" and tp1 > entry) or (
+        direction == "SHORT" and tp1 < entry
+    )
+    structural_tp1 = (
+        exec_lvl.get("structural_tp_valid") is True
+        and str(exec_lvl.get("tp1_source") or "").lower() == "structural"
+    )
+    if not structural_tp1 or not side_ok or rr1 + 1e-12 < floor:
+        exec_lvl["execution_plan"] = "scale_out_unavailable"
+        exec_lvl["execution_plan_reason"] = "single_target_structural_tp1_invalid"
+        return
+
+    exec_lvl["execution_tp"] = tp1
+    exec_lvl["execution_tp1"] = tp1
+    exec_lvl["execution_tp2"] = tp1
+    exec_lvl["execution_rr"] = rr1
+    exec_lvl["execution_rr1"] = rr1
+    exec_lvl["execution_rr2"] = rr1
+    exec_lvl["rr_used_for_gate"] = rr1
+    exec_lvl["rr_required"] = floor
+    exec_lvl["rr_actual"] = rr1
+    exec_lvl["rr_passed"] = True
+    exec_lvl["exit_strategy"] = "single_structural_tp"
+    exec_lvl["runner_tp_requires_structural_break"] = False
+    exec_lvl["tp_source"] = "structural"
+    exec_lvl["tp1_source"] = "structural"
+    exec_lvl["tp2_source"] = "structural"
+    exec_lvl["synthetic_rr_tp_used"] = False
+    exec_lvl["execution_levels_valid"] = True
+    exec_lvl["execution_level_reject_reason"] = None
+    exec_lvl["level_mode"] = f"{exec_lvl.get('sl_source')}_sl_structural_tp"
+    exec_lvl["rr_source"] = exec_lvl["level_mode"]
+    exec_lvl["level_cohort"] = engine_b_level_cohort(exec_lvl["level_mode"])
+    exec_lvl["execution_plan"] = "single_structural_tp1"
+    exec_lvl["execution_plan_reason"] = "non_crypto_structural_tp1"
+    exec_lvl["single_target_rr_floor"] = floor
+    exec_lvl["single_target_execution_tp"] = tp1
+    exec_lvl["single_target_valid"] = True
+
+
 def _adx_from_indicator_snap(snap: dict | None) -> float | None:
     """Read ADX from calc_indicators / calc_indicators_with_normalized snap (Engine A parity)."""
     if not isinstance(snap, dict):
@@ -5578,6 +5686,13 @@ class NakedEngine:
             exec_style=exec_style,
             asset_class=_exec_asset_class,
         )
+        _engine_b_adapt_execution_plan_for_venue(
+            _exec_lvl,
+            direction=direction,
+            entry=current_price,
+            asset_type=asset_type_lower,
+            exec_style=exec_style,
+        )
         # Structural TP side check — kept for diagnostics / ENGINE_B_REASON_TP_WRONG_SIDE
         sl = _exec_lvl["execution_sl"]
         tp = _exec_lvl["execution_tp"]
@@ -6252,6 +6367,11 @@ class NakedEngine:
             "rr_required": _exec_lvl.get("rr_required", min_rr),
             "rr_actual": _exec_lvl.get("rr_actual", round(rr, 2)),
             "rr_passed": _exec_lvl.get("rr_passed", rr_ok),
+            "execution_plan": _exec_lvl.get("execution_plan"),
+            "execution_plan_reason": _exec_lvl.get("execution_plan_reason"),
+            "single_target_rr_floor": _exec_lvl.get("single_target_rr_floor"),
+            "single_target_execution_tp": _exec_lvl.get("single_target_execution_tp"),
+            "single_target_valid": _exec_lvl.get("single_target_valid"),
             "structural_sl": _exec_lvl["structural_sl"],
             "structural_tp": _exec_lvl["structural_tp"],
             "structural_rr": _exec_lvl["structural_rr"],
@@ -6261,6 +6381,17 @@ class NakedEngine:
             "execution_tp": _exec_lvl["execution_tp"],
             "execution_tp1": _exec_lvl.get("execution_tp1"),
             "execution_tp2": _exec_lvl.get("execution_tp2"),
+            "canonical_execution_plan": _exec_lvl.get("canonical_execution_plan"),
+            "canonical_execution_sl": _exec_lvl.get("canonical_execution_sl"),
+            "canonical_execution_tp": _exec_lvl.get("canonical_execution_tp"),
+            "canonical_execution_tp1": _exec_lvl.get("canonical_execution_tp1"),
+            "canonical_execution_tp2": _exec_lvl.get("canonical_execution_tp2"),
+            "canonical_execution_rr": _exec_lvl.get("canonical_execution_rr"),
+            "canonical_execution_rr1": _exec_lvl.get("canonical_execution_rr1"),
+            "canonical_execution_rr2": _exec_lvl.get("canonical_execution_rr2"),
+            "canonical_rr_required": _exec_lvl.get("canonical_rr_required"),
+            "canonical_rr_passed": _exec_lvl.get("canonical_rr_passed"),
+            "canonical_exit_strategy": _exec_lvl.get("canonical_exit_strategy"),
             "execution_rr": _exec_lvl["execution_rr"],
             "execution_rr1": _exec_lvl.get("execution_rr1"),
             "execution_rr2": _exec_lvl.get("execution_rr2"),

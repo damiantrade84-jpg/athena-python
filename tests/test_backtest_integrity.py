@@ -744,9 +744,9 @@ def test_backtest_pair_naked_preserves_engine_b_tp1_tp2_exit_plan(monkeypatch):
         extract_candles=lambda candles: candles,
         fetch_candles=lambda *_args, **_kwargs: d1,
         fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
-        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None, symbol=None: (
             "intraday",
-            {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
+            {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 2.5, "atr_tf": "H4"},
         ),
         engine_b_regime_label=lambda *_args, **_kwargs: "TRENDING",
         AUDIT_DB=str(audit_dir / "audit.db"),
@@ -830,6 +830,9 @@ def test_backtest_pair_naked_preserves_engine_b_tp1_tp2_exit_plan(monkeypatch):
             "execution_rr1": 0.75,
             "execution_rr2": 2.0,
             "rr_used_for_gate": 2.0,
+            # The resolver emitted its executable runner threshold. The BT
+            # must not re-apply the higher style floor and reject this plan.
+            "rr_required": 2.0,
             "rr_source": "atr_sl_fallback_rr_tp",
             "exit_strategy": "scale_out_structural_tp1_fallback_tp2",
         }

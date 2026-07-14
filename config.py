@@ -1392,7 +1392,15 @@ CONFIG: dict = {
     # behavior is unchanged until explicitly enabled. When on, a reduce-only
     # partial banks the TP1 clip and the position TP carries the TP2 runner.
     "ENGINE_B_LIVE_SCALE_OUT_ENABLED": False,
+    # A Bybit TP1 reduce-only order is a partial close on the one broker
+    # position, not a second entry leg. Keep this opt-in independently from
+    # the deployment-wide single-entry-leg safeguard.
+    "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL": False,
     "ENGINE_B_LIVE_SCALE_OUT_TP1_SIZE": 0.5,
+    # MT5 and non-crypto executors only express one target. When enabled,
+    # a resolver-validated structural TP1 may replace an otherwise
+    # unexecutable Engine B synthetic runner plan.
+    "ENGINE_B_SINGLE_TARGET_STRUCTURAL_FALLBACK_ENABLED": False,
     # ── Phase 3 calibration placeholders — NOT wired into level resolution ──
     # Values mirror the current NAKED_ENGINE style-profile min_rr rows (forex
     # groups override to 1.3/1.8). They only become active after the
