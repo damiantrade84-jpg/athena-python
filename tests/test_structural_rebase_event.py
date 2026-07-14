@@ -370,3 +370,46 @@ def test_reconcile_skips_when_tp_already_synthetic():
 
     assert err is None
     assert sig["tp1"] == 58.7
+
+
+def test_reconcile_engine_a_preserved_b_levels_after_broker_rebase():
+    """Engine A Quick Exec with preserved B levels must reconcile even without ALIGNED verdict."""
+    import execution
+
+    cfg = {
+        "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP": True,
+        "ENGINE_C_EXEC_MIN_RR": 1.0,
+        "NAKED_ENGINE": {
+            "score_group_overrides": {
+                "crypto_alt_majors": {"intraday": {"min_rr": 1.4, "fallback_rr": 1.8}},
+            }
+        },
+    }
+    sig = {
+        "engine": "engine_a",
+        "verdict": "WATCHLIST",
+        "enginesAligned": True,
+        "level_source": "engine_b_execution",
+        "pair": "DOT/USDT",
+        "type": "crypto",
+        "direction": "LONG",
+        "style": "intraday",
+        "price": 0.855,
+        "entry": 0.855,
+        "sl": 0.8307078471161137,
+        "tp1": 0.8722851148310247,
+        "tp2": 0.8938258751909953,
+        "engine_b_execution_plan": "scale_out",
+        "engine_b": {"execution_sl": 0.8307078471161137, "execution_tp1": 0.8722851148310247},
+        "engine_b_status": {"tp1_source": "structural"},
+    }
+
+    err = execution._reconcile_engine_b_rr_after_broker_entry(sig, cfg)
+
+    assert err is None
+    assert sig.get("engine_b_broker_rebase_rr_resynth") is True
+    assert sig["tp1"] > 0.8722851148310247
+    new_rr = (sig["tp1"] - 0.855) / (0.855 - 0.8307078471161137)
+    assert new_rr >= 1.4 - 1e-9
+    assert sig["tp2"] == sig["tp1"]
+    assert sig["engine_b_execution_plan"] == "single_structural_tp1"

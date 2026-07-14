@@ -254,6 +254,77 @@ def test_mt5_execute_blocks_close_only_symbol_before_order_send(monkeypatch):
     assert result["error"] == "MT5_TRADE_DISABLED:symbol_close_only_no_new_positions"
 
 
+def test_mt5_trade_block_for_direction_long_only_rejects_short(monkeypatch):
+    class _FakeMT5:
+        SYMBOL_TRADE_MODE_LONGONLY = 1
+        SYMBOL_TRADE_MODE_DISABLED = 0
+        SYMBOL_TRADE_MODE_FULL = 4
+        SYMBOL_TRADE_MODE_CLOSEONLY = 3
+        SYMBOL_TRADE_MODE_SHORTONLY = 2
+
+        @staticmethod
+        def symbol_info(_symbol):
+            return SimpleNamespace(trade_mode=_FakeMT5.SYMBOL_TRADE_MODE_LONGONLY, visible=True)
+
+        @staticmethod
+        def terminal_info():
+            return SimpleNamespace(trade_allowed=True, tradeapi_disabled=False)
+
+        @staticmethod
+        def account_info():
+            return SimpleNamespace(trade_allowed=True, trade_expert=True, trade_mode=0)
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
+
+    symbol_info = {
+        "error": False,
+        "symbol": "JPM",
+        "mt5_symbol": "JPM.US",
+        "trade_mode": _FakeMT5.SYMBOL_TRADE_MODE_LONGONLY,
+        "trade_mode_disabled": False,
+    }
+
+    reason, state = mt5_executor.mt5_trade_block_for_direction(symbol_info, "SHORT")
+
+    assert reason == "symbol_long_only"
+    assert state["symbol_trade_mode"] == _FakeMT5.SYMBOL_TRADE_MODE_LONGONLY
+
+
+def test_mt5_trade_block_for_direction_long_only_allows_long(monkeypatch):
+    class _FakeMT5:
+        SYMBOL_TRADE_MODE_LONGONLY = 1
+        SYMBOL_TRADE_MODE_DISABLED = 0
+        SYMBOL_TRADE_MODE_FULL = 4
+        SYMBOL_TRADE_MODE_CLOSEONLY = 3
+        SYMBOL_TRADE_MODE_SHORTONLY = 2
+
+        @staticmethod
+        def symbol_info(_symbol):
+            return SimpleNamespace(trade_mode=_FakeMT5.SYMBOL_TRADE_MODE_LONGONLY, visible=True)
+
+        @staticmethod
+        def terminal_info():
+            return SimpleNamespace(trade_allowed=True, tradeapi_disabled=False)
+
+        @staticmethod
+        def account_info():
+            return SimpleNamespace(trade_allowed=True, trade_expert=True, trade_mode=0)
+
+    monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
+
+    symbol_info = {
+        "error": False,
+        "symbol": "JPM",
+        "mt5_symbol": "JPM.US",
+        "trade_mode": _FakeMT5.SYMBOL_TRADE_MODE_LONGONLY,
+        "trade_mode_disabled": False,
+    }
+
+    reason, _state = mt5_executor.mt5_trade_block_for_direction(symbol_info, "LONG")
+
+    assert reason is None
+
+
 def test_mt5_execute_reports_order_check_rejection_before_send(monkeypatch):
     send_called = False
 

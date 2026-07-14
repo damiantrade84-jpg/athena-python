@@ -296,6 +296,34 @@ def _mt5_trade_state_block_reason(state: dict, direction: str, mt5) -> str | Non
     return None
 
 
+def mt5_trade_block_for_direction(
+    symbol_info: dict,
+    direction: str,
+) -> tuple[str | None, dict | None]:
+    """Return (block_reason, trade_state) when MT5 will reject this direction.
+
+    Uses ``mt5_get_symbol_info`` payload when available; refreshes terminal/account
+    flags so Quick Exec can fail closed before risk sizing and order_send.
+    """
+    mt5 = _get_mt5()
+    if not mt5 or not isinstance(symbol_info, dict) or symbol_info.get("error"):
+        return None, None
+    direction_u = str(direction or "").upper()
+    if direction_u not in ("LONG", "SHORT"):
+        return None, None
+    mt5_symbol = symbol_info.get("mt5_symbol") or mt5_map_symbol(
+        symbol_info.get("symbol") or ""
+    )
+    if not mt5_symbol:
+        return None, None
+    sym_info = mt5.symbol_info(mt5_symbol)
+    state = _mt5_trade_state(mt5, mt5_symbol, sym_info)
+    reason = _mt5_trade_state_block_reason(state, direction_u, mt5)
+    if reason:
+        return reason, state
+    return None, state
+
+
 def _mt5_scalar(value):
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -720,11 +748,20 @@ def mt5_get_account() -> dict:
     if not info:
         return {"error": True, "symbol": "MT5", "detail": "Failed to get account info"}
 
+    trade_mode = getattr(info, "trade_mode", None)
+    demo_mode = getattr(mt5, "ACCOUNT_TRADE_MODE_DEMO", object())
+    real_mode = getattr(mt5, "ACCOUNT_TRADE_MODE_REAL", object())
+    account_environment = (
+        "demo" if trade_mode == demo_mode else
+        "real" if trade_mode == real_mode else
+        "unknown"
+    )
     return {
         "error": False,
         "symbol": "MT5",
         "detail": "",
         "login": info.login,
+        "accountId": info.login,
         "server": info.server,
         "risk_domain": f"forex:mt5:{info.server}:{info.login}",
         "balance": info.balance,
@@ -733,7 +770,8 @@ def mt5_get_account() -> dict:
         "freeMargin": info.margin_free,
         "profit": info.profit,
         "currency": info.currency,
-        "trade_mode": getattr(info, "trade_mode", None),
+        "trade_mode": trade_mode,
+        "accountEnvironment": account_environment,
     }
 
 

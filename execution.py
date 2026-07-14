@@ -762,13 +762,55 @@ def _engine_b_tp_already_synthetic(sig: dict) -> bool:
     return False
 
 
-def _resolve_engine_b_rr_thresholds(sig: dict) -> tuple[float | None, float | None]:
+def _engine_b_profile_thresholds_from_cfg(
+    cfg: dict,
+    *,
+    style: str,
+    score_group: str | None,
+) -> tuple[float | None, float | None]:
+    """Config-only style/group min_rr lookup when runtime profile hook is unavailable."""
+    style_key = str(style or "intraday").lower()
+    defaults = {
+        "scalp": {"min_rr": 1.0, "fallback_rr": 1.4},
+        "intraday": {"min_rr": 1.2, "fallback_rr": 1.8},
+        "swing": {"min_rr": 1.6, "fallback_rr": 2.2},
+    }
+    base = dict(defaults.get(style_key, defaults["intraday"]))
+    naked = (cfg.get("NAKED_ENGINE") or {}) if isinstance(cfg, dict) else {}
+    style_profiles = naked.get("style_profiles") or {}
+    if isinstance(style_profiles.get(style_key), dict):
+        base.update(style_profiles[style_key])
+    if score_group:
+        group_overrides = (naked.get("score_group_overrides") or {}).get(score_group) or {}
+        if isinstance(group_overrides.get(style_key), dict):
+            base.update(group_overrides[style_key])
+    try:
+        min_rr = float(base.get("min_rr")) if base.get("min_rr") is not None else None
+    except (TypeError, ValueError):
+        min_rr = None
+    try:
+        fallback_rr = float(base.get("fallback_rr")) if base.get("fallback_rr") is not None else None
+    except (TypeError, ValueError):
+        fallback_rr = None
+    return min_rr, fallback_rr
+
+
+def _resolve_engine_b_rr_thresholds(
+    sig: dict,
+    cfg: dict | None = None,
+) -> tuple[float | None, float | None]:
     min_rr = None
     fallback_rr = None
     for source in (sig, sig.get("engine_b_status"), sig.get("engine_b"), sig.get("naked_data")):
         if not isinstance(source, dict):
             continue
-        for key in ("engine_b_min_rr", "min_rr", "required_rr"):
+        for key in (
+            "engine_b_min_rr",
+            "min_rr",
+            "required_rr",
+            "engine_b_rr_required",
+            "rr_required",
+        ):
             if min_rr is None and source.get(key) is not None:
                 try:
                     min_rr = float(source.get(key))
@@ -780,9 +822,6 @@ def _resolve_engine_b_rr_thresholds(sig: dict) -> tuple[float | None, float | No
                     fallback_rr = float(source.get(key))
                 except (TypeError, ValueError):
                     pass
-
-    if min_rr is not None and fallback_rr is not None:
-        return min_rr, fallback_rr
 
     style = str(sig.get("style") or "intraday").lower()
     asset_type = str(sig.get("type") or sig.get("asset_type") or "forex").lower()
@@ -804,13 +843,61 @@ def _resolve_engine_b_rr_thresholds(sig: dict) -> tuple[float | None, float | No
                 asset_type=asset_type,
                 symbol=str(sig.get("pair") or ""),
             )
-            if min_rr is None:
-                min_rr = float(profile.get("min_rr") or 0)
-            if fallback_rr is None:
-                fallback_rr = float(profile.get("fallback_rr") or 2.0)
+            if min_rr is None and profile.get("min_rr") is not None:
+                min_rr = float(profile.get("min_rr"))
+            if fallback_rr is None and profile.get("fallback_rr") is not None:
+                fallback_rr = float(profile.get("fallback_rr"))
         except Exception:
             pass
+    if min_rr is None or fallback_rr is None:
+        cfg_min, cfg_fallback = _engine_b_profile_thresholds_from_cfg(
+            cfg or {},
+            style=style,
+            score_group=score_group,
+        )
+        if min_rr is None:
+            min_rr = cfg_min
+        if fallback_rr is None:
+            fallback_rr = cfg_fallback
+
+    try:
+        exec_floor = float((cfg or {}).get("ENGINE_C_EXEC_MIN_RR", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        exec_floor = 1.0
+    if min_rr is None:
+        min_rr = exec_floor if exec_floor > 0 else None
+    elif exec_floor > 0:
+        min_rr = max(min_rr, exec_floor)
+    if fallback_rr is None or fallback_rr <= 0:
+        fallback_rr = 1.8
     return min_rr, fallback_rr
+
+
+def _engine_b_rr_reconcile_applies(sig: dict) -> bool:
+    """True when broker-entry RR reconciliation should run before risk_check."""
+    if str(sig.get("level_source") or "").strip().lower() == "engine_b_execution":
+        return True
+    return _is_structural_engine_b_execution(sig)
+
+
+def _engine_b_reconcile_rr_target(sig: dict, entry: float) -> tuple[float, float | None]:
+    """Mirror risk_engine RR target selection for reconcile (tp + optional plan floor)."""
+    try:
+        tp1 = float(sig.get("tp1") or 0)
+    except (TypeError, ValueError):
+        tp1 = 0.0
+    asset_type = str(sig.get("type") or sig.get("asset_type") or "forex").lower()
+    try:
+        from risk_engine import _engine_b_resolver_plan_for_risk
+
+        resolver_plan = _engine_b_resolver_plan_for_risk(sig, entry, asset_type)
+    except Exception:
+        resolver_plan = None
+    if resolver_plan and resolver_plan[0] == "scale_out":
+        return float(resolver_plan[2]), float(resolver_plan[1])
+    if resolver_plan and resolver_plan[0] == "single_structural_tp1":
+        return float(resolver_plan[2]), float(resolver_plan[1])
+    return tp1, None
 
 
 def _geometric_rr(entry: float, sl: float, tp: float) -> float | None:
@@ -822,7 +909,7 @@ def _geometric_rr(entry: float, sl: float, tp: float) -> float | None:
 
 def _reconcile_engine_b_rr_after_broker_entry(sig: dict, cfg: dict) -> str | None:
     """Resynthesize TP when broker entry rebase drops geometric RR below min_rr."""
-    if not _is_structural_engine_b_execution(sig):
+    if not _engine_b_rr_reconcile_applies(sig):
         return None
     try:
         from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
@@ -842,17 +929,22 @@ def _reconcile_engine_b_rr_after_broker_entry(sig: dict, cfg: dict) -> str | Non
     try:
         entry = float(sig.get("price") or sig.get("entry") or 0)
         sl = float(sig.get("sl") or 0)
-        tp1 = float(sig.get("tp1") or 0)
     except (TypeError, ValueError):
         return None
-    if entry <= 0 or sl <= 0 or tp1 <= 0:
+    if entry <= 0 or sl <= 0:
         return None
 
-    min_rr, fallback_rr = _resolve_engine_b_rr_thresholds(sig)
+    rr_target, plan_floor = _engine_b_reconcile_rr_target(sig, entry)
+    if rr_target <= 0:
+        return None
+
+    min_rr, fallback_rr = _resolve_engine_b_rr_thresholds(sig, cfg)
     if min_rr is None or min_rr <= 0 or fallback_rr is None or fallback_rr <= 0:
         return None
+    if plan_floor is not None and plan_floor > 0:
+        min_rr = max(min_rr, plan_floor)
 
-    rr_geom = _geometric_rr(entry, sl, tp1)
+    rr_geom = _geometric_rr(entry, sl, rr_target)
     if rr_geom is None or rr_geom + 1e-12 >= min_rr:
         return None
 
@@ -879,6 +971,11 @@ def _reconcile_engine_b_rr_after_broker_entry(sig: dict, cfg: dict) -> str | Non
 
     sig["tp1"] = synth_tp
     sig["tp2"] = synth_tp
+    if str(sig.get("engine_b_execution_plan") or "").lower() == "scale_out":
+        sig["engine_b_execution_plan"] = "single_structural_tp1"
+        sig["engine_b_execution_plan_reason"] = "broker_rebase_rr_resynth"
+    sig["engine_b_rr_required"] = min_rr
+    sig["engine_b_rr_passed"] = True
     sig["engine_b_broker_rebase_rr_resynth"] = True
     sig["engine_b_broker_rebase_rr_before"] = round(rr_geom, 4)
     sig["engine_b_broker_rebase_rr_after"] = round(new_rr, 4)
@@ -1600,6 +1697,50 @@ def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) ->
     return True
 
 
+def _mt5_direction_preflight_error(
+    sig: dict,
+    symbol_info: dict,
+    *,
+    log_prefix: str = "[QUICK EXEC]",
+) -> tuple[dict, int] | None:
+    """Fail closed when MT5 symbol trade mode blocks the signal direction."""
+    direction = str(sig.get("direction") or "").upper()
+    if direction not in ("LONG", "SHORT"):
+        return None
+    from mt5_executor import mt5_trade_block_for_direction
+
+    block_reason, trade_state = mt5_trade_block_for_direction(symbol_info, direction)
+    if not block_reason:
+        return None
+    pair_name = sig.get("pair") or sig.get("display") or sig.get("symbol") or "?"
+    try:
+        rt().log.warning(
+            "%s %s: MT5 direction blocked (%s): %s",
+            log_prefix,
+            pair_name,
+            block_reason,
+            trade_state,
+        )
+    except RuntimeError:
+        pass
+    detail_by_reason = {
+        "symbol_long_only": "Broker symbol is long-only; SHORT orders are not permitted.",
+        "symbol_short_only": "Broker symbol is short-only; LONG orders are not permitted.",
+        "symbol_close_only_no_new_positions": "Broker symbol is close-only; new positions are not permitted.",
+        "symbol_trade_disabled": "Broker symbol trading is disabled.",
+    }
+    return (
+        {
+            "error": f"MT5_TRADE_DISABLED:{block_reason}",
+            "pair": pair_name,
+            "direction": direction,
+            "detail": detail_by_reason.get(block_reason, block_reason),
+            "tradeState": trade_state,
+        },
+        409,
+    )
+
+
 def _refresh_engine_b_execution_context(
     sig: dict,
     engine_b: dict | None,
@@ -1998,6 +2139,15 @@ def api_quick_execute():
                     }
                 ), 409
 
+    if str(sig.get("type") or "").lower() != "crypto":
+        from mt5_executor import mt5_get_symbol_info
+
+        _preflight_sym = mt5_get_symbol_info(sig.get("display") or sig.get("pair"))
+        if _preflight_sym and not _preflight_sym.get("error"):
+            _mt5_dir_block = _mt5_direction_preflight_error(sig, _preflight_sym)
+            if _mt5_dir_block:
+                return jsonify(_mt5_dir_block[0]), _mt5_dir_block[1]
+
     if _is_engine_a_v3:
         sig["level_source"] = "engine_a_v3_refresh"
     elif _has_engine_b_context:
@@ -2110,6 +2260,9 @@ def api_quick_execute():
             symbol_info = mt5_get_symbol_info(sig.get("display") or sig.get("pair"))
             if not symbol_info or symbol_info.get("error"):
                 return jsonify({"error": "Symbol not on broker"}), 400
+            _mt5_dir_block = _mt5_direction_preflight_error(sig, symbol_info)
+            if _mt5_dir_block:
+                return jsonify(_mt5_dir_block[0]), _mt5_dir_block[1]
             _exec_venue = "mt5"
 
         _demo_error = _engine_a_v3_demo_attestation_error(
@@ -3290,6 +3443,12 @@ def api_execute():
                         f"Check Market Watch or use a broker that offers this instrument."
                     }
                 ), 400
+
+            _mt5_dir_block = _mt5_direction_preflight_error(
+                sig, symbol_info, log_prefix="[EXEC]"
+            )
+            if _mt5_dir_block:
+                return jsonify(_mt5_dir_block[0]), _mt5_dir_block[1]
 
             _exec_venue = "mt5"
 
