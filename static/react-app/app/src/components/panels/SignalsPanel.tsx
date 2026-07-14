@@ -121,6 +121,12 @@ function isWatchlist(s: EngineASignal): boolean {
   return tier.includes('watch') || tier === 'skip' || tier === 'blocked';
 }
 
+function isEngineATradeSignal(s: EngineASignal): boolean {
+  const tier = String(s.signalTier || s.scan_tier || s.signalClass || '').toLowerCase();
+  if (tier) return tier === 'trade';
+  return s.trade === true || String(s.decision || '').toUpperCase() === 'TRADE';
+}
+
 /** MT5 ETF universe (matches athena.ETF_PAIRS displays). Used when legacy scans tagged type=stock. */
 const KNOWN_ETF_DISPLAYS = new Set([
   'SPY', 'QQQ', 'GLD', 'TLT', 'IWM', 'EEM', 'DIA', 'GDX', 'SOXX', 'XLE', 'SLV', 'USO',
@@ -195,13 +201,15 @@ function unifyScanResults(
     || lastScanAssetClass === activeFilter
     || !lastScanAssetClass;
 
-  // Engine A: combine trade list + watchlist from the scan/lastScan cache.
+  // Engine A full scans display only candidates that reached the trade tier.
+  // The filter also clears watchlist rows left in a persisted cache by earlier
+  // versions of the UI.
   const sourceA: EngineASignal[] = scanA != null
     ? scanA
     : lastScanMatchesFilter && Array.isArray(lastScan?.signals)
       ? (lastScan!.signals as EngineASignal[])
       : [];
-  for (const raw of sourceA) {
+  for (const raw of sourceA.filter(isEngineATradeSignal)) {
     if (!raw) continue;
     const sig: EngineASignal = {
       ...raw,
@@ -623,27 +631,18 @@ export default function SignalsPanel() {
       const result = await postScanA('/api/scan', { asset_class: ac, refresh_market_data: false, style });
       if (!result) return null;
       const tradeSignals = Array.isArray(result.signals) ? result.signals : [];
-      const watchlistSignals = Array.isArray(result.watchlist) ? result.watchlist : [];
-      const displaySignals = [
-        ...tradeSignals.map((s) => ({
-          ...s,
-          signalClass: s.signalClass || 'TRADE',
-          signalTier: s.signalTier || 'trade',
-        })),
-        ...watchlistSignals.map((s) => ({
-          ...s,
-          signalClass: s.signalClass || 'WATCHLIST',
-          signalTier: s.signalTier || 'watchlist',
-          trade: false,
-        })),
-      ];
+      const displaySignals = tradeSignals.map((s) => ({
+        ...s,
+        signalClass: s.signalClass || 'TRADE',
+        signalTier: s.signalTier || 'trade',
+      }));
       setScanCacheA(displaySignals, {
         count: displaySignals.length,
         scannedAt: typeof result.scannedAt === 'string' && result.scannedAt
           ? result.scannedAt
           : new Date().toISOString(),
       });
-      return { trade: tradeSignals.length, watchlist: watchlistSignals.length, pairs: result.totalPairs ?? result.pairs_scanned };
+      return { trade: tradeSignals.length, pairs: result.totalPairs ?? result.pairs_scanned };
     } catch {
       return null;
     }
@@ -679,7 +678,7 @@ export default function SignalsPanel() {
     handleFeedEngineChange('A');
     setSortBy('score');
     showToast(
-      a ? `Engine A scan complete · ${a.trade} trade / ${a.watchlist} watch` : 'Engine A scan failed',
+      a ? `Engine A scan complete · ${a.trade} trade` : 'Engine A scan failed',
       a ? 'success' : 'error',
     );
   }, [scanEngineA, handleFeedEngineChange, showToast]);
