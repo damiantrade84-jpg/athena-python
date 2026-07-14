@@ -38,6 +38,8 @@ DUKA_SYMBOL_MAP = {
     "GBP/USD": "GBPUSD",
     "USD/JPY": "USDJPY",
     "AUD/USD": "AUDUSD",
+    "AUD/CHF": "AUDCHF",
+    "AUD/NZD": "AUDNZD",
     "NZD/USD": "NZDUSD",
     "EUR/GBP": "EURGBP",
     "USD/CAD": "USDCAD",

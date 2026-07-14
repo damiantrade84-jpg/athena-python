@@ -1473,6 +1473,27 @@ def _eodhd_ticker_for_pair(pair: dict) -> str | None:
     return sym or None
 
 
+_EODHD_SENTIMENT_SUPPORTED_TYPES = frozenset(
+    {"stock", "etf", "etf_bond", "forex", "crypto"}
+)
+
+
+def _eodhd_sentiment_ticker_map(pairs: list[dict]) -> dict[str, str]:
+    """Return only asset classes accepted by EODHD's Sentiment API.
+
+    EODHD documents sentiment for stocks, ETFs, crypto, and Forex.  Its
+    commodities and indices return HTTP 404 from this endpoint; keeping them
+    out of a mixed request prevents one unsupported ticker from discarding an
+    otherwise valid batch.
+    """
+    return {
+        ticker: pair["display"]
+        for pair in pairs
+        if pair.get("type") in _EODHD_SENTIMENT_SUPPORTED_TYPES
+        if (ticker := _eodhd_ticker_for_pair(pair))
+    }
+
+
 def _polygon_ticker_for_pair(pair: dict) -> str | None:
 
     override = pair.get("polygonTicker") or _vendor_overrides(pair).get("polygon")
@@ -4139,11 +4160,7 @@ def _refresh_news_cache(pairs: list | None = None) -> dict:
         _eodhd_key = os.environ.get("EODHD_KEY", "")
 
         if _eodhd_key:
-            ticker_map = {
-                t: p["display"]
-                for p in (pairs or ACTIVE_PAIRS)
-                if (t := _eodhd_ticker_for_pair(p))
-            }
+            ticker_map = _eodhd_sentiment_ticker_map(pairs or ACTIVE_PAIRS)
 
             sentiments = {}
 
