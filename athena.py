@@ -7779,7 +7779,7 @@ def _compute_naked_analysis(
                         xai_model=get_ai_model(
                             CONFIG,
                             "AI_MODEL",
-                            "grok-4.3",
+                            "grok-4.5",
                             provider=_engine_b_ai_provider,
                         ),
                         engine_a_ctx=engine_a_ctx,
@@ -12282,7 +12282,7 @@ def api_meta_analysis():
             get_ai_model(
                 CONFIG,
                 "AI_MODEL",
-                "grok-4.3",
+                "grok-4.5",
                 provider=str(_ai_runtime.get("provider") or _ai_runtime.get("selectedProvider") or "grok"),
             ),
         )
@@ -13051,7 +13051,7 @@ def api_chart_analysis():
         log.info(
             f"[AI CHART] provider={get_ai_provider_label(CONFIG, provider=_active_provider)} "
             f"base_url={get_ai_base_url(CONFIG, provider=_active_provider)} "
-            f"model={get_ai_model(CONFIG, 'VISION_MODEL', 'grok-4.3', provider=_active_provider)}"
+            f"model={get_ai_model(CONFIG, 'VISION_MODEL', 'grok-4.5', provider=_active_provider)}"
         )
 
         img_h4 = str(data["image"])
@@ -13140,7 +13140,7 @@ def api_chart_analysis():
         _vision_model = get_ai_model(
             CONFIG,
             "VISION_MODEL",
-            "grok-4.3",
+            "grok-4.5",
             provider=_active_provider,
         )
         _vision_temp = float(AITemperatureConfig.get_temperature("vision"))
@@ -16319,7 +16319,7 @@ def _get_decay_ai_verdict(
         from ai_utils import parse_json_object
 
         client = create_ai_client(CONFIG, api_key=api_key, provider=_active_provider)
-        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4.3", provider=_active_provider)
+        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4.5", provider=_active_provider)
         _temp = float(AITemperatureConfig.get_temperature("decay"))
 
         result = None

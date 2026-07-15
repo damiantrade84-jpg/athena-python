@@ -63,7 +63,7 @@ def _get_model_name(cfg_model: Optional[str] = None) -> str:
     except ImportError:
         pass
     import os
-    return cfg_model or os.environ.get("XAI_MODEL", os.environ.get("AI_MODEL", "grok-4.3"))
+    return cfg_model or os.environ.get("XAI_MODEL", os.environ.get("AI_MODEL", "grok-4.5"))
 
 
 # ─── Deterministic fallback review ───────────────────────────────────────────

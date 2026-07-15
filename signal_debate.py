@@ -199,7 +199,7 @@ def run_signal_debate(signal: dict, style_pref: str = "auto") -> dict:
 
     try:
         client = create_ai_client(CONFIG, api_key=api_key)
-        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4.3")
+        _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4.5")
         _temp_bull = AITemperatureConfig.get_temperature("debate_bull")
         _temp_bear = AITemperatureConfig.get_temperature("debate_bear")
         _temp_judge = AITemperatureConfig.get_temperature("debate_judge")

@@ -676,7 +676,7 @@ def news_sentiment_ai_runtime(config: dict | None = None) -> dict:
     model = get_ai_model(
         cfg,
         "NEWS_SENTIMENT_MODEL",
-        "grok-4.3",
+        "grok-4.5",
         provider=provider,
     )
     return {
@@ -703,7 +703,7 @@ def get_news_sentiment(
     """
     cfg = CONFIG if config is None else config
     runtime = news_sentiment_ai_runtime(cfg)
-    resolved_model = str(model or runtime.get("model") or "grok-4.3").strip() or "grok-4.3"
+    resolved_model = str(model or runtime.get("model") or "grok-4.5").strip() or "grok-4.5"
     api_key = str(xai_api_key or "").strip() or str(runtime.get("api_key") or "").strip()
     if not api_key:
         display = pair.get("display") or pair.get("symbol") or ""
@@ -994,7 +994,7 @@ def apply_news_sentiment_to_scan_result(
         return
 
     ttl = float(config.get("NEWS_SENTIMENT_CACHE_TTL_SEC", 900))
-    model = str(runtime.get("model") or "grok-4.3")
+    model = str(runtime.get("model") or "grok-4.5")
     max_s = float(max_score if max_score is not None else res.get("maxScoreOverride") or 3.0)
     threshold_value = float(threshold if threshold is not None else res.get("threshold") or 0.0)
     major_mode_for_filter = str(

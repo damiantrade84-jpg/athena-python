@@ -42,7 +42,7 @@ def test_get_ai_api_key_uses_moonshot_as_legacy_grok_fallback(monkeypatch):
     assert get_ai_api_key({}, provider="grok") == "moonshot-key"
 
 
-def test_ai_runtime_descriptor_defaults_to_openai_gpt55(monkeypatch):
+def test_ai_runtime_descriptor_defaults_to_grok45(monkeypatch):
     monkeypatch.delenv("AI_REVIEW_PROVIDER", raising=False)
     monkeypatch.delenv("AI_BASE_URL", raising=False)
     monkeypatch.delenv("AI_MODEL", raising=False)
@@ -53,10 +53,10 @@ def test_ai_runtime_descriptor_defaults_to_openai_gpt55(monkeypatch):
 
     desc = ai_runtime_descriptor({})
 
-    assert desc["provider"] == "OpenAI"
-    assert desc["selectedProvider"] == "openai"
-    assert desc["base_url"] == "https://api.openai.com/v1"
-    assert desc["model"] == "gpt-5.5"
+    assert desc["provider"] == "xAI"
+    assert desc["selectedProvider"] == "grok"
+    assert desc["base_url"] == "https://api.x.ai/v1"
+    assert desc["model"] == "grok-4.5"
     assert desc["key_configured"] is False
 
 
@@ -107,11 +107,11 @@ def test_provider_resolver_returns_openai_when_selected(monkeypatch):
     assert get_ai_model(cfg, provider="openai") == "gpt-5.5"
 
 
-def test_startup_chart_review_defaults_allow_openai():
-    assert CONFIG["AI_REVIEW_PROVIDER"] == "openai"
+def test_startup_chart_review_defaults_use_grok():
+    assert CONFIG["AI_REVIEW_PROVIDER"] == "grok"
     assert CONFIG["OPENAI_REVIEW_ENABLED"] is True
-    assert CONFIG["AI_CHART_REVIEW"]["DEFAULT_PROVIDER"] == "openai"
-    assert CONFIG["AI_SCALP_CHART_REVIEW"]["DEFAULT_PROVIDER"] == "openai"
+    assert CONFIG["AI_CHART_REVIEW"]["DEFAULT_PROVIDER"] == "grok"
+    assert CONFIG["AI_SCALP_CHART_REVIEW"]["DEFAULT_PROVIDER"] == "grok"
     assert CONFIG["AI_CHART_REVIEW"]["OPENAI_REVIEW_ENABLED"] is True
     assert CONFIG["AI_SCALP_CHART_REVIEW"]["OPENAI_REVIEW_ENABLED"] is True
 

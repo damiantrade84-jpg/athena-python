@@ -2438,11 +2438,11 @@ KELLY_FRACTION: 0.5                # Half-Kelly (safety proven)
 
 # ── Signal Debate (Bull/Bear/Judge) ───────────────────────
 
-SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs OPENAI_API_KEY when provider=openai)
+SIGNAL_DEBATE_ENABLED: true        # Run LLM debate before auto-trades (needs XAI_API_KEY when provider=grok)
 
-AI_REVIEW_PROVIDER: "openai"        # Global AI review provider: openai | claude | grok
+AI_REVIEW_PROVIDER: "grok"          # Global AI review provider: openai | claude | grok
 
-AI_REVIEW_FALLBACK_PROVIDERS: "claude"
+AI_REVIEW_FALLBACK_PROVIDERS: ""
 
 # TV Chart candidate source + /api/ai/chart-review primary engine: A | B (default A)
 AI_CHART_REVIEW:
@@ -2472,31 +2472,31 @@ OPENAI_REVIEW_TIMEOUT_SECONDS: 240
 
 OPENAI_REVIEW_SDK_MAX_RETRIES: 0
 
-AI_MODEL: "gpt-5.6-sol"
+AI_MODEL: "grok-4.5"
 
-XAI_MODEL: "grok-4.3"  # xAI-only legacy alias; unused when providers are openai.
+XAI_MODEL: "grok-4.5"
 
 # Lottery Lab AI Pattern Analysis (/api/lottery/ai-analysis) — separate from chart vision.
-LOTTERY_AI_PROVIDER: "openai"
+LOTTERY_AI_PROVIDER: "grok"
 LOTTERY_AI_MAX_TOKENS: 4000
 LOTTERY_AI_REASONING_EFFORT: "low"   # OpenAI Responses path only
 # LOTTERY_AI_TIMEOUT_SEC: 30         # optional; falls back to AI_REQUEST_TIMEOUT_SEC
-# LOTTERY_AI_MODEL: "gpt-5.6-sol"         # optional; defaults to AI_MODEL for selected provider
+LOTTERY_AI_MODEL: "grok-4.5"
 
-DEBATE_MODEL: "gpt-5.6-sol"
+DEBATE_MODEL: "grok-4.5"
 
-VISION_MODEL: "gpt-5.6-sol"          # /api/chart-analysis
+VISION_MODEL: "grok-4.5"              # /api/chart-analysis
 
-NEWS_SENTIMENT_AI_PROVIDER: "openai"
+NEWS_SENTIMENT_AI_PROVIDER: "grok"
 
-NEWS_SENTIMENT_MODEL: "gpt-5.6-sol"  # News AI text; defaults to AI_MODEL if empty
+NEWS_SENTIMENT_MODEL: "grok-4.5"      # News AI text; defaults to AI_MODEL if empty
 
 # Default OpenAI-compatible SDK read timeout is much longer; keep advisory AI bounded.
 AI_REQUEST_TIMEOUT_SEC: 30
 # Bull/Bear/Judge debate uses this (falls back to AI_REQUEST_TIMEOUT_SEC if unset).
 DEBATE_AI_TIMEOUT_SEC: 30
-MARCUS_AI_PROVIDER: "openai"  # Marcus Reid text review (/api/analyze); independent of AI_REVIEW_PROVIDER.
-MARCUS_MODEL: "gpt-5.6-sol"  # Marcus Reid model; falls back to AI_MODEL if unset.
+MARCUS_AI_PROVIDER: "grok"    # Marcus Reid text review (/api/analyze); independent of AI_REVIEW_PROVIDER.
+MARCUS_MODEL: "grok-4.5"      # Marcus Reid model; falls back to AI_MODEL if unset.
 
 MARCUS_AI_TIMEOUT_SEC: 90
 # Marcus output budget. On OpenAI Responses, reasoning tokens share this budget;

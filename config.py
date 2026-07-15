@@ -40,10 +40,10 @@ def scan_duplicate_top_level_yaml_keys(yaml_text: str) -> dict[str, list[int]]:
 AI_API_KEY_PLACEHOLDER = "YOUR_XAI_API_KEY"
 _LEGACY_AI_API_KEY_PLACEHOLDER = "YOUR_MOONSHOT_API_KEY"
 _AI_BASE_URL_DEFAULT = "https://api.x.ai/v1"
-_AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "gpt-5.6-sol")
+_AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "grok-4.5")
 _OPENAI_BASE_URL_DEFAULT = "https://api.openai.com/v1"
 _OPENAI_REVIEW_MODEL_DEFAULT = "gpt-5.6-sol"
-_AI_REVIEW_PROVIDER_DEFAULT = "openai"
+_AI_REVIEW_PROVIDER_DEFAULT = "grok"
 _CLAUDE_REVIEW_MODEL_DEFAULT = "claude-opus-4-7"
 _AI_REVIEW_PROVIDER_ALIASES = {
     "": "",
@@ -280,7 +280,7 @@ def get_ai_base_url(cfg: dict | None = None, provider: object | None = None) -> 
 def get_ai_model(
     cfg: dict | None = None,
     preferred_key: str = "AI_MODEL",
-    fallback: str = "grok-4.3",
+    fallback: str = "grok-4.5",
     provider: object | None = None,
 ) -> str:
     cfg = CONFIG if cfg is None else cfg
@@ -736,7 +736,7 @@ def create_ai_client(
 def ai_runtime_descriptor(
     cfg: dict | None = None,
     preferred_model_key: str = "AI_MODEL",
-    fallback_model: str = "grok-4.3",
+    fallback_model: str = "grok-4.5",
 ) -> dict:
     resolved_cfg = CONFIG if cfg is None else cfg
     provider = get_ai_review_provider(resolved_cfg)
@@ -907,17 +907,17 @@ CONFIG: dict = {
     "XAI_MODEL": os.environ.get("XAI_MODEL", _AI_MODEL_DEFAULT),
     "CLAUDE_MODEL": os.environ.get("CLAUDE_MODEL", _CLAUDE_REVIEW_MODEL_DEFAULT),
     "LOTTERY_AI_MODEL": os.environ.get("LOTTERY_AI_MODEL", ""),  # empty → use AI_MODEL for /api/lottery/ai-analysis
-    "LOTTERY_AI_PROVIDER": os.environ.get("LOTTERY_AI_PROVIDER", "openai"),
+    "LOTTERY_AI_PROVIDER": os.environ.get("LOTTERY_AI_PROVIDER", "grok"),
     "LOTTERY_AI_MAX_TOKENS": _env_int("LOTTERY_AI_MAX_TOKENS", 4000),
     "LOTTERY_AI_REASONING_EFFORT": os.environ.get("LOTTERY_AI_REASONING_EFFORT", "low"),
     "LOTTERY_AI_TIMEOUT_SEC": _env_int("LOTTERY_AI_TIMEOUT_SEC", 0) or None,
     "DEBATE_MODEL": os.environ.get("DEBATE_MODEL", _AI_MODEL_DEFAULT),
     "VISION_MODEL": os.environ.get("VISION_MODEL", _AI_MODEL_DEFAULT),
-    "NEWS_SENTIMENT_AI_PROVIDER": os.environ.get("NEWS_SENTIMENT_AI_PROVIDER", "openai"),
+    "NEWS_SENTIMENT_AI_PROVIDER": os.environ.get("NEWS_SENTIMENT_AI_PROVIDER", "grok"),
     "NEWS_SENTIMENT_MODEL": os.environ.get("NEWS_SENTIMENT_MODEL", _AI_MODEL_DEFAULT),
     "AI_REQUEST_TIMEOUT_SEC": 30.0,
     "DEBATE_AI_TIMEOUT_SEC": 30.0,
-    "MARCUS_AI_PROVIDER": os.environ.get("MARCUS_AI_PROVIDER", "openai"),
+    "MARCUS_AI_PROVIDER": os.environ.get("MARCUS_AI_PROVIDER", "grok"),
     "MARCUS_AI_TIMEOUT_SEC": 90.0,
     "MARCUS_AI_MAX_TOKENS": _env_int("MARCUS_AI_MAX_TOKENS", 10000),
     "MARCUS_AI_REASONING_EFFORT": os.environ.get("MARCUS_AI_REASONING_EFFORT", "low"),

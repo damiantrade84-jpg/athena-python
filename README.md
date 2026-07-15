@@ -45,9 +45,9 @@ Copy environment variables you need into a **`.env`** file in the repo root (loa
 | Variable | Purpose |
 |----------|---------|
 | `EODHD_KEY` | EODHD market data / news where used |
-| `AI_REVIEW_PROVIDER` | Global AI review provider selector: `openai`, `claude`, or `grok`; default startup config uses `openai` |
+| `AI_REVIEW_PROVIDER` | Global AI review provider selector: `openai`, `claude`, or `grok`; default startup config uses `grok` |
 | `AI_REVIEW_FALLBACK_PROVIDERS` | Optional comma-separated fallback providers, for example `claude,grok` |
-| `OPENAI_API_KEY` | OpenAI Responses API key for GPT-5.5 AI review |
+| `OPENAI_API_KEY` | Optional OpenAI Responses API key when an OpenAI provider override is selected |
 | `MOONSHOT_API_KEY` / `XAI_API_KEY` | Grok/xAI-compatible Marcus Reid, chart vision, lottery AI, news sentiment, and Engine B advisory routes |
 | `ANTHROPIC_API_KEY` | Claude AI review and optional sentiment helpers |
 | `BYBIT_API_KEY` / `BYBIT_API_SECRET` | Crypto execution (`BYBIT_TESTNET=true` for testnet) |
