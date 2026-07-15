@@ -1186,7 +1186,18 @@ def _stamp_engine_b_execution_plan(sig: dict, source: dict | None, levels: dict)
     plan = levels.get("execution_plan") or source.get("execution_plan")
     if plan:
         sig["engine_b_execution_plan"] = plan
-    for key in ("execution_plan_reason", "rr_required", "rr_passed", "single_target_rr_floor", "single_target_execution_tp", "single_target_valid"):
+    for key in (
+        "execution_plan_reason",
+        "rr_required",
+        "rr_passed",
+        "execution_sl",
+        "execution_tp",
+        "execution_tp1",
+        "execution_tp2",
+        "single_target_rr_floor",
+        "single_target_execution_tp",
+        "single_target_valid",
+    ):
         value = levels.get(key, source.get(key))
         if value is not None:
             sig[f"engine_b_{key}"] = value
