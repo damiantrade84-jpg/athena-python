@@ -3664,7 +3664,7 @@ GRADING - derive from data, NOT from rawScorePct buckets:
 You must arrive at a letter grade (A+ through F) by weighing evidence in this order. Cite which items drove the grade in narrative/warnings.
 1. Factor coherence: how many active directional factors support the call, and do weights justify confidence?
 2. trendCoherence ratio: <0.5 fragmented; 0.5-0.7 mixed; >0.7 aligned.
-3. directionalConfidenceMultiplier: <0.5 is a structural red flag regardless of headline score.
+3. Confidence: for Engine A V3 use the supplied conviction/scoreNorm; for legacy Engine A use directionalConfidenceMultiplier. A supplied value <0.5 is a structural red flag, but do not mark the V3 metric unavailable merely because the legacy field is absent.
 4. ENGINE B (if present): CLEAR structural_verdict + direction aligned to the reviewed engine direction is a boost; UNCLEAR/misaligned is a risk (ignore overlay Final Score 0.00 when verdict is CLEAR, and derive percent from score/max when score_pct is missing or stale). For Engine B-primary reviews, gate flags, reason codes, min_rr, rr_used_for_gate, structural levels, and freshness diagnostics are the confirmation layer; do not require Engine A factor diagnostics.
 4C. ENGINE C (if present): execute/reduced_risk decision_state with HIGH tier and strong conviction is positive context; watchlist/blocked is a risk. Use sizing_override for position sizing when Engine A confidence_multiplier is unavailable.
 5. Momentum and intermarket confirmation from FACTOR DIAGNOSTICS.
@@ -3676,7 +3676,7 @@ A grade must cite specific evidence. "Score is X%" alone is not sufficient ratio
 
 edgeProbability (0-100) - derive from input with this rubric (do not mirror rawScorePct mechanically):
 - Base from trendCoherence: take coherence_ratio from FACTOR DIAGNOSTICS (0-1). Add min(40, coherence_ratio * 40) points.
-- directionalConfidenceMultiplier: add min(30, multiplier * 30) where multiplier is 0-1 from diagnostics (if missing/unavailable, use neutral 0.5 — do NOT treat missing as 0).
+- Confidence metric: use Engine A V3 conviction/scoreNorm when supplied, otherwise directionalConfidenceMultiplier. Add min(30, value * 30); if neither is available, use neutral 0.5 and do NOT treat missing as 0.
 - ENGINE B: if structural_verdict is CLEAR and direction matches the reviewed engine direction, +15; if ENGINE B absent/neutral, +0; if UNCLEAR or direction conflicts, -10.
 - Regime label from SIGNAL: TRENDING or strong trend labels +10; RANGING/chop near neutral +0; DEAD RANGING or explicit dead chop + (-10).
 - RR: if RR1 meets Style min RR (config) from AI CALIBRATION CONTEXT +5; if below config min -5 (informational only).
@@ -3699,7 +3699,7 @@ reviewSource: use "engine_c_marcus" when Engine source is Engine C consensus; us
 PLAYBOOK AUTHORITY: The ATHENA TRADE PLAYBOOKS block in the user message is authoritative for entry models, mustRejectIf rules, and invalidations. Apply them strictly (advisory only).
 
 OUTPUT - EXACT JSON in this precise key order to ensure reasoning happens before scoring (no other text):
-{"symbol":"BTCUSDT","timeframe":"H4","bias":"long|short|neutral","setup_type":"breakout_retest","trend_score":18,"structure_score":17,"momentum_score":13,"liquidity_score":8,"risk_score":12,"confirmation_score":14,"total_score":84,"grade":"B","ai_action":"needs_confirmation","blocking_reasons":[],"reason":"Strong factor coherence and aligned Engine B structure; momentum mixed.","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","verdict":"One punchy sentence citing specific factor scores and structure","reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","levelsVerdict":"accept|adjust|reject","levelsReason":"Cite zone/ATR/fib evidence for SL and TP placement","suggestedSL":null,"suggestedTP":null,"positionSizing":"Full/Half/Quarter + why (reference confidence_multiplier/nondirectionalScore for Engine A, or sizing_override/conviction for Engine C)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
+{"symbol":"BTCUSDT","timeframe":"H4","bias":"long|short|neutral","setup_type":"breakout_retest","trend_score":18,"structure_score":17,"momentum_score":13,"liquidity_score":8,"risk_score":12,"confirmation_score":14,"total_score":84,"grade":"B","ai_action":"needs_confirmation","blocking_reasons":[],"reason":"Strong factor coherence and aligned Engine B structure; momentum mixed.","narrative":"2-3 sentences. MUST reference specific factor names, scores, and weights from the input. Name the strongest and weakest factors.","verdict":"One punchy sentence citing specific factor scores and structure","reviewSource":"engine_a_marcus","resolvedStyle":"SWING|INTRADAY|SCALP","scannerReadiness":"Weak|Medium|Strong","factorQuality":85,"structuralRisk":"Low","executionRisk":"Medium","selectedStyleGrade":"A","entryZone":"exact price or fib level from input","invalidation":"exact price from SL or structural level","keyLevels":"S1/R1 from input data only","levelsVerdict":"accept|adjust|reject","levelsReason":"Cite zone/ATR/fib evidence for SL and TP placement","suggestedSL":null,"suggestedTP":null,"positionSizing":"Full/Half/Quarter + why (use V3 conviction/scoreNorm and component quality for Engine A V3; legacy confidence_multiplier/nondirectionalScore only when supplied; sizing_override/conviction for Engine C)","tradeStyle":"SWING|INTRADAY|SCALP","tradeStyleReason":"cite specific data","warnings":["specific risks citing data points"],"edgeProbability":68,"riskLevel":"Medium","style_ratings":{"scalp":{"grade":"B","edgeProbability":52,"riskLevel":"High"},"intraday":{"grade":"A","edgeProbability":68,"riskLevel":"Medium"},"swing":{"grade":"A+","edgeProbability":78,"riskLevel":"Low"}}}
 """
 
 EXPERT_PROMPT, _EXPERT_PROMPT_SOURCE, _EXPERT_PROMPT_HASH = load_prompt(
@@ -4562,6 +4562,12 @@ def _build_signal_message(
     def _present(x) -> bool:
         return x is not None and x != ""
 
+    def _first_present_value(*values):
+        for value in values:
+            if _present(value):
+                return value
+        return None
+
     def _session_context() -> tuple[str, str]:
         session = signal.get("session")
         if isinstance(session, dict):
@@ -4596,10 +4602,27 @@ def _build_signal_message(
     score = _num(signal.get("confluenceScore"), 0.0)
 
     score_pct = round(score / max_score * 100) if max_score else 0
+    _factor_diag = signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}
+    if not isinstance(_factor_diag, dict):
+        _factor_diag = {}
 
-    spread = _num(signal.get("spread"), 0.0)
-
-    conviction = "HIGH" if spread >= 0.6 else "MEDIUM" if spread >= 0.3 else "LOW"
+    _v3_conviction = _first_present_value(signal.get("conviction"), signal.get("scoreNorm"))
+    try:
+        _v3_conviction = float(_v3_conviction) if _v3_conviction is not None else None
+    except (TypeError, ValueError):
+        _v3_conviction = None
+    if _v3_conviction is not None:
+        conviction = (
+            "HIGH" if _v3_conviction >= 0.7
+            else "MEDIUM" if _v3_conviction >= 0.5
+            else "LOW" if _v3_conviction >= 0.35
+            else "SKIP"
+        )
+        conviction_detail = f"V3 conviction {_v3_conviction:.4f}"
+    else:
+        spread = _num(signal.get("spread"), 0.0)
+        conviction = "HIGH" if spread >= 0.6 else "MEDIUM" if spread >= 0.3 else "LOW"
+        conviction_detail = f"spread {spread}"
 
     ptype = signal.get("type", "stock")
     engine_b_for_signal = signal.get("engine_b") or signal.get("naked_data")
@@ -4616,21 +4639,34 @@ def _build_signal_message(
             "ADX percentile is Engine A-only)"
         )
     else:
-        regime_detail = (
-            f"(ADX {signal.get('h4', {}).get('snap', {}).get('adxPct', '?')}th pct, "
-            f"{signal.get('h4', {}).get('snap', {}).get('adxLabel', '?')})"
-        )
+        _h4_snap = signal.get("h4", {}).get("snap", {}) if isinstance(signal.get("h4"), dict) else {}
+        _adx_pct = _h4_snap.get("adxPct")
+        _adx_label = _h4_snap.get("adxLabel")
+        _adx_value = _factor_diag.get("adxValue")
+        if _present(_adx_pct) or _present(_adx_label):
+            regime_detail = f"(ADX {_adx_pct if _present(_adx_pct) else '?'}th pct, {_adx_label if _present(_adx_label) else '?'})"
+        elif _present(_adx_value):
+            regime_detail = f"(ADX value {_adx_value}; percentile/label unavailable)"
+        else:
+            regime_detail = "(ADX data unavailable)"
+
+    _trend_state = _first_present_value(
+        signal.get("trendState"),
+        _factor_diag.get("trendState"),
+        signal.get("regimeName"),
+        signal.get("regime") if isinstance(signal.get("regime"), str) else None,
+    ) or "data unavailable"
 
     # === SIGNAL ===
 
     lines = [
         "=== SIGNAL ===",
         f"Pair: {signal['pair']} | Direction: {signal['direction']} | Score: {score}/{max_score} ({score_pct}%)",
-        f"Conviction: {conviction} (spread {spread}) | Entry Mode: {signal.get('entryMode', 'trend')} | "
+        f"Conviction: {conviction} ({conviction_detail}) | Entry Mode: {signal.get('entryMode', 'trend')} | "
         f"Class: {signal.get('signalClass', 'trend_continuation')}",
         f"Review source: {engine_source_label}",
         f"Style: {style_pref.upper()} ({style_labels.get(style_pref.lower(), '')}) | "
-        f"Regime: {signal.get('trendState', '?')} {regime_detail}",
+        f"Regime: {_trend_state} {regime_detail}",
     ]
 
     engine_c = signal.get("engine_c") if isinstance(signal.get("engine_c"), dict) else {}
@@ -4710,13 +4746,35 @@ def _build_signal_message(
         lines.append(f"  Room to Move Bonus: {eng_b.get('room_to_move_bonus', 0)}")
         lines.append(f"  Catalyst Bonus: {eng_b.get('catalyst_bonus', 0)}")
         lines.append(f"  AI Stats Adjustment: {_num(eng_b.get('ai_adjustment')):.2f}")
-        from ai_context import derive_engine_b_score_pct
-
-        lines.append(
-            f"  Engine B Final Score: {_num(eng_b.get('score')):.2f} / {_num(eng_b.get('max_possible'), 3.0):.2f} ({derive_engine_b_score_pct(eng_b):.1f}%)"
+        _b_audit = signal.get("_threshold_audit_b_conf") or {}
+        if not isinstance(_b_audit, dict):
+            _b_audit = {}
+        _b_score = _first_present_value(
+            eng_b.get("score"), signal.get("engine_b_score"), _b_audit.get("score")
+        )
+        _b_max = _first_present_value(
+            eng_b.get("max_possible"), _b_audit.get("max_possible")
+        )
+        if _b_score is not None and _b_max is not None and _num(_b_max) > 0:
+            _b_pct = _first_present_value(signal.get("engine_b_pct"), _b_audit.get("pct"))
+            if _b_pct is None:
+                _b_pct = _num(_b_score) / _num(_b_max) * 100.0
+            lines.append(
+                f"  Engine B Final Score: {_num(_b_score):.2f} / {_num(_b_max):.2f} ({_num(_b_pct):.1f}%)"
+            )
+        elif _b_score is not None:
+            lines.append(f"  Engine B Final Score: {_num(_b_score):.2f} / unavailable")
+        else:
+            lines.append("  Engine B Final Score: unavailable")
+        _b_actionable = _first_present_value(
+            eng_b.get("engine_b_canonical_actionable"),
+            eng_b.get("is_actionable"),
+            _b_audit.get("engine_b_canonical_actionable"),
+            _b_audit.get("canonical_trade_ok"),
         )
         lines.append(
-            f"  Engine B Actionable: {'YES' if eng_b.get('engine_b_canonical_actionable', eng_b.get('is_actionable')) else 'NO'}"
+            "  Engine B Actionable: "
+            + ("unavailable" if _b_actionable is None else "YES" if bool(_b_actionable) else "NO")
         )
         if eng_b.get("engine_b_canonical_status"):
             lines.append(f"  Engine B Canonical Status: {eng_b.get('engine_b_canonical_status')}")
@@ -4811,18 +4869,34 @@ def _build_signal_message(
 
         lines.extend(vote_lines)
 
-        lines.append(f"  Stoch K/D: {signal.get('stochK')}/{signal.get('stochD')}")
+        if _present(signal.get("stochK")) or _present(signal.get("stochD")):
+            lines.append(f"  Stoch K/D: {signal.get('stochK')}/{signal.get('stochD')}")
+        else:
+            lines.append("  Stoch K/D: data unavailable")
 
-        lines.append(f"  Volume ratio: {signal.get('volRatio', 1.0)}x avg")
+        if _present(signal.get("volRatio")):
+            lines.append(f"  Volume ratio: {signal.get('volRatio')}x avg")
+        else:
+            lines.append("  Volume ratio: data unavailable")
 
-        lines.append(f"  EMA200 slope: {signal.get('ema200Slope', 0)}%")
+        if _present(signal.get("ema200Slope")):
+            lines.append(f"  EMA200 slope: {signal.get('ema200Slope')}%")
+        else:
+            lines.append("  EMA200 slope: data unavailable")
 
-        lines.append(f"  Weinstein: {signal.get('weinsteinLabel', 'n/a')}")
+        if _present(signal.get("weinsteinLabel")):
+            lines.append(f"  Weinstein: {signal.get('weinsteinLabel')}")
+        else:
+            lines.append("  Weinstein: data unavailable")
 
-        lines.append(
-            f"  ATR percentile: {signal.get('h4', {}).get('snap', {}).get('atrPct', '?')} "
-            f"({signal.get('h4', {}).get('snap', {}).get('atrLabel', '?')})"
-        )
+        _h4_snap = signal.get("h4", {}).get("snap", {}) if isinstance(signal.get("h4"), dict) else {}
+        if _present(_h4_snap.get("atrPct")) or _present(_h4_snap.get("atrLabel")):
+            lines.append(
+                f"  ATR percentile: {_h4_snap.get('atrPct', '?')} "
+                f"({_h4_snap.get('atrLabel', '?')})"
+            )
+        else:
+            lines.append("  ATR percentile: data unavailable")
 
     # === RAW MARKET DATA (last 20 H4 bars) ===
     # Give Marcus Reid actual OHLCV + indicator time-series so the AI can
@@ -4893,7 +4967,7 @@ def _build_signal_message(
         log.debug("[BUILD_SIGNAL] aiContext string failed: %s", _ai_ctx_err)
 
     # === FACTOR DIAGNOSTICS (quantitative scoring breakdown) ===
-    _fd = signal.get("factorDiagnostics", {})
+    _fd = _factor_diag
     _fs = signal.get("factorScores", {})
     _fw = signal.get("factorWeights", {})
     _naked = signal.get("naked_data", {})
@@ -4921,6 +4995,11 @@ def _build_signal_message(
                 "  Note: Engine A V3 uses factorScores trend/momentum and factorScores.ortho location/volume. "
                 "Do not require legacy directionalScore/activeDirectionalFactors unless supplied."
             )
+            if _v3_conviction is not None:
+                lines.append(
+                    f"  Engine A V3 conviction/scoreNorm: {_v3_conviction:.4f} "
+                    "(use this V3 metric; legacy confidence multiplier may be absent)"
+                )
         if _fd.get("entryTimeframe") or signal.get("entryTimeframe"):
             lines.append(
                 "  Engine A entry scoring: "
@@ -4951,9 +5030,30 @@ def _build_signal_message(
             lines.append("  ** MIN DIRECTIONAL FAILED - signal below directional threshold **")
         _tc = _fd.get("trendCoherence", {})
         if _tc:
+            _tc_agreement = _tc.get("agreement_count")
+            _tc_total = _tc.get("total_count")
+            _tc_ratio = _tc.get("coherence_ratio")
+            _tc_dominant = _tc.get("dominant_direction")
+            if any(value is None for value in (_tc_agreement, _tc_total, _tc_ratio, _tc_dominant)):
+                _tc_labels = [
+                    str(value).upper()
+                    for key, value in _tc.items()
+                    if str(key).lower() in {"d1", "h4", "h1", "m30", "m15", "m5"}
+                    and str(value).upper() in {"UP", "DOWN", "FLAT"}
+                ]
+                if _tc_labels:
+                    _tc_counts = {label: _tc_labels.count(label) for label in set(_tc_labels)}
+                    _tc_best = max(_tc_counts.values())
+                    _tc_winners = [label for label, count in _tc_counts.items() if count == _tc_best]
+                    _tc_agreement = _tc_best
+                    _tc_total = len(_tc_labels)
+                    _tc_ratio = round(_tc_best / len(_tc_labels), 4)
+                    _tc_dominant = _tc_winners[0] if len(_tc_winners) == 1 else "MIXED"
             lines.append(
-                f"  Trend coherence: {_tc.get('agreement_count', '?')}/{_tc.get('total_count', '?')} TFs agree "
-                f"(ratio={_tc.get('coherence_ratio', '?')}, dominant={_tc.get('dominant_direction', '?')})"
+                f"  Trend coherence: {_tc_agreement if _tc_agreement is not None else '?'}/"
+                f"{_tc_total if _tc_total is not None else '?'} TFs agree "
+                f"(ratio={_tc_ratio if _tc_ratio is not None else '?'}, "
+                f"dominant={_tc_dominant if _tc_dominant is not None else '?'})"
             )
         if _fd.get("optionalFactorCoverage") is not None:
             lines.append(f"  Optional factor coverage: {_fd['optionalFactorCoverage']}")
@@ -5078,9 +5178,17 @@ def _build_signal_message(
         f"Entry: {signal['price']} | SL: {signal['sl']} ({signal.get('slPct', '?')}%) | "
         f"TP1: {signal['tp1']} ({signal['rr1']}R) | TP2: {signal['tp2']} ({signal['rr2']}R)"
     )
-    lines.append(
-        f"ATR: {signal.get('atr', signal.get('naked_data', {}).get('atr', 'N/A'))}"
+    _atr_diagnostics = signal.get("atrDiagnostics") or {}
+    if not isinstance(_atr_diagnostics, dict):
+        _atr_diagnostics = {}
+    _atr_value = _first_present_value(
+        signal.get("atr"),
+        signal.get("atrValue"),
+        signal.get("riskAtr"),
+        _atr_diagnostics.get("atr_value"),
+        engine_b_for_signal.get("atr"),
     )
+    lines.append(f"ATR: {_atr_value if _atr_value is not None else 'data unavailable'}")
 
     fib = signal.get("fib")
 

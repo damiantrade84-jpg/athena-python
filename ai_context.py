@@ -177,6 +177,12 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
     resolved_style = resolve_ai_style(signal, explicit_style)
     style_min_rr = resolve_ai_review_min_rr(signal, resolved_style)
 
+    def _first_not_none(*values: Any) -> Any:
+        for value in values:
+            if value is not None:
+                return value
+        return None
+
     # 1. Identity/context
     identity = {
         "pair": signal.get("display") or signal.get("pair", "?"),
@@ -195,19 +201,42 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
     confluence_score = float(signal.get("confluenceScore", 0) or 0)
     max_score = float(signal.get("maxScore", 3.0) or 3.0)
     raw_score_pct = (confluence_score / max_score * 100) if max_score > 0 else 0
+    factor_diagnostics = signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}
+    live_threshold = _first_not_none(
+        signal.get("liveThreshold"),
+        signal.get("confluenceThreshold"),
+        signal.get("threshold"),
+    )
+    threshold_progress_pct = _first_not_none(
+        signal.get("thresholdProgressPct"),
+        signal.get("confluencePct"),
+    )
+    if threshold_progress_pct is None:
+        try:
+            threshold_value = float(live_threshold)
+            threshold_progress_pct = (
+                max(0.0, min(100.0, (confluence_score / threshold_value) * 67.0))
+                if threshold_value > 0
+                else 0.0
+            )
+        except (TypeError, ValueError):
+            threshold_progress_pct = 0.0
     
     engine_a = {
         "confluenceScore": confluence_score,
         "maxScore": max_score,
         "rawScorePct": raw_score_pct,
-        "liveThreshold": signal.get("liveThreshold"),
-        "thresholdProgressPct": float(signal.get("thresholdProgressPct") or signal.get("confluencePct") or 0),
+        "liveThreshold": live_threshold,
+        "thresholdProgressPct": float(threshold_progress_pct),
         "scoreNorm": signal.get("scoreNorm"),
         "factorScores": signal.get("factorScores") or signal.get("factor_scores"),
         "factorWeights": signal.get("factorWeights") or signal.get("factor_weights"),
-        "factorDiagnostics": signal.get("factorDiagnostics") or signal.get("factor_diagnostics"),
+        "factorDiagnostics": factor_diagnostics,
         "confidenceDetail": signal.get("confidenceDetail") or signal.get("confidence_detail"),
-        "trendState": signal.get("trendState") or signal.get("regimeName") or (signal.get("regime", {}).get("label") if isinstance(signal.get("regime", {}), dict) else signal.get("regime")),
+        "trendState": signal.get("trendState")
+        or factor_diagnostics.get("trendState")
+        or signal.get("regimeName")
+        or (signal.get("regime", {}).get("label") if isinstance(signal.get("regime", {}), dict) else signal.get("regime")),
         "warnings": signal.get("warnings", []),
         "addonStatus": (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("addon_status"),
         "entryTimeframe": signal.get("entryTimeframe")
@@ -221,12 +250,6 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
     engine_b_data = signal.get("engine_b") or signal.get("engine_b_overlay") or signal.get("naked_data") or {}
     if not isinstance(engine_b_data, dict):
         engine_b_data = {}
-
-    def _first_not_none(*values: Any) -> Any:
-        for value in values:
-            if value is not None:
-                return value
-        return None
 
     engine_b_tf_defaults: Dict[str, Any] = {}
     try:
@@ -400,7 +423,17 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
     entry = float(signal.get("price") or 0)
     sl = float(signal.get("sl") or 0)
     sl_pct = (abs(entry - sl) / entry * 100) if entry > 0 and sl > 0 else 0
-    atr = float(signal.get("atr") or 0)
+    atr_diagnostics = signal.get("atrDiagnostics") or {}
+    atr = float(
+        _first_not_none(
+            signal.get("atr"),
+            signal.get("atrValue"),
+            signal.get("riskAtr"),
+            atr_diagnostics.get("atr_value") if isinstance(atr_diagnostics, dict) else None,
+            engine_b_data.get("atr"),
+        )
+        or 0
+    )
     max_sl_pct = signal.get("MAX_SL_PCT")
     max_sl_source = signal.get("MAX_SL_PCT_SOURCE")
     if max_sl_pct is None:
