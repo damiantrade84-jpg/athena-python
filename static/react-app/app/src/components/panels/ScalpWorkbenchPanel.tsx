@@ -1253,7 +1253,10 @@ export default function ScalpWorkbenchPanel() {
     return Array.from(codes);
   }, [activeSignal, activeUi.advisoryContext.warnings]);
   const refreshScan = useCallback(async () => {
-    const result = await postScan('/api/scalp-scan', { diagnostic: true });
+    const result = await postScan('/api/scalp-scan', {
+      diagnostic: true,
+      ...(chartSymbol ? { pairs: [chartSymbol] } : {}),
+    });
     if (!result) {
       showToast('Engine D scan refresh failed', 'error');
       return;
@@ -1263,7 +1266,7 @@ export default function ScalpWorkbenchPanel() {
     setScalpLabSelectedCache(first || null);
     setSymbolOverride(first ? signalKey(first) : '');
     showToast('Engine D scan refreshed', result.error ? 'error' : 'success');
-  }, [postScan, setScalpLabScanCache, setScalpLabSelectedCache, showToast]);
+  }, [chartSymbol, postScan, setScalpLabScanCache, setScalpLabSelectedCache, showToast]);
 
   const selectSymbol = useCallback((key: string) => {
     if (key === EMPTY_SYMBOL_SELECT_VALUE) return;

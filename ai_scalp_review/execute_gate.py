@@ -225,6 +225,76 @@ def _execution_levels_block(signal: dict[str, Any]) -> str | None:
     return None
 
 
+def _paper_demo_direct_rr(signal: dict[str, Any]) -> float | None:
+    for key in ("rr_gate_basis", "structural_rr"):
+        value = _to_float(signal.get(key))
+        if value is not None:
+            return value
+    entry = _signal_level(signal, "entry")
+    sl = _signal_level(signal, "sl")
+    tp1 = _signal_level(signal, "tp1")
+    if entry is None or sl is None or tp1 is None:
+        return None
+    risk = abs(entry - sl)
+    return abs(tp1 - entry) / risk if risk > 0 else None
+
+
+def _paper_demo_direct_policy_block(signal: dict[str, Any], cfg: dict[str, Any]) -> str | None:
+    """Keep raw paper/demo execution deterministic when AI review is skipped."""
+    fail_reasons = signal.get("fail_reasons")
+    if isinstance(fail_reasons, (list, tuple)) and fail_reasons:
+        return str(signal.get("candidate_status") or ",".join(map(str, fail_reasons)))
+
+    if signal.get("strict_fabio_pass") is False:
+        return str(signal.get("strict_fabio_reason") or "ENGINE_D_STRICT_FABIO_FAILED")
+
+    fee_guard = _dict(signal.get("fee_guard"))
+    fee_reason = str(fee_guard.get("engine_d_reject_reason") or "").strip()
+    if fee_reason:
+        return fee_reason
+
+    # Without AI, only the deliberately reduced RR floor may reopen an A/B
+    # watchlist candidate. Other advisory warnings still require review.
+    soft_warnings = signal.get("soft_warnings")
+    gate_result = str(signal.get("gate_result") or "PASS").upper()
+    already_passed = gate_result == "PASS" and signal.get("executable") is not False
+    if not already_passed and isinstance(soft_warnings, (list, tuple)):
+        disallowed = [str(reason) for reason in soft_warnings if str(reason) != "rr_below_min"]
+        if disallowed:
+            return disallowed[0]
+
+    scalp_cfg = cfg.get("SCALP_ENGINE") or {}
+    try:
+        min_rr = max(0.0, float(scalp_cfg.get("PAPER_DEMO_DIRECT_MIN_RR", 1.0)))
+    except (TypeError, ValueError):
+        min_rr = 1.0
+    rr = _paper_demo_direct_rr(signal)
+    if rr is None:
+        return "ENGINE_D_RR_UNAVAILABLE"
+    if rr + 1e-9 < min_rr:
+        return f"ENGINE_D_RR_BELOW_PAPER_DEMO_FLOOR:{rr:.2f}<{min_rr:.2f}"
+    return None
+
+
+def engine_d_paper_demo_direct_block_reason(
+    signal: dict[str, Any],
+    *,
+    cfg: dict[str, Any] | None = None,
+) -> str | None:
+    """Return the complete deterministic block reason for no-AI paper/demo entry."""
+    cfg = cfg or {}
+    hard = engine_d_signal_hard_block(signal)
+    if hard:
+        return hard
+    levels_block = _execution_levels_block(signal)
+    if levels_block:
+        return levels_block
+    grade = str(signal.get("ai_grade") or signal.get("grade") or "").upper()
+    if grade not in ("A", "B"):
+        return "ENGINE_D_GRADE_BELOW_B_NOT_EXECUTABLE"
+    return _paper_demo_direct_policy_block(signal, cfg)
+
+
 def _review_age_seconds(created_at: str | None) -> float | None:
     if not created_at:
         return None
@@ -344,13 +414,17 @@ def engine_d_paper_demo_execution_block_reason(
         return "ENGINE_D_GRADE_BELOW_B_NOT_EXECUTABLE"
 
     ai_cfg = _ai_execute_cfg(cfg)
-    requires_ai = (
-        bool(ai_cfg.get("EXECUTE_REQUIRES_AI_REVIEW", True))
-        if require_ai_review is None
-        else bool(require_ai_review)
+    configured_requires_ai = bool(
+        ai_cfg.get(
+            "PAPER_DEMO_EXECUTE_REQUIRES_AI_REVIEW",
+            ai_cfg.get("EXECUTE_REQUIRES_AI_REVIEW", True),
+        )
     )
+    # A caller may opt into AI review, but cannot turn off a configured
+    # paper/demo requirement through the request payload.
+    requires_ai = configured_requires_ai or require_ai_review is True
     if not requires_ai:
-        return None
+        return _paper_demo_direct_policy_block(signal, cfg)
 
     reason, _review = resolve_engine_d_execute_gate(
         signal,

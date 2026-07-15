@@ -2672,6 +2672,9 @@ AI_STRUCTURED_OUTPUTS: true
 
 # Engine D scalp chart AI review — session context for Fabio/Carmine model (server-resolved, not screenshot)
 AI_SCALP_CHART_REVIEW:
+  # AI remains advisory for Engine D paper/demo execution. Live execution keeps
+  # the separate fail-closed EXECUTE_REQUIRES_AI_REVIEW default.
+  PAPER_DEMO_EXECUTE_REQUIRES_AI_REVIEW: false
   SESSION_CONTEXT:
     ENABLED: true
     NY_PREMARKET_START_ET: "08:00"
@@ -4695,6 +4698,7 @@ SCALP_ENGINE:
                                 # clear this floor. The mechanical TP1 (TP1_R_MULT self-pay) is synthetic
                                 # and is no longer compared against MIN_RR (2026-06-10 fix: doing so made
                                 # every signal rr_below_min and blocked all Engine D execution).
+  PAPER_DEMO_DIRECT_MIN_RR: 1.0 # Direct no-AI A/B scalp floor; live/group MIN_RR remains unchanged.
 
   score_group_overrides:
     forex_majors:

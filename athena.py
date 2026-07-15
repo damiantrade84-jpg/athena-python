@@ -11827,7 +11827,18 @@ def api_scalp_scan():
             pairs = displays_for_scalp_scan(ACTIVE_PAIRS, disabled_displays=_disabled_pairs)
 
         diagnostic = bool(payload.get("diagnostic", False))
-        result = run_scalp_scan(pairs)
+        try:
+            max_actionable_candidates = int(payload.get("max_actionable_candidates") or 0)
+        except (TypeError, ValueError):
+            max_actionable_candidates = 0
+        max_actionable_candidates = min(max(max_actionable_candidates, 0), 10)
+        if max_actionable_candidates:
+            result = run_scalp_scan(
+                pairs,
+                max_actionable_candidates=max_actionable_candidates,
+            )
+        else:
+            result = run_scalp_scan(pairs)
         signals = [_scalp_ui_signal(s) for s in (result.get("signals", []) or [])]
         raw_skipped = result.get("skipped", []) or []
 
@@ -11872,6 +11883,7 @@ def api_scalp_scan():
             "scanned": result.get("scanned", len(pairs)),
             "pairs": pairs,
             "pair_count": len(pairs),
+            "scan_mode": "fast" if max_actionable_candidates else "full",
             "session": result.get("session"),
             "sessions_active": result.get("sessions_active", []),
             "reason": result.get("reason"),

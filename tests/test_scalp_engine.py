@@ -1044,6 +1044,29 @@ def test_scalp_candles_fresh_rejects_stale_structure(monkeypatch):
     assert reason.startswith("MARKET_DATA_STALE_STRUCTURE_")
 
 
+def test_scalp_candles_fresh_allows_normal_confirmed_h1_age(monkeypatch):
+    now = datetime(2026, 7, 15, 13, 55, tzinfo=timezone.utc)
+    monkeypatch.setattr(scalp_engine, "_current_utc_datetime", lambda: now)
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MARKET_CANDLE_MAX_AGE_SEC": 900,
+            "USE_FORMING_FOR_BIAS": False,
+        },
+    )
+
+    normal_confirmed = [{"time": (now - timedelta(seconds=6900)).isoformat()}]
+    fresh, reason = scalp_engine._scalp_candles_fresh(normal_confirmed, "H1", "bias", "forex")
+    assert (fresh, reason) == (True, "fresh")
+
+    truly_stale = [{"time": (now - timedelta(seconds=9000)).isoformat()}]
+    fresh, reason = scalp_engine._scalp_candles_fresh(truly_stale, "H1", "bias", "forex")
+    assert fresh is False
+    assert reason.startswith("MARKET_DATA_STALE_BIAS_")
+
+
 def test_scalp_candles_fresh_rejects_missing_timestamp_by_default(monkeypatch):
     monkeypatch.setitem(
         scalp_engine.CONFIG,
@@ -2158,8 +2181,8 @@ def test_scalp_crypto_pair_dict_follows_trade_bucket_exchange(monkeypatch):
 # 10. UNCOVERED FIXES (Engine D audit residuals)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def test_execution_min_grade_a_marks_b_as_watchlist_not_skip(monkeypatch):
-    """Grade is no longer an AI veto; below execution grade becomes visible watchlist."""
+def test_execution_min_grade_a_marks_b_as_watchlist_and_fast_scan_stops(monkeypatch):
+    """Below-min grades stay visible; fast scan stops only on direct-eligible A/B."""
     monkeypatch.setitem(
         scalp_engine.CONFIG,
         "SCALP_ENGINE",
@@ -2197,6 +2220,96 @@ def test_execution_min_grade_a_marks_b_as_watchlist_not_skip(monkeypatch):
     assert result["signals"][0]["gate_result"] == "WATCHLIST"
     assert result["signals"][0]["executable"] is False
     assert "grade_B_below_execution_min_A" in result["signals"][0]["soft_warnings"]
+
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "EXECUTION_MIN_GRADE": "B",
+            "PAPER_DEMO_DIRECT_MIN_RR": 1.0,
+        },
+    )
+    fast = scalp_engine.run_scalp_scan(
+        ["EUR/USD", "GBP/USD"],
+        max_actionable_candidates=1,
+    )
+    assert fast["scanned"] == 1
+    assert len(fast["signals"]) == 1
+    assert fast["signals"][0]["gate_result"] == "PASS"
+
+
+def test_paper_demo_direct_path_relaxes_only_rr():
+    from ai_scalp_review.execute_gate import engine_d_paper_demo_execution_block_reason
+
+    cfg = {
+        "AI_SCALP_CHART_REVIEW": {
+            "EXECUTE_REQUIRES_AI_REVIEW": True,
+            "PAPER_DEMO_EXECUTE_REQUIRES_AI_REVIEW": False,
+        },
+        "SCALP_ENGINE": {"PAPER_DEMO_DIRECT_MIN_RR": 1.0},
+    }
+    signal = {
+        "pair": "LTC/USDT",
+        "direction": "LONG",
+        "ai_grade": "B",
+        "gate_result": "WATCHLIST",
+        "executable": False,
+        "candidate_status": "rr_below_min",
+        "fail_reasons": [],
+        "soft_warnings": ["rr_below_min"],
+        "strict_fabio_pass": True,
+        "rr_gate_basis": 1.25,
+        "price": 100.0,
+        "sl": 99.0,
+        "tp1": 101.0,
+    }
+
+    assert engine_d_paper_demo_execution_block_reason(signal, cfg=cfg) is None
+
+    low_room = {**signal, "rr_gate_basis": 0.59}
+    assert engine_d_paper_demo_execution_block_reason(low_room, cfg=cfg).startswith(
+        "ENGINE_D_RR_BELOW_PAPER_DEMO_FLOOR"
+    )
+
+    fee_blocked = {
+        **signal,
+        "fee_guard": {"engine_d_reject_reason": "fee_guard_high_cost"},
+    }
+    assert engine_d_paper_demo_execution_block_reason(fee_blocked, cfg=cfg) == "fee_guard_high_cost"
+
+
+def test_status_reports_demo_ai_advisory_without_weakening_live(monkeypatch):
+    from athena_app.api import routes_status
+
+    monkeypatch.setattr(
+        routes_status,
+        "CONFIG",
+        {
+            "AI_SCALP_CHART_REVIEW": {
+                "EXECUTE_REQUIRES_AI_REVIEW": True,
+                "PAPER_DEMO_EXECUTE_REQUIRES_AI_REVIEW": False,
+            }
+        },
+    )
+    assert routes_status._scalp_execute_requires_ai_review("demo") is False
+    assert routes_status._scalp_execute_requires_ai_review("paper") is False
+    assert routes_status._scalp_execute_requires_ai_review("live") is True
+
+
+def test_engine_d_funnel_accepts_candidate_liquidity_context():
+    from scalp_audit import build_funnel_row
+
+    liquidity = {"confirmed": True, "source": "bybit_orderbook"}
+    row = build_funnel_row(
+        symbol="BTC/USDT",
+        asset_type="crypto",
+        source="bybit",
+        liquidity_at_level=liquidity,
+        setup_grade="B",
+        gate_result="WATCHLIST",
+    )
+    assert row["liquidity_at_level"] == liquidity
 
 
 def test_mt5_market_open_state_time_msc_milliseconds(monkeypatch):

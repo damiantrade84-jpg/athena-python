@@ -188,10 +188,17 @@ def _paper_mode_snapshot() -> tuple[bool, bool]:
     return False, bool(real_orders_allowed if real_orders_allowed is not None else True)
 
 
-def _scalp_execute_requires_ai_review() -> bool:
+def _scalp_execute_requires_ai_review(execution_mode: str) -> bool:
     ai_cfg = CONFIG.get("AI_SCALP_CHART_REVIEW") or {}
     if not isinstance(ai_cfg, dict):
         return True
+    if execution_mode in ("paper", "demo"):
+        return bool(
+            ai_cfg.get(
+                "PAPER_DEMO_EXECUTE_REQUIRES_AI_REVIEW",
+                ai_cfg.get("EXECUTE_REQUIRES_AI_REVIEW", True),
+            )
+        )
     return bool(ai_cfg.get("EXECUTE_REQUIRES_AI_REVIEW", True))
 
 
@@ -223,6 +230,7 @@ def health():
     data_sources = _configured_data_sources(all_pairs)
     mt5_status = _mt5_connection_health_getter()
     paper_mode, real_orders_allowed = _paper_mode_snapshot()
+    scalp_execution_mode = _scalp_execution_mode(paper_mode, real_orders_allowed)
 
     return jsonify(
         {
@@ -240,8 +248,8 @@ def health():
             "xaiKey": ai_key_configured(CONFIG),
             "paper_mode": paper_mode,
             "real_orders_allowed": real_orders_allowed,
-            "scalp_execute_requires_ai_review": _scalp_execute_requires_ai_review(),
-            "scalp_execution_mode": _scalp_execution_mode(paper_mode, real_orders_allowed),
+            "scalp_execute_requires_ai_review": _scalp_execute_requires_ai_review(scalp_execution_mode),
+            "scalp_execution_mode": scalp_execution_mode,
         }
     )
 

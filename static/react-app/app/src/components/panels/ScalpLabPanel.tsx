@@ -8,7 +8,7 @@ import {
   formatRiskPreviewLine,
   useExecutionVolumeState,
 } from '@/hooks/useExecutionVolumeState';
-import { buildScalpExecutePayload } from '@/lib/manualExecuteHelpers';
+import { buildScalpExecutePayload, type ScalpExecutionMode } from '@/lib/manualExecuteHelpers';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -161,6 +161,7 @@ interface ScalpScanResponse {
   scanned?: number;
   pairs?: string[];
   pair_count?: number;
+  scan_mode?: 'fast' | 'full';
   session?: string;
   sessions_active?: string[];
   reason?: string;
@@ -273,6 +274,11 @@ export default function ScalpLabPanel() {
   const [riskPreviewLine, setRiskPreviewLine] = useState<string | null>(null);
 
   const { data: pairsData } = useApiPoll<ScalpPairsResponse>('/api/scalp-pairs', 0);
+  const { data: health } = useApiPoll<{
+    paper_mode?: boolean;
+    scalp_execution_mode?: ScalpExecutionMode;
+    scalp_execute_requires_ai_review?: boolean;
+  }>('/api/health', 60_000);
   const { post: postScan, loading: scanning, error: scanError } = useApiPost<ScalpScanResponse>();
   const { post: postExecute, loading: executing } = useApiPost<ScalpExecuteResponse>();
   const { priceFor, ageSecFor, sourceFor } = useLivePrices();
@@ -280,8 +286,23 @@ export default function ScalpLabPanel() {
   const universeCount = pairsData?.count ?? pairsData?.pairs?.length ?? 0;
   const scanResult = scalpLabScanCache as ScalpScanResponse | null;
   const selected = scalpLabSelectedCache as ScalpSignal | null;
+  const scalpExecutionMode: ScalpExecutionMode = health?.scalp_execution_mode
+    || (health?.paper_mode ? 'paper' : 'live_disabled');
+  const requireAiReview = health?.scalp_execute_requires_ai_review !== false;
+  const canDirectExecute = (
+    (scalpExecutionMode === 'paper' || scalpExecutionMode === 'demo')
+    && !requireAiReview
+  );
+  const executeEndpoint = scalpExecutionMode === 'paper'
+    ? '/api/scalp-paper-execute'
+    : '/api/scalp-execute';
+  const directExecuteLabel = scalpExecutionMode === 'paper'
+    ? (requireAiReview ? 'AI Review Required' : 'Paper Execute')
+    : scalpExecutionMode === 'demo'
+      ? (requireAiReview ? 'AI Review Required' : 'Demo Execute')
+      : 'Direct Execute Unavailable';
 
-  const openWorkbenchAndReview = useCallback((sig: ScalpSignal) => {
+  const openWorkbench = useCallback((sig: ScalpSignal, autoReview = false) => {
     setScalpLabSelectedCache(sig);
     const symbol = String(sig.symbol || sig.pair || sig.display || '').toUpperCase().trim();
     if (!symbol) {
@@ -294,26 +315,42 @@ export default function ScalpLabPanel() {
       symbol,
       signal: sig,
       preferredTf: 'M5',
-      autoReview: true,
+      autoReview,
       createdAt: new Date().toISOString(),
     });
     setActivePanel('scalpWorkbench');
-    showToast(`Opening ${sig.display || symbol} workbench for AI review`, 'info');
+    showToast(
+      autoReview
+        ? `Opening ${sig.display || symbol} workbench for AI review`
+        : `Opening ${sig.display || symbol} workbench`,
+      'info',
+    );
   }, [setActivePanel, setScalpLabSelectedCache, setScalpWorkbenchIntent, showToast]);
 
-  const runScan = useCallback(async () => {
+  const openWorkbenchAndReview = useCallback(
+    (sig: ScalpSignal) => openWorkbench(sig, true),
+    [openWorkbench],
+  );
+
+  const runScan = useCallback(async (fullUniverse = false) => {
     setScalpLabSelectedCache(null);
-    const result = await postScan('/api/scalp-scan', { diagnostic });
+    const result = await postScan('/api/scalp-scan', {
+      diagnostic,
+      ...(fullUniverse ? {} : { max_actionable_candidates: 1 }),
+    });
     if (!result || result.error) {
       showToast(`Scalp scan failed: ${result?.error || 'unknown'}`, 'error');
       return;
     }
     setScalpLabScanCache(result);
     showToast(
-      `Engine D: ${result.pass_count ?? 0}/${result.candidate_count ?? 0} pass · ${result.skip_count ?? 0} skipped (session: ${result.session || '—'})`,
+      `Engine D ${result.scan_mode || (fullUniverse ? 'full' : 'fast')}: ${result.pass_count ?? 0}/${result.candidate_count ?? 0} pass · ${result.skip_count ?? 0} skipped (session: ${result.session || '—'})`,
       'success',
     );
   }, [diagnostic, postScan, showToast, setScalpLabScanCache, setScalpLabSelectedCache]);
+
+  const runFastScan = useCallback(() => runScan(false), [runScan]);
+  const runFullScan = useCallback(() => runScan(true), [runScan]);
 
   const requestExecute = useCallback((s: ScalpSignal) => setConfirmExec(s), []);
 
@@ -374,8 +411,10 @@ export default function ScalpLabPanel() {
       },
       volumeMode,
       sizingOverride,
+      executionMode: scalpExecutionMode,
+      requireAiReview,
     });
-    const result = await postExecute('/api/scalp-execute', payload);
+    const result = await postExecute(executeEndpoint, payload);
     if (!result) {
       showToast('Execution failed (no response)', 'error');
     } else if (result.success) {
@@ -398,8 +437,11 @@ export default function ScalpLabPanel() {
     setConfirmExec(null);
   }, [
     confirmExec,
+    executeEndpoint,
     postExecute,
+    requireAiReview,
     scanResult,
+    scalpExecutionMode,
     selected,
     setScalpLabScanCache,
     setScalpLabSelectedCache,
@@ -453,12 +495,16 @@ export default function ScalpLabPanel() {
               <Switch checked={diagnostic} onCheckedChange={setDiagnostic} />
               <span className="text-xs text-muted-foreground">Diagnostic mode (show skipped)</span>
             </div>
-            <Button size="sm" className="h-8 gap-1 text-xs" onClick={runScan} disabled={scanning}>
+            <Button size="sm" className="h-8 gap-1 text-xs" onClick={runFastScan} disabled={scanning}>
               <Zap className={scanning ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
-              {scanning ? 'Engine D scanning…' : 'Run Engine D Scan'}
+              {scanning ? 'Engine D scanning…' : 'Fast Scan (first A/B)'}
+            </Button>
+            <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={runFullScan} disabled={scanning}>
+              <Layers className="w-3.5 h-3.5" />
+              Full Scan
             </Button>
           </div>
-          {scanError && <ErrorBanner message={scanError} onRetry={runScan} />}
+          {scanError && <ErrorBanner message={scanError} onRetry={runFastScan} />}
         </CardContent>
       </Card>
 
@@ -531,7 +577,7 @@ export default function ScalpLabPanel() {
                                 livePriceSource={sourceFor(s)}
                                 selected={selected === s}
                                 onSelect={setScalpLabSelectedCache}
-                                onExecute={openWorkbenchAndReview}
+                                onExecute={openWorkbench}
                               />
                             ))}
                           </div>
@@ -559,6 +605,8 @@ export default function ScalpLabPanel() {
                       }}
                       onExecute={requestExecute}
                       onOpenWorkbenchAndReview={openWorkbenchAndReview}
+                      canDirectExecute={canDirectExecute}
+                      directExecuteLabel={directExecuteLabel}
                     />
                   </ScrollArea>
                 ) : (
@@ -794,10 +842,14 @@ function ScalpDetail({
   sig,
   onExecute,
   onOpenWorkbenchAndReview,
+  canDirectExecute,
+  directExecuteLabel,
 }: {
   sig: ScalpSignal;
   onExecute: (s: ScalpSignal) => void;
   onOpenWorkbenchAndReview: (s: ScalpSignal) => void;
+  canDirectExecute: boolean;
+  directExecuteLabel: string;
 }) {
   const display = sig.display || sig.pair || sig.symbol || '—';
   const grade = String(sig.ai_grade || 'D').toUpperCase();
@@ -810,6 +862,7 @@ function ScalpDetail({
   const realOrderFlow = sig.aggression_uses_real_order_flow ?? sig.data_fidelity?.aggression_uses_real_order_flow;
   const exec = isSignalExecutable(sig);
   const openable = canOpenWorkbench(sig);
+  const gradeExecutable = grade === 'A' || grade === 'B';
   return (
     <div className="space-y-3">
       <div className="p-3 rounded-md bg-muted/30 space-y-2">
@@ -979,11 +1032,11 @@ function ScalpDetail({
       <Button
         size="sm"
         className="w-full gap-2"
-        onClick={() => onOpenWorkbenchAndReview(sig)}
-        disabled={!openable}
+        onClick={() => onExecute(sig)}
+        disabled={!openable || !gradeExecutable || !canDirectExecute}
       >
         <Play className="w-3.5 h-3.5" />
-        Open Workbench
+        {directExecuteLabel}
       </Button>
     </div>
   );

@@ -689,10 +689,22 @@ def _scalp_candles_fresh(candles: list, timeframe: str, role: str = "execution",
             return True, "candle_time_unavailable"
         role_key = str(role or "data").upper()
         return False, f"MARKET_DATA_TIME_UNAVAILABLE_{role_key}"
-    # Candle timestamps are bar-open times. Allow one extra bar length before
-    # declaring live data stale.
+    # Candle timestamps are bar-open times. A forming candle may therefore be
+    # one full timeframe old. MT5 roles configured as confirmed-only return the
+    # previous bar, whose open can legitimately be two timeframes old just
+    # before the next bar closes.
     tf_sec = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}.get(str(timeframe).upper(), 60)
-    if age_s > max_age + tf_sec:
+    role_name = str(role or "data").strip().lower()
+    confirmed_only = asset_type != "crypto" and (
+        (role_name == "structure" and not bool(cfg.get("USE_FORMING_FOR_STRUCTURE", False)))
+        or (role_name == "bias" and not bool(cfg.get("USE_FORMING_FOR_BIAS", False)))
+        or (
+            role_name in {"context", "execution"}
+            and not bool(cfg.get("USE_FORMING_FOR_TRIGGER", True))
+        )
+    )
+    allowed_age = max_age + tf_sec + (tf_sec if confirmed_only else 0)
+    if age_s > allowed_age:
         role_key = str(role or "data").upper()
         return False, f"MARKET_DATA_STALE_{role_key}_{round(age_s)}s"
 
@@ -4471,7 +4483,11 @@ def _build_premarket_delta_proxy_levels(
 # MAIN SCAN — run_scalp_scan()
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def run_scalp_scan(pairs_or_symbols: list) -> dict:
+def run_scalp_scan(
+    pairs_or_symbols: list,
+    *,
+    max_actionable_candidates: int | None = None,
+) -> dict:
     """Scan a list of pairs for Fabio Valentini scalp setups.
 
     Args:
@@ -4479,6 +4495,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
 
     Returns:
         {signals, skipped, session, scanned, sessions_active}
+
+    ``max_actionable_candidates`` is a latency-oriented fast-scan control. When
+    set, scanning stops after that many grade A/B candidates have been built.
+    It does not change any candidate, risk, freshness, or execution gate.
     """
     from mt5_executor import mt5_map_symbol, mt5_get_symbol_info, mt5_connect
 
@@ -4506,6 +4526,12 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     bias_tf   = str(cfg.get("BIAS_TIMEFRAME", "H1")).upper()
     use_bias  = bool(cfg.get("WITH_TREND_ONLY", True))
     min_grade = _scalp_execution_min_grade(cfg)
+    try:
+        actionable_target = max(1, int(max_actionable_candidates)) if max_actionable_candidates else None
+    except (TypeError, ValueError):
+        actionable_target = None
+    actionable_count = 0
+    scanned_count = 0
 
     def _record_stability_sample(
         display: str,
@@ -4564,8 +4590,10 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
         mt5_pairs = []
 
     for display in pairs_or_symbols:
+        scanned_count += 1
         if display in _already_skipped:
             continue
+        _stop_after_pair = False
         mt5_sym = None
         _skip_start = len(skipped)
         _funnel: dict[str, Any] = {
@@ -5576,6 +5604,26 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                 )
             
             signals.append(signal)
+            if actionable_target is not None:
+                try:
+                    from ai_scalp_review.execute_gate import (
+                        engine_d_paper_demo_direct_block_reason,
+                    )
+
+                    fast_candidate_block = engine_d_paper_demo_direct_block_reason(
+                        signal,
+                        cfg=CONFIG,
+                    )
+                except Exception as exc:
+                    log.debug("[SCALP] Fast candidate eligibility check failed: %s", exc)
+                    fast_candidate_block = "ENGINE_D_FAST_CANDIDATE_CHECK_FAILED"
+            else:
+                fast_candidate_block = None
+            if actionable_target is not None and fast_candidate_block is None:
+                actionable_count += 1
+                _stop_after_pair = bool(
+                    actionable_count >= actionable_target
+                )
             _record_stability_sample(
                 display, asset_type, executable,
                 score_norm=quality["score"] / 100.0,
@@ -5609,11 +5657,19 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
                     log_engine_d_funnel(build_funnel_row(**_funnel))
                 except Exception as _f_err:
                     log.debug("[SCALP-AUDIT] funnel log error: %s", _f_err)
+        if _stop_after_pair:
+            log.info(
+                "[SCALP] Fast scan stopped after %d grade A/B candidate(s) (%d/%d pairs)",
+                actionable_count,
+                scanned_count,
+                len(pairs_or_symbols),
+            )
+            break
 
     signals.sort(key=lambda s: s.get("ai_score", 0), reverse=True)
 
     log.warning(
-        f"[SCALP] Scan: {len(pairs_or_symbols)} pairs | "
+        f"[SCALP] Scan: {scanned_count} pairs | "
         f"{len(signals)} signals | {len(skipped)} skipped | session={session_name}"
     )
 
@@ -5634,7 +5690,7 @@ def run_scalp_scan(pairs_or_symbols: list) -> dict:
     return _finalize_run_scalp_scan_result(
         signals=signals,
         skipped=skipped,
-        scanned=len(pairs_or_symbols),
+        scanned=scanned_count,
         session_name=session_name,
         sessions_active=sessions,
         reason=None,
