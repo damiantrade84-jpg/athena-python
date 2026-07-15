@@ -206,8 +206,8 @@ export interface EngineBScoreBreakdown {
   totalScore: number | null;
   totalMax: number | null;
   minScore: number | null;
-  gatePasses: boolean;
-  totalPasses: boolean;
+  scoreFloorPasses: boolean;
+  confidencePasses: boolean;
   bonusPoints: number | null;
 }
 
@@ -216,13 +216,24 @@ function engineBConfidenceSource(
 ): Record<string, unknown> {
   if (!data || typeof data !== 'object') return {};
   const row = data as Record<string, unknown>;
-  const conf = row.confidence;
-  return conf && typeof conf === 'object' && !Array.isArray(conf)
-    ? conf as Record<string, unknown>
-    : row;
+  const nested = row.naked_data ?? row.engine_b;
+  const nestedRow = nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : null;
+  for (const candidate of [
+    row.confidence,
+    row.engine_b_status,
+    nestedRow?.confidence,
+    nestedRow,
+  ]) {
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      return candidate as Record<string, unknown>;
+    }
+  }
+  return row;
 }
 
-/** Engine B pass floor uses gate_score; UI often showed total_score only. */
+/** Engine B's style/regime score floor applies to total score, not gate score. */
 export function engineBScoreBreakdown(
   data: EngineBNakedResult | Record<string, unknown> | null | undefined,
 ): EngineBScoreBreakdown | null {
@@ -258,7 +269,7 @@ export function engineBScoreBreakdown(
   const resolvedGateMax = Number.isFinite(gateMax) ? gateMax : gateMaxFromTop;
 
   const totalMax = readSignalNumber(conf, 'max_possible', 'max_score');
-  const totalMaxFromTop = readSignalNumber(row, 'confidence_max', 'max_score', 'maxScore');
+  const totalMaxFromTop = readSignalNumber(row, 'engine_b_max', 'confidence_max', 'max_score', 'maxScore');
   const resolvedTotalMax = Number.isFinite(totalMax) ? totalMax : totalMaxFromTop;
 
   const minScore = readSignalNumber(
@@ -285,12 +296,17 @@ export function engineBScoreBreakdown(
     return null;
   }
 
-  const gatePasses = resolvedMin != null && resolvedMin > 0
-    && Number.isFinite(resolvedGate)
-    && resolvedGate >= resolvedMin;
-  const totalPasses = resolvedMin != null && resolvedMin > 0
-    && Number.isFinite(resolvedTotal)
-    && resolvedTotal >= resolvedMin;
+  const scoreFloorPasses = resolvedMin == null || resolvedMin <= 0
+    ? Number.isFinite(resolvedTotal)
+    : Number.isFinite(resolvedTotal) && resolvedTotal >= resolvedMin;
+  const explicitPass = conf.passed
+    ?? conf.checklist_passed
+    ?? row.engine_b_confidence_passed
+    ?? row.passed
+    ?? row.checklist_passed;
+  const confidencePasses = typeof explicitPass === 'boolean'
+    ? explicitPass && scoreFloorPasses
+    : scoreFloorPasses;
 
   return {
     gateScore: Number.isFinite(resolvedGate) ? resolvedGate : null,
@@ -298,8 +314,8 @@ export function engineBScoreBreakdown(
     totalScore: Number.isFinite(resolvedTotal) ? resolvedTotal : null,
     totalMax: Number.isFinite(resolvedTotalMax) ? resolvedTotalMax : null,
     minScore: Number.isFinite(resolvedMin) ? resolvedMin : null,
-    gatePasses,
-    totalPasses,
+    scoreFloorPasses,
+    confidencePasses,
     bonusPoints: resolvedBonus,
   };
 }

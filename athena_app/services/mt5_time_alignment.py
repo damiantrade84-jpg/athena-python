@@ -59,6 +59,46 @@ def normalize_mt5_tick_epoch_utc(
     return tick_t - shift_hours * 3600.0
 
 
+def should_refetch_active_lower_tf(
+    timeframe: str,
+    utc_now: float,
+    newest_bar_epoch_utc: float | None,
+    tick_epoch_utc: float | None,
+    max_tick_age_sec: float,
+) -> tuple[bool, int]:
+    """Return whether an active MT5 M15/M30 feed warrants one read-only retry.
+
+    A one-bucket bar lag can be a transient MT5 history-sync omission even while
+    live ticks are current.  Closed/frozen markets must not retry: the normalized
+    broker tick has to satisfy the same per-asset age limit as the live-quote
+    gate.  The caller still applies the normal freshness gate if the retry stays
+    stale, so this helper cannot turn stale data into an executable signal.
+    """
+    tf_upper = str(timeframe or "").upper()
+    if tf_upper not in {"M15", "M30"}:
+        return False, 0
+
+    try:
+        now = float(utc_now)
+        newest = float(newest_bar_epoch_utc)
+        tick = float(tick_epoch_utc)
+        max_age = float(max_tick_age_sec)
+    except (TypeError, ValueError):
+        return False, 0
+    if now <= 0 or newest <= 0 or tick <= 0 or max_age <= 0:
+        return False, 0
+
+    tick_age = now - tick
+    if tick_age < -5.0 or tick_age > max_age:
+        return False, 0
+
+    tf_sec = int(_TF_SECONDS[tf_upper])
+    current_bucket = int(now // tf_sec) * tf_sec
+    newest_bucket = int(newest // tf_sec) * tf_sec
+    lag = max(0, int((current_bucket - newest_bucket) // tf_sec))
+    return lag == 1, lag
+
+
 def infer_mt5_rates_time_shift_seconds(
     timeframe: str,
     utc_now: float,

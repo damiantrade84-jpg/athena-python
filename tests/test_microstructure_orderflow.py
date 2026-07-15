@@ -304,8 +304,23 @@ def test_binance_micro_multi_ws_url_includes_all_streams():
     for sym in ("btcusdt", "ethusdt"):
         assert f"{sym}@aggTrade" in url
         assert f"{sym}@trade" in url
-        assert f"{sym}@depth20@100ms" in url
+        # Default depth rate is 500ms (reduced from 100ms to curb 1006 flapping);
+        # trade/aggTrade streams are unchanged.
+        assert f"{sym}@depth20@500ms" in url
     assert url.startswith("wss://fstream.binance.com/stream?streams=")
+
+
+def test_binance_micro_multi_ws_url_depth_speed_is_configurable():
+    from athena.datafeeds.binance_ws import binance_futures_multi_micro_stream_url
+
+    # Explicit 100ms rollback path is preserved.
+    assert "btcusdt@depth20@100ms" in binance_futures_multi_micro_stream_url(
+        ["btcusdt"], 100
+    )
+    # Invalid speeds clamp to the safe 500ms default.
+    assert "btcusdt@depth20@500ms" in binance_futures_multi_micro_stream_url(
+        ["btcusdt"], 137
+    )
 
 
 def test_binance_micro_multi_ws_url_dedupes_and_normalises():

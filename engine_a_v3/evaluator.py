@@ -93,6 +93,26 @@ def _validate_candles(candles: dict[str, list[dict]]) -> tuple[bool, tuple[str, 
     return not reasons, tuple(dict.fromkeys(reasons))
 
 
+def _minimum_normalized_indicator_bars(
+    asset_type: str, periods: Mapping[str, int] | tuple[tuple[str, int], ...]
+) -> int:
+    """Bars required for the latest configured normalized indicator values."""
+    from indicators import get_normalization_lookback
+
+    resolved = dict(periods)
+    lookback = int(get_normalization_lookback(asset_type))
+    adx_period = int(resolved.get("adx", 14))
+    atr_period = int(resolved.get("atr", 14))
+    return max(
+        50,
+        int(resolved.get("ema_long", 0)),
+        int(resolved.get("rsi", 0)) + 1,
+        int(resolved.get("macd_slow", 0)) + int(resolved.get("macd_signal", 0)) - 1,
+        lookback + atr_period,
+        lookback + (2 * adx_period) + 1,
+    )
+
+
 def _horizon(value: str | None) -> str | None:
     """Normalize the requested style to a V3 horizon.
 
@@ -234,6 +254,9 @@ def evaluate_engine_a_v3(
     policy_entry_tf = str(
         (policy or {}).get("setup") or (policy or {}).get("setupTf") or ""
     ).upper()
+    policy_trigger_tf = str(
+        (policy or {}).get("trigger") or (policy or {}).get("triggerTf") or ""
+    ).upper()
     if policy and policy_entry_tf:
         primary_tf = policy_entry_tf
     elif entry_tf_override is not None and diagnostic_override is None:
@@ -262,18 +285,38 @@ def evaluate_engine_a_v3(
     display = str(pair.get("display") or pair.get("pair") or pair.get("symbol") or "")
     symbol = str(pair.get("symbol") or display)
     asset_type = str(pair.get("type") or pair.get("asset_type") or "other")
-
     valid_candles, candle_reasons = _validate_candles(candles)
-    if diagnostic_override is not None:
-        if not primary:
-            candle_reasons = candle_reasons + ("missing_entry_candles",)
+    promotion = None
+    profile = None
+    if normalized_horizon is not None and primary_tf is not None and valid_candles:
+        promotion = (registry or production_registry()).resolve(
+            route,
+            normalized_horizon,
+            symbol=symbol,
+        )
+        profile = promotion.profile or baseline_profile(route.score_group, normalized_horizon)
+
+    role_timeframes: dict[str, str] = {}
+    if diagnostic_override is not None or policy_entry_tf:
+        role_timeframes[primary_tf] = "entry"
+    if policy_trigger_tf and policy_trigger_tf != primary_tf:
+        role_timeframes[policy_trigger_tf] = "trigger"
+    role_minimum = (
+        _minimum_normalized_indicator_bars(asset_type, profile.indicator_periods)
+        if policy and profile is not None
+        else 50
+    )
+    for role_tf, role_name in role_timeframes.items():
+        role_candles = candles.get(role_tf, [])
+        if not role_candles:
+            candle_reasons = candle_reasons + (f"missing_{role_name}_candles",)
             valid_candles = False
-        elif len(primary) < 50:
-            candle_reasons = candle_reasons + ("entry_history_insufficient",)
+        elif len(role_candles) < role_minimum:
+            candle_reasons = candle_reasons + (f"{role_name}_history_insufficient",)
             valid_candles = False
         else:
             _entry_prev_ts = None
-            for _entry_bar in primary:
+            for _entry_bar in role_candles:
                 try:
                     _o = float(_entry_bar["open"])
                     _h = float(_entry_bar["high"])
@@ -294,7 +337,7 @@ def evaluate_engine_a_v3(
                     or _entry_ts is None
                     or (_entry_prev_ts is not None and _entry_ts <= _entry_prev_ts)
                 ):
-                    candle_reasons = candle_reasons + ("entry_candles_invalid",)
+                    candle_reasons = candle_reasons + (f"{role_name}_candles_invalid",)
                     valid_candles = False
                     break
                 _entry_prev_ts = _entry_ts
@@ -364,12 +407,7 @@ def evaluate_engine_a_v3(
 
     # ── Continuous quant scoring (no-veto). Every valid pair gets a direction +
     # quality. Promotion governs execution eligibility only; it never hides a pair.
-    promotion = (registry or production_registry()).resolve(
-        route,
-        normalized_horizon,
-        symbol=symbol,
-    )
-    profile = promotion.profile or baseline_profile(route.score_group, normalized_horizon)
+    assert promotion is not None and profile is not None
     _score_kwargs = {
         "context": context,
         "profile": profile,

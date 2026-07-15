@@ -1310,9 +1310,9 @@ CONFIG: dict = {
         "MAX_SLIPPAGE_PCT": 0.01,
     },
     "ADX_TREND_MIN": 25,
-    # analyze_pair: fetch then drop last (forming) bar. H4/H1 align with /api/candles max (1000).
-    # D1=1001 so closed D1 bars after drop ≈1000; tune in config.yaml. Lower = faster scans, chart diverges.
-    "D1_CANDLES": 1001,
+    # analyze_pair: fetch then drop last (forming) bar. D1/H4/H1 align with the
+    # provider's 1000-bar request cap, retaining about 999 closed bars.
+    "D1_CANDLES": 1000,
     "H4_CANDLES": 1000,
     "H1_CANDLES": 1000,
     "M30_CANDLES": 500,
@@ -2293,7 +2293,7 @@ CONFIG: dict = {
     "DATA_FRESHNESS_GATES": {
         "WARN_ON_STALE_SCAN": True,
         "BLOCK_EXECUTION_ON_STALE": True,
-        "BLOCK_TIMEFRAMES": ["H1", "H4", "D1"],
+        "BLOCK_TIMEFRAMES": ["M5", "M15", "M30", "H1", "H4", "D1"],
         "BLOCK_SEVERITIES": [
             "missing_current_bucket",
             "stale_1_bucket",
@@ -2512,9 +2512,9 @@ CONFIG: dict = {
     # override kwargs directly and does not require this flag.
     "ENGINE_A_DIAGNOSTIC_ENTRY_TF_ENABLED": False,
     "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED": False,
-    # Scan-only: let Engine B re-check its own naked-structure direction when
-    # the Engine A direction blocks B. Default-off to preserve historical scan behavior.
-    "ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED": False,
+    # Scan-only: Engine B selects its direction from its own structure evidence;
+    # Engine A direction is consulted only after scoring for alignment.
+    "ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED": True,
     # When both LONG and SHORT pass gates, require this score gap before emitting.
     # 0.0 = disabled (legacy max-score pick).
     "ENGINE_B_DIRECTION_MIN_SCORE_GAP": 0.5,

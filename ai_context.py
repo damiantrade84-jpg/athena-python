@@ -171,6 +171,23 @@ def classify_sl_by_asset_style(asset_type: str, style: str, sl_pct: float, atr: 
             return "Wide (Elevated Risk)"
         return "Normal"
 
+def _is_engine_b_primary_signal(
+    signal: Dict[str, Any], engine_source: str | None = None
+) -> bool:
+    """True only when Engine B, rather than an A signal with a B overlay, is primary."""
+    hint = str(
+        engine_source
+        or signal.get("engine_source")
+        or signal.get("source_engine")
+        or signal.get("engine")
+        or signal.get("setup_engine")
+        or ""
+    ).strip().lower().replace("-", "_")
+    if hint.startswith("engine b") or hint in {"engine_b", "naked", "b"}:
+        return True
+    return bool(signal.get("is_naked")) and not hint
+
+
 def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, explicit_style: str = "auto") -> Dict[str, Any]:
     """Build a unified dictionary context across all engines for LLM prompts."""
     asset_type = str(signal.get("type") or signal.get("asset_type", "unknown")).lower()
@@ -197,21 +214,46 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "data_freshness": signal.get("dataFreshness") or signal.get("candleFetchMeta"),
     }
     
-    # 2. Engine A metrics
-    confluence_score = float(signal.get("confluenceScore", 0) or 0)
-    max_score = float(signal.get("maxScore", 3.0) or 3.0)
-    raw_score_pct = (confluence_score / max_score * 100) if max_score > 0 else 0
-    factor_diagnostics = signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}
+    # 2. Engine A metrics. A B-primary compatibility payload may carry generic
+    # confluenceScore/maxScore aliases for legacy rendering; those are not
+    # Engine A evidence and must not populate the Engine A context.
+    is_engine_b_primary = _is_engine_b_primary_signal(signal, engine_source)
+    nested_engine_a = signal.get("engine_a") if isinstance(signal.get("engine_a"), dict) else {}
+    engine_a_source = nested_engine_a if is_engine_b_primary else signal
+    engine_a_score_raw = _first_not_none(
+        engine_a_source.get("confluenceScore"),
+        engine_a_source.get("score"),
+        engine_a_source.get("final_score"),
+    )
+    engine_a_max_raw = _first_not_none(
+        engine_a_source.get("maxScore"),
+        engine_a_source.get("max_score"),
+    )
+    if is_engine_b_primary and engine_a_score_raw is None:
+        confluence_score = None
+        max_score = None
+        raw_score_pct = None
+    else:
+        confluence_score = float(engine_a_score_raw or 0)
+        max_score = float(engine_a_max_raw or 3.0)
+        raw_score_pct = (
+            confluence_score / max_score * 100 if max_score > 0 else 0
+        )
+    factor_diagnostics = (
+        engine_a_source.get("factorDiagnostics")
+        or engine_a_source.get("factor_diagnostics")
+        or {}
+    )
     live_threshold = _first_not_none(
-        signal.get("liveThreshold"),
-        signal.get("confluenceThreshold"),
-        signal.get("threshold"),
+        engine_a_source.get("liveThreshold"),
+        engine_a_source.get("confluenceThreshold"),
+        engine_a_source.get("threshold"),
     )
     threshold_progress_pct = _first_not_none(
-        signal.get("thresholdProgressPct"),
-        signal.get("confluencePct"),
+        engine_a_source.get("thresholdProgressPct"),
+        engine_a_source.get("confluencePct"),
     )
-    if threshold_progress_pct is None:
+    if threshold_progress_pct is None and confluence_score is not None:
         try:
             threshold_value = float(live_threshold)
             threshold_progress_pct = (
@@ -227,23 +269,27 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "maxScore": max_score,
         "rawScorePct": raw_score_pct,
         "liveThreshold": live_threshold,
-        "thresholdProgressPct": float(threshold_progress_pct),
-        "scoreNorm": signal.get("scoreNorm"),
-        "factorScores": signal.get("factorScores") or signal.get("factor_scores"),
-        "factorWeights": signal.get("factorWeights") or signal.get("factor_weights"),
+        "thresholdProgressPct": (
+            float(threshold_progress_pct)
+            if threshold_progress_pct is not None
+            else None
+        ),
+        "scoreNorm": engine_a_source.get("scoreNorm"),
+        "factorScores": engine_a_source.get("factorScores") or engine_a_source.get("factor_scores"),
+        "factorWeights": engine_a_source.get("factorWeights") or engine_a_source.get("factor_weights"),
         "factorDiagnostics": factor_diagnostics,
-        "confidenceDetail": signal.get("confidenceDetail") or signal.get("confidence_detail"),
-        "trendState": signal.get("trendState")
+        "confidenceDetail": engine_a_source.get("confidenceDetail") or engine_a_source.get("confidence_detail"),
+        "trendState": engine_a_source.get("trendState")
         or factor_diagnostics.get("trendState")
-        or signal.get("regimeName")
-        or (signal.get("regime", {}).get("label") if isinstance(signal.get("regime", {}), dict) else signal.get("regime")),
-        "warnings": signal.get("warnings", []),
-        "addonStatus": (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("addon_status"),
-        "entryTimeframe": signal.get("entryTimeframe")
-        or (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("entryTimeframe"),
-        "entryUsesActiveCandle": (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("entryUsesActiveCandle"),
-        "activeEntryGate": (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("activeEntryGate"),
-        "components": (signal.get("factorDiagnostics") or signal.get("factor_diagnostics") or {}).get("components") or signal.get("componentScores"),
+        or engine_a_source.get("regimeName")
+        or (engine_a_source.get("regime", {}).get("label") if isinstance(engine_a_source.get("regime", {}), dict) else engine_a_source.get("regime")),
+        "warnings": engine_a_source.get("warnings", []),
+        "addonStatus": factor_diagnostics.get("addon_status"),
+        "entryTimeframe": engine_a_source.get("entryTimeframe")
+        or factor_diagnostics.get("entryTimeframe"),
+        "entryUsesActiveCandle": factor_diagnostics.get("entryUsesActiveCandle"),
+        "activeEntryGate": factor_diagnostics.get("activeEntryGate"),
+        "components": factor_diagnostics.get("components") or engine_a_source.get("componentScores"),
     }
     
     # 3. Engine B metrics
@@ -251,17 +297,6 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
     if not isinstance(engine_b_data, dict):
         engine_b_data = {}
 
-    engine_b_tf_defaults: Dict[str, Any] = {}
-    try:
-        from market_structure import resolve_engine_b_tfs
-
-        engine_b_tf_defaults = resolve_engine_b_tfs(
-            asset_type,
-            str(resolved_style or "intraday").lower(),
-        )
-    except Exception:
-        engine_b_tf_defaults = {}
-        
     engine_b = {
         "structural_verdict": _first_not_none(engine_b_data.get("structural_verdict"), signal.get("engine_b_verdict")),
         "current_swing_sequence": _first_not_none(engine_b_data.get("current_swing_sequence"), engine_b_data.get("swing_sequence")),
@@ -357,17 +392,37 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "independent_direction": engine_b_data.get("independent_direction") or engine_b_data.get("engine_b_independent_direction"),
         "struct_tf": _first_not_none(
             engine_b_data.get("struct_tf"),
+            engine_b_data.get("structure_tf_actual"),
             engine_b_data.get("structure_timeframe"),
-            engine_b_tf_defaults.get("struct"),
+            engine_b_data.get("structureTf"),
         ),
-        "zone_tf": _first_not_none(engine_b_data.get("zone_tf"), engine_b_tf_defaults.get("zone")),
+        "zone_tf": _first_not_none(
+            engine_b_data.get("zone_tf"),
+            engine_b_data.get("zoneTf"),
+            engine_b_data.get("structure_tf_actual"),
+        ),
+        "setup_tf": _first_not_none(
+            engine_b_data.get("setup_tf_policy"),
+            engine_b_data.get("setup_tf"),
+            engine_b_data.get("setupTf"),
+        ),
         "trigger_tf": _first_not_none(
+            engine_b_data.get("trigger_tf_actual"),
             engine_b_data.get("trigger_timeframe_actual"),
             engine_b_data.get("trigger_timeframe"),
             engine_b_data.get("entry_tf"),
-            engine_b_tf_defaults.get("trigger"),
+            engine_b_data.get("triggerTf"),
         ),
-        "atr_tf": _first_not_none(engine_b_data.get("atr_tf"), engine_b_tf_defaults.get("atr")),
+        "execution_tf": _first_not_none(
+            engine_b_data.get("execution_tf_actual"),
+            engine_b_data.get("execution_tf"),
+            engine_b_data.get("executionTf"),
+        ),
+        "atr_tf": _first_not_none(
+            engine_b_data.get("atr_tf_actual"),
+            engine_b_data.get("atr_tf"),
+            engine_b_data.get("atrTimeframe"),
+        ),
         "trigger_timeframe_expected": engine_b_data.get("trigger_timeframe_expected"),
         "trigger_timeframe_actual": _first_not_none(
             engine_b_data.get("trigger_timeframe_actual"),
@@ -566,10 +621,6 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
         f"Score group: {identity['scoreGroup']}",
         f"Requested style: {identity['requested_style']}",
         f"Resolved AI style: {identity['resolved_ai_style']}",
-        f"Raw score: {engine_a['confluenceScore']} / {engine_a['maxScore']}",
-        f"Raw score pct: {engine_a['rawScorePct']:.1f}%",
-        f"Live threshold: {engine_a['liveThreshold']}",
-        f"Threshold progress pct: {engine_a['thresholdProgressPct']:.1f}%",
         "Deterministic timeframe policy: "
         f"bias={timeframe_policy.get('biasTf')} "
         f"structure={timeframe_policy.get('structureTf')} "
@@ -578,17 +629,31 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
         f"execution={timeframe_policy.get('executionTf')} "
         f"readiness={timeframe_policy.get('entryReadiness')}",
     ]
+
+    if engine_a.get("confluenceScore") is not None:
+        lines.extend(
+            [
+                f"Engine A raw score: {engine_a['confluenceScore']} / {engine_a['maxScore']}",
+                f"Engine A raw score pct: {engine_a['rawScorePct']:.1f}%",
+                f"Engine A live threshold: {engine_a['liveThreshold']}",
+                "Engine A threshold progress pct: "
+                f"{engine_a['thresholdProgressPct']:.1f}%"
+                if engine_a.get("thresholdProgressPct") is not None
+                else "Engine A threshold progress pct: unavailable",
+            ]
+        )
     
     if signal.get("dashboard_confluence_label"):
         lines.append(f"Dashboard confluence label: {signal['dashboard_confluence_label']}")
-    elif engine_a["thresholdProgressPct"] >= 80:
+    elif engine_a.get("thresholdProgressPct") is not None and engine_a["thresholdProgressPct"] >= 80:
         lines.append("Dashboard confluence label: Strong")
-    elif engine_a["thresholdProgressPct"] >= 50:
+    elif engine_a.get("thresholdProgressPct") is not None and engine_a["thresholdProgressPct"] >= 50:
         lines.append("Dashboard confluence label: Medium")
-    else:
+    elif engine_a.get("thresholdProgressPct") is not None:
         lines.append("Dashboard confluence label: Weak")
         
-    lines.append(f"ScoreNorm: {engine_a['scoreNorm']}")
+    if engine_a.get("scoreNorm") is not None:
+        lines.append(f"Engine A ScoreNorm: {engine_a['scoreNorm']}")
     if engine_a.get("entryTimeframe"):
         lines.append(
             "Engine A entry scoring: "
@@ -600,7 +665,9 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
         lines.append(f"Engine A score contributions: {engine_a.get('components')}")
     if ctx["engine_c"].get("conviction") is not None:
         lines.append(f"CombinedConviction: {ctx['engine_c']['conviction']}")
-    is_engine_b_source = str(identity.get("engine_source") or "").lower().startswith("engine b") or bool(signal.get("is_naked"))
+    is_engine_b_source = _is_engine_b_primary_signal(
+        signal, str(identity.get("engine_source") or "")
+    )
     if is_engine_b_source:
         score = engine_b.get("structure_score")
         max_possible = engine_b.get("max_possible")
@@ -626,7 +693,8 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
         lines.append(
             "Engine B timeframe roles: "
             f"struct={engine_b.get('struct_tf')} zone={engine_b.get('zone_tf')} "
-            f"trigger={engine_b.get('trigger_tf')} atr={engine_b.get('atr_tf')}"
+            f"setup={engine_b.get('setup_tf')} trigger={engine_b.get('trigger_tf')} "
+            f"execution={engine_b.get('execution_tf')} atr={engine_b.get('atr_tf')}"
         )
         lines.append(
             "Engine B trigger TF gate: "
@@ -1016,25 +1084,34 @@ def build_engine_d_context(signal: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
-def _build_engine_a_context(signal: Dict[str, Any]) -> Dict[str, Any]:
+def _build_engine_a_context(
+    signal: Dict[str, Any], *, allow_root_fallback: bool = True
+) -> Dict[str, Any]:
     engine_a = _engine_dict(signal, "engine_a", "engineA")
-    score = _to_float(_pick_nested(signal, engine_a, "score", "confluenceScore", "final_score"))
-    max_score = _to_float(_pick_nested(signal, engine_a, "max_score", "maxScore"))
-    score_pct = _to_float(_pick_nested(signal, engine_a, "score_pct", "rawScorePct", "confluencePct"))
+
+    def _engine_a_pick(*keys: str) -> Any:
+        nested_value = _pick(engine_a, *keys)
+        if nested_value is not _MISSING or not allow_root_fallback:
+            return nested_value
+        return _pick(signal, *keys)
+
+    score = _to_float(_engine_a_pick("score", "confluenceScore", "final_score"))
+    max_score = _to_float(_engine_a_pick("max_score", "maxScore"))
+    score_pct = _to_float(_engine_a_pick("score_pct", "rawScorePct", "confluencePct"))
     if score_pct is None and score is not None and max_score:
         score_pct = score / max_score * 100.0
     data = {
         "score": score,
         "max_score": max_score,
         "score_pct": score_pct,
-        "direction": _pick_nested(signal, engine_a, "direction"),
-        "regime": _pick_nested(signal, engine_a, "regime", "trendState", "regimeName"),
-        "trend_score": _pick_nested(signal, engine_a, "trend_score", "trendScore"),
-        "momentum_score": _pick_nested(signal, engine_a, "momentum_score", "mom_quality", "momentumScore"),
-        "adx": _pick_nested(signal, engine_a, "adx"),
-        "volatility_state": _pick_nested(signal, engine_a, "volatility_state", "volatilityState"),
-        "factor_diagnostics": _pick_nested(signal, engine_a, "factor_diagnostics", "factorDiagnostics"),
-        "threshold_progress": _pick_nested(signal, engine_a, "threshold_progress", "thresholdProgressPct"),
+        "direction": _engine_a_pick("direction"),
+        "regime": _engine_a_pick("regime", "trendState", "regimeName"),
+        "trend_score": _engine_a_pick("trend_score", "trendScore"),
+        "momentum_score": _engine_a_pick("momentum_score", "mom_quality", "momentumScore"),
+        "adx": _engine_a_pick("adx"),
+        "volatility_state": _engine_a_pick("volatility_state", "volatilityState"),
+        "factor_diagnostics": _engine_a_pick("factor_diagnostics", "factorDiagnostics"),
+        "threshold_progress": _engine_a_pick("threshold_progress", "thresholdProgressPct"),
     }
     for key, value in list(data.items()):
         if value is _MISSING:
@@ -1241,7 +1318,10 @@ def build_ai_review_packet(
         or signal.get("setup_engine")
         or "unknown"
     )
-    engine_a = _build_engine_a_context(signal)
+    engine_a = _build_engine_a_context(
+        signal,
+        allow_root_fallback=not _is_engine_b_primary_signal(signal, engine_source),
+    )
     engine_b = _build_engine_b_context(signal)
     engine_c = _build_engine_c_context(signal)
     engine_d = build_engine_d_context(signal)

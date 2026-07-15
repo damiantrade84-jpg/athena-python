@@ -114,6 +114,35 @@ def test_scanner_v3_min_confidence_matches_scoring(monkeypatch):
     assert "confidence" in scanner_reason.lower()
 
 
+def test_v3_score_norm_is_not_reused_as_confidence_for_scoring_or_scanner(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_MIN_CONFIDENCE", 0.60)
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE",
+        {
+            **(CONFIG.get("ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE") or {}),
+            "us_indices_trackers": 0.54,
+        },
+    )
+    signal = _v3_trade_signal(
+        confluenceScore=1.50,
+        confluenceThreshold=1.50,
+        maxScore=3.0,
+        scoreNorm=0.50,
+    )
+    pair = {
+        "display": "S&P 500",
+        "symbol": "US500",
+        "type": "index",
+        "score_group": "us_indices_trackers",
+        "enabled": True,
+    }
+
+    assert scoring_classify(signal, pair)[0] == "trade"
+    assert scanner_classify(signal, pair)[0] == "trade"
+
+
 def test_scanner_and_scoring_agree_on_trade(monkeypatch):
     monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", False)
     signal = _v3_trade_signal()

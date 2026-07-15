@@ -26,6 +26,19 @@ log = logging.getLogger("sentinel.suggested_trades")
 _runtime: SimpleNamespace | None = None
 
 
+def start_suggested_trade_monitor(runtime: SimpleNamespace) -> bool:
+    """Start the alert-only monitor during explicit application startup."""
+    cfg = getattr(runtime, "CONFIG", {}) or {}
+    return start_suggested_trade_runner_once(
+        cfg=cfg,
+        fetch_candles_fn=getattr(runtime, "fetch_candles", None),
+        live_prices=getattr(runtime, "live_prices", None),
+        live_prices_lock=getattr(runtime, "live_prices_lock", None),
+        active_path=DEFAULT_ACTIVE_PATH,
+        events_path=DEFAULT_EVENTS_PATH,
+    )
+
+
 def _runtime_cfg() -> dict:
     rt = _runtime
     return getattr(rt, "CONFIG", {}) or {}
@@ -57,16 +70,6 @@ def _build_list_payload(*, watches: list[dict] | None = None) -> dict:
 def register_suggested_trade_routes(app, runtime: SimpleNamespace) -> None:
     global _runtime
     _runtime = runtime
-
-    cfg = _runtime_cfg()
-    start_suggested_trade_runner_once(
-        cfg=cfg,
-        fetch_candles_fn=getattr(runtime, "fetch_candles", None),
-        live_prices=getattr(runtime, "live_prices", None),
-        live_prices_lock=getattr(runtime, "live_prices_lock", None),
-        active_path=DEFAULT_ACTIVE_PATH,
-        events_path=DEFAULT_EVENTS_PATH,
-    )
 
     @app.route("/api/suggested-trades/flag", methods=["POST"])
     def api_suggested_trades_flag():

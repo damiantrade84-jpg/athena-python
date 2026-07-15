@@ -32,17 +32,17 @@ PAPER_SOAK:
 
 # len(d1)>=220, len(h4)>=50, len(h1)>=50 after drop.
 
-# H4/H1/D1 default 1001 means after the forming-bar drop scoring still uses ~1000
+# H4/H1/D1 default 1000 avoids Bybit pagination while retaining ~999 closed bars
 
 # closed bars while charts can keep the live bar for visibility.
 
 # Reduce for lighter scans (EMA on chart vs signal.snap will diverge).
 
-D1_CANDLES: 1001
+D1_CANDLES: 1000
 
-H4_CANDLES: 1001
+H4_CANDLES: 1000
 
-H1_CANDLES: 1001
+H1_CANDLES: 1000
 M30_CANDLES: 500  # Active Engine A forex intraday entry/setup bars.
 M15_CANDLES: 500  # Active Engine B forex intraday trigger bars.
 M5_CANDLES: 1000  # Policy-driven execution/refinement bars; never a higher-TF fallback.
@@ -242,8 +242,10 @@ ENGINE_A_V3_TREND_HEALTH:
 # family default in engine_a_v3/profile.py and renormalized to sum 1.0; unknown
 # keys and invalid values are ignored (fall back to the family default). Empty
 # {} -> per-family defaults (_FAMILY_WEIGHTS). TRADE cutoff reuses
-# ENGINE_A_SCORE_GROUP_THRESHOLDS. Timeframes: intraday = H1 entry / H4 momentum
-# / D1 bias; swing = H4 entry / D1 bias (per horizon).
+# ENGINE_A_SCORE_GROUP_THRESHOLDS. Without authoritative timeframe policy, the
+# legacy fallback is intraday H1 entry/H4 momentum and swing H4 entry/D1 bias.
+# Under enforced policy, Engine A consumes policy setup/trigger and
+# regime/bias/structure roles instead.
 # Tunable live with no code change, e.g.:
 #   crypto_btc: { trend: 0.40, momentum: 0.25, location: 0.15, volume: 0.20 }
 ENGINE_A_QUANT_WEIGHTS_BY_GROUP:
@@ -2300,6 +2302,7 @@ DATA_FRESHNESS_GATES:
   BLOCK_TIMEFRAMES:
     - M5
     - M15
+    - M30
     - H1
     - H4
     - D1
@@ -4036,10 +4039,10 @@ LOWER_TF_SHADOW:
 ENGINE_B_STRUCTURE_GATE_ENABLED: true
 # false = space/room gate is non-blocking (still computed for diagnostics).
 # Does not bypass freshness, structure, location, trigger, or SL/TP side checks.
-ENGINE_B_SPACE_GATE_ENABLED: false
+ENGINE_B_SPACE_GATE_ENABLED: true
 # false = Engine B min-RR (rr_ok) is non-blocking at scan; risk_engine also
 # skips RR_BELOW_MINIMUM for Engine B execution signals. SL/TP must still exist.
-ENGINE_B_RR_GATE_ENABLED: false
+ENGINE_B_RR_GATE_ENABLED: true
 # false = risk_engine skips RR_BELOW_MINIMUM for non-Engine-B (Engine A) signals.
 ENGINE_A_RR_GATE_ENABLED: false
 # Diagnostic-only: retarget Engine B trigger detection onto style_profile.entry_tf
@@ -4052,9 +4055,8 @@ ENGINE_A_DIAGNOSTIC_ENTRY_TF_ENABLED: false
 # When true, Engine A full-scan *trade* tier requires Engine B confirmation (enginesAligned).
 # Default false: Engine A and B are independent on scan; use Engine C for combined verdict.
 ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED: false
-# Scan-only paper/demo diagnostics: Engine B may re-check its own independent
-# naked-structure direction when the Engine A direction blocks B. config.py
-# remains default-off.
+# Scan-only engine isolation: Engine B selects direction from its own structure
+# evidence before Engine A/B alignment is calculated.
 ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED: true
 # When both LONG and SHORT pass gates, require this score gap before emitting.
 # 0.0 = disabled (legacy max-score pick).

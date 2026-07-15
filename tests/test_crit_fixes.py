@@ -552,6 +552,21 @@ def test_scan_naked_revalidates_emitted_engine_b_cards_before_response():
     assert "_revalidate_engine_b_scan_signal(_row)" in route
 
 
+def test_broker_unavailable_gld_cannot_be_restored_or_auto_enabled():
+    src = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
+    gld = src.split('"display": "GLD"', 1)[1].split("},", 1)[0]
+    load_toggle = src.split("def _load_toggle_state():", 1)[1].split(
+        "ACTIVE_PAIRS =", 1
+    )[0]
+    auto_toggle = src.split("def _auto_toggle_pair(pair, result):", 1)[1].split(
+        '@app.route("/api/backtest-naked"', 1
+    )[0]
+
+    assert '"auto_enable": False' in gld
+    assert 'persisted_enabled and p.get("auto_enable") is False' in load_toggle
+    assert 'pair.get("auto_enable") is False' in auto_toggle
+
+
 def test_naked_execution_refresh_is_fail_closed_for_direction_and_atr():
     src = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
 

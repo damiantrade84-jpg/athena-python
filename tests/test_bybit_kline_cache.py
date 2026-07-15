@@ -100,3 +100,45 @@ def test_expired_entry_refetches(monkeypatch):
     _fetch_bybit_klines("BTCUSDT", "H4", 120)
     assert calls["n"] == 2
     clear_bybit_kline_cache()
+
+
+def test_rate_limit_retcode_retries_once_then_fails_closed(monkeypatch):
+    class _Response:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    success = {
+        "retCode": 0,
+        "result": {
+            "list": [["1700000000000", "1", "2", "0.5", "1.5", "100", "150"]]
+        },
+    }
+    rate_limited = {"retCode": 10006, "retMsg": "Too many visits"}
+    responses = iter([_Response(rate_limited), _Response(success)])
+    sleeps = []
+    monkeypatch.setattr(data_feeds.http_requests, "get", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(data_feeds.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    clear_bybit_kline_cache()
+    candles = _fetch_bybit_klines("BTCUSDT", "D1", 1000)
+    assert candles and candles[0]["close"] == 1.5
+    assert sleeps == [data_feeds._BYBIT_KLINE_RATE_LIMIT_BACKOFF_SEC]
+
+    calls = {"n": 0}
+
+    def _always_limited(*_args, **_kwargs):
+        calls["n"] += 1
+        return _Response(rate_limited)
+
+    clear_bybit_kline_cache()
+    sleeps.clear()
+    monkeypatch.setattr(data_feeds.http_requests, "get", _always_limited)
+    assert _fetch_bybit_klines("BTCUSDT", "D1", 1000) is None
+    assert calls["n"] == 2
+    assert sleeps == [data_feeds._BYBIT_KLINE_RATE_LIMIT_BACKOFF_SEC]
+    clear_bybit_kline_cache()

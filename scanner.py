@@ -369,31 +369,23 @@ def _attach_engine_a_execution_freshness(
         forming = state.get("forming")
         return confirmed + ([forming] if forming else [])
 
+    diagnostic_tfs = ["D1", "H4", "H1"]
+    for tf_u in ("M30", "M15", "M5"):
+        if isinstance(preloaded_market_state.get(tf_u), dict) or raw_candles.get(tf_u):
+            diagnostic_tfs.append(tf_u)
+
     signal["candleFreshness"] = {
-        "D1": candle_freshness_diagnostic(
+        tf_u: candle_freshness_diagnostic(
             pair,
-            "D1",
-            _scan_series_for_diag("D1"),
+            tf_u,
+            _scan_series_for_diag(tf_u),
             source=pair.get("source"),
             time_now=now,
-        ),
-        "H4": candle_freshness_diagnostic(
-            pair,
-            "H4",
-            _scan_series_for_diag("H4"),
-            source=pair.get("source"),
-            time_now=now,
-        ),
-        "H1": candle_freshness_diagnostic(
-            pair,
-            "H1",
-            _scan_series_for_diag("H1"),
-            source=pair.get("source"),
-            time_now=now,
-        ),
+        )
+        for tf_u in diagnostic_tfs
     }
 
-    for tf_u in ("H4", "H1", "D1"):
+    for tf_u in diagnostic_tfs:
         state = _scan_state(tf_u)
         confirmed = list(state.get("confirmed") or [])
         forming = state.get("forming")
@@ -1256,6 +1248,23 @@ def _make_engine_b_only_signal_stub_from_blocked_engine_a(
     return stub
 
 
+def _engine_b_scan_direction_input(
+    engine_a_direction: str | None,
+    independent_direction: str | None,
+    *,
+    engine_b_only: bool,
+    independent_enabled: bool,
+) -> str | None:
+    """Choose B's analysis direction without silently falling back across engines."""
+    if engine_b_only or independent_enabled:
+        return (
+            independent_direction
+            if independent_direction in ("LONG", "SHORT")
+            else None
+        )
+    return engine_a_direction if engine_a_direction in ("LONG", "SHORT") else None
+
+
 def _engine_b_independent_direction_probe(
     pair: dict,
     *,
@@ -1564,6 +1573,58 @@ def _scalar_float_gate(x: Any) -> float | None:
         return None
 
 
+def _scalar_bool_gate(x: Any) -> bool | None:
+    """Normalize native/numpy scalar booleans for JSON funnel diagnostics."""
+    if x is None:
+        return None
+    if isinstance(x, str):
+        value = x.strip().lower()
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        return None
+    try:
+        x = x.item()
+    except (AttributeError, ValueError):
+        pass
+    return x if isinstance(x, bool) else bool(x)
+
+
+def _attach_engine_b_timeframe_provenance(
+    res_b: dict,
+    policy: Any,
+    *,
+    actual_structure_tf: str,
+    actual_trigger_tf: str,
+    actual_atr_tf: str,
+) -> None:
+    """Keep computed TFs authoritative while recording policy TFs separately."""
+    structure_tf = str(res_b.get("structure_tf") or actual_structure_tf).upper()
+    trigger_tf = str(res_b.get("trigger_timeframe") or actual_trigger_tf).upper()
+    atr_tf = str(actual_atr_tf).upper()
+    res_b.update(
+        {
+            "structure_tf": structure_tf,
+            "entry_tf": trigger_tf,
+            "trigger_tf": trigger_tf,
+            "execution_tf": trigger_tf,
+            "atr_tf": atr_tf,
+            "structure_tf_actual": structure_tf,
+            "entry_tf_actual": trigger_tf,
+            "trigger_tf_actual": trigger_tf,
+            "execution_tf_actual": trigger_tf,
+            "atr_tf_actual": atr_tf,
+            "structure_tf_policy": policy.structure_tf.value,
+            "setup_tf_policy": policy.setup_tf.value,
+            "trigger_tf_policy": policy.trigger_tf.value,
+            "execution_tf_policy": policy.execution_tf.value,
+            "atr_tf_policy": policy.structure_tf.value,
+            "nearest_support_resistance_timeframe": structure_tf,
+        }
+    )
+
+
 def _attach_engine_b_scan_gate_funnel(
     *,
     sig: dict,
@@ -1607,12 +1668,12 @@ def _attach_engine_b_scan_gate_funnel(
         "structure_verdict": rb.get("structural_verdict"),
         "direction_a": sig.get("direction"),
         "direction_b": sig.get("engine_b_direction"),
-        "structure_ok": cnf.get("structure_ok"),
-        "location_ok": cnf.get("location_ok"),
-        "entry_ok": cnf.get("entry_ok"),
-        "room_ok": cnf.get("room_ok"),
-        "space_gate_ok": cnf.get("space_gate_ok"),
-        "rr_ok": cnf.get("rr_ok"),
+        "structure_ok": _scalar_bool_gate(cnf.get("structure_ok")),
+        "location_ok": _scalar_bool_gate(cnf.get("location_ok")),
+        "entry_ok": _scalar_bool_gate(cnf.get("entry_ok")),
+        "room_ok": _scalar_bool_gate(cnf.get("room_ok")),
+        "space_gate_ok": _scalar_bool_gate(cnf.get("space_gate_ok")),
+        "rr_ok": _scalar_bool_gate(cnf.get("rr_ok")),
         "score": _scalar_float_gate(cnf.get("score")),
         "min_score_scaled": _scalar_float_gate(sig.get("engine_b_min_score_scaled")),
         "min_rr": _scalar_float_gate(sp.get("min_rr")),
@@ -1633,6 +1694,23 @@ def _attach_engine_b_scan_gate_funnel(
         "rr": _scalar_float_gate(cnf.get("rr")),
         "rr_source": cnf.get("rr_source"),
         "execution_level_reject_reason": cnf.get("execution_level_reject_reason"),
+        "tp1_path_clear": _scalar_bool_gate(cnf.get("tp1_path_clear")),
+        "tp1_path_block_reason": cnf.get("tp1_path_block_reason"),
+        "entry_inside_opposing_zone": _scalar_bool_gate(
+            cnf.get("entry_inside_opposing_zone")
+        ),
+        "tp1_before_opposing_zone": _scalar_bool_gate(
+            cnf.get("tp1_before_opposing_zone")
+        ),
+        "tp1_clamped_to_opposing_zone": _scalar_bool_gate(
+            cnf.get("tp1_clamped_to_opposing_zone")
+        ),
+        "tp1_clamp_reject_reason": cnf.get("tp1_clamp_reject_reason"),
+        "opposing_zone_distance": _scalar_float_gate(
+            (cnf.get("tp1_path_diag") or {}).get("opposing_zone_distance")
+            if isinstance(cnf.get("tp1_path_diag"), dict)
+            else None
+        ),
         "tp_structural_limited": rb.get("tp_structural_limited"),
         "engine_b_aggtrade_required": cnf.get("aggtrade_required", rb.get("aggtrade_required")),
         "engine_b_aggtrade_available": cnf.get("aggtrade_available", rb.get("aggtrade_available")),
@@ -2324,6 +2402,7 @@ def run_full_scan(
                     "preloaded_market_state": preloaded_market_state,
                     "preloaded_fetch_meta": fetch_meta,
                     "intermarket_snapshot": intermarket_snapshot,
+                    "timeframe_speed_state": _speed_state,
                 }
                 if refresh_market_data:
                     _analyze_kwargs["refresh_market_data"] = True
@@ -2711,7 +2790,11 @@ def run_full_scan(
                             and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
                             and hasattr(r, "bybit_atr_for_levels")
                         ):
-                            bybit_atr = r.bybit_atr_for_levels(pair, resolved_style_b)
+                            bybit_atr = r.bybit_atr_for_levels(
+                                pair,
+                                resolved_style_b,
+                                atr_tf=_atr_tf_b,
+                            )
                             _eb_funnel_extras["bybit_atr_available"] = bool(bybit_atr)
                             if bybit_atr:
                                 atr = float(bybit_atr)
@@ -2774,13 +2857,25 @@ def run_full_scan(
                                 asset_type=ptype,
                             )
 
-                            # Engine B-only path: when no Engine A direction
-                            # exists, probe both directions independently and
-                            # pick the best. This makes Engine B output
-                            # independent of Engine A.
+                            # Engine B owns its direction whenever independent
+                            # scanning is enabled. Engine A's direction is used
+                            # only after B scoring to calculate alignment; it is
+                            # never an input to B's structure/confidence score.
+                            _engine_a_direction = (
+                                sig_a.get("direction")
+                                if not engine_b_scan_only
+                                else None
+                            )
+                            _independent_direction_enabled = bool(
+                                CONFIG.get(
+                                    "ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED",
+                                    False,
+                                )
+                            )
                             _b_only_probe_res = None
                             _b_only_probe_conf = None
-                            if engine_b_scan_only:
+                            _b_dir = None
+                            if engine_b_scan_only or _independent_direction_enabled:
                                 _b_dir, _b_only_probe_res, _b_only_probe_conf = (
                                     _engine_b_independent_direction_probe(
                                         pair,
@@ -2800,16 +2895,25 @@ def run_full_scan(
                                         role_candles=_tf_map_b,
                                     )
                                 )
-                                if _b_dir in ("LONG", "SHORT"):
-                                    sig_a["direction"] = _b_dir
-                                else:
+                                if _b_dir not in ("LONG", "SHORT"):
                                     _eb_funnel_extras.setdefault(
                                         "engine_b_skip_stage",
                                         "no_clear_structural_verdict",
                                     )
-                            direction = sig_a.get("direction")
+                            _b_direction_for_analysis = _engine_b_scan_direction_input(
+                                _engine_a_direction,
+                                _b_dir,
+                                engine_b_only=engine_b_scan_only,
+                                independent_enabled=_independent_direction_enabled,
+                            )
+                            if _b_direction_for_analysis in ("LONG", "SHORT"):
+                                if engine_b_scan_only:
+                                    sig_a["direction"] = _b_direction_for_analysis
+                                elif _independent_direction_enabled:
+                                    sig_a["engine_b_independent_direction_scan_applied"] = True
+                                    sig_a["engine_b_original_direction"] = _engine_a_direction
 
-                            if direction in ("LONG", "SHORT"):
+                            if _b_direction_for_analysis in ("LONG", "SHORT"):
                                 if _b_only_probe_res is not None:
                                     # Reuse probe result so we don't re-run
                                     # analyze_structure for the picked direction.
@@ -2822,7 +2926,7 @@ def run_full_scan(
                                         h4 or [],
                                         h1 or [],
                                         current_price,
-                                        direction,
+                                        _b_direction_for_analysis,
                                         atr,
                                         regime_label,
                                         fallback_rr=style_profile_b.get("fallback_rr", 2.0),
@@ -2845,76 +2949,13 @@ def run_full_scan(
                                         conf_b = _engine_b.calculate_confidence(
                                             res_b,
                                             current_price,
-                                            direction,
+                                            _b_direction_for_analysis,
                                             entry_candles=entry_candles_b or zone_candles_b,
                                             style_profile=style_profile_b,
                                         )
-                                    _engine_b_direction_used = direction
-                                    # Scan-only B independence (legacy A-driven
-                                    # path): if Engine A's direction makes the
-                                    # naked-structure gate fail, optionally
-                                    # re-check the direction inferred from
-                                    # Engine B's own BOS/CHoCH/sweep evidence.
-                                    # Skipped for engine_b_scan_only — the
-                                    # probe above already evaluated both
-                                    # directions and picked the best.
-                                    if (
-                                        not engine_b_scan_only
-                                        and bool(CONFIG.get("ENGINE_B_SCAN_INDEPENDENT_DIRECTION_ENABLED", False))
-                                    ):
-                                        _initial_gate_ok, _ = engine_b_confidence_passes(
-                                            conf_b,
-                                            style_profile_b,
-                                            regime_label,
-                                            ptype,
-                                        )
-                                        _independent = res_b.get("engine_b_independent_direction") or {}
-                                        _alt_direction = _independent.get("direction")
-                                        if (
-                                            not _initial_gate_ok
-                                            and _alt_direction in ("LONG", "SHORT")
-                                            and _alt_direction != direction
-                                        ):
-                                            alt_res_b = _engine_b.set_registry_context(
-                                                pair.get("symbol") or pair.get("display")
-                                            ).analyze_structure(
-                                                d1 or [],
-                                                h4 or [],
-                                                h1 or [],
-                                                current_price,
-                                                _alt_direction,
-                                                atr,
-                                                regime_label,
-                                                fallback_rr=style_profile_b.get("fallback_rr", 2.0),
-                                                asset_type=ptype,
-                                                d1_snap=_sc_d1_snap,
-                                                h4_snap=_sc_h4_snap,
-                                                style=resolved_style_b,
-                                                pair=pair,
-                                                **engine_b_live_trigger_kwargs(
-                                                    style_profile_b, _tf_map_b
-                                                ),
-                                            )
-                                            if alt_res_b.get("structural_verdict") == "CLEAR":
-                                                alt_conf_b = _engine_b.calculate_confidence(
-                                                    alt_res_b,
-                                                    current_price,
-                                                    _alt_direction,
-                                                    entry_candles=entry_candles_b or zone_candles_b,
-                                                    style_profile=style_profile_b,
-                                                )
-                                                alt_gate_ok, _ = engine_b_confidence_passes(
-                                                    alt_conf_b,
-                                                    style_profile_b,
-                                                    regime_label,
-                                                    ptype,
-                                                )
-                                                if alt_gate_ok:
-                                                    res_b = alt_res_b
-                                                    conf_b = alt_conf_b
-                                                    _engine_b_direction_used = _alt_direction
-                                                    sig_a["engine_b_independent_direction_scan_applied"] = True
-                                                    sig_a["engine_b_original_direction"] = direction
+                                    _engine_b_direction_used = _b_direction_for_analysis
+                                    # The selected B direction is now final; A is
+                                    # consulted only for alignment below.
                                     b_score = float(conf_b.get("score", 0))
                                     b_max = float(conf_b.get("max_possible", 5))
                                     b_gate_score = float(conf_b.get("gate_score", b_score))
@@ -2966,8 +3007,9 @@ def run_full_scan(
                                     _w_a = float(_w.get("A", 0.40))
                                     _w_b = float(_w.get("B", 0.60))
 
-                                    _engine_b_direction_aligned = (
-                                        _engine_b_direction_used == direction
+                                    _engine_b_direction_aligned = bool(
+                                        _engine_a_direction in ("LONG", "SHORT")
+                                        and _engine_b_direction_used == _engine_a_direction
                                     )
                                     combined_conviction = _engine_b_scan_combined_conviction(
                                         a_norm,
@@ -3018,13 +3060,12 @@ def run_full_scan(
                                 from timeframe_policy import policy_mode_is_authoritative
 
                                 if policy_mode_is_authoritative(None, CONFIG):
-                                    res_b["structure_tf"] = _engine_b_policy.structure_tf.value
-                                    res_b["entry_tf"] = _engine_b_policy.setup_tf.value
-                                    res_b["trigger_tf"] = _engine_b_policy.trigger_tf.value
-                                    res_b["execution_tf"] = _engine_b_policy.execution_tf.value
-                                    res_b["atr_tf"] = _engine_b_policy.structure_tf.value
-                                    res_b["nearest_support_resistance_timeframe"] = (
-                                        _engine_b_policy.structure_tf.value
+                                    _attach_engine_b_timeframe_provenance(
+                                        res_b,
+                                        _engine_b_policy,
+                                        actual_structure_tf=_zone_tf_b,
+                                        actual_trigger_tf=_entry_tf_b,
+                                        actual_atr_tf=_atr_tf_b,
                                     )
                                 res_b["signal_price_rr"] = res_b.get("structural_rr")
                                 res_b["live_price_rr"] = (
@@ -3066,7 +3107,7 @@ def run_full_scan(
                                             pair=pair,
                                             source=pair.get("source"),
                                             fetch_candles=r.fetch_candles,
-                                            direction=direction,
+                                            direction=_engine_b_direction_used,
                                             atr=atr,
                                             component="engine_b",
                                         )

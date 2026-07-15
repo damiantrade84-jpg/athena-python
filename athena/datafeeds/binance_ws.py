@@ -327,13 +327,24 @@ class BinanceWS:
         asyncio.run(self.stop())
 
 
-def binance_futures_multi_micro_stream_url(symbols: list[str]) -> str:
+def binance_futures_multi_micro_stream_url(
+    symbols: list[str], depth_speed_ms: int = 500
+) -> str:
     """Combined Binance USDT-M URL multiplexing depth+trade+aggTrade for many symbols.
 
     One physical WebSocket connection carries all subscribed symbol streams, removing
     the per-symbol-connection failure mode that left BTCUSDT/ETHUSDT/XRPUSDT silent
     when individual streams half-closed without a close frame.
+
+    ``depth_speed_ms`` controls the partial-book refresh rate (Binance USD-M supports
+    100/250/500 ms). Metrics only emit once per second, so 100 ms depth delivered ~10x
+    more inbound frames than the consumer used — that surplus filled the socket buffer
+    during scan-thread GIL contention and triggered abnormal (code 1006) server-side
+    closes. 500 ms preserves 1s-emit fidelity while cutting depth volume ~5x. The
+    trade/aggTrade streams are unchanged, so orderflow/trade-bucket freshness is intact.
     """
+    if depth_speed_ms not in (100, 250, 500):
+        depth_speed_ms = 500
     norm: list[str] = []
     seen: set[str] = set()
     for s in symbols or []:
@@ -349,7 +360,7 @@ def binance_futures_multi_micro_stream_url(symbols: list[str]) -> str:
     streams = "/".join(
         f"{sym}@{kind}"
         for sym in norm
-        for kind in ("depth20@100ms", "trade", "aggTrade")
+        for kind in (f"depth20@{depth_speed_ms}ms", "trade", "aggTrade")
     )
     return f"{base}?streams={streams}"
 
@@ -399,7 +410,9 @@ class BinanceMicroMultiWS:
         symbols: list[str],
         emit_interval: float = 1.0,
         stale_symbol_seconds: float = 120.0,
+        depth_speed_ms: int = 500,
     ) -> None:
+        self._depth_speed_ms = depth_speed_ms if depth_speed_ms in (100, 250, 500) else 500
         norm: list[str] = []
         seen: set[str] = set()
         for s in symbols or []:
@@ -442,7 +455,7 @@ class BinanceMicroMultiWS:
 
     async def _connect(self) -> None:
         """Outer reconnect loop; mirrors BinanceCandleWS pattern."""
-        url = binance_futures_multi_micro_stream_url(self._symbols)
+        url = binance_futures_multi_micro_stream_url(self._symbols, self._depth_speed_ms)
         while self._running:
             try:
                 async with websockets.connect(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Callable, Iterable
 
@@ -45,6 +46,7 @@ DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS = 3
 # Hard wall-clock budget so a slow/hung feed can never stall a scan. On overrun
 # the scan proceeds with existing PTIS data (fail-open).
 DEFAULT_SCAN_INGEST_BUDGET_S = 45.0
+_ASE_SCAN_INGEST_LOCK = threading.Lock()
 
 
 def _attach_lower_tf_shadow_ase(
@@ -103,6 +105,7 @@ def _maybe_ingest(
     *,
     bybit_lookback_days: int = DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS,
     bybit_symbols: list[str] | None = None,
+    mt5_live_instruments: tuple[Instrument, ...] | None = None,
     budget_s: float = DEFAULT_SCAN_INGEST_BUDGET_S,
 ) -> dict[str, Any] | None:
     """Refresh PTIS before a scan. Fail-open: log and return error metadata on failure.
@@ -116,11 +119,12 @@ def _maybe_ingest(
     if not selected:
         return None
 
-    import threading
-
     outcome: dict[str, Any] = {}
 
     def _run() -> None:
+        if not _ASE_SCAN_INGEST_LOCK.acquire(blocking=False):
+            outcome["skipped"] = "ingest_already_in_progress"
+            return
         try:
             ingest_kwargs: dict[str, Any] = {
                 "store": store,
@@ -130,6 +134,8 @@ def _maybe_ingest(
             }
             if bybit_symbols is not None:
                 ingest_kwargs["bybit_symbols"] = bybit_symbols
+            if mt5_live_instruments is not None:
+                ingest_kwargs["mt5_live_instruments"] = mt5_live_instruments
             outcome["result"] = run_ingest(
                 **ingest_kwargs,
             )
@@ -137,6 +143,8 @@ def _maybe_ingest(
             # validation raises a SystemExit subclass, which must not kill the
             # ingest worker silently either.
             outcome["error"] = str(exc)
+        finally:
+            _ASE_SCAN_INGEST_LOCK.release()
 
     worker = threading.Thread(target=_run, name="ase-scan-ingest", daemon=True)
     worker.start()
@@ -150,6 +158,8 @@ def _maybe_ingest(
     if "error" in outcome:
         log.warning("ASE ingest failed (scan continues): %s", outcome["error"])
         return {"error": outcome["error"]}
+    if "skipped" in outcome:
+        return {"skipped": True, "reason": outcome["skipped"]}
     return {"result": outcome.get("result")}
 
 
@@ -368,6 +378,11 @@ def run_ase_scan(
             if ingest_sources_selected and "bybit" in ingest_sources_selected
             else None
         ),
+        mt5_live_instruments=(
+            instruments
+            if ingest_sources_selected and "mt5_live" in ingest_sources_selected
+            else None
+        ),
     )
 
     candidates = generate_live_candidates(store, instruments, horizon=horizon)
@@ -471,6 +486,11 @@ def run_ase_dual_horizon_scan(
         bybit_symbols=(
             _bybit_symbols_for_scan(instruments)
             if ingest_sources_selected and "bybit" in ingest_sources_selected
+            else None
+        ),
+        mt5_live_instruments=(
+            instruments
+            if ingest_sources_selected and "mt5_live" in ingest_sources_selected
             else None
         ),
     )

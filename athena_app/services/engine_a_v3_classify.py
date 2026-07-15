@@ -61,12 +61,6 @@ def classify_engine_a_v3_signal(signal: dict[str, Any], pair: dict[str, Any]) ->
         if bool(CONFIG.get("ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", False)):
             min_conf = get_min_confidence_threshold(pair)
             conf = _signal_confidence_for_gate(signal)
-            if conf is None:
-                conf_raw = signal.get("scoreNorm")
-                try:
-                    conf = float(conf_raw) if conf_raw is not None else None
-                except (TypeError, ValueError):
-                    conf = None
             if conf is not None and conf < min_conf:
                 score_group = get_pair_score_group(pair)
                 return (

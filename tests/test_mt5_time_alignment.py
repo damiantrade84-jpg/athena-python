@@ -3,6 +3,7 @@
 from athena_app.services.mt5_time_alignment import (
     infer_mt5_rates_time_shift_seconds,
     normalize_mt5_tick_epoch_utc,
+    should_refetch_active_lower_tf,
 )
 
 
@@ -149,3 +150,52 @@ def test_normalize_tick_invalid_inputs_return_none():
     assert normalize_mt5_tick_epoch_utc(None, 123.0, 3) is None
     assert normalize_mt5_tick_epoch_utc(0, 123.0, 3) is None
     assert normalize_mt5_tick_epoch_utc(-5, 123.0, 3) is None
+
+
+def test_active_m15_one_bucket_lag_with_fresh_tick_retries():
+    now = 1_781_034_014.0
+    current_bucket = int(now // 900) * 900
+    should, lag = should_refetch_active_lower_tf(
+        "M15",
+        now,
+        current_bucket - 900,
+        now - 10,
+        60,
+    )
+    assert should is True
+    assert lag == 1
+
+
+def test_active_m15_current_bucket_does_not_retry():
+    now = 1_781_034_014.0
+    current_bucket = int(now // 900) * 900
+    assert should_refetch_active_lower_tf(
+        "M15",
+        now,
+        current_bucket,
+        now - 10,
+        60,
+    ) == (False, 0)
+
+
+def test_closed_m15_feed_with_stale_tick_does_not_retry():
+    now = 1_781_034_014.0
+    current_bucket = int(now // 900) * 900
+    assert should_refetch_active_lower_tf(
+        "M15",
+        now,
+        current_bucket - 900,
+        now - 17 * 3600,
+        90,
+    ) == (False, 0)
+
+
+def test_active_lower_tf_retry_is_limited_to_m15_m30():
+    now = 1_781_034_014.0
+    assert should_refetch_active_lower_tf(
+        "H1",
+        now,
+        now - 3600,
+        now - 10,
+        60,
+    ) == (False, 0)

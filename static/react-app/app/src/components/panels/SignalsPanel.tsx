@@ -75,6 +75,41 @@ type ExecuteResponse = {
   approval?: { approved: boolean; reason: string };
 };
 
+function firstFiniteNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (value == null || value === '' || typeof value === 'boolean') continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function isEngineBPrimarySignal(signal: EngineASignal | null | undefined): boolean {
+  if (!signal) return false;
+  const raw = signal as Record<string, unknown>;
+  const engine = String(raw.engine_source ?? raw.source_engine ?? raw.engine ?? '').toUpperCase();
+  return engine === 'ENGINE_B' || engine === 'B' || engine === 'NAKED' || raw.is_naked === true;
+}
+
+function signalGateRr(signal: EngineASignal | null | undefined): number | null {
+  if (!signal) return null;
+  if (!isEngineBPrimarySignal(signal)) return firstFiniteNumber(signal.rr1, signal.rr);
+  const raw = signal as Record<string, unknown>;
+  const status = recordValue(raw.engine_b_status);
+  const result = recordValue(raw.naked_data ?? raw.engine_b);
+  return firstFiniteNumber(
+    raw.engine_b_rr_used_for_gate,
+    status?.rr_used_for_gate,
+    result?.rr_used_for_gate,
+    raw.engine_b_execution_rr2,
+    status?.execution_rr2,
+    result?.execution_rr2,
+    signal.rr,
+    signal.rr2,
+    signal.rr1,
+  );
+}
+
 /** Stable row key for a unified signal (pair + direction). Used for engine dedupe. */
 function rowKey(signal: EngineASignal): string {
   const pair = String(signal.pair || signal.display || signal.symbol || '').toUpperCase().trim();
@@ -104,7 +139,7 @@ function compareUnified(a: UnifiedRow, b: UnifiedRow, sortBy: string): number {
   const bWatch = isWatchlist(b.signal);
   if (aWatch !== bWatch) return aWatch ? 1 : -1;
   if (sortBy === 'conviction') return toNum(b.signal.conviction) - toNum(a.signal.conviction);
-  if (sortBy === 'rr') return toNum(b.signal.rr ?? b.signal.rr1) - toNum(a.signal.rr ?? a.signal.rr1);
+  if (sortBy === 'rr') return toNum(signalGateRr(b.signal)) - toNum(signalGateRr(a.signal));
   if (sortBy === 'time') {
     return new Date(b.signal.timestamp || 0).getTime() - new Date(a.signal.timestamp || 0).getTime();
   }
@@ -392,7 +427,13 @@ function resolveSignalSymbol(signal: EngineASignal): string {
 
 export function preferredTvChartTf(signal: EngineASignal): string {
   const route = (signal as { timeframe_route?: { autoSelectTf?: string } }).timeframe_route?.autoSelectTf;
-  const direct = signal.entryTimeframe || signal.timeframe || route;
+  const direct = signal.setupTf
+    || signal.triggerTf
+    || signal.entryTimeframe
+    || signal.executionTf
+    || signal.structureTf
+    || signal.timeframe
+    || route;
   if (direct && typeof direct === 'string') {
     return direct.toUpperCase();
   }
@@ -1012,7 +1053,7 @@ export default function SignalsPanel() {
 
       {scanAgeMinutesA != null && scanAgeMinutesA >= 30 && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100/90">
-          Engine A scores are {scanAgeMinutesA} min old. Scores use confirmed H1/H4/D1 bars (not live ticks);
+          Engine A scores are {scanAgeMinutesA} min old. Scores use confirmed policy-role candles shown on each signal card (not live ticks);
           run Scan A to refresh. Live prices update separately.
         </div>
       )}
@@ -1337,7 +1378,10 @@ export default function SignalsPanel() {
                             value={fmtPrice(selectedRow.signal.atr, selectedRow.signal.pair, selectedRow.signal.type)}
                             meta={fmtAtrMeta(selectedRow.signal.atrDiagnostics, selectedRow.signal.atrFreshness)}
                           />
-                          <DetailRow label="R:R"    value={fmtNum(selectedRow.signal.rr ?? selectedRow.signal.rr1, 2)} />
+                          <DetailRow
+                            label={isEngineBPrimarySignal(selectedRow.signal) ? 'Gate R:R' : 'R:R'}
+                            value={fmtNum(signalGateRr(selectedRow.signal), 2)}
+                          />
                           <DetailRow label="Scalp SL"    value={fmtPrice(selectedRow.signal.scalp_sl, selectedRow.signal.pair, selectedRow.signal.type)} />
                           <DetailRow label="Scalp TP"    value={fmtPrice(selectedRow.signal.scalp_tp, selectedRow.signal.pair, selectedRow.signal.type)} />
                           <DetailRow label="Intraday SL" value={fmtPrice(selectedRow.signal.intraday_sl, selectedRow.signal.pair, selectedRow.signal.type)} />
@@ -1676,7 +1720,8 @@ export default function SignalsPanel() {
                 <div className="font-mono">
                   SL: {fmtPrice(confirmRow?.signal.sl, confirmRow?.signal.pair, confirmRow?.signal.type)} ·{' '}
                   TP: {fmtPrice(confirmRow?.signal.tp ?? confirmRow?.signal.tp1, confirmRow?.signal.pair, confirmRow?.signal.type)} ·{' '}
-                  R:R {fmtNum(confirmRow?.signal.rr ?? confirmRow?.signal.rr1, 2)}
+                  {isEngineBPrimarySignal(confirmRow?.signal) ? 'Gate R:R' : 'R:R'}{' '}
+                  {fmtNum(signalGateRr(confirmRow?.signal), 2)}
                 </div>
                 {aiOverride && (
                   <label className="flex items-start gap-2 text-[11px] cursor-pointer">

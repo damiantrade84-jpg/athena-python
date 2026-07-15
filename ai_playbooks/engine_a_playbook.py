@@ -5,22 +5,6 @@ from __future__ import annotations
 from ai_playbooks.contracts import PLAYBOOK_SCHEMA_VERSION
 
 
-def _live_entry_timeframes() -> dict:
-    try:
-        from config import CONFIG
-
-        raw = (CONFIG.get("ENGINE_A_SCORING_PROFILE") or {}).get(
-            "LIVE_ENTRY_TF_BY_STYLE"
-        ) or {}
-        return {
-            str(style): {str(asset): str(tf).upper() for asset, tf in assets.items()}
-            for style, assets in raw.items()
-            if isinstance(assets, dict)
-        }
-    except Exception:
-        return {}
-
-
 def get_engine_a_playbook() -> dict:
     return {
         "schemaVersion": PLAYBOOK_SCHEMA_VERSION,
@@ -34,18 +18,30 @@ def get_engine_a_playbook() -> dict:
             "High Engine A score does not imply entry is acceptable now.",
             "Distinguish direction valid from entry timing poor.",
             "Acceptable timing is a valid and common outcome: a confirmed BOS with acceptance/retest, a pullback to structure, or a breakout retest are tradeable continuation entries, not chasing.",
-            "Downgrade timing only on concrete evidence — measure price (diagnostics.entry) distance from diagnostics.ema50/ema200 in ATR units (diagnostics.atrH4) plus momentum (rsi, adx); for crypto also use vwapExtended/vwapDistanceAtr. Do not downgrade as a reflex because the score passed.",
+            "Downgrade timing only on concrete evidence — use the setup/location timeframe for price-to-value distance, the trigger timeframe for momentum, and atrDiagnostics.atr_tf for volatility units; for crypto also use vwapExtended/vwapDistanceAtr. Do not downgrade as a reflex because the score passed.",
             "Score high but location/timing poor requires WAIT, not ENTRY_NOW; a signal can be directionally valid while execution waits.",
             "No trade when evidence is weak, conflicted, or missing required context.",
-            "Use engineAContext.entryTimeframe as the actual live entry/scoring timeframe. D1/H4/H1 remain the confirmed structural trend stack; a configured M15/M30 entry changes timing, location, volume, and trend-health inputs without replacing the higher-timeframe trend layers.",
+            "Use factorDiagnostics.scoringTimeframes and the server-supplied policy role fields as the actual scoring contract. Trend uses regime/bias/structure roles, momentum uses trigger, and location/volume use setup; never substitute a static D1/H4/H1 or H1/H4 matrix.",
         ],
         "timeframeContract": {
-            "confirmedStructureStack": ["D1", "H4", "H1"],
-            "liveEntryTfByStyle": _live_entry_timeframes(),
+            "roleMapping": {
+                "trend": "factorDiagnostics.scoringTimeframes.trend and regimeTf/biasTf/structureTf",
+                "momentum": "factorDiagnostics.scoringTimeframes.momentum and triggerTf",
+                "location": "factorDiagnostics.scoringTimeframes.location and setupTf",
+                "volume": "factorDiagnostics.scoringTimeframes.volume and setupTf",
+                "atr": "atrDiagnostics.atr_tf",
+            },
             "authoritativeFields": [
+                "factorDiagnostics.scoringTimeframes",
                 "engineAContext.entryTimeframe",
                 "engineAContext.entryUsesActiveCandle",
                 "engineAContext.activeEntryGate",
+                "regimeTf",
+                "biasTf",
+                "structureTf",
+                "setupTf",
+                "triggerTf",
+                "atrDiagnostics.atr_tf",
             ],
         },
         "entryModels": [
@@ -66,13 +62,13 @@ def get_engine_a_playbook() -> dict:
             "setupId / decision / qualified": "V3 setup identity and TRADE/WATCH/NO_SIGNAL decision — advisory context; never mutate deterministic scores.",
             "diagnostics.adxD1 / adxH4": "Trend strength / regime. Low ADX = ranging; do not treat range chop as a continuation entry, and prefer mean-reversion logic at value.",
             "diagnostics.rsi": "Momentum confirmation alongside factorScores.momentum.",
-            "diagnostics.ema50 / ema200 / dema200 (H4 basis)": "Engine A's trend EMAs. Confirm direction matches EMA stacking, and gauge extension by how far diagnostics.entry sits above/below them in ATR units (diagnostics.atrH4) — a large gap with no pullback is the cross-asset extended/late test.",
+            "diagnostics.ema50 / ema200 / dema200 with factorDiagnostics.scoringTimeframes": "Engine A EMA evidence. Confirm direction against the policy trend roles, and gauge entry extension only with setup-timeframe value/EMA evidence in the ATR units identified by atrDiagnostics.atr_tf. An H4 reference alone cannot verify M30 location or M15 momentum.",
             "diagnostics.emaTrendPeriod / emaMomentumPeriod / emaLongPeriod / rsiPeriod / rsiTimeframe": "Per-group periods Engine A actually scored with (e.g. forex 26/60, crypto 18/40, rsi 18 vs 12). The chart draws its EMA/RSI lines at these same per-group periods on confirmed bars — the legacy ema50/rsi14 key names are aliases, not literal 50/14 periods. indicatorParity compares chart vs Engine A values only when the chart is on H4; any entry in indicatorParity.mismatches means the values genuinely diverge and is a real warning, not an expected period difference.",
             "diagnostics.vwapExtended / vwapDistanceAtr (crypto only)": "Crypto late-trend extension flag: when vwapExtended is true or vwapDistanceAtr is large the entry is extended. Null for non-crypto — use EMA distance + RSI/ADX there instead.",
-            "diagnostics.atrD1 / atrH4": "Volatility for SL/TP sizing and room to target; confirm SL is structurally valid relative to ATR.",
+            "atrDiagnostics.atr_value / atr_tf / atr_source": "Authoritative ATR provenance for the reviewed levels. Confirm SL is structurally valid relative to this exact ATR series; do not assume H4 or D1.",
             "diagnostics.rr / sl / tp / entry": "Risk geometry; reject when RR is unacceptable after confirmation requirements.",
             "riskGeometry.maxSlFraction / slDistanceFraction / maxSlPassed / rrRequired / rrPassed": "Server-resolved execution risk gates. Fractions use 0.025=2.5%. False maxSlPassed or rrPassed blocks ENTRY_NOW; do not invent another cap or floor.",
-            "conviction / timeframeBias (D1/H4/H1)": "Directional alignment across timeframes; conflicting timeframes lower tradeability and can justify WAIT.",
+            "conviction / timeframeBias / regimeTf / biasTf / structureTf": "Directional alignment across the resolved policy trend roles; conflicting roles lower tradeability and can justify WAIT.",
             "engineBContext (bosConfirmed, chochConfirmed, liquiditySweep, nearestSupport/Resistance, breakerLevel, structuralVerdict, obAtZone, fvgOverlap)": "Optional structure overlay for location and entry-model selection when available=true; confirmed BOS/CHoCH with acceptance supports continuation, not chasing.",
             "nonVisualContext / intermarket / newsSentiment": "Explains why Engine A scored the setup. Advisory, non-visual — never reject only because a non-visual driver is not visible on the chart.",
         },

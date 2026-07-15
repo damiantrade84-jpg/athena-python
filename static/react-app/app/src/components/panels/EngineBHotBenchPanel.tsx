@@ -307,6 +307,7 @@ export default function EngineBHotBenchPanel() {
   const [primingKey, setPrimingKey] = useState<string | null>(null);
   const [armingKey, setArmingKey] = useState<string | null>(null);
   const autoOpenedWatchIdsRef = useRef<Set<string>>(new Set());
+  const snapshotTimeframe = timeframe === 'M15' ? 'H1' : timeframe;
 
   const refreshHotlist = useCallback(async () => {
     setHotlistLoading(true);
@@ -349,7 +350,7 @@ export default function EngineBHotBenchPanel() {
     try {
       const params = new URLSearchParams({
         symbols: displays.join(','),
-        timeframe: timeframe === 'M15' ? 'H1' : timeframe,
+        timeframe: snapshotTimeframe,
       });
       const res = await apiClient.get<LdSnapshot>(`/api/live-dashboard/snapshot?${params.toString()}`);
       setSnapshot(res);
@@ -360,7 +361,7 @@ export default function EngineBHotBenchPanel() {
     } finally {
       setSnapshotLoading(false);
     }
-  }, [hotlist, timeframe]);
+  }, [hotlist, snapshotTimeframe]);
 
   const refreshWatches = useCallback(async () => {
     setWatchesLoading(true);
@@ -592,6 +593,7 @@ export default function EngineBHotBenchPanel() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] text-muted-foreground">Scout TF</span>
               <Select value={timeframe} onValueChange={(value) => setTimeframe(value as 'H1' | 'M15')}>
                 <SelectTrigger className="w-[88px] h-8 text-xs">
                   <SelectValue />
@@ -601,6 +603,9 @@ export default function EngineBHotBenchPanel() {
                   <SelectItem value="M15">M15</SelectItem>
                 </SelectContent>
               </Select>
+              <Badge variant="outline" className="text-[10px]">
+                Snapshot TF {snapshotTimeframe}
+              </Badge>
               <div className="flex items-center gap-2 rounded-md border border-border/60 px-3 py-1.5">
                 <span className="text-[11px] text-muted-foreground">Auto-review ready only</span>
                 <Switch checked={autoReviewReadyOnly} onCheckedChange={setAutoReviewReadyOnly} />

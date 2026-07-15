@@ -1009,6 +1009,15 @@ def score_pair(
     factor_diagnostics = {
         "entryTimeframe": entry_tf,
         "entryTfOverride": diagnostic_override,
+        "scoringTimeframes": {
+            "policyApplied": bool(policy),
+            "trend": list(tf_weights.keys()),
+            "momentum": momentum_tf,
+            "location": entry_tf,
+            "volume": entry_tf,
+            "setup": policy_setup_tf or entry_tf,
+            "trigger": policy_trigger_tf or momentum_tf,
+        },
         "adxValue": mom_diag.get("adxValue"),
         "adxMultiplier": mom_diag.get("adxMultiplier"),
         "diAlignMult": mom_diag.get("diAlignMult"),

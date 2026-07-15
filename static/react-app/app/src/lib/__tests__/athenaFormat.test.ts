@@ -84,7 +84,7 @@ describe('confluencePct', () => {
 });
 
 describe('engineBScoreBreakdown', () => {
-  it('separates gate score from total score for pass floor', () => {
+  it('applies the score floor to total score and keeps final confidence separate', () => {
     const breakdown = engineBScoreBreakdown({
       confidence: {
         passed: false,
@@ -99,8 +99,25 @@ describe('engineBScoreBreakdown', () => {
 
     expect(breakdown?.gateScore).toBe(4);
     expect(breakdown?.totalScore).toBe(5.5);
-    expect(breakdown?.gatePasses).toBe(false);
-    expect(breakdown?.totalPasses).toBe(true);
+    expect(breakdown?.scoreFloorPasses).toBe(true);
+    expect(breakdown?.confidencePasses).toBe(false);
+  });
+
+  it('reads Engine B-only scanner score fields and final confidence status', () => {
+    const breakdown = engineBScoreBreakdown({
+      engine_source: 'ENGINE_B',
+      engine_b_score: 5.25,
+      engine_b_max: 6,
+      engine_b_gate_score: 4,
+      engine_b_gate_max: 4,
+      engine_b_min_score_scaled: 4.5,
+      engine_b_status: { passed: true },
+    });
+
+    expect(breakdown?.totalScore).toBe(5.25);
+    expect(breakdown?.totalMax).toBe(6);
+    expect(breakdown?.scoreFloorPasses).toBe(true);
+    expect(breakdown?.confidencePasses).toBe(true);
   });
 });
 

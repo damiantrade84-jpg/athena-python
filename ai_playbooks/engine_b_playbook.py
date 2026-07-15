@@ -5,22 +5,6 @@ from __future__ import annotations
 from ai_playbooks.contracts import PLAYBOOK_SCHEMA_VERSION
 
 
-def _live_trigger_timeframes() -> dict:
-    try:
-        from config import CONFIG
-
-        raw = (CONFIG.get("NAKED_ENGINE") or {}).get(
-            "LIVE_TRIGGER_TF_BY_STYLE"
-        ) or {}
-        return {
-            str(style): {str(asset): str(tf).upper() for asset, tf in assets.items()}
-            for style, assets in raw.items()
-            if isinstance(assets, dict)
-        }
-    except Exception:
-        return {}
-
-
 def get_engine_b_playbook() -> dict:
     return {
         "schemaVersion": PLAYBOOK_SCHEMA_VERSION,
@@ -32,7 +16,7 @@ def get_engine_b_playbook() -> dict:
             "Engine B is a zone-retest engine: retest/rejection at the active zone (support for LONG, resistance for SHORT) is the intended setup when locationOk=true.",
             "Do not downgrade entry timing as a reflex because nearestResistance or nearestSupport exists — check locationOk, entryOk, and spaceGateOk first.",
             "Distinguish direction valid from entry timing poor — a passing Engine B score does not imply ENTRY_NOW.",
-            "Judge zone location on zoneTf and entry triggers on triggerTf from server-supplied engineBContext. The canonical timeframeMatrix is only the fallback; configured liveTriggerOverrides may replace trigger TF without changing structure/zone roles. Macro swing sequence is always H4.",
+            "Judge zone location on zoneTf and entry triggers on triggerTf from server-supplied engineBContext. Timeframe roles are symbol-, style-, and speed-aware; never substitute a static matrix. Macro swing sequence is always H4.",
             "Chart screenshot timeframe may differ from zone_tf — do not reject H4/D1 zone quality using only a lower-TF chart image.",
             "Assess liquidity pools, supply/demand, support/resistance.",
             "Evaluate sweep/reclaim and whether structure supports direction.",
@@ -41,29 +25,12 @@ def get_engine_b_playbook() -> dict:
             "Use server-supplied engineBContext flags and canonical gates only — never invent BOS/OB/FVG confirmation from the chart image alone.",
             "Engine B score/gates are deterministic; AI is advisory and must never mutate or override them.",
         ],
-        "timeframeMatrix": {
-            "macroSwing": "H4 (always, separate from struct_tf)",
-            "scalp": {
-                "struct": "H1",
-                "zone": "H4",
-                "trigger": "H1",
-                "atr": "H1",
-            },
-            "intraday": {
-                "struct": "H4",
-                "zone": "H4",
-                "trigger": "H1",
-                "atr": "H4",
-            },
-            "swing": {
-                "struct": "D1",
-                "zone": "D1",
-                "trigger": "H4",
-                "atr": "D1",
-            },
+        "timeframeContract": {
+            "macroSwing": "H4 (always, separate from structTf)",
+            "authority": "Use server-supplied engineBContext regimeTf/biasTf/structTf/zoneTf/setupTf/triggerTf/executionTf/atrTf for this exact signal.",
+            "adaptation": "Roles may differ by symbol profile, style, speed class, and liquidity state. Missing role provenance blocks timeframe-specific AI claims; it never authorizes a legacy fallback.",
         },
-        "liveTriggerOverrides": _live_trigger_timeframes(),
-        "timeframeAuthority": "Server-supplied engineBContext structTf/zoneTf/triggerTf/atrTf and triggerTimeframeExpected/Actual/GateOk override the canonical matrix. Never substitute H1 for a requested M15/M30 trigger.",
+        "timeframeAuthority": "Server-supplied engineBContext structTf/zoneTf/setupTf/triggerTf/executionTf/atrTf and triggerTimeframeExpected/Actual/GateOk are authoritative. Never substitute H1 for a requested M15/M30 trigger.",
         "entryModels": [
             "STRUCTURE_CONTINUATION",
             "LIQUIDITY_SWEEP_RECLAIM",

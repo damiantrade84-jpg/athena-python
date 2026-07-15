@@ -320,7 +320,14 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
         fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
         naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
             "intraday",
-            {"min_score": 0.5, "fallback_rr": 2.0, "min_rr": 1.0, "atr_tf": "H4"},
+            {
+                "min_score": 0.5,
+                "fallback_rr": 2.0,
+                "min_rr": 1.0,
+                "atr_tf": "H4",
+                "entry_tf": "H4",
+                "zone_tf": "H4",
+            },
         ),
         engine_b_regime_label=lambda *_args, **_kwargs: "TRENDING",
         AUDIT_DB=str(audit_dir / "audit.db"),
@@ -384,10 +391,11 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
             "volume_strength": 0.0,
         },
     )
-    monkeypatch.setattr(
-        market_structure.engine,
-        "calculate_confidence",
-        lambda _res, _px, direction, **_kwargs: {
+    geometry_prices = []
+
+    def _confidence_at_acting_price(_res, _px, direction, **_kwargs):
+        geometry_prices.append(float(_px))
+        return {
             "score": 1.0 if direction == "LONG" else 0.0,
             "pct": 80.0 if direction == "LONG" else 0.0,
             "rr": 2.0,
@@ -408,7 +416,12 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
             "execution_sl": _px - 1.0 if direction == "LONG" else _px + 1.0,
             "execution_tp": _px + 2.0 if direction == "LONG" else _px - 2.0,
             "rr_source": "test_fixture",
-        },
+        }
+
+    monkeypatch.setattr(
+        market_structure.engine,
+        "calculate_confidence",
+        _confidence_at_acting_price,
     )
 
     result = backtest_runner.backtest_pair_naked(pair, style="intraday")
@@ -417,6 +430,12 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
     assert "researchValidation" in result
     assert result["researchValidation"].get("validationMode") == "standard"
     assert slip_calls, "slippage helper should run for each fill"
+    assert geometry_prices
+    acting_opens = {
+        float(bar["open"])
+        for bar in (d1 + h4 + h1)
+    }
+    assert all(price in acting_opens for price in geometry_prices)
     # Next-bar open with slippage: LONG entry = open + open*slip (slip fixed at 0.001 here).
     long_trades = [t for t in result["trades"] if t.get("direction") == "LONG"]
     assert long_trades

@@ -276,7 +276,6 @@ def register_ai_agent_routes(app, runtime) -> None:
 
     log = getattr(runtime, "log", None)
     audit_db = str(getattr(runtime, "AUDIT_DB", "") or "")
-    _init_conversation_db(audit_db, log)
     set_ai_tools_runtime(runtime)
 
     @app.post("/api/ai/trade-chat")

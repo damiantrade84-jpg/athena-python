@@ -42,6 +42,15 @@ const ORTHO_LABELS: Record<string, string> = {
   microstructure: 'Micro',
 };
 
+function firstFiniteNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (value == null || value === '' || typeof value === 'boolean') continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
 export default function EngineASignalCard({
   signal,
   onExecute,
@@ -71,6 +80,20 @@ export default function EngineASignalCard({
     engineSource === 'B' && raw.engine_a_present === false
   );
   const isEngineBOnly = isEngineBOnlyStub || isNakedScan;
+  const engineBResult = (
+    signal.naked_data && typeof signal.naked_data === 'object'
+      ? signal.naked_data
+      : signal.engine_b && typeof signal.engine_b === 'object'
+        ? signal.engine_b
+        : {}
+  ) as Record<string, unknown>;
+  const engineBStatus = (
+    raw.engine_b_status && typeof raw.engine_b_status === 'object'
+      ? raw.engine_b_status
+      : engineBResult.confidence && typeof engineBResult.confidence === 'object'
+        ? engineBResult.confidence
+        : {}
+  ) as Record<string, unknown>;
   const engineABlockReason = String(raw.engine_a_block_reason ?? '').trim();
   const isLong  = signal.direction === 'LONG';
   const isShort = signal.direction === 'SHORT';
@@ -80,19 +103,19 @@ export default function EngineASignalCard({
     ? { background: 'hsl(var(--short) / 0.18)', color: 'hsl(var(--short))' }
     : { background: 'hsl(var(--muted) / 0.40)', color: 'hsl(var(--muted-foreground))' };
   const scoreBreakdown = engineAScoreBreakdown(signal);
-  const bBreakdown = isNakedScan
-    ? engineBScoreBreakdown((signal.naked_data || signal.engine_b || signal) as Record<string, unknown>)
+  const bBreakdown = isEngineBOnly
+    ? engineBScoreBreakdown(raw)
     : null;
   // Headline % is the graded total (score/max incl. bonuses). gate_pct is 100
   // for every emitted signal (all mandatory gates must pass to emit), so it is
   // only a last-resort fallback, never the headline.
-  const nakedQualityPct = isNakedScan
-    ? toNum(raw.quality_pct ?? raw.confluencePct ?? raw.score_pct ?? raw.edgeProbability, NaN)
+  const nakedQualityPct = isEngineBOnly
+    ? toNum(raw.quality_pct ?? raw.engine_b_pct ?? engineBResult.quality_pct ?? engineBResult.score_pct ?? raw.confluencePct ?? raw.score_pct ?? raw.edgeProbability, NaN)
     : NaN;
-  const nakedGatePct = isNakedScan
-    ? toNum(raw.gate_pct ?? raw.engine_b_pct, NaN)
+  const nakedGatePct = isEngineBOnly
+    ? toNum(raw.engine_b_pct ?? engineBResult.quality_pct ?? engineBResult.score_pct ?? raw.gate_pct ?? engineBResult.gate_pct, NaN)
     : NaN;
-  const conf = isNakedScan
+  const conf = isEngineBOnly
     ? (Number.isFinite(nakedQualityPct)
         ? Math.max(0, Math.min(100, Math.round(nakedQualityPct)))
         : bBreakdown?.totalScore != null && bBreakdown.totalMax
@@ -109,8 +132,8 @@ export default function EngineASignalCard({
     NaN,
   );
   const threshold = scoreBreakdown?.threshold ?? engineAThreshold(signal);
-  const passed = isNakedScan && bBreakdown
-    ? bBreakdown.gatePasses
+  const passed = isEngineBOnly && bBreakdown
+    ? bBreakdown.confidencePasses
     : !isEngineBOnly && Number.isFinite(score) && threshold != null && (
       isEngineAV3Signal(signal) && scoreBreakdown?.hasAdjustments
         ? Boolean(scoreBreakdown.decisionPasses)
@@ -171,6 +194,33 @@ export default function EngineASignalCard({
   const displayPrice = Number.isFinite(livePrice) ? livePrice : signal.entry ?? signal.price;
   const decimals = priceDecimals(pair, type);
   const intermarketEntries = intermarketConfirmationEntries(signal.intermarketConfirmation);
+  const levelEntry = isEngineBOnly
+    ? firstFiniteNumber(signal.entry, signal.price, engineBResult.current_price)
+    : signal.entry ?? signal.price;
+  const levelSl = isEngineBOnly
+    ? firstFiniteNumber(raw.engine_b_execution_sl, engineBStatus.execution_sl, engineBResult.execution_sl, signal.sl)
+    : signal.sl;
+  const levelTp1 = isEngineBOnly
+    ? firstFiniteNumber(raw.engine_b_execution_tp1, engineBStatus.execution_tp1, engineBResult.execution_tp1, signal.tp, signal.tp1)
+    : signal.tp ?? signal.tp1;
+  const levelTp2 = isEngineBOnly
+    ? firstFiniteNumber(raw.engine_b_execution_tp2, engineBStatus.execution_tp2, engineBResult.execution_tp2, signal.tp2)
+    : signal.tp2;
+  const rr1 = isEngineBOnly
+    ? firstFiniteNumber(raw.engine_b_execution_rr1, engineBStatus.execution_rr1, engineBResult.execution_rr1, signal.rr1)
+    : firstFiniteNumber(signal.rr1, signal.rr);
+  const rr2 = isEngineBOnly
+    ? firstFiniteNumber(raw.engine_b_execution_rr2, engineBStatus.execution_rr2, engineBResult.execution_rr2, signal.rr2, signal.rr)
+    : firstFiniteNumber(signal.rr2);
+  const rrUsedForGate = isEngineBOnly
+    ? firstFiniteNumber(raw.engine_b_rr_used_for_gate, engineBStatus.rr_used_for_gate, engineBResult.rr_used_for_gate, rr2)
+    : undefined;
+  const tp1MinRr = isEngineBOnly
+    ? firstFiniteNumber(engineBStatus.tp1_min_rr, engineBResult.tp1_min_rr)
+    : undefined;
+  const runnerMinRr = isEngineBOnly
+    ? firstFiniteNumber(raw.engine_b_rr_required, engineBStatus.rr_required, engineBResult.rr_required, signal.min_rr)
+    : undefined;
   void displayPrice;
 
   return (
@@ -227,35 +277,36 @@ export default function EngineASignalCard({
         <div className="space-y-1">
           <div className="flex items-center justify-between text-[10px] text-muted-foreground">
             <span>
-              {isEngineBOnlyStub ? 'Engine A' : isNakedScan ? 'Engine B gate' : 'Confluence'}{' '}
+              {isEngineBOnly ? 'Engine B gates' : 'Confluence'}{' '}
               <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
-                {isNakedScan && bBreakdown?.gateScore != null
+                {isEngineBOnly && bBreakdown?.gateScore != null
                   ? `${fmtNum(bBreakdown.gateScore, 2)}/${fmtNum(bBreakdown.gateMax ?? max, 2)}`
                   : `${fmtNum(score, 2)}/${fmtNum(max, 2)}`}
               </span>
-              {isNakedScan && bBreakdown?.minScore != null ? (
-                <span className="ml-1">≥ {fmtNum(bBreakdown.minScore, 2)}</span>
-              ) : threshold != null && !isNakedScan ? (
+              {threshold != null && !isEngineBOnly ? (
                 <span className="ml-1">≥ {fmtNum(threshold, 2)}</span>
               ) : null}
             </span>
             <span className="font-mono">{conf != null ? `${conf.toFixed(0)}%` : '—'}</span>
           </div>
-          {isNakedScan && bBreakdown?.totalScore != null && (
+          {isEngineBOnly && bBreakdown?.totalScore != null && (
             <p className="text-[9px] text-muted-foreground leading-snug">
               Quality total{' '}
               <span className="font-mono text-foreground">
                 {fmtNum(bBreakdown.totalScore, 2)}/{fmtNum(bBreakdown.totalMax ?? max, 2)}
               </span>
+              {bBreakdown.minScore != null && (
+                <span> ≥ {fmtNum(bBreakdown.minScore, 2)}</span>
+              )}
               {bBreakdown.bonusPoints != null && bBreakdown.bonusPoints !== 0 && (
                 <span> · bonuses {bBreakdown.bonusPoints >= 0 ? '+' : ''}{fmtNum(bBreakdown.bonusPoints, 2)}</span>
               )}
-              {bBreakdown.totalPasses && !bBreakdown.gatePasses && (
-                <span className="text-warning"> — total clears min but gate score does not</span>
+              {bBreakdown.scoreFloorPasses && !bBreakdown.confidencePasses && (
+                <span className="text-warning"> — score clears floor; one or more mandatory gates failed</span>
               )}
             </p>
           )}
-          {!isNakedScan && scoreBreakdown?.hasAdjustments && (
+          {!isEngineBOnly && scoreBreakdown?.hasAdjustments && (
             <EngineAScoreAdjustmentNote breakdown={scoreBreakdown} />
           )}
           {/* Violet gradient bar — glows when score passes threshold */}
@@ -274,7 +325,7 @@ export default function EngineASignalCard({
             <p className="text-[9px] text-muted-foreground leading-snug">
               Engine B-only watchlist. Engine A blocked: {engineABlockReason || 'no Engine A trade signal'}.
             </p>
-          ) : isNakedScan ? (
+          ) : isEngineBOnly ? (
             <p className="text-[9px] text-muted-foreground leading-snug">
               Engine B structure scan — confidence from Naked Engine gates (structure, location, trigger, RR).
             </p>
@@ -313,7 +364,7 @@ export default function EngineASignalCard({
               )}
             </p>
           )}
-          {!isEngineBOnlyStub && !isNakedScan && signal.engine_b != null && (
+          {!isEngineBOnly && signal.engine_b != null && (
             <p className="text-[9px] text-muted-foreground leading-snug border-t border-border/40 pt-1 mt-1">
               Engine B attached — see detail panel
             </p>
@@ -370,22 +421,23 @@ export default function EngineASignalCard({
             decimals={decimals}
             meta={livePriceMeta}
           />
-          <Level label="Entry" value={signal.entry ?? signal.price} pair={pair} type={type} accent="muted" decimals={decimals} />
-          <Level label="SL" value={signal.sl} pair={pair} type={type} accent="short" decimals={decimals} />
-          <Level label="TP" value={signal.tp ?? signal.tp1} pair={pair} type={type} accent="long" decimals={decimals} />
+          <Level label="Entry" value={levelEntry} pair={pair} type={type} accent="muted" decimals={decimals} />
+          <Level label="SL" value={levelSl} pair={pair} type={type} accent="short" decimals={decimals} />
+          <Level label={isEngineBOnly ? 'TP1' : 'TP'} value={levelTp1} pair={pair} type={type} accent="long" decimals={decimals} />
         </div>
 
-        {(signal.tp2 != null && Number.isFinite(Number(signal.tp2))) && (
+        {(levelTp2 != null && Number.isFinite(Number(levelTp2))) && (
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
             <ArrowUpRight className="w-3 h-3 text-long" />
-            TP2: <span className="font-mono text-foreground">{fmtPrice(signal.tp2, pair, type)}</span>
-            {/* Primary R:R = TP1 RR (the value the execution gate validates);
-                backend `rr` mirrors rr2 (TP2 RR), shown separately. */}
-            {(signal.rr1 ?? signal.rr) != null && (
-              <span className="ml-2">R:R {fmtNum(signal.rr1 ?? signal.rr, 2)}</span>
+            TP2: <span className="font-mono text-foreground">{fmtPrice(levelTp2, pair, type)}</span>
+            {rr1 != null && (
+              <span className="ml-2">{isEngineBOnly ? 'TP1 R:R' : 'R:R'} {fmtNum(rr1, 2)}{tp1MinRr != null ? ` ≥ ${fmtNum(tp1MinRr, 2)}` : ''}</span>
             )}
-            {signal.rr2 != null && (
-              <span className="ml-1">TP2 R:R {fmtNum(signal.rr2, 2)}</span>
+            {rr2 != null && (
+              <span className="ml-1">{isEngineBOnly ? 'Runner R:R' : 'TP2 R:R'} {fmtNum(rr2, 2)}{runnerMinRr != null ? ` ≥ ${fmtNum(runnerMinRr, 2)}` : ''}</span>
+            )}
+            {isEngineBOnly && rrUsedForGate != null && rrUsedForGate !== rr2 && (
+              <span className="ml-1">Gate R:R {fmtNum(rrUsedForGate, 2)}</span>
             )}
           </div>
         )}
@@ -654,9 +706,12 @@ function EngineAV3SignalCard({
 function TimeframePolicyLine({ signal, compact }: { signal: EngineASignal; compact?: boolean }) {
   if (!signal.timeframePolicyVersion) return null;
   const roles = [
+    signal.regimeTf ? `${signal.regimeTf} regime` : null,
     signal.biasTf ? `${signal.biasTf} bias` : null,
     signal.structureTf ? `${signal.structureTf} structure` : null,
+    signal.setupTf ? `${signal.setupTf} setup` : null,
     signal.triggerTf ? `${signal.triggerTf} trigger` : null,
+    signal.atrTimeframe ? `${signal.atrTimeframe} ATR` : null,
     signal.executionTf ? `${signal.executionTf} execution` : null,
   ].filter(Boolean).join(' · ');
   const speed = signal.liveSpeedClass || signal.baselineSpeedClass || 'UNKNOWN';

@@ -4518,6 +4518,7 @@ class NakedEngine:
         struct_closes = np.array([float(c["close"]) for c in struct_candles])
         struct_atr = self._compute_atr_from_candles(struct_candles, fallback=atr)
         zone_atr = self._compute_atr_from_candles(_zone_fvg_candles, fallback=atr)
+        h4_atr = self._compute_atr_from_candles(h4_candles, fallback=atr)
         # Trigger-local ATR scales candle-body/wick and follow-through checks on
         # the same lower timeframe. It never replaces the style ATR used for
         # structural zones, SL/TP, RR, or room gates.
@@ -4546,9 +4547,9 @@ class NakedEngine:
         fvgs = self._detect_fvg(_zone_fvg_candles)
         active_fvgs = [f for f in fvgs if not f.get("mitigated", False)]
 
-        h4_swings = self._swing_cache(h4_highs, h4_lows, zone_atr)
+        h4_swings = self._swing_cache(h4_highs, h4_lows, h4_atr)
         sequence_data = self._determine_sequence(struct_highs, struct_lows, struct_atr, "LONG", swings=struct_swings)
-        macro_seq_data = self._determine_sequence(h4_highs, h4_lows, zone_atr, "LONG", swings=h4_swings)
+        macro_seq_data = self._determine_sequence(h4_highs, h4_lows, h4_atr, "LONG", swings=h4_swings)
 
         struct_volumes = None
         _allow_tick_vol_gate = bool(config.CONFIG.get("ENGINE_B_BOS_VOLUME_FOR_TICKVOL", False))
@@ -4780,6 +4781,7 @@ class NakedEngine:
             "d1_atr": d1_atr,
             "struct_atr": struct_atr,
             "zone_atr": zone_atr,
+            "h4_atr": h4_atr,
             "trigger_atr": trigger_atr,
             "struct_highs": struct_highs,
             "struct_lows": struct_lows,
@@ -4860,6 +4862,7 @@ class NakedEngine:
         d1_atr = precompute["d1_atr"]
         struct_atr = precompute["struct_atr"]
         zone_atr = precompute["zone_atr"]
+        h4_atr = precompute.get("h4_atr") or zone_atr
         trigger_atr = precompute.get("trigger_atr") or atr
         res_zones = precompute["res_zones"]
         sup_zones = precompute["sup_zones"]
@@ -5190,6 +5193,7 @@ class NakedEngine:
             "d1_atr": d1_atr,
             "struct_atr": struct_atr,
             "zone_atr": zone_atr,
+            "h4_atr": h4_atr,
             "trigger_atr": trigger_atr,
             "trigger_atr_tf": tfs["trigger"],
             "bos_confirmed": bos_confirmed,

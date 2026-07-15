@@ -88,6 +88,87 @@ def test_live_trigger_kwargs_do_not_depend_on_diagnostic_flag(monkeypatch):
     assert kw["role_candles"]["M15"] is m15
 
 
+def test_scanner_provenance_does_not_relabel_computed_timeframes():
+    from types import SimpleNamespace
+
+    from scanner import _attach_engine_b_timeframe_provenance
+
+    def tf(value):
+        return SimpleNamespace(value=value)
+
+    policy = SimpleNamespace(
+        structure_tf=tf("H1"),
+        setup_tf=tf("M30"),
+        trigger_tf=tf("M15"),
+        execution_tf=tf("M15"),
+    )
+    result = {"structure_tf": "H4", "trigger_timeframe": "H1"}
+
+    _attach_engine_b_timeframe_provenance(
+        result,
+        policy,
+        actual_structure_tf="H4",
+        actual_trigger_tf="H1",
+        actual_atr_tf="H4",
+    )
+
+    assert result["structure_tf"] == "H4"
+    assert result["entry_tf"] == "H1"
+    assert result["trigger_tf"] == "H1"
+    assert result["execution_tf"] == "H1"
+    assert result["atr_tf"] == "H4"
+    assert result["structure_tf_policy"] == "H1"
+    assert result["trigger_tf_policy"] == "M15"
+    assert result["atr_tf_policy"] == "H1"
+
+
+def test_engine_b_backtest_requests_policy_atr_timeframe(monkeypatch):
+    from types import SimpleNamespace
+
+    import backtest_runner
+
+    captured = {}
+
+    def _bybit_atr_for_levels(pair, style, as_of=None, *, atr_tf=None):
+        captured["as_of"] = as_of
+        captured["atr_tf"] = atr_tf
+        return 7.25
+
+    monkeypatch.setattr(
+        backtest_runner,
+        "_rt",
+        lambda: SimpleNamespace(bybit_atr_for_levels=_bybit_atr_for_levels),
+    )
+    monkeypatch.setitem(config.CONFIG, "TF_POLICY_MODE", "enforced_demo")
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK",
+        False,
+    )
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED",
+        False,
+    )
+
+    atr, source = backtest_runner._engine_b_level_atr_for_bt(
+        3.0,
+        {
+            "display": "BTC/USDT",
+            "symbol": "BTCUSDT",
+            "type": "crypto",
+            "source": "binance",
+        },
+        "intraday",
+        as_of="2025-01-02T04:00:00+00:00",
+    )
+
+    assert atr == pytest.approx(7.25)
+    assert source == "bybit"
+    assert captured["atr_tf"] == "H1"
+
+
 def test_live_lower_trigger_freshness_cannot_be_disabled(monkeypatch):
     import athena_app.services.market_state as market_state
     from scanner import _engine_b_scan_freshness_stale_tfs
@@ -147,6 +228,43 @@ def test_intraday_override_m15_uses_m15_series_not_h1(monkeypatch):
     assert overridden["_structure_tf"] == "H4"
     assert overridden["trigger_atr"] == pytest.approx(0.2)
     assert overridden["struct_atr"] == pytest.approx(4.0)
+
+
+def test_h4_macro_sequence_uses_h4_atr_not_policy_zone_atr(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "TF_POLICY_MODE", "enforced_demo")
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRIP_FORMING_STRUCT", False)
+    d1 = _series(100.0, half_range=6.0)
+    h4 = _series(100.0, half_range=4.0)
+    h1 = _series(100.0, half_range=0.5)
+    m15 = _series(100.0, half_range=0.1)
+
+    engine = NakedEngine()
+    swing_atrs = []
+    original_swing_cache = engine._swing_cache
+
+    def _capture_swing_atr(highs, lows, atr, *args, **kwargs):
+        swing_atrs.append(atr)
+        return original_swing_cache(highs, lows, atr, *args, **kwargs)
+
+    monkeypatch.setattr(engine, "_swing_cache", _capture_swing_atr)
+    pre = engine.precompute_structure_data(
+        d1,
+        h4,
+        h1,
+        100.0,
+        1.0,
+        style="intraday",
+        asset_type="forex",
+        pair={"display": "EUR/USD", "type": "forex", "source": "mt5"},
+        role_candles={"M15": m15},
+        trigger_tf_override="M15",
+    )
+
+    assert pre.get("_error") is None
+    assert pre["_tfs"]["zone"] == "H1"
+    assert pre["zone_atr"] == pytest.approx(1.0)
+    assert pre["h4_atr"] == pytest.approx(8.0)
+    assert swing_atrs[1] == pytest.approx(pre["h4_atr"])
 
 
 def test_override_empty_m15_does_not_silently_use_h1(monkeypatch):

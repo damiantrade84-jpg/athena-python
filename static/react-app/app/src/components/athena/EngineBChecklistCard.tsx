@@ -19,6 +19,15 @@ interface Props {
   compact?: boolean;
 }
 
+function firstFiniteNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (value == null || value === '' || typeof value === 'boolean') continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
 export default function EngineBChecklistCard({ data, pair, type, livePrice, livePriceAgeSec, livePriceSource, compact }: Props) {
   if (!data) {
     return (
@@ -38,7 +47,11 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
   const totalScore = breakdown?.totalScore ?? ((conf.score ?? data.score) as number | undefined);
   const totalMax = breakdown?.totalMax ?? ((conf.max_possible ?? data.max_score) as number | undefined);
   const minScore = breakdown?.minScore ?? (data.min_score as number | undefined);
-  const minRr = data.min_rr as number | undefined;
+  const tp1Rr = firstFiniteNumber(conf.execution_rr1, data.execution_rr1, data.rr1);
+  const runnerRr = firstFiniteNumber(conf.execution_rr2, data.execution_rr2, conf.rr_used_for_gate, data.rr);
+  const rrUsedForGate = firstFiniteNumber(conf.rr_used_for_gate, data.rr_used_for_gate, runnerRr);
+  const tp1MinRr = firstFiniteNumber(conf.tp1_min_rr, data.tp1_min_rr);
+  const runnerMinRr = firstFiniteNumber(conf.rr_required, data.rr_required, data.min_rr);
   const verdict = data.structural_verdict || '—';
   const dirBg =
     data.direction === 'LONG' ? 'bg-long/20 text-long' : data.direction === 'SHORT' ? 'bg-short/20 text-short' : 'bg-muted/40 text-muted-foreground';
@@ -115,19 +128,19 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
           <div className="text-[10px] text-muted-foreground font-mono text-right">
             <div>
               Gate {fmtNum(score, 2)} / {fmtNum(max, 2)}
-              {minScore != null && <span> (min {fmtNum(minScore, 2)})</span>}
             </div>
-            {totalScore != null && totalScore !== score && (
+            {totalScore != null && (
               <div className="text-[9px]">
                 Total {fmtNum(totalScore, 2)} / {fmtNum(totalMax, 2)}
+                {minScore != null && <span> (min {fmtNum(minScore, 2)})</span>}
                 {breakdown?.bonusPoints != null && breakdown.bonusPoints !== 0 && (
                   <span> · bonus {breakdown.bonusPoints >= 0 ? '+' : ''}{fmtNum(breakdown.bonusPoints, 2)}</span>
                 )}
               </div>
             )}
-            {breakdown?.totalPasses && !breakdown.gatePasses && (
+            {breakdown?.scoreFloorPasses && !breakdown.confidencePasses && (
               <div className="text-[9px] text-warning">
-                Total clears min; gate score does not (pass uses gate floor).
+                Total clears the score floor; one or more mandatory gates failed.
               </div>
             )}
           </div>
@@ -180,17 +193,32 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
             accent="long"
           />
           <SmallStat
-            label="R:R"
-            value={levels.showExecutable ? fmtNum(data.rr, 2) : '—'}
+            label="TP1 R:R"
+            value={levels.showExecutable ? fmtNum(tp1Rr, 2) : '—'}
             accent={
               levels.showExecutable
-              && typeof data.rr === 'number'
-              && typeof minRr === 'number'
-              && data.rr >= minRr
+              && tp1Rr != null
+              && (tp1MinRr == null || tp1Rr >= tp1MinRr)
                 ? 'long'
                 : 'muted'
             }
+            meta={tp1MinRr != null ? `min ${fmtNum(tp1MinRr, 2)}` : undefined}
           />
+          <SmallStat
+            label="Runner R:R"
+            value={levels.showExecutable ? fmtNum(runnerRr, 2) : '—'}
+            accent={
+              levels.showExecutable
+              && runnerRr != null
+              && (runnerMinRr == null || runnerRr >= runnerMinRr)
+                ? 'long'
+                : 'muted'
+            }
+            meta={runnerMinRr != null ? `min ${fmtNum(runnerMinRr, 2)}` : undefined}
+          />
+          {rrUsedForGate != null && rrUsedForGate !== runnerRr && (
+            <SmallStat label="Gate R:R" value={fmtNum(rrUsedForGate, 2)} />
+          )}
         </div>
 
         {!levels.showExecutable

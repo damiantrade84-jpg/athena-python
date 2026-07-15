@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 import athena_ase.runtime.scan as scan_module
+from athena_ase.data.ingest import runner as ingest_runner
 from athena_ase.data.availability import AvailabilityRuleId, compute_available_time_ms
 from athena_ase.data.ptis import PTISStore, build_row
 from athena_ase.inference.predict import predict_no_candidate
@@ -122,13 +123,21 @@ def test_ase_health_reports_blockers(ptis: PTISStore):
 def test_forex_symbol_scan_runs_mt5_live_ingest_by_default(ptis: PTISStore, monkeypatch):
     calls: list[dict[str, Any]] = []
 
-    def fake_run_ingest(*, store, sources, write_audit, bybit_lookback_days):
+    def fake_run_ingest(
+        *,
+        store,
+        sources,
+        write_audit,
+        bybit_lookback_days,
+        mt5_live_instruments,
+    ):
         calls.append(
             {
                 "store": store,
                 "sources": tuple(sources),
                 "write_audit": write_audit,
                 "bybit_lookback_days": bybit_lookback_days,
+                "mt5_live_instruments": mt5_live_instruments,
             }
         )
         return {"mt5_live": {"inserted": 5}}
@@ -145,7 +154,53 @@ def test_forex_symbol_scan_runs_mt5_live_ingest_by_default(ptis: PTISStore, monk
     assert calls[0]["sources"] == ("mt5_live",)
     assert calls[0]["write_audit"] is False
     assert calls[0]["bybit_lookback_days"] == scan_module.DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS
+    assert tuple(inst.symbol for inst in calls[0]["mt5_live_instruments"]) == ("EURUSD",)
     assert result["ingestResult"]["result"] == {"mt5_live": {"inserted": 5}}
+
+
+def test_scan_skips_overlapping_ingest_workers(ptis: PTISStore, monkeypatch):
+    monkeypatch.setattr(
+        scan_module,
+        "run_ingest",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("overlapping ingest must not start")
+        ),
+    )
+    scan_module._ASE_SCAN_INGEST_LOCK.acquire()
+    try:
+        result = scan_module._maybe_ingest(
+            ptis,
+            ("mt5_live",),
+            budget_s=0.1,
+        )
+    finally:
+        scan_module._ASE_SCAN_INGEST_LOCK.release()
+
+    assert result == {"skipped": True, "reason": "ingest_already_in_progress"}
+
+
+def test_run_ingest_forwards_scoped_mt5_instruments(
+    ptis: PTISStore, monkeypatch
+):
+    eurusd = instrument_by_symbol("EURUSD")
+    assert eurusd is not None
+    calls: list[tuple] = []
+
+    monkeypatch.setattr(
+        ingest_runner.mt5_live,
+        "ingest_all",
+        lambda store, *, instruments: calls.append(instruments) or {"inserted": 5},
+    )
+
+    result = ingest_runner.run_ingest(
+        store=ptis,
+        sources=("mt5_live",),
+        mt5_live_instruments=(eurusd,),
+        write_audit=False,
+    )
+
+    assert calls == [(eurusd,)]
+    assert result == {"mt5_live": {"inserted": 5}}
 
 
 def test_crypto_only_scan_ingests_bybit_only(ptis: PTISStore, monkeypatch):

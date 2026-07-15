@@ -139,6 +139,32 @@ def test_summary_crypto_forex_sections_and_counters():
     assert any("bybit_atr_unavailable" in str(x[0]) for x in err)
 
 
+def test_summary_counts_numpy_like_false_room_value():
+    class _NumpyLikeFalse:
+        def item(self):
+            return False
+
+    rows = [
+        {
+            "symbol": "EUR/USD",
+            "asset_type": "forex",
+            "has_funnel": True,
+            "room_ok": _NumpyLikeFalse(),
+            "tp1_path_clear": _NumpyLikeFalse(),
+            "tp1_path_block_reason": "tp1_blocked_by_opposing_zone",
+            "failed_gate_names": ["space"],
+        }
+    ]
+
+    summary = summarize_funnel_rows(rows)
+
+    assert summary["by_asset_type"]["forex"]["room_failed"] == 1
+    assert summary["by_asset_type"]["forex"]["tp1_path_failed"] == 1
+    assert summary["top_blockers"]["tp1_path_block_reason"] == [
+        ("tp1_blocked_by_opposing_zone", 1)
+    ]
+
+
 def test_save_writes_artifacts():
     with tempfile.TemporaryDirectory() as td:
         tmp_path = Path(td)

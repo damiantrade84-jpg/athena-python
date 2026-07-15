@@ -769,5 +769,6 @@ def _daily_summary_worker():
         time.sleep(60)  # Check every minute
 
 
-# Start daily summary worker thread
-threading.Thread(target=_daily_summary_worker, daemon=True).start()
+def start_daily_summary_worker() -> None:
+    """Start the daily summary worker during explicit application startup."""
+    threading.Thread(target=_daily_summary_worker, daemon=True, name="TelegramDailySummary").start()

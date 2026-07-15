@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 
@@ -383,3 +383,82 @@ def test_scanner_stock_h4_confirmed_only_lag_sets_consistency_before_freshness()
     assert signal["candleConsistency"]["H4"]["status"] == "CONFIRMED_ONLY_OK"
     assert signal["dataFreshness"]["allowed"] is True
     assert signal["dataFreshness"]["blocked"] == []
+
+
+def test_engine_a_policy_lower_tfs_are_freshness_and_count_checked() -> None:
+    import scanner
+    from engine_a_v3 import evaluate_engine_a_v3
+
+    def _bar(iso: str) -> dict:
+        return {
+            "time": iso,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "vol": 1000.0,
+        }
+
+    now = datetime(2026, 5, 11, 18, 40, tzinfo=timezone.utc).timestamp()
+    pair = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex", "source": "mt5"}
+    signal = {"pair": "EUR/USD", "type": "forex", "scoreGroup": "forex_majors"}
+    m30_confirmed = _bar("2026-05-11T18:00:00+00:00")
+    m30_forming = _bar("2026-05-11T18:30:00+00:00")
+    market_state = {
+        "D1": {"confirmed": [_bar("2026-05-09T00:00:00+00:00")], "forming": None},
+        "H4": {"confirmed": [_bar("2026-05-11T11:00:00+00:00")], "forming": None},
+        "H1": {"confirmed": [_bar("2026-05-11T17:00:00+00:00")], "forming": None},
+        "M30": {"confirmed": [m30_confirmed], "forming": m30_forming},
+    }
+    raw_candles = {
+        tf: list(state["confirmed"]) + ([state["forming"]] if state["forming"] else [])
+        for tf, state in market_state.items()
+    }
+
+    scanner._attach_engine_a_execution_freshness(
+        signal,
+        pair,
+        preloaded_market_state=market_state,
+        raw_candles=raw_candles,
+        config={
+            "DATA_FRESHNESS_GATES": {
+                "BLOCK_EXECUTION_ON_STALE": True,
+                "BLOCK_TIMEFRAMES": ["M30"],
+                "BLOCK_SEVERITIES": ["missing_current_bucket", "stale_multi_bucket"],
+            }
+        },
+        time_now=now,
+    )
+
+    assert "M30" in signal["candleFreshness"]
+    assert "M30" in signal["candleConsistency"]
+
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    def _series(count: int, step: timedelta) -> list[dict]:
+        return [
+            _bar((start + i * step).isoformat())
+            for i in range(count)
+        ]
+
+    result = evaluate_engine_a_v3(
+        pair,
+        {
+            "D1": _series(220, timedelta(days=1)),
+            "H4": _series(50, timedelta(hours=4)),
+            "H1": _series(429, timedelta(hours=1)),
+            "M15": _series(428, timedelta(minutes=15)),
+        },
+        horizon="intraday",
+        policy_timeframes={
+            "regime": "D1",
+            "bias": "D1",
+            "structure": "H4",
+            "setup": "H1",
+            "trigger": "M15",
+            "execution": "M5",
+        },
+    )
+
+    assert result.decision == "NO_SIGNAL"
+    assert "trigger_history_insufficient" in result.rejectionReasons

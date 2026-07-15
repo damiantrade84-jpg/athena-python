@@ -95,6 +95,7 @@ from market_structure import (
     engine_b_forex_asian_session_blocks_bar,
     engine_b_profile_context_enabled,
     resolve_engine_b_asset_class,
+    resolve_engine_b_tfs,
 )
 
 
@@ -814,8 +815,19 @@ def _engine_b_level_atr_for_bt(
             bybit_fn = getattr(_rt(), "bybit_atr_for_levels", None)
             bybit_atr = None
             if callable(bybit_fn):
+                resolved_tfs = resolve_engine_b_tfs(
+                    str(p.get("type") or "crypto"),
+                    str(style or "intraday"),
+                    symbol=str(p.get("display") or p.get("symbol") or ""),
+                    score_group=str(p.get("score_group") or "") or None,
+                )
                 try:
-                    bybit_atr = bybit_fn(pair, style, as_of=as_of)
+                    bybit_atr = bybit_fn(
+                        pair,
+                        style,
+                        as_of=as_of,
+                        atr_tf=resolved_tfs["atr"],
+                    )
                 except TypeError:
                     bybit_atr = bybit_fn(pair, style)
             if bybit_atr:
@@ -2009,6 +2021,68 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 "error": f"Insufficient H1 history for Engine A V3 ({len(h1_raw)} bars, need 80+)"
             }
 
+        # Resolve the same authoritative baseline policy used by live Engine A.
+        # Historical speed adaptation is intentionally not inferred from current
+        # state; run_v3_backtest discloses it as an unreplayed input.
+        from timeframe_policy import resolve_timeframe_policy
+
+        _v3_policy = resolve_timeframe_policy(
+            pair.get("display") or pair.get("symbol") or "",
+            pair.get("type") or "",
+            get_pair_score_group(pair),
+            effective_style,
+            engine_id="engine_a",
+        )
+        _v3_policy_timeframes = {
+            "regime": _v3_policy.regime_tf.value,
+            "bias": _v3_policy.bias_tf.value,
+            "structure": _v3_policy.structure_tf.value,
+            "setup": _v3_policy.setup_tf.value,
+            "trigger": _v3_policy.trigger_tf.value,
+            "execution": _v3_policy.execution_tf.value,
+        }
+        _v3_candles = {"D1": d1_raw, "H4": h4_raw, "H1": h1_raw}
+        for _tf in dict.fromkeys(
+            (_v3_policy_timeframes["setup"], _v3_policy_timeframes["trigger"])
+        ):
+            _tf = str(_tf or "").upper()
+            if _tf in _v3_candles:
+                continue
+            _limit = int(_bt_limits.get(_tf.lower(), 0) or 0)
+            if _limit <= 0:
+                return {
+                    "error": f"No backtest candle limit for Engine A policy timeframe {_tf}",
+                    "timeframePolicyMissing": _tf,
+                }
+            if _ptype == "crypto":
+                _raw_role = _crypto_bt_signal_candles(
+                    pair,
+                    engine="A",
+                    tf=_tf,
+                    limit=_limit,
+                    min_bars=80,
+                )
+            else:
+                _raw_role = _bt_cached_fetch(
+                    pair,
+                    _tf,
+                    _limit,
+                    lambda lim, tf=_tf: _rt().fetch_candles(pair, tf, lim),
+                    provider=str(pair.get("source") or "source_router"),
+                    min_bars=80,
+                )
+            _v3_candles[_tf] = _bt_confirmed_candles(
+                pair, _tf, _raw_role
+            )
+            if len(_v3_candles[_tf]) < 80:
+                return {
+                    "error": (
+                        f"Insufficient {_tf} history for Engine A policy "
+                        f"({len(_v3_candles[_tf])} bars, need 80+)"
+                    ),
+                    "timeframePolicyMissing": _tf,
+                }
+
         h4_times = pd.to_datetime(
             [c["time"] for c in h4_raw], utc=True, errors="coerce"
         )
@@ -2036,7 +2110,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
     _v3_costs = engine_a_v3_backtest_costs(pair.get("type"), CONFIG)
     _v3_result = run_v3_backtest(
         pair,
-        {"D1": d1_raw, "H4": h4_raw, "H1": h1_raw},
+        _v3_candles,
         horizon=effective_style,
         spread_bps=float(_v3_costs.get("SPREAD_BPS", 2.0)),
         commission_bps=float(_v3_costs.get("COMMISSION_BPS", 1.0)),
@@ -2044,17 +2118,9 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
         swap_bps_per_day=float(_v3_costs.get("SWAP_BPS_PER_DAY", 0.5)),
         max_hold_bars=int(_v3_costs.get("MAX_HOLD_BARS", 24)),
         collect_funnel=collect_funnel,
+        policy_timeframes=_v3_policy_timeframes,
     )
-    # Persist the same deterministic policy identity used by live scans. The
-    # policy is metadata here: it does not alter Engine A scoring or direction.
-    from timeframe_policy import resolve_timeframe_policy
-
-    _v3_policy = resolve_timeframe_policy(
-        pair.get("display") or pair.get("symbol") or "",
-        pair.get("type") or "",
-        get_pair_score_group(pair),
-        effective_style,
-    )
+    # Persist the exact deterministic baseline policy used by scoring.
     _v3_policy_payload = _v3_policy.payload()
     _v3_config_hash = hashlib.sha256(
         json.dumps(
@@ -2062,9 +2128,7 @@ def backtest_pair(pair, style="auto", validation_mode="standard", purge_gap=200,
                 "policy": _v3_policy.to_dict(),
                 "style": effective_style,
                 "candle_counts": {
-                    "D1": len(d1_raw),
-                    "H4": len(h4_raw),
-                    "H1": len(h1_raw),
+                    tf: len(rows) for tf, rows in _v3_candles.items()
                 },
             },
             sort_keys=True,
@@ -5027,6 +5091,29 @@ def _format_backtest_results(
 
 
 # ── NEW: Engine B (Naked) Backtest Function ───────────────────────────────
+_ENGINE_B_BT_TF_SECONDS = {
+    "D1": 86400,
+    "H4": 14400,
+    "H1": 3600,
+    "M30": 1800,
+    "M15": 900,
+    "M5": 300,
+}
+
+
+def _engine_b_monitoring_context(
+    role_series: dict[str, list[dict]], execution_tf: str
+) -> tuple[str, list[dict], int]:
+    """Resolve Engine B exit monitoring from the actual execution series."""
+    monitor_tf = str(execution_tf or "").upper()
+    monitor_seconds = _ENGINE_B_BT_TF_SECONDS.get(monitor_tf)
+    monitor_candles = role_series.get(monitor_tf) or []
+    if monitor_seconds is None or not monitor_candles:
+        raise ValueError(f"Engine B execution timeframe unavailable for monitoring: {monitor_tf}")
+    h4_hold_multiplier = max(1, 14400 // monitor_seconds)
+    return monitor_tf, monitor_candles, h4_hold_multiplier
+
+
 def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="standard", purge_gap=200, folds=3):
     """Separate backtest loop for NakedEngine (Engine B).
     Completely isolated from Engine A backtest_pair()."""
@@ -5262,14 +5349,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         tf: [candle_timestamp_epoch(candle) for candle in series]
         for tf, series in _role_series.items()
     }
-    _tf_seconds = {
-        "D1": 86400,
-        "H4": 14400,
-        "H1": 3600,
-        "M30": 1800,
-        "M15": 900,
-        "M5": 300,
-    }
+    _tf_seconds = _ENGINE_B_BT_TF_SECONDS
 
     # PRECOMPUTE ATR SERIES: Compute the full ATR array once per timeframe to avoid O(N^2) complexity.
     # We compute for all three timeframes to ensure we can resolve the _atr_tf at any scan index.
@@ -5801,27 +5881,17 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         be_armed = False
         be_trigger_r = None
 
-        # PHASE 3A/B: Use entry_tf for monitoring and convert max_hold_bars from H4 to monitoring TF
-        # Config max_hold_bars is defined in H4 bars; convert to monitoring TF
-        _monitor_tf = _entry_tf  # Use entry_tf from style_profile (H1 for intraday, H4 for swing)
-        _monitor_candles = candles_h1 if _monitor_tf == "H1" else candles_h4
-        _monitor_times = h1_times if _monitor_tf == "H1" else h4_times
-        _monitor_fill_index = 0
-        if _monitor_tf == "H4":
-            # entry_bar is candles_h4[i + 1] in this loop, so monitoring starts there directly.
-            _monitor_fill_index = i + 1
-        elif h1_times is not None and len(h1_times) > 0:
-            _entry_bar_ts = pd.Timestamp(entry_bar["time"])
-            if pd.notna(_entry_bar_ts):
-                if _entry_bar_ts.tzinfo is None:
-                    _entry_bar_ts = _entry_bar_ts.tz_localize("UTC")
-                _monitor_fill_index = int(bisect.bisect_left(h1_times, _entry_bar_ts))
-        
-        # Convert H4-based max_hold to monitoring TF (H4->H1 = 4x, H4->H4 = 1x)
-        _tf_multiplier = 4 if _monitor_tf == "H1" else 1
+        # Entry is filled on entry_raw, which is the policy execution series.
+        # Monitor that same series so M5/M15/M30 entries never fall through to H4.
+        _monitor_tf, _monitor_candles, _tf_multiplier = _engine_b_monitoring_context(
+            _role_series, _execution_tf
+        )
+        _monitor_fill_index = i + 1
+
+        # Config max_hold_bars is defined in H4 bars; preserve wall-clock duration.
         _max_hold_monitor_bars = max_hold_bars * _tf_multiplier
         
-        # Forward monitoring on the correct timeframe based on entry_tf
+        # Forward monitoring uses the same timeframe as the simulated fill.
         future_window = _monitor_candles[_monitor_fill_index : min(_monitor_fill_index + _max_hold_monitor_bars + 1, len(_monitor_candles))]
         for fi, future in enumerate(future_window):
             exit_bar_offset = fi
@@ -5915,8 +5985,6 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                     r_multiple = 0.0 if outcome == "BE" else -1.0
                 break
             
-            # Use H1 granularity for barrier checks if we need more precision than H4 (optional enhancement)
-            # For now, H4 мониторинг on H1 entry is a reasonable compromise for performance.
             f_high = float(future["high"])
             f_low = float(future["low"])
             f_close = float(future["close"])
@@ -6053,8 +6121,13 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 "date": bar_date,
                 "signal_timestamp_utc": (entry_raw[i].get("time") if 0 <= i < len(entry_raw) else None),
                 "entry_timestamp_utc": entry_bar.get("time"),
-                "exit_timestamp_utc": (candles_h1[_monitor_fill_index + exit_bar_offset].get("time") if _monitor_tf == "H1" and _monitor_fill_index + exit_bar_offset < len(candles_h1) else None),
-                "entry_timeframe": _entry_tf,
+                "exit_timestamp_utc": (
+                    _monitor_candles[_monitor_fill_index + exit_bar_offset].get("time")
+                    if _monitor_fill_index + exit_bar_offset < len(_monitor_candles)
+                    else None
+                ),
+                "entry_timeframe": _monitor_tf,
+                "trigger_timeframe": _entry_tf,
                 "pair": pair["display"],
                 "direction": direction,
                 "score": best["score"],

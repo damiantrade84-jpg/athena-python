@@ -1570,7 +1570,32 @@ def risk_check(
     # signal, not only consensus/Engine B. Pure Engine A signals (no verdict,
     # no components) previously bypassed this and could execute with RR < 1
     # (SL further than TP) as long as SL/TP were on the correct side.
-    if not _tp_sl_rr_relaxed and _min_exec_rr > 0 and _rr_target > 0:
+    # Config may disable min-RR blocking for Engine A and/or Engine B while
+    # leaving SL/TP side and freshness gates fail-closed. ASE / Engine D /
+    # fx-factor bridges keep their own floors regardless of these flags.
+    _eng_rr = str(
+        signal.get("engine") or signal.get("source_engine") or ""
+    ).strip().lower()
+    _is_ase_rr = (
+        execution_context == "ase_bridge" and signal.get("aseExecution") is True
+    )
+    _is_fx_factor_rr = (
+        execution_context == "fx_factor_bridge"
+        and signal.get("fxFactorExecution") is True
+    )
+    _is_engine_d_rr = _eng_rr in ("scalp", "scalp_vp", "engine_d", "d")
+    if _is_engine_b_execution_signal(signal):
+        _rr_gate_enabled = bool(CONFIG.get("ENGINE_B_RR_GATE_ENABLED", True))
+    elif _is_ase_rr or _is_fx_factor_rr or _is_engine_d_rr:
+        _rr_gate_enabled = True
+    else:
+        _rr_gate_enabled = bool(CONFIG.get("ENGINE_A_RR_GATE_ENABLED", True))
+    if (
+        not _tp_sl_rr_relaxed
+        and _rr_gate_enabled
+        and _min_exec_rr > 0
+        and _rr_target > 0
+    ):
         risk_abs = abs(entry - sl)
         if risk_abs > 0:
             rr_geom = abs(_rr_target - entry) / risk_abs

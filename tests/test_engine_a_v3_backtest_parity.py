@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,9 +12,13 @@ from engine_a_v3.contract import PriceZone
 
 
 def _bars(*, timeframe: str, count: int = 100) -> list[dict]:
-    step = {"D1": timedelta(days=1), "H4": timedelta(hours=4), "H1": timedelta(hours=1)}[
-        timeframe
-    ]
+    step = {
+        "D1": timedelta(days=1),
+        "H4": timedelta(hours=4),
+        "H1": timedelta(hours=1),
+        "M30": timedelta(minutes=30),
+        "M15": timedelta(minutes=15),
+    }[timeframe]
     start = datetime(2025, 1, 1, tzinfo=timezone.utc)
     return [
         {
@@ -112,6 +117,54 @@ def test_v3_backtest_discloses_unreplayed_live_inputs(monkeypatch):
     assert result["comparability"]["promotionEligible"] is False
     assert "live_context" in result["comparability"]["unreplayedInputs"]
     assert "live_scan_gates" in result["comparability"]["unreplayedInputs"]
+    assert "timeframe_speed_adaptation" in result["comparability"]["unreplayedInputs"]
+
+
+def test_v3_backtest_applies_policy_setup_and_trigger_timeframes(monkeypatch):
+    pair = _pair("forex_majors", display="EUR/USD", symbol="EURUSD", asset_type="forex")
+    candles = {
+        timeframe: _bars(timeframe=timeframe)
+        for timeframe in ("D1", "H4", "H1", "M30", "M15")
+    }
+    policy = {
+        "regime": "D1",
+        "bias": "H4",
+        "structure": "H1",
+        "setup": "M30",
+        "trigger": "M15",
+        "execution": "M5",
+    }
+    captured: list[dict] = []
+
+    def _recording_eval(*args, **kwargs):
+        captured.append(kwargs)
+        return _trade_signal()
+
+    monkeypatch.setattr(backtest_module, "evaluate_engine_a_v3", _recording_eval)
+    result = run_v3_backtest(
+        pair,
+        candles,
+        horizon="intraday",
+        collect_funnel=True,
+        policy_timeframes=policy,
+        **_costs(),
+    )
+
+    assert result["entryTimeframe"] == "M30"
+    assert result["funnel"]["primaryTf"] == "M30"
+    assert result["policyTimeframesApplied"] == policy
+    assert captured
+    assert all(call.get("policy_timeframes") == policy for call in captured)
+
+
+def test_scan_speed_state_is_used_for_engine_a_scoring_policy():
+    root = Path(__file__).resolve().parents[1]
+    athena_src = (root / "athena.py").read_text(encoding="utf-8")
+    scanner_src = (root / "scanner.py").read_text(encoding="utf-8")
+
+    assert "timeframe_speed_state=None" in athena_src
+    assert "speed_state=timeframe_speed_state" in athena_src
+    assert '"timeframe_speed_state": _speed_state' in scanner_src
 
 
 def test_v3_backtest_excludes_confidence_demoted_raw_trade(monkeypatch):

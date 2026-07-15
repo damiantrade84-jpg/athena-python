@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 from typing import Iterable
 
+from athena_ase.universe import Instrument
+
 from athena_ase.data.ingest import audit as audit_mod
 from athena_ase.data.ingest import binance, bybit, cot, dukascopy, eodhd, fred, mt5, mt5_live
 from athena_ase.data.ptis import PTISStore, default_ptis_root
@@ -25,6 +27,7 @@ def run_ingest(
     cot_db: str | None = None,
     carry_db: str | None = None,
     bybit_symbols: list[str] | None = None,
+    mt5_live_instruments: tuple[Instrument, ...] | None = None,
     bybit_lookback_days: int = 730,
     write_audit: bool = True,
     audit_path: Path | str | None = None,
@@ -38,7 +41,9 @@ def run_ingest(
     if "mt5" in selected:
         results["mt5"] = mt5.ingest_all(ptis, db_path=backtest_db)
     if "mt5_live" in selected:
-        results["mt5_live"] = mt5_live.ingest_all(ptis)
+        results["mt5_live"] = mt5_live.ingest_all(
+            ptis, instruments=mt5_live_instruments
+        )
     if "binance" in selected:
         results["binance"] = binance.ingest_all(ptis, db_path=backtest_db)
     if "dukascopy" in selected:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import bisect
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from math import sqrt
@@ -17,7 +17,15 @@ from engine_a_v3.routing import route_specialist
 from engine_a_v3.setups import _efficiency_ratio
 from engine_a_v3.timeframes import resolve_v3_entry_timeframe
 
-_TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
+_TF_SECONDS = {
+    "M1": 60,
+    "M5": 300,
+    "M15": 900,
+    "M30": 1800,
+    "H1": 3600,
+    "H4": 14400,
+    "D1": 86400,
+}
 
 
 def _tf_seconds(tf: str) -> int:
@@ -266,7 +274,11 @@ def _v3_backtest_comparability() -> dict[str, Any]:
     return {
         "liveComparable": False,
         "promotionEligible": False,
-        "unreplayedInputs": ["live_context", "live_scan_gates"],
+        "unreplayedInputs": [
+            "live_context",
+            "live_scan_gates",
+            "timeframe_speed_adaptation",
+        ],
         "unreplayedScanGates": [
             "exchangeClosed",
             "eventRisk",
@@ -303,9 +315,22 @@ def run_v3_backtest(
     start_index: int | None = None,
     collect_funnel: bool = False,
     intermarket_context_provider: Callable[[Any], dict | None] | None = None,
+    policy_timeframes: Mapping[str, Any] | None = None,
 ) -> dict:
     route = route_specialist(pair)
-    primary_tf = resolve_v3_entry_timeframe(
+    policy = policy_timeframes if isinstance(policy_timeframes, Mapping) else None
+    policy_setup_tf = str(
+        (policy or {}).get("setup") or (policy or {}).get("setupTf") or ""
+    ).upper()
+    if policy is not None and not policy_setup_tf:
+        return {
+            "error": "ENGINE_A_V3_POLICY_SETUP_TIMEFRAME_MISSING",
+            "engine": "ENGINE_A_V3",
+            "contractVersion": CONTRACT_VERSION,
+            "entryTimeframe": None,
+            "comparability": _v3_backtest_comparability(),
+        }
+    primary_tf = policy_setup_tf or resolve_v3_entry_timeframe(
         route.score_group,
         str(pair.get("type") or pair.get("asset_type") or "other"),
         horizon,
@@ -320,6 +345,24 @@ def run_v3_backtest(
             "comparability": comparability,
         }
     primary = list(candles.get(primary_tf) or [])
+    if policy is not None:
+        policy_trigger_tf = str(
+            policy.get("trigger") or policy.get("triggerTf") or ""
+        ).upper()
+        missing_policy_tfs = [
+            tf
+            for tf in dict.fromkeys((policy_setup_tf, policy_trigger_tf))
+            if not tf or not candles.get(tf)
+        ]
+        if missing_policy_tfs:
+            return {
+                "error": "ENGINE_A_V3_POLICY_CANDLES_MISSING",
+                "engine": "ENGINE_A_V3",
+                "contractVersion": CONTRACT_VERSION,
+                "entryTimeframe": primary_tf,
+                "missingPolicyTimeframes": missing_policy_tfs,
+                "comparability": comparability,
+            }
     min_index = max(80, int(start_index or 80))
     trades: list[dict] = []
     same_bar = 0
@@ -387,6 +430,7 @@ def run_v3_backtest(
             horizon=horizon,
             registry=registry,
             snapshot_cache=snapshot_cache,
+            policy_timeframes=policy,
         )
         _im_confirmation = None
         if intermarket_context_provider is not None:
@@ -512,6 +556,7 @@ def run_v3_backtest(
 
     result = _summarize(pair, horizon, trades, same_bar, oos_frac=_oos_frac)
     result["entryTimeframe"] = primary_tf
+    result["policyTimeframesApplied"] = dict(policy) if policy else None
     result["comparability"] = comparability
     if collect_funnel:
         # Diagnostic: re-walk every bar (ignoring the post-trade cooldown) to attribute
@@ -525,7 +570,14 @@ def run_v3_backtest(
         evaluated = 0
         for index in range(min_index, len(primary) - 1):
             prefix = _build_prefix_at(_primary_open_epochs[index])
-            sig = evaluate_engine_a_v3(pair, prefix, horizon=horizon, registry=registry, snapshot_cache=snapshot_cache)
+            sig = evaluate_engine_a_v3(
+                pair,
+                prefix,
+                horizon=horizon,
+                registry=registry,
+                snapshot_cache=snapshot_cache,
+                policy_timeframes=policy,
+            )
             decisions[sig.decision] = decisions.get(sig.decision, 0) + 1
             qualified += 1 if sig.qualified else 0
             is_raw_qualified = sig.decision == "TRADE" and sig.qualified

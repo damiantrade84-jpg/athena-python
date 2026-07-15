@@ -12,7 +12,28 @@ class _Log:
         pass
 
 
-def test_ase_post_scan_hook_is_scheduled_without_blocking_response():
+def test_ase_post_scan_hook_is_disabled_when_auto_scan_off(monkeypatch):
+    from config import CONFIG
+
+    monkeypatch.setitem(CONFIG, "ASE_AUTO_SCAN_ENABLED", False)
+    from athena_app.services.scan_completion_hooks import schedule_ase_post_scan_hook
+
+    started = threading.Event()
+
+    def slow_ase_runner():
+        started.set()
+        return {"success": True}
+
+    status = schedule_ase_post_scan_hook(runner=slow_ase_runner, logger=_Log())
+
+    assert status == {"success": None, "status": "disabled"}
+    assert not started.wait(timeout=0.05)
+
+
+def test_ase_post_scan_hook_is_scheduled_without_blocking_response(monkeypatch):
+    from config import CONFIG
+
+    monkeypatch.setitem(CONFIG, "ASE_AUTO_SCAN_ENABLED", True)
     from athena_app.services.scan_completion_hooks import schedule_ase_post_scan_hook
 
     started = threading.Event()

@@ -130,11 +130,15 @@ def _norm_asset_type(x: Any) -> str:
 
 
 def _bool_is_false(val: Any) -> bool:
-    if val is False:
-        return True
+    if val is None:
+        return False
     if isinstance(val, str) and val.strip().lower() == "false":
         return True
-    return False
+    try:
+        val = val.item()
+    except (AttributeError, ValueError):
+        pass
+    return val is False
 
 
 def _failed_gate_has(row: dict[str, Any], name: str) -> bool:
@@ -250,6 +254,7 @@ def summarize_funnel_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     gate_counter: Counter[str] = Counter()
     err_counter: Counter[str] = Counter()
+    tp1_path_counter: Counter[str] = Counter()
 
     for r in rows:
         fg = r.get("failed_gate_names")
@@ -261,6 +266,9 @@ def summarize_funnel_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ee = r.get("engine_b_error")
         if ee is not None and str(ee).strip():
             err_counter[str(ee).strip()] += 1
+        tp1_reason = r.get("tp1_path_block_reason")
+        if tp1_reason is not None and str(tp1_reason).strip():
+            tp1_path_counter[str(tp1_reason).strip()] += 1
 
     overall = {
         "total_rows": len(rows),
@@ -357,6 +365,12 @@ def summarize_funnel_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
                     or _failed_gate_has(r, "space")
                 )
             ),
+            "tp1_path_failed": sum(
+                1
+                for r in sub
+                if r.get("has_funnel")
+                and _bool_is_false(r.get("tp1_path_clear"))
+            ),
             "rr_failed": sum(
                 1
                 for r in sub
@@ -436,10 +450,11 @@ def summarize_funnel_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "by_asset_type": by_at,
         "crypto_section": crypto_question_block("crypto"),
         "forex_section": crypto_question_block("forex"),
-        "top_blockers": {
-            "failed_gate_names": gate_counter.most_common(40),
-            "engine_b_error": err_counter.most_common(40),
-        },
+            "top_blockers": {
+                "failed_gate_names": gate_counter.most_common(40),
+                "engine_b_error": err_counter.most_common(40),
+                "tp1_path_block_reason": tp1_path_counter.most_common(40),
+            },
     }
     return summary
 

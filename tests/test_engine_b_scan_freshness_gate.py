@@ -129,3 +129,87 @@ def test_engine_b_scan_freshness_gate_blocks_d1_when_score_group_omitted(
     )
     assert stale == ["D1:stale_multi_bucket"]
     mock_d1_consumed.assert_not_called()
+
+
+@patch("athena_app.services.market_state.candle_freshness_diagnostic")
+def test_entry_tf_mt5_equity_stale_1_bucket_is_tolerated(mock_diag):
+    """MT5 equity CFDs lag ~1 M15 bucket; the entry-TF gate must not block them
+    on stale_1_bucket (the live-quote gate guards the executable price)."""
+    mock_diag.side_effect = lambda _pair, tf, _candles, **_: {
+        "stalenessSeverity": "stale_1_bucket" if tf == "M15" else "fresh",
+        "bucketLag": 1,
+    }
+    for pair_type in ("stock", "etf", "etf_bond"):
+        pair = {"display": "SPY", "type": pair_type, "source": "mt5"}
+        stale, diag = _engine_b_scan_freshness_stale_tfs(
+            pair,
+            [{"time": 1}] * 5,
+            [{"time": 2}] * 5,
+            [{"time": 3}] * 5,
+            config={"ENGINE_B_SCAN_FRESHNESS_GATE": True},
+            active_entry_tfs={"M15": [{"time": 4}] * 5},
+        )
+        assert stale == [], f"{pair_type} should not be blocked on entry-TF stale_1_bucket"
+        assert diag["M15"]["stalenessSeverity"] == "stale_1_bucket"
+
+
+@patch("athena_app.services.market_state.candle_freshness_diagnostic")
+def test_entry_tf_mt5_equity_stale_multi_bucket_still_blocks(mock_diag):
+    """Only one-bucket lag is tolerated; genuinely stale equity entry bars fail closed."""
+    mock_diag.side_effect = lambda _pair, tf, _candles, **_: {
+        "stalenessSeverity": "stale_multi_bucket" if tf == "M15" else "fresh",
+        "bucketLag": 3,
+    }
+    pair = {"display": "SPY", "type": "etf", "source": "mt5"}
+    stale, _diag = _engine_b_scan_freshness_stale_tfs(
+        pair,
+        [{"time": 1}] * 5,
+        [{"time": 2}] * 5,
+        [{"time": 3}] * 5,
+        config={"ENGINE_B_SCAN_FRESHNESS_GATE": True},
+        active_entry_tfs={"M15": [{"time": 4}] * 5},
+    )
+    assert stale == ["M15:stale_multi_bucket"]
+
+
+@patch("athena_app.services.market_state.candle_freshness_diagnostic")
+def test_entry_tf_crypto_stale_1_bucket_still_blocks(mock_diag):
+    """The grace is equity-only: real-time crypto/forex feeds must still fail
+    closed on a stale entry bucket."""
+    mock_diag.side_effect = lambda _pair, tf, _candles, **_: {
+        "stalenessSeverity": "stale_1_bucket" if tf == "M15" else "fresh",
+        "bucketLag": 1,
+    }
+    pair = {"display": "BTC/USDT", "type": "crypto", "source": "binance"}
+    stale, _diag = _engine_b_scan_freshness_stale_tfs(
+        pair,
+        [{"time": 1}] * 5,
+        [{"time": 2}] * 5,
+        [{"time": 3}] * 5,
+        config={"ENGINE_B_SCAN_FRESHNESS_GATE": True},
+        active_entry_tfs={"M15": [{"time": 4}] * 5},
+    )
+    assert stale == ["M15:stale_1_bucket"]
+
+
+@patch("athena_app.services.market_state.candle_freshness_diagnostic")
+def test_entry_tf_mt5_equity_grace_config_reversible(mock_diag):
+    """Setting ENGINE_B_ENTRY_TF_ALLOW_MT5_EQUITY_STALE_1 False restores the
+    strict entry-TF gate for equities."""
+    mock_diag.side_effect = lambda _pair, tf, _candles, **_: {
+        "stalenessSeverity": "stale_1_bucket" if tf == "M15" else "fresh",
+        "bucketLag": 1,
+    }
+    pair = {"display": "SPY", "type": "etf", "source": "mt5"}
+    stale, _diag = _engine_b_scan_freshness_stale_tfs(
+        pair,
+        [{"time": 1}] * 5,
+        [{"time": 2}] * 5,
+        [{"time": 3}] * 5,
+        config={
+            "ENGINE_B_SCAN_FRESHNESS_GATE": True,
+            "ENGINE_B_ENTRY_TF_ALLOW_MT5_EQUITY_STALE_1": False,
+        },
+        active_entry_tfs={"M15": [{"time": 4}] * 5},
+    )
+    assert stale == ["M15:stale_1_bucket"]

@@ -53,12 +53,52 @@ from athena_app.services.market_state import (
 )
 from candles_cache import get_candle_fetch_meta
 from config import scan_candle_limits
+from engine_a_v3.profile import baseline_profile
+from engine_a_v3.routing import route_specialist
+from feature_normalizer import get_normalization_lookback
+
+
+_FAMILY_ASSET = {
+    "forex": "forex",
+    "crypto": "crypto",
+    "commodity": "commodity",
+    "index": "index",
+    "equity_etf": "stock",
+}
+
+
+def _required_scoring_bars(pair: dict, tf: str) -> tuple[int, dict]:
+    """Derive the controlling Engine A/B scan depth for current indicators."""
+    route = route_specialist(pair)
+    profile = baseline_profile(route.score_group, "intraday")
+    periods = dict(profile.indicator_periods)
+    normalized_asset = _FAMILY_ASSET.get(route.family, "other")
+    normalization = int(get_normalization_lookback(normalized_asset))
+    ema_long = int(periods["ema_long"])
+    atr_period = int(periods["atr"])
+    adx_period = int(periods["adx"])
+    indicator_min = max(
+        ema_long,
+        normalization + atr_period,
+        normalization + (2 * adx_period) + 1,
+    )
+    core_min = int(config.CONFIG.get(f"ENGINE_A_MIN_{tf}_BARS", 0) or 0)
+    required = max(indicator_min, core_min)
+    return required, {
+        "score_group": route.score_group,
+        "normalization_lookback": normalization,
+        "ema_long": ema_long,
+        "atr_period": atr_period,
+        "adx_period": adx_period,
+        "engine_a_core_min": core_min,
+    }
 
 
 def _filter_pairs(
     pairs: list[dict],
     asset_types: set[str] | None,
     symbols: set[str] | None,
+    sources: set[str] | None,
 ) -> list[dict]:
     out = []
     for pair in pairs:
@@ -66,6 +106,8 @@ def _filter_pairs(
         if ptype == "crypto":
             continue
         if asset_types and ptype not in asset_types:
+            continue
+        if sources and str(pair.get("source") or "").lower() not in sources:
             continue
         if not pair.get("enabled", True):
             continue
@@ -123,7 +165,9 @@ def _path_row(
         "fresh",
         "stale_1_bucket",
         "d1_calendar_gap_policy_ok",
+        "intraday_calendar_gap_policy_ok",
     }
+    required_bars, requirement = _required_scoring_bars(pair, tf)
     return {
         "path": path,
         "symbol": pair.get("display") or pair.get("symbol"),
@@ -132,6 +176,9 @@ def _path_row(
         "provider": provider,
         "raw_count": len(raw),
         "scoring_count": len(scoring),
+        "required_scoring_bars": required_bars,
+        "count_sufficient": len(scoring) >= required_bars,
+        "count_requirement": requirement,
         "last_raw_ts": _last_ts(raw),
         "last_scoring_ts": _last_ts(scoring),
         "expected_latest_ts": score_diag.get("expectedCurrentBucketEpoch"),
@@ -158,6 +205,10 @@ def audit_pair_tf(pair: dict, tf: str, limit: int, time_now: float) -> dict:
         raw = list(fetched or [])
     except Exception as exc:
         provider_error = str(exc)
+
+    # A full-universe audit can cross M15/M30 boundaries. Evaluate each fetch
+    # against the wall clock observed after that fetch, not a frozen run start.
+    time_now = time.time()
 
     meta = get_candle_fetch_meta(pair, tf, limit) or {}
     provider = meta.get("upstream") or pair.get("source") or "unknown"
@@ -236,6 +287,7 @@ def _summarize(rows: list[dict], path_rows: list[dict]) -> dict:
     fallback_count = 0
     cache_stale = 0
     partial_count = 0
+    insufficient_count = 0
     ec_mismatch_symbols: list[str] = []
     tf_mismatch: dict[str, set[str]] = defaultdict(set)
 
@@ -260,7 +312,12 @@ def _summarize(rows: list[dict], path_rows: list[dict]) -> dict:
             cache_stale += 1
 
         severity = diag.get("stale_status") or "unknown"
-        if severity not in {"fresh", "stale_1_bucket", "d1_calendar_gap_policy_ok"}:
+        if severity not in {
+            "fresh",
+            "stale_1_bucket",
+            "d1_calendar_gap_policy_ok",
+            "intraday_calendar_gap_policy_ok",
+        }:
             stale_by_type[atype] += 1
             stale_by_provider[provider] += 1
             stale_by_tf[tf] += 1
@@ -271,6 +328,12 @@ def _summarize(rows: list[dict], path_rows: list[dict]) -> dict:
 
         if row.get("engine_c_b_leg_mismatch"):
             ec_mismatch_symbols.append(f"{sym}/{tf}")
+
+    for path_row in path_rows:
+        if path_row.get("path") in {"scanner_engine_a", "scanner_engine_b"} and not path_row.get(
+            "count_sufficient", False
+        ):
+            insufficient_count += 1
 
     # D1/H4/H1 mismatch: same symbol where severities differ across TFs
     by_sym: dict[str, dict[str, str]] = defaultdict(dict)
@@ -293,6 +356,7 @@ def _summarize(rows: list[dict], path_rows: list[dict]) -> dict:
         "stale_by_provider": dict(stale_by_provider),
         "stale_by_timeframe": dict(stale_by_tf),
         "partial_fetch_count": partial_count,
+        "insufficient_scoring_path_count": insufficient_count,
         "fallback_count": fallback_count,
         "cache_stale_count": cache_stale,
         "engine_c_b_leg_mismatch": ec_mismatch_symbols,
@@ -315,6 +379,12 @@ def main() -> int:
         type=str,
         default="",
         help="Optional comma-separated symbol filter",
+    )
+    parser.add_argument(
+        "--sources",
+        type=str,
+        default="",
+        help="Optional comma-separated source filter (for example: mt5)",
     )
     parser.add_argument(
         "--timeframes",
@@ -342,10 +412,15 @@ def main() -> int:
         if s.strip()
     }
     symbols = _normalize_symbols(args.symbols) if args.symbols.strip() else None
+    sources = {
+        item.strip().lower()
+        for item in args.sources.split(",")
+        if item.strip()
+    } or None
     timeframes = [s.strip().upper() for s in args.timeframes.split(",") if s.strip()]
 
     _, active_pairs = _load_all_pairs()
-    pairs = _filter_pairs(active_pairs, asset_types, symbols)
+    pairs = _filter_pairs(active_pairs, asset_types, symbols, sources)
     if not pairs:
         print("No matching non-crypto pairs found.", file=sys.stderr)
         return 1
@@ -391,6 +466,7 @@ def main() -> int:
         print(f"Stale by provider: {summary['stale_by_provider']}")
         print(f"Stale by TF: {summary['stale_by_timeframe']}")
         print(f"Partial fetches: {summary['partial_fetch_count']}")
+        print(f"Insufficient scoring paths: {summary['insufficient_scoring_path_count']}")
         print(f"Fallback used: {summary['fallback_count']}")
         print(f"Cache-stale: {summary['cache_stale_count']}")
         if summary["engine_c_b_leg_mismatch"]:

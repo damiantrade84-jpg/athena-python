@@ -72,6 +72,9 @@ _BYBIT_FUNDING_URL = "https://api.bybit.com/v5/market/funding/history"
 _BYBIT_OI_URL = "https://api.bybit.com/v5/market/open-interest"
 _BYBIT_KLINE_URL = "https://api.bybit.com/v5/market/kline"
 _BYBIT_TICKERS_URL = "https://api.bybit.com/v5/market/tickers"
+_BYBIT_KLINE_RATE_LIMIT_RETCODE = 10006
+_BYBIT_KLINE_RATE_LIMIT_MAX_RETRIES = 1
+_BYBIT_KLINE_RATE_LIMIT_BACKOFF_SEC = 1.0
 
 
 def clear_derivative_history_caches() -> None:
@@ -187,13 +190,29 @@ def _fetch_bybit_klines(
     if end_ms is not None:
         params["end"] = str(int(end_ms))
     try:
-        r = http_requests.get(_BYBIT_KLINE_URL, params=params, timeout=15)
-        if r.status_code != 200:
-            log.warning("[BYBIT-KLINE] %s %s HTTP %s", symbol, tf, r.status_code)
-            return None
-        data = r.json()
-        if int(data.get("retCode", -1)) != 0:
-            log.warning("[BYBIT-KLINE] %s %s retCode=%s", symbol, tf, data.get("retCode"))
+        data: dict[str, Any] = {}
+        for attempt in range(_BYBIT_KLINE_RATE_LIMIT_MAX_RETRIES + 1):
+            r = http_requests.get(_BYBIT_KLINE_URL, params=params, timeout=15)
+            if r.status_code != 200:
+                log.warning("[BYBIT-KLINE] %s %s HTTP %s", symbol, tf, r.status_code)
+                return None
+            data = r.json()
+            ret_code = int(data.get("retCode", -1))
+            if ret_code == 0:
+                break
+            if (
+                ret_code == _BYBIT_KLINE_RATE_LIMIT_RETCODE
+                and attempt < _BYBIT_KLINE_RATE_LIMIT_MAX_RETRIES
+            ):
+                log.warning(
+                    "[BYBIT-KLINE] %s %s retCode=%s; retrying once",
+                    symbol,
+                    tf,
+                    ret_code,
+                )
+                time.sleep(_BYBIT_KLINE_RATE_LIMIT_BACKOFF_SEC)
+                continue
+            log.warning("[BYBIT-KLINE] %s %s retCode=%s", symbol, tf, ret_code)
             return None
         rows = (data.get("result") or {}).get("list") or []
         now_ms = int(time.time() * 1000)

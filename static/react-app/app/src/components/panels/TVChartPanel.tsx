@@ -2092,7 +2092,7 @@ function EngineBSidePanel({
   engineBOverlay: EngineBOverlayPayload | null;
 }) {
   const naked = asRecord(signal?.naked_data ?? signal?.engine_b);
-  const bBreakdown = engineBScoreBreakdown((signal?.naked_data ?? signal?.engine_b ?? signal) as Record<string, unknown>);
+  const bBreakdown = engineBScoreBreakdown(signal as Record<string, unknown>);
   const direction = normalizeDirection(signal?.direction);
   const score = bBreakdown?.totalScore ?? firstNumber(signal?.confluenceScore, signal?.score, naked.score);
   const maxScore = bBreakdown?.totalMax ?? firstNumber(signal?.maxScore, signal?.max_score, naked.max_possible);
@@ -2109,7 +2109,7 @@ function EngineBSidePanel({
   const tp = firstNumber(signal?.tp, signal?.tp1, naked.recommended_take_profit, naked.final_take_profit);
   const rr = firstNumber(naked.rr_used_for_gate, naked.rr, signal?.rr, signal?.rr1);
   const style = firstString(signal?.style, naked.style);
-  const passed = bBreakdown?.gatePasses ?? (signal?.passed ?? naked.passed ?? naked.checklist_passed);
+  const passed = bBreakdown?.confidencePasses ?? (signal?.passed ?? naked.passed ?? naked.checklist_passed);
 
   return (
     <aside className="min-w-0 space-y-3 rounded-md border bg-card/70 p-3">
@@ -2126,18 +2126,21 @@ function EngineBSidePanel({
           <span className="text-muted-foreground">Gate</span>
           <span className="font-mono">
             {gateScore != null && gateMax != null
-              ? `${fmtNum(gateScore, 2)} / ${fmtNum(gateMax, 1)} (min ${fmtNum(threshold, 2)})`
+              ? `${fmtNum(gateScore, 2)} / ${fmtNum(gateMax, 1)}`
               : score === null ? 'Unavailable' : `${fmtNum(score, 2)} / ${fmtNum(maxScore, 1)}`}
           </span>
         </div>
         {bBreakdown?.totalScore != null && (
           <div className="flex items-center justify-between text-xs">
             <span className="text-muted-foreground">Total score</span>
-            <span className="font-mono">{`${fmtNum(bBreakdown.totalScore, 2)} / ${fmtNum(maxScore, 1)}`}</span>
+            <span className="font-mono">
+              {`${fmtNum(bBreakdown.totalScore, 2)} / ${fmtNum(maxScore, 1)}`}
+              {threshold != null ? ` (min ${fmtNum(threshold, 2)})` : ''}
+            </span>
           </div>
         )}
         <TextRow label="Structural verdict" value={structuralVerdict} />
-        <TextRow label="Gate passed" value={passed == null ? null : passed ? 'Yes' : 'No'} />
+        <TextRow label="Confidence passed" value={passed == null ? null : passed ? 'Yes' : 'No'} />
         <TextRow label="Style" value={style} />
         <NumberRow label="Entry" value={entry} />
         <NumberRow label="Live price" value={liveTick?.price} />

@@ -1735,7 +1735,11 @@ def _attach_engine_a_v3_atr_provenance(
 
 
 def _bybit_atr_and_candles_for_levels(
-    pair: dict, style: str | None, as_of=None
+    pair: dict,
+    style: str | None,
+    as_of=None,
+    *,
+    atr_tf: str | None = None,
 ) -> tuple[float | None, list | None]:
     """Bybit ATR for crypto execution levels plus the confirmed klines that produced it."""
     symbol = (pair.get("symbol") or pair.get("display") or "").replace("/", "").upper()
@@ -1744,7 +1748,11 @@ def _bybit_atr_and_candles_for_levels(
     resolved_style = _normalize_style(style or "swing")
     if resolved_style == "auto":
         resolved_style = "swing"
-    tf = {"scalp": "H1", "intraday": "H4", "swing": "D1"}.get(resolved_style, "D1")
+    tf = str(atr_tf or "").strip().upper() or {
+        "scalp": "H1",
+        "intraday": "H4",
+        "swing": "D1",
+    }.get(resolved_style, "D1")
     end_ms = None
     if as_of is not None:
         try:
@@ -1773,9 +1781,20 @@ def _bybit_atr_and_candles_for_levels(
     return None, None
 
 
-def _bybit_atr_for_levels(pair: dict, style: str | None, as_of=None) -> float | None:
+def _bybit_atr_for_levels(
+    pair: dict,
+    style: str | None,
+    as_of=None,
+    *,
+    atr_tf: str | None = None,
+) -> float | None:
     """Fetch Bybit ATR for crypto execution levels when Bybit is the execution venue."""
-    atr_value, _ = _bybit_atr_and_candles_for_levels(pair, style, as_of=as_of)
+    atr_value, _ = _bybit_atr_and_candles_for_levels(
+        pair,
+        style,
+        as_of=as_of,
+        atr_tf=atr_tf,
+    )
     return atr_value
 
 
@@ -4898,9 +4917,10 @@ def _build_signal_message(
         else:
             lines.append("  ATR percentile: data unavailable")
 
-    # === RAW MARKET DATA (last 20 H4 bars) ===
-    # Give Marcus Reid actual OHLCV + indicator time-series so the AI can
-    # independently verify Engine A conclusions, not just read summaries.
+    # === RAW H4 TREND-LAYER REFERENCE (last 20 bars) ===
+    # This can verify the H4 trend layer only. Policy setup/trigger evidence may
+    # live on M30/M15 and must be read from scoringTimeframes diagnostics rather
+    # than inferred from this H4 series.
     _h4_candles = signal.get("h4Candles", [])
     if _h4_candles:
         _raw_count = min(20, len(_h4_candles))
@@ -4927,10 +4947,11 @@ def _build_signal_message(
             _adx_s = calc_adx(_highs, _lows, _closes, _adx_p)
             _atr_s = calc_atr(_highs, _lows, _closes, _atr_p)
             lines.append("")
-            lines.append(f"=== RAW MARKET DATA (last {_raw_count} H4 bars) ===")
+            lines.append(f"=== RAW H4 TREND-LAYER REFERENCE (last {_raw_count} bars) ===")
             lines.append(
-                f"Engine A scoring periods: trend={_ema_trend_p} momentum={_ema_mom_p} "
-                f"long={_ema_long_p} rsi={_rsi_p} atr={_atr_p} adx={_adx_p} (H4)"
+                f"H4 reference periods: trend={_ema_trend_p} momentum={_ema_mom_p} "
+                f"long={_ema_long_p} rsi={_rsi_p} atr={_atr_p} adx={_adx_p}. "
+                "Do not use this H4-only block to verify policy setup/location or trigger/momentum."
             )
             lines.append(
                 f"Bar | Time | Open | High | Low | Close | Vol | EMA{_ema_trend_p} | "
@@ -5000,6 +5021,17 @@ def _build_signal_message(
                     f"  Engine A V3 conviction/scoreNorm: {_v3_conviction:.4f} "
                     "(use this V3 metric; legacy confidence multiplier may be absent)"
                 )
+        _scoring_timeframes = _fd.get("scoringTimeframes")
+        if isinstance(_scoring_timeframes, dict):
+            lines.append(
+                "  Engine A scoring timeframe roles: "
+                f"trend={_scoring_timeframes.get('trend')} "
+                f"momentum={_scoring_timeframes.get('momentum')} "
+                f"location={_scoring_timeframes.get('location')} "
+                f"volume={_scoring_timeframes.get('volume')} "
+                f"setup={_scoring_timeframes.get('setup')} "
+                f"trigger={_scoring_timeframes.get('trigger')}"
+            )
         if _fd.get("entryTimeframe") or signal.get("entryTimeframe"):
             lines.append(
                 "  Engine A entry scoring: "
@@ -7466,7 +7498,11 @@ def _compute_naked_analysis(
             pair_obj.get("type") == "crypto"
             and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
         ):
-            bybit_atr = _bybit_atr_for_levels(pair_obj, resolved_style)
+            bybit_atr = _bybit_atr_for_levels(
+                pair_obj,
+                resolved_style,
+                atr_tf=_atr_tf,
+            )
             if bybit_atr:
                 atr = float(bybit_atr)
                 atr_source = "bybit_levels"
@@ -8387,7 +8423,11 @@ def api_scan_naked():
                 pair.get("type") == "crypto"
                 and str(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
             ):
-                bybit_atr = _bybit_atr_for_levels(pair, resolved_style)
+                bybit_atr = _bybit_atr_for_levels(
+                    pair,
+                    resolved_style,
+                    atr_tf=_atr_tf,
+                )
                 if bybit_atr:
                     atr = float(bybit_atr)
                     debug_row["atr_feed"] = "bybit"
@@ -14691,6 +14731,7 @@ def analyze_pair(
     preloaded_fetch_meta=None,
     intermarket_snapshot=None,
     refresh_market_data: bool = False,
+    timeframe_speed_state=None,
 ):
 
     pair_profile = get_pair_profile(pair)
@@ -14710,6 +14751,7 @@ def analyze_pair(
             pair.get("type", ""),
             _score_group,
             style,
+            speed_state=timeframe_speed_state,
             engine_id="engine_a",
         )
         _policy_timeframes = {
@@ -15041,10 +15083,15 @@ def analyze_pair(
             _is_forex_stock = _pair_type in ("forex", "stock", "index", "commodity", "etf", "etf_bond")
             _allow_confirmed_only_stale_1 = pre_scoring_allows_confirmed_only_stale_1(pair)
 
-            _freshness_series = [("D1", d1), ("H4", h4), ("H1", h1)]
+            _freshness_by_tf = {"D1": d1, "H4": h4, "H1": h1}
             if _v3_live_entry_tf:
-                _freshness_series.append((_v3_live_entry_tf, _v3_entry_candles))
-            for _tf, _candles in _freshness_series:
+                _freshness_by_tf[_v3_live_entry_tf] = _v3_entry_candles
+            if _policy_timeframes:
+                for _policy_role in ("setup", "trigger"):
+                    _policy_tf = _policy_timeframes.get(_policy_role)
+                    if _policy_tf and _policy_tf not in _freshness_by_tf:
+                        _freshness_by_tf[_policy_tf] = _v3_candles.get(_policy_tf, [])
+            for _tf, _candles in _freshness_by_tf.items():
                 _diag = candle_freshness_diagnostic(
                     pair, _tf, _candles,
                     source=pair.get("source"),
@@ -15163,12 +15210,11 @@ def analyze_pair(
                     horizon=style,
                     blocked_reasons=(_reason,),
                     entry_tf_override=_v3_live_entry_tf,
+                    policy_timeframes=_policy_timeframes,
                 ).to_dict()
                 _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
                 _blocked["candleFetchMeta"] = {
-                    "D1": _freshness_diag.get("D1"),
-                    "H4": _freshness_diag.get("H4"),
-                    "H1": _freshness_diag.get("H1"),
+                    **_freshness_diag,
                     "pairSource": pair.get("source"),
                 }
                 _blocked["is_forming"] = is_forming
@@ -15194,6 +15240,7 @@ def analyze_pair(
                 horizon=style,
                 blocked_reasons=("FRESHNESS_VALIDATION_ERROR",),
                 entry_tf_override=_v3_live_entry_tf,
+                policy_timeframes=_policy_timeframes,
             ).to_dict()
             _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
             _blocked["is_forming"] = is_forming
@@ -15229,6 +15276,7 @@ def analyze_pair(
             horizon=style,
             blocked_reasons=(_reason,),
             entry_tf_override=_v3_live_entry_tf,
+            policy_timeframes=_policy_timeframes,
         ).to_dict()
         _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
         _blocked["quoteFreshness"] = {
@@ -15299,17 +15347,10 @@ def analyze_pair(
     _v3_signal["quoteFreshness"] = _engine_a_quote_diag
     _v3_signal["dataFreshness"]["diagnostics"] = _freshness_diag
     _v3_signal["candleFetchMeta"] = {
-        "D1": preloaded_fetch_meta.get("D1") or _freshness_diag.get("D1"),
-        "H4": preloaded_fetch_meta.get("H4") or _freshness_diag.get("H4"),
-        "H1": preloaded_fetch_meta.get("H1") or _freshness_diag.get("H1"),
-        **(
-            {
-                _v3_live_entry_tf: preloaded_fetch_meta.get(_v3_live_entry_tf)
-                or _freshness_diag.get(_v3_live_entry_tf)
-            }
-            if _v3_live_entry_tf
-            else {}
-        ),
+        **{
+            tf: preloaded_fetch_meta.get(tf) or diag
+            for tf, diag in _freshness_diag.items()
+        },
         "pairSource": pair.get("source"),
     }
     _v3_signal["is_forming"] = is_forming

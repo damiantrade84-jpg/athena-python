@@ -255,19 +255,20 @@ describe('Engine A V3 scanner tier gating', () => {
     })).toBe('Engine A no longer confirmed after AI review');
   });
 
-  it('routes a V3 chart review to the signal entry timeframe', async () => {
+  it('routes a V3 chart review to the policy setup timeframe', async () => {
     const panel = await import('../../components/panels/SignalsPanel') as {
       preferredTvChartTf?: (signal: EngineASignal) => string;
     };
     const signal = {
       engine: 'ENGINE_A_V3',
       contractVersion: '3.1.0',
+      setupTf: 'M30',
       entryTimeframe: 'H4',
       style: 'intraday',
     } as EngineASignal;
 
     expect(typeof panel.preferredTvChartTf).toBe('function');
-    expect(panel.preferredTvChartTf?.(signal)).toBe('H4');
+    expect(panel.preferredTvChartTf?.(signal)).toBe('M30');
   });
 
   it('blocks a V3 Signals-panel row when its scanner tier is missing', async () => {

@@ -314,8 +314,6 @@ def _build_strategy_layer_safely(
 
 
 def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
-    ensure_schema(getattr(runtime, "AUDIT_DB", None))
-
     @app.post("/api/ai/chart-review")
     def api_ai_chart_review():
         cfg = runtime.CONFIG["AI_CHART_REVIEW"]

@@ -12,6 +12,8 @@ import logging
 import threading
 from typing import Any, Callable
 
+from athena_ase.settings import auto_scan_enabled
+
 log = logging.getLogger(__name__)
 
 _ase_lock = threading.Lock()
@@ -25,6 +27,9 @@ def schedule_ase_post_scan_hook(
     logger: logging.Logger | Any | None = None,
 ) -> dict[str, Any]:
     """Schedule the standalone ASE post-scan hook without blocking scan return."""
+    if not auto_scan_enabled():
+        return {"success": None, "status": "disabled"}
+
     global _ase_running
     hook_log = logger or log
     with _ase_lock:
