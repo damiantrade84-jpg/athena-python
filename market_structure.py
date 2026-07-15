@@ -3190,10 +3190,19 @@ class NakedEngine:
             if len(vols) > 0
             else np.array([], dtype=float)
         )
+        closes = np.array([float(c["close"]) for c in candles], dtype=float)
 
         res_zones = []
         for idx in peak_idx:
             peak_price = highs[idx]
+            zone_upper = peak_price + (atr * buf.get("upper", 0.5))
+
+            # A confirmed close through the far edge breaks resistance. Keeping
+            # that historical peak as an opposing wall would block later
+            # continuation/retest setups even though price already accepted
+            # above it. The caller supplies confirmed zone-timeframe candles.
+            if np.any(closes[idx + 1 :] > zone_upper):
+                continue
 
             # Average vol of 3 bars around the peak
             zone_vol = float(zone_vol_means[idx]) if idx < len(zone_vol_means) else 0.0
@@ -3202,8 +3211,7 @@ class NakedEngine:
             # Zone expands below the peak (ceiling)
             res_zones.append(
                 {
-                    "upper": peak_price
-                    + (atr * buf.get("upper", 0.5)),  # slight overshoot tolerance
+                    "upper": zone_upper,  # slight overshoot tolerance
                     "lower": peak_price
                     - (atr * buf.get("lower", 1.2)),  # buffer zone thickness
                     "center": peak_price,
@@ -3217,6 +3225,12 @@ class NakedEngine:
         sup_zones = []
         for idx in trough_idx:
             trough_price = lows[idx]
+            zone_lower = trough_price - (atr * buf.get("upper", 0.5))
+
+            # Symmetric support invalidation: once a confirmed close accepts
+            # below the far edge, this trough is no longer a valid opposing wall.
+            if np.any(closes[idx + 1 :] < zone_lower):
+                continue
 
             # Average vol of 3 bars around the trough
             zone_vol = float(zone_vol_means[idx]) if idx < len(zone_vol_means) else 0.0
@@ -3225,7 +3239,7 @@ class NakedEngine:
             # Zone expands above the trough (floor)
             sup_zones.append(
                 {
-                    "lower": trough_price - (atr * buf.get("upper", 0.5)),
+                    "lower": zone_lower,
                     "upper": trough_price + (atr * buf.get("lower", 1.2)),
                     "center": trough_price,
                     "volume_strength": vol_strength,

@@ -2272,6 +2272,40 @@ def test_find_zones_handles_short_candle_window():
     assert isinstance(sup_zones, list)
 
 
+def test_find_zones_excludes_levels_broken_by_later_confirmed_close():
+    """A structurally broken pivot must not remain an opposing room wall."""
+    local_engine = NakedEngine()
+    highs = np.array(
+        [100.0, 101.0, 105.0, 101.0, 100.0, 101.0, 107.0, 101.0, 100.0]
+    )
+    lows = np.array(
+        [99.0, 98.0, 95.0, 98.0, 99.0, 98.0, 93.0, 98.0, 93.5]
+    )
+    closes = [99.5, 100.0, 104.0, 100.0, 99.5, 100.0, 106.0, 100.0, 94.0]
+    candles = [
+        {
+            "open": close,
+            "high": float(high),
+            "low": float(low),
+            "close": close,
+            "vol": 100.0,
+        }
+        for high, low, close in zip(highs, lows, closes)
+    ]
+
+    res_zones, sup_zones = local_engine._find_zones(
+        highs,
+        lows,
+        1.0,
+        "RANGING",
+        candles,
+        structure_tf="H1",
+    )
+
+    assert [zone["center"] for zone in res_zones] == [107.0]
+    assert [zone["center"] for zone in sup_zones] == [93.0]
+
+
 def test_calculate_confidence_hard_fail_reasons_populated_when_failed():
     """calculate_confidence must include hard_fail_reasons when passed=False."""
     engine = NakedEngine()
