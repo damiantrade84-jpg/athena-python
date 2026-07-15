@@ -674,6 +674,13 @@ function TimeframePolicyLine({ signal, compact }: { signal: EngineASignal; compa
           )}
         </p>
       )}
+      {!compact && signal.policyScore != null && (
+        <p>
+          Policy score: <span className="font-mono text-foreground">{fmtNum(signal.policyScore, 2)}</span>
+          {' '}· Legacy score: <span className="font-mono text-foreground">{fmtNum(signal.legacyScore, 2)}</span>
+          {' '}· Authoritative: <span className="font-mono text-foreground">{signal.authoritativeScoreSource || 'LEGACY'}</span>
+        </p>
+      )}
     </div>
   );
 }

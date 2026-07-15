@@ -17,6 +17,7 @@ from timeframe_policy import (
     SpeedState,
     TIMEFRAME_LADDER,
     Timeframe,
+    apply_authoritative_policy_result,
     apply_speed_hysteresis,
     attach_timeframe_policy_payload,
     calculate_speed_state,
@@ -96,9 +97,9 @@ def test_required_baseline_matrix() -> None:
     cases = {
         "EUR/USD": ("forex", "forex_majors", Timeframe.H1, Timeframe.M15, M5Role.REFINEMENT),
         "GBP/USD": ("forex", "forex_majors", Timeframe.H1, Timeframe.M5, M5Role.EXECUTION),
-        "EUR/GBP": ("forex", "forex_crosses", Timeframe.H4, Timeframe.M15, M5Role.DISABLED),
+        "EUR/GBP": ("forex", "forex_crosses", Timeframe.H4, Timeframe.M15, M5Role.ADVISORY),
         "XAU/USD": ("commodity", "precious_trackers", Timeframe.H1, Timeframe.M5, M5Role.EXECUTION),
-        "XPT/USD": ("commodity", "pgm_metals", Timeframe.H1, Timeframe.M15, M5Role.DISABLED),
+        "XPT/USD": ("commodity", "pgm_metals", Timeframe.H1, Timeframe.M15, M5Role.ADVISORY),
         "WTI Oil": ("commodity", "energy_oil", Timeframe.H1, Timeframe.M5, M5Role.EXECUTION),
         "S&P 500": ("index", "us_indices_trackers", Timeframe.H1, Timeframe.M15, M5Role.REFINEMENT),
         "AAPL": ("stock", "us_stock_single", Timeframe.H1, Timeframe.M5, M5Role.EXECUTION),
@@ -114,6 +115,53 @@ def test_required_baseline_matrix() -> None:
 
     oil = resolve_timeframe_policy("SpotBrent", "commodity", "energy_oil", "intraday")
     assert oil.diagnostics.m15_confirmation_required_for_m5 is True
+
+
+def test_corrected_symbol_specific_profiles() -> None:
+    cases = {
+        "USD/JPY": ("forex", "forex_majors", "LIQUID_FAST_SESSION_CONDITIONAL", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "USD/CAD": ("forex", "forex_majors", "STANDARD_SESSION_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "AUD/NZD": ("forex", "forex_crosses", "BROAD_STRUCTURE_CROSS", Timeframe.H4, Timeframe.M30, Timeframe.M15, M5Role.ADVISORY),
+        "GBP/JPY": ("forex", "forex_crosses", "LIQUID_FAST_SESSION_CONDITIONAL", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "EUR/JPY": ("forex", "forex_crosses", "STANDARD_YEN_CROSS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "AUD/JPY": ("forex", "forex_crosses", "STANDARD_YEN_CROSS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "EUR/CHF": ("forex", "forex_crosses", "BROAD_STRUCTURE_CROSS", Timeframe.H4, Timeframe.M30, Timeframe.M15, M5Role.ADVISORY),
+        "XAG/USD": ("commodity", "precious_trackers", "VOLATILE_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "XPT/USD": ("commodity", "pgm_metals", "THIN_EVENT_SENSITIVE", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.ADVISORY),
+        "XPD/USD": ("commodity", "pgm_metals", "THIN_EVENT_SENSITIVE", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.ADVISORY),
+        "Natural Gas": ("commodity", "nat_gas", "NATGAS_NO_M5", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "NAS100": ("index", "us_indices_trackers", "LIQUID_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "US30": ("index", "us_indices_trackers", "LIQUID_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "GER40": ("index", "eu_indices", "LIQUID_FAST_SESSION_CONDITIONAL", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "JPN225": ("index", "asia_indices", "STANDARD_INDEX_SESSION_CONDITIONAL", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "US500": ("index", "us_indices_trackers", "STANDARD_LIQUID_INDEX", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "UK100": ("index", "eu_indices", "STANDARD_LIQUID_INDEX", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "AAPL": ("stock", "us_stock_single", "CASH_EQUITY_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M5, M5Role.EXECUTION),
+        "SPY": ("etf", "us_etfs", "CASH_EQUITY_LIQUID", Timeframe.H1, Timeframe.M15, Timeframe.M5, M5Role.EXECUTION),
+        "BTC/USDT": ("crypto", "crypto_btc", "CRYPTO_LIQUID_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M5, M5Role.EXECUTION),
+        "ETH/USDT": ("crypto", "crypto_eth", "CRYPTO_LIQUID_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M5, M5Role.EXECUTION),
+        "BNB/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_STANDARD", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "SOL/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_HIGH_BETA", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "XRP/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_HIGH_BETA_EVENT", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "DOGE/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_HIGH_BETA_SPECULATIVE", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "ADA/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_HIGH_BETA", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "LINK/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_HIGH_BETA", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+    }
+    for symbol, (asset, group, profile, structure, trigger, execution, m5_role) in cases.items():
+        policy = resolve_timeframe_policy(symbol, asset, group, "intraday")
+        assert policy.profile == profile
+        assert policy.structure_tf == structure
+        assert policy.trigger_tf == trigger
+        assert policy.execution_tf == execution
+        assert policy.m5_role == m5_role
+
+
+def test_policy_keys_are_scoped_by_engine_and_style() -> None:
+    engine_a = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday", engine_id="engine_a")
+    engine_b = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday", engine_id="engine_b")
+    engine_d = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "scalp", engine_id="engine_d")
+
+    assert len({engine_a.policy_key, engine_b.policy_key, engine_d.policy_key}) == 3
 
 
 def test_speed_class_boundaries_and_hysteresis() -> None:
@@ -182,9 +230,15 @@ def test_dynamic_policy_moves_only_one_adjacent_execution_timeframe() -> None:
 
     slow_policy = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday", slow)
     fast_policy = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday", fast)
+    promoted_policy = resolve_timeframe_policy("USD/JPY", "forex", "forex_majors", "intraday", fast)
 
     assert slow_policy.execution_tf == Timeframe.M30
-    assert fast_policy.execution_tf == Timeframe.M5
+    # STANDARD_LIQUID keeps M5 as refinement-only even when speed is fast.
+    assert fast_policy.execution_tf == Timeframe.M15
+    # Session-conditional profiles may promote exactly one rung when the caller
+    # supplies qualifying liquidity and quote quality.
+    assert promoted_policy.execution_tf == Timeframe.M5
+    assert promoted_policy.m5_role == M5Role.EXECUTION
 
 
 def test_speed_state_uses_confirmed_volatility_velocity_volume_and_quote_quality() -> None:
@@ -266,22 +320,49 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     engine_b_swing = resolve_engine_b_tfs(
         "forex", "swing", symbol="EUR/USD", score_group="forex_majors"
     )
+    engine_b_fast = resolve_timeframe_policy(
+        "GBP/USD", "forex", "forex_majors", "intraday", engine_id="engine_b"
+    )
+    engine_b_cross = resolve_timeframe_policy(
+        "EUR/GBP", "forex", "forex_crosses", "intraday", engine_id="engine_b"
+    )
     engine_d = resolve_timeframe_policy("BTC/USDT", "crypto", "crypto_btc", "engine_d")
 
     assert equity.structure_tf == Timeframe.H1
     assert engine_b_intraday["bias"] == "H4"
     assert engine_b_intraday["struct"] == "H1"
+    # Zone walls track structure TF (intraday H1 / swing H4). Bias stays one
+    # rung higher for MTF context only.
     assert engine_b_intraday["zone"] == "H1"
+    assert engine_b_intraday["zone"] == engine_b_intraday["struct"]
     assert engine_b_intraday["setup"] == "M30"
     assert engine_b_intraday["trigger"] == "M15"
     assert engine_b_intraday["execution"] == "M15"
     assert engine_b_intraday["atr"] == "H1"
     assert engine_b_swing["struct"] == "H4"
+    assert engine_b_swing["zone"] == "H4"
+    assert engine_b_swing["zone"] == engine_b_swing["struct"]
+    assert engine_b_swing["bias"] == "D1"
     assert engine_b_swing["trigger"] == "H1"
+    assert engine_b_fast.execution_tf == Timeframe.M5
+    assert engine_b_fast.m5_role == M5Role.EXECUTION
+    assert engine_b_fast.execution_prerequisite_tf == Timeframe.M15
+    assert engine_b_cross.structure_tf == Timeframe.H4
+    assert engine_b_cross.trigger_tf == Timeframe.M30
+    assert engine_b_cross.m5_role == M5Role.ADVISORY
     assert engine_d.bias_tf == Timeframe.H1
     assert engine_d.structure_tf == Timeframe.M15
     assert engine_d.trigger_tf == Timeframe.M5
     assert engine_d.execution_tf == Timeframe.M5
+
+    eng_a_intra = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "intraday", engine_id="engine_a"
+    )
+    eng_a_swing = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "swing", engine_id="engine_a"
+    )
+    assert eng_a_intra.structure_tf == Timeframe.H1
+    assert eng_a_swing.structure_tf == Timeframe.H4
 
 
 def test_engine_a_payload_attachment_does_not_change_score_or_direction() -> None:
@@ -607,4 +688,35 @@ def test_enforced_policy_requires_separate_autotrade_promotion() -> None:
     ) is None
     assert timeframe_policy_execution_block_reason(
         signal, {"TF_POLICY_MODE": PolicyMode.ENFORCED.value, "TF_POLICY_AUTOTRADE_ENABLED": False}
-    ) == "TF_POLICY_AUTOTRADE_DISABLED"
+    ) == "TF_POLICY_DEMO_AUTOTRADE_DISABLED"
+
+
+def test_enforced_demo_promotes_policy_score_direction_and_locks_real_account() -> None:
+    signal = {"confluenceScore": 5.9, "score": 5.9, "direction": "SHORT", "maxScore": 10}
+    cfg = {
+        "TF_POLICY_MODE": "enforced_demo",
+        "TF_POLICY_DEMO_AUTOTRADE_ENABLED": True,
+        "TF_POLICY_REAL_AUTOTRADE_ENABLED": False,
+    }
+
+    apply_authoritative_policy_result(
+        signal,
+        policy_score=7.2,
+        policy_direction="LONG",
+        config=cfg,
+    )
+
+    assert signal["legacyScore"] == 5.9
+    assert signal["legacyDirection"] == "SHORT"
+    assert signal["policyScore"] == 7.2
+    assert signal["policyDirection"] == "LONG"
+    assert signal["confluenceScore"] == 7.2
+    assert signal["direction"] == "LONG"
+    assert signal["authoritativeScoreSource"] == "POLICY"
+    assert timeframe_policy_execution_block_reason(
+        signal, cfg, {"accountId": "demo-42", "exchange": "Bybit", "demo": True}
+    ) is None
+    assert timeframe_policy_execution_block_reason(
+        signal, cfg, {"accountId": "real-42", "exchange": "Bybit", "demo": False}
+    ) == "TF_POLICY_REAL_ACCOUNT_LOCKED"
+    assert signal["timeframePolicyExecution"]["accountEnvironment"] == "real"

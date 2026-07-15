@@ -1657,8 +1657,23 @@ class AutoTrader:
         )
         signal["calibratedProbability"] = calibration.get("calibrated_prob")
         signal["calibration"] = calibration
-        meta = meta_report(signal, db_path=self._audit_db) if self._audit_db else meta_report(signal, records=[])
-        signal.update(apply_meta_policy(signal, meta))
+        from timeframe_policy import policy_mode_is_authoritative
+
+        # F5 remains unresolved.  A promoted forward-demo policy result must
+        # not be routed through the meta-labeler path, which can otherwise
+        # alter its execution threshold using potentially leaky historical
+        # state.  Deterministic execution/risk gates below remain active.
+        if policy_mode_is_authoritative(None, cfg):
+            meta = {}
+            signal["metaLabelerApplied"] = False
+            signal["metaLabelerReason"] = "F5_INTEGRITY_ISOLATION"
+            signal["metaThresholdDelta"] = 0.0
+            signal["metaSuspended"] = False
+            signal["metaEngineWeight"] = 0.0
+        else:
+            meta = meta_report(signal, db_path=self._audit_db) if self._audit_db else meta_report(signal, records=[])
+            signal.update(apply_meta_policy(signal, meta))
+            signal["metaLabelerApplied"] = True
         meta_delta = float(signal.get("metaThresholdDelta", 0.0) or 0.0)
         auto_min_conviction = max(0.0, min(1.0, auto_min_conviction + meta_delta))
         signal["autoMinConviction"] = round(auto_min_conviction, 6)
@@ -2212,6 +2227,37 @@ class AutoTrader:
 
                 _exec_venue = "mt5"
                 signal["brokerPrecheck"] = {"allowed": True, "venue": _exec_venue}
+
+            # The account object comes from the live broker connection.  This
+            # is the final policy account-scope gate and must run immediately
+            # before any risk or executor call; a scan-level test/demo flag is
+            # not a substitute for broker metadata.
+            from timeframe_policy import timeframe_policy_execution_block_reason
+
+            policy_account_block = timeframe_policy_execution_block_reason(
+                signal, cfg, account
+            )
+            policy_execution = signal.get("timeframePolicyExecution")
+            if isinstance(policy_execution, dict):
+                log.info(
+                    "[AUTO][TF_POLICY] accountId=%s broker=%s accountEnvironment=%s "
+                    "policyMode=%s executionAllowed=%s executionRestrictionReason=%s",
+                    policy_execution.get("accountId"),
+                    policy_execution.get("broker"),
+                    policy_execution.get("accountEnvironment"),
+                    policy_execution.get("policyMode"),
+                    policy_execution.get("executionAllowed"),
+                    policy_execution.get("executionRestrictionReason"),
+                )
+            if policy_account_block:
+                signal["brokerPrecheck"] = {
+                    "allowed": False,
+                    "stage": "timeframe_policy_account",
+                    "venue": _exec_venue,
+                    "reason": policy_account_block,
+                }
+                self._write_error(signal, policy_account_block)
+                return False
 
             from execution_lifecycle import run_managed_execution
 

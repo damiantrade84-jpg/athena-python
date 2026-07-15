@@ -2092,7 +2092,7 @@ AUTO_TRADE_BLOCKED_REGIMES:
 
 # Demo/testing: 1.0 = up to 100% of balance in simultaneous stop-risk (cap effectively off).
 # For live/paper discipline use ~0.06–0.12 (validated max 1.0 in config.py).
-MAX_PORTFOLIO_HEAT: 0.06
+MAX_PORTFOLIO_HEAT: 1.0
 
 MAX_OPEN_POSITIONS: 10
 
@@ -2327,6 +2327,14 @@ SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS: true
 ENGINE_B_STRIP_FORMING_STRUCT: true
 # Fail-closed: skip Engine B structure scoring when role TF candles are stale (mirrors Engine A pre-scoring gate).
 ENGINE_B_SCAN_FRESHNESS_GATE: true
+# MT5 equity CFDs (stock/etf/etf_bond) lag ~1 M15 bucket on the broker feed, so
+# under the M15 trigger TF the whole US equity/ETF universe was hard-blocked on
+# the entry-TF freshness gate every scan. The executable price is guarded
+# separately by the live-quote gate (LIVE_PRICE_MAX_AGE_SEC stock/etf = 90s), so
+# a one-bucket-stale signal bar is tolerated for these MT5 groups only.
+# stale_multi_bucket / missing still fail closed. Set false to restore the strict
+# entry-TF gate for equities.
+ENGINE_B_ENTRY_TF_ALLOW_MT5_EQUITY_STALE_1: true
 ENGINE_B_STRUCT_CONFIRMED_MIN_BARS: 20
 ENGINE_B_SWEEP_LOOKBACK_BARS: 5
 ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP: true
@@ -3252,6 +3260,15 @@ MICROSTRUCTURE_BINANCE_COMBINED_STREAM: true
 # catches the half-closed-but-quiet stream case the socket-level recv timeout missed.
 MICROSTRUCTURE_BINANCE_STALE_SYMBOL_SEC: 120
 
+# Partial-book depth refresh rate for the combined micro stream (Binance USD-M
+# supports 100 / 250 / 500 ms). Micro metrics only emit once per second, so 100 ms
+# depth delivered ~10x more inbound frames than consumed; that surplus filled the
+# socket buffer during scan-thread GIL contention and caused abnormal (1006)
+# server-side closes (~90 s flapping). 500 ms keeps 1s-emit fidelity while cutting
+# depth volume ~5x. Trade/aggTrade streams are unaffected, so orderflow and
+# trade-bucket freshness are unchanged. Set 100 to restore the prior rate.
+MICROSTRUCTURE_BINANCE_DEPTH_SPEED_MS: 500
+
 # Public market-data websockets only. Keep certificate verification enabled.
 
 # If a local proxy/CA issue blocks market data, fix the CA store or set
@@ -3860,11 +3877,11 @@ ENGINE_B_BOS_VOLUME_FOR_TICKVOL: false
 # symbol/group/style by timeframe_policy.resolve_timeframe_policy().
 # Legacy ENGINE_B_FOREX_STRUCTURE_TF is no longer read.
 
-# Promoted for this deployment: Engine B uses the resolver's policy timeframes
-# (H4 bias, H1 structure, M30 setup, M15 trigger/execution, H1 ATR) rather
-# than the legacy intraday H4/H4/H1/H4 matrix.
-TF_POLICY_MODE: enforced
-TF_POLICY_AUTOTRADE_ENABLED: false
+# Policy results are authoritative for scans and connected demo accounts. Real
+# accounts remain independently locked until an explicit enforced_live change.
+TF_POLICY_MODE: enforced_demo
+TF_POLICY_DEMO_AUTOTRADE_ENABLED: true
+TF_POLICY_REAL_AUTOTRADE_ENABLED: false
 TF_POLICY_SPEED_THRESHOLDS:
   default:
     slow_to_normal_min: 45
@@ -4017,6 +4034,14 @@ LOWER_TF_SHADOW:
 # false = disable the structure_ok gate in live calculate_confidence() (same as BT experiment).
 # Live scan, AI review, and execution all consume this key.
 ENGINE_B_STRUCTURE_GATE_ENABLED: true
+# false = space/room gate is non-blocking (still computed for diagnostics).
+# Does not bypass freshness, structure, location, trigger, or SL/TP side checks.
+ENGINE_B_SPACE_GATE_ENABLED: false
+# false = Engine B min-RR (rr_ok) is non-blocking at scan; risk_engine also
+# skips RR_BELOW_MINIMUM for Engine B execution signals. SL/TP must still exist.
+ENGINE_B_RR_GATE_ENABLED: false
+# false = risk_engine skips RR_BELOW_MINIMUM for non-Engine-B (Engine A) signals.
+ENGINE_A_RR_GATE_ENABLED: false
 # Diagnostic-only: retarget Engine B trigger detection onto style_profile.entry_tf
 # (H1/M15/M30) when true. Default false — production trigger stays matrix H1.
 # Does not change struct/zone TFs. Experiment harness bypasses this flag.
@@ -4112,6 +4137,8 @@ ENGINE_C_EXEC_MIN_RR: 1.0
 ASE_EXEC_MIN_RR: 0.6
 
 # ASE signal / inference tuning (default-safe; all gates off or legacy-compatible)
+# Automatic ASE scan+execute after Engine A scans. Manual /api/ase-scan is unaffected.
+ASE_AUTO_SCAN_ENABLED: false
 ASE_ARBITRATION:
   MODE: weighted      # max | weighted — signed aggregate Σ dirᵢ·strengthᵢ
   STRENGTH_FLOOR: 0.3

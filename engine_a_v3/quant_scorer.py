@@ -651,6 +651,7 @@ def score_pair(
     profile: Any | None = None,
     snapshot_cache: dict | None = None,
     entry_tf_override: str | None = None,
+    policy_timeframes: Mapping[str, Any] | None = None,
 ) -> QuantScore:
     """Continuous quality score for one pair. `route` is a SpecialistRoute
     (.score_group, .family). `context` carries subsystem snapshots and an
@@ -665,7 +666,14 @@ def score_pair(
     asset_type = _FAMILY_ASSET.get(family, "other")
     horizon = "intraday" if str(horizon).lower() == "intraday" else "swing"
     diagnostic_override = resolve_diagnostic_v3_entry_timeframe(entry_tf_override)
-    if entry_tf_override is not None and diagnostic_override is None:
+    policy = policy_timeframes if isinstance(policy_timeframes, Mapping) else None
+    policy_setup_tf = str((policy or {}).get("setup") or (policy or {}).get("setupTf") or "").upper()
+    policy_trigger_tf = str((policy or {}).get("trigger") or (policy or {}).get("triggerTf") or "").upper()
+    if policy and policy_setup_tf:
+        # Policy-controlled setup/location and trigger/momentum sources are
+        # authoritative.  There is deliberately no H1/H4 fallback below.
+        entry_tf = policy_setup_tf
+    elif entry_tf_override is not None and diagnostic_override is None:
         entry_tf = None
     elif diagnostic_override is not None:
         entry_tf = diagnostic_override
@@ -689,24 +697,53 @@ def score_pair(
             rejection_reason="missing_entry_candles",
         )
 
-    extra_tfs = (entry_tf,) if entry_tf not in ("D1", "H4", "H1") else ()
-    snaps = _snapshots(
-        candles,
-        asset_type,
-        dict(profile.indicator_periods),
-        snapshot_cache,
-        extra_tfs=extra_tfs,
+    if policy:
+        policy_roles = (
+            ("regime", "regimeTf"),
+            ("bias", "biasTf"),
+            ("structure", "structureTf"),
+        )
+        tf_weights: dict[str, float] = {}
+        for keys, weight in zip(policy_roles, (0.18, 0.37, 0.45)):
+            tf = str((policy.get(keys[0]) or policy.get(keys[1]) or "")).upper()
+            if tf:
+                tf_weights[tf] = tf_weights.get(tf, 0.0) + weight
+        momentum_tf = policy_trigger_tf
+    else:
+        tf_weights = _resolve_v3_tf_weights(group, asset_type, horizon)
+        momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
+    extra_tfs = tuple(
+        tf for tf in set((*tf_weights.keys(), entry_tf, momentum_tf))
+        if tf and tf not in ("D1", "H4", "H1")
     )
-    if diagnostic_override is not None:
+    if extra_tfs:
+        snaps = _snapshots(
+            candles,
+            asset_type,
+            dict(profile.indicator_periods),
+            snapshot_cache,
+            extra_tfs=extra_tfs,
+        )
+    else:
+        snaps = _snapshots(
+            candles,
+            asset_type,
+            dict(profile.indicator_periods),
+            snapshot_cache,
+        )
+    if diagnostic_override is not None or policy:
         entry_snap = snaps.get(entry_tf) or {}
     else:
         entry_snap = snaps.get(entry_tf) or snaps.get("H4") or snaps.get("D1") or {}
-    momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
-    momentum_snap = snaps.get(momentum_tf) or snaps.get("H4") or entry_snap
+    momentum_snap = (
+        (snaps.get(momentum_tf) or {})
+        if policy else
+        (snaps.get(momentum_tf) or snaps.get("H4") or entry_snap)
+    )
 
     trend, coherence = _trend_component(
         snaps,
-        _resolve_v3_tf_weights(group, asset_type, horizon),
+        tf_weights,
         entry_candles=entry_candles,
         indicator_periods=dict(profile.indicator_periods),
         entry_tf=entry_tf,

@@ -1697,6 +1697,7 @@ CONFIG: dict = {
     "ASE_BT_ENABLED": True,
     "ASE_BT_LOOKBACK_DAYS": 365,
     "ASE_BT_HORIZONS": ["intraday", "swing"],
+    "ASE_AUTO_SCAN_ENABLED": False,
     "ASE_ARBITRATION": {
         "MODE": "weighted",
         "STRENGTH_FLOOR": 0.3,
@@ -2354,8 +2355,9 @@ CONFIG: dict = {
     "DRAWDOWN_STOP_THRESHOLD": 0.15,  # At 15% drawdown, reject ALL new trades
     "DRAWDOWN_STOP_ENABLED": True,  # Set false only for paper/debug — disables stop + size reduction
     # ── Auto-Trade Bot ────────────────────────────────────────────────────────
-    "TF_POLICY_MODE": "shadow",
-    "TF_POLICY_AUTOTRADE_ENABLED": False,
+    "TF_POLICY_MODE": "enforced_demo",
+    "TF_POLICY_DEMO_AUTOTRADE_ENABLED": True,
+    "TF_POLICY_REAL_AUTOTRADE_ENABLED": False,
     "TF_POLICY_SPEED_THRESHOLDS": {
         "default": {
             "slow_to_normal_min": 45.0,
@@ -2495,6 +2497,10 @@ CONFIG: dict = {
     "ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE": {},
     "ENGINE_B_BT_STRUCTURE_GATE_ENABLED": True,
     "ENGINE_B_STRUCTURE_GATE_ENABLED": True,
+    # Fail-closed defaults: space/min-RR remain blocking until config.yaml opts out.
+    "ENGINE_B_SPACE_GATE_ENABLED": True,
+    "ENGINE_B_RR_GATE_ENABLED": True,
+    "ENGINE_A_RR_GATE_ENABLED": True,
     # Diagnostic-only: when true, live scan may retarget Engine B trigger detection
     # onto style_profile.entry_tf (H1/M15/M30) via role_candles. Default false —
     # production trigger remains matrix H1. Experiment harness calls override
@@ -2809,6 +2815,9 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_B_FOREX_ADX_MIN",
     "ENGINE_B_RESEARCH_LAB_FACTORS",
     "ENGINE_B_STRUCTURE_GATE_ENABLED",
+    "ENGINE_B_SPACE_GATE_ENABLED",
+    "ENGINE_B_RR_GATE_ENABLED",
+    "ENGINE_A_RR_GATE_ENABLED",
     "ENGINE_B_DIAGNOSTIC_TRIGGER_TF_ENABLED",
     "ENGINE_A_DIAGNOSTIC_ENTRY_TF_ENABLED",
     "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS",

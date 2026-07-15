@@ -465,9 +465,10 @@ def resolve_engine_b_asset_class(asset_type: str, score_group: str | None = None
 
 _ENGINE_B_LEGACY_TF_MATRIX = {
     asset: {
-        "scalp": ("H1", "H4", "H1", "H1"),
-        "intraday": ("H4", "H4", "H1", "H4"),
-        "swing": ("D1", "D1", "H4", "D1"),
+        # (struct, zone, trigger, atr) — zone tracks structure (intraday H1 / swing H4)
+        "scalp": ("H1", "H1", "H1", "H1"),
+        "intraday": ("H1", "H1", "H1", "H1"),
+        "swing": ("H4", "H4", "H4", "H4"),
     }
     for asset in ("forex", "crypto", "commodity", "index", "stock", "etf", "etf_bond")
 }
@@ -501,7 +502,9 @@ def resolve_engine_b_tfs(
         speed_state,
         engine_id="engine_b",
     )
-    if str(config.CONFIG.get("TF_POLICY_MODE", "shadow")).strip().lower() != "enforced":
+    from timeframe_policy import policy_mode_is_authoritative
+
+    if not policy_mode_is_authoritative(None, config.CONFIG):
         asset_table = _ENGINE_B_LEGACY_TF_MATRIX.get(a) or _ENGINE_B_LEGACY_TF_MATRIX["forex"]
         struct_tf, zone_tf, trigger_tf, atr_tf = asset_table.get(
             s, asset_table["intraday"]
@@ -517,7 +520,7 @@ def resolve_engine_b_tfs(
             "atr": atr_tf,
             "policy_version": policy.policy_version,
             "policy_profile": policy.profile,
-            "policy_mode": str(config.CONFIG.get("TF_POLICY_MODE", "shadow")).lower(),
+            "policy_mode": str(config.CONFIG.get("TF_POLICY_MODE", "off")).lower(),
             "proposed": policy.payload(),
         }
     # Engine B's structural ATR remains tied to its principal structure horizon;
@@ -526,6 +529,10 @@ def resolve_engine_b_tfs(
         "regime": policy.regime_tf.value,
         "bias": policy.bias_tf.value,
         "struct": policy.structure_tf.value,
+        # Room/space-gate walls and structural TP/location zones track structure
+        # TF (intraday H1, swing H4). Bias remains one rung higher for MTF bias
+        # only. Pair with ENGINE_B_SPACE_GATE_ENABLED when dense zone walls would
+        # otherwise over-block; set zone back to bias_tf to restore H4/D1 walls.
         "zone": policy.structure_tf.value,
         "setup": policy.setup_tf.value,
         "trigger": policy.trigger_tf.value,
@@ -5709,6 +5716,11 @@ class NakedEngine:
                 rr_ok = _exec_lvl.get("execution_sl") is not None and _exec_lvl.get("execution_tp") is not None
         except Exception:
             pass
+        if not bool(config.CONFIG.get("ENGINE_B_RR_GATE_ENABLED", True)):
+            rr_ok = (
+                _exec_lvl.get("execution_sl") is not None
+                and _exec_lvl.get("execution_tp") is not None
+            )
 
         # FIX 7: Apply contextual room gate after rr is computed
         _effective_min_room_atr = _get_min_room_atr(rr, bool(res.get("bos_confirmed")), asset_type_lower, exec_style)
@@ -5940,6 +5952,8 @@ class NakedEngine:
                 room_ok = True
         except Exception:
             pass
+        if not bool(config.CONFIG.get("ENGINE_B_SPACE_GATE_ENABLED", True)):
+            space_gate_ok = True
 
         # Stage 2.8: Optional volume confirmation gate.
         # Contributes to gate_score (+1 bonus) but is NOT mandatory for pass.

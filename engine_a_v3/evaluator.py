@@ -224,12 +224,19 @@ def evaluate_engine_a_v3(
     snapshot_cache: dict | None = None,
     current_price: float | None = None,
     entry_tf_override: str | None = None,
+    policy_timeframes: Mapping[str, Any] | None = None,
     entry_candle_is_forming: bool = False,
 ) -> EngineASetupSignal:
     route = route_specialist(pair)
     normalized_horizon = _horizon(horizon)
     diagnostic_override = resolve_diagnostic_v3_entry_timeframe(entry_tf_override)
-    if entry_tf_override is not None and diagnostic_override is None:
+    policy = policy_timeframes if isinstance(policy_timeframes, Mapping) else None
+    policy_entry_tf = str(
+        (policy or {}).get("setup") or (policy or {}).get("setupTf") or ""
+    ).upper()
+    if policy and policy_entry_tf:
+        primary_tf = policy_entry_tf
+    elif entry_tf_override is not None and diagnostic_override is None:
         primary_tf = None
     elif diagnostic_override is not None:
         primary_tf = diagnostic_override
@@ -363,15 +370,16 @@ def evaluate_engine_a_v3(
         symbol=symbol,
     )
     profile = promotion.profile or baseline_profile(route.score_group, normalized_horizon)
-    quant = score_pair(
-        route,
-        normalized_horizon,
-        candles,
-        context=context,
-        profile=profile,
-        snapshot_cache=snapshot_cache,
-        entry_tf_override=diagnostic_override,
-    )
+    _score_kwargs = {
+        "context": context,
+        "profile": profile,
+        "snapshot_cache": snapshot_cache,
+    }
+    if diagnostic_override is not None:
+        _score_kwargs["entry_tf_override"] = diagnostic_override
+    if policy is not None:
+        _score_kwargs["policy_timeframes"] = policy
+    quant = score_pair(route, normalized_horizon, candles, **_score_kwargs)
 
     # ── Setup overlay: use already-implemented specialists for every family
     # (forex: breakout/retest/pullback/london_open/mean_reversion; crypto:
@@ -384,14 +392,13 @@ def evaluate_engine_a_v3(
     setup: SetupCandidate | None = None
     setup_diagnostics: dict[str, Any] = {}
     try:
-        setup = detect_setup(
-            route,
-            normalized_horizon,
-            candles,
-            display=display,
-            indicator_periods=dict(profile.indicator_periods),
-            entry_tf_override=diagnostic_override,
-        )
+        _setup_kwargs = {
+            "display": display,
+            "indicator_periods": dict(profile.indicator_periods),
+        }
+        if policy_entry_tf or diagnostic_override:
+            _setup_kwargs["entry_tf_override"] = policy_entry_tf or diagnostic_override
+        setup = detect_setup(route, normalized_horizon, candles, **_setup_kwargs)
         setup_diagnostics = {
             "setupId": setup.setup_id,
             "setupDecision": setup.decision,

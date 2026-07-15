@@ -255,6 +255,7 @@ from ai_signal_trace import ensure_trace_id  # noqa: E402
 from athena_app.services.mt5_time_alignment import (  # noqa: E402
     infer_mt5_rates_time_shift_seconds,
     normalize_mt5_tick_epoch_utc,
+    should_refetch_active_lower_tf,
 )
 from prompt_store import load_prompt  # noqa: E402
 from prompt_versions import get_prompt_version  # noqa: E402
@@ -854,6 +855,7 @@ ETF_PAIRS = [
         "display": "GLD",
         "source": "mt5",
         "enabled": False,
+        "auto_enable": False,
         "ws": False,
     },  # SQN +2.08, OOS:+2.98 ✓ — Disabled 2026-07-02: no GLD symbol on Pepperstone
     # MT5 demo (symbols_get returns nothing); every scan failed closed with 0 candles.
@@ -1304,7 +1306,15 @@ def _load_toggle_state():
 
         for p in ALL_PAIRS:
             if p["display"] in state:
-                p["enabled"] = state[p["display"]]
+                persisted_enabled = bool(state[p["display"]])
+                if persisted_enabled and p.get("auto_enable") is False:
+                    p["enabled"] = False
+                    log.warning(
+                        "[TOGGLE] Ignored persisted enable for %s: auto-enable is locked",
+                        p["display"],
+                    )
+                else:
+                    p["enabled"] = persisted_enabled
 
                 applied += 1
 
@@ -3061,6 +3071,87 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
             tick_epoch,
             stale_unshifted_age_sec=get_mt5_fetch_stale_unshifted_age_sec(),
         )
+
+        # MT5 can briefly omit the current M15/M30 history bucket even while
+        # current ticks are arriving. Retry once only when the normalized tick
+        # is fresh under the same per-asset threshold as the live-quote gate.
+        # Closed/frozen markets (for example US equities before the cash open)
+        # do not retry, and a still-stale retry remains blocked downstream.
+        if tf in ("M15", "M30"):
+            try:
+                _asset_type = str(pair.get("type") or "").strip().lower()
+                _threshold_type = "etf" if _asset_type == "etf_bond" else _asset_type
+                _age_cfg = CONFIG.get("LIVE_PRICE_MAX_AGE_SEC") or {}
+                _max_tick_age = float(_age_cfg.get(_threshold_type) or 0.0)
+                _tick_utc = normalize_mt5_tick_epoch_utc(
+                    tick_epoch,
+                    _utc_now,
+                    _broker_offset_cfg,
+                )
+                _lower_retry, _lower_lag = should_refetch_active_lower_tf(
+                    tf,
+                    _utc_now,
+                    _newest_ts - offset_seconds,
+                    _tick_utc,
+                    _max_tick_age,
+                )
+                if _lower_retry:
+                    _retry_sleep_ms = int(CONFIG.get("MT5_H4_FETCH_RETRY_SLEEP_MS", 400) or 0)
+                    if _retry_sleep_ms > 0:
+                        time.sleep(min(_retry_sleep_ms, 2000) / 1000.0)
+                    _retry_bars = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, request_limit)
+                    if _retry_bars is not None and len(_retry_bars) > 0:
+                        _r_now = time.time()
+                        _r_newest = float(_retry_bars[-1]["time"])
+                        _r_tick = mt5.symbol_info_tick(mt5_symbol)
+                        _r_tick_epoch = (
+                            float(_r_tick.time)
+                            if _r_tick and getattr(_r_tick, "time", 0) and _r_tick.time > 0
+                            else None
+                        )
+                        _r_offset, _r_tag = infer_mt5_rates_time_shift_seconds(
+                            tf,
+                            _r_now,
+                            _r_newest,
+                            _broker_offset_cfg,
+                            _r_tick_epoch,
+                            stale_unshifted_age_sec=get_mt5_fetch_stale_unshifted_age_sec(),
+                        )
+                        _r_tick_utc = normalize_mt5_tick_epoch_utc(
+                            _r_tick_epoch,
+                            _r_now,
+                            _broker_offset_cfg,
+                        )
+                        _, _retry_lag = should_refetch_active_lower_tf(
+                            tf,
+                            _r_now,
+                            _r_newest - _r_offset,
+                            _r_tick_utc,
+                            _max_tick_age,
+                        )
+                        log.debug(
+                            "[MT5] %s %s: active-feed one-shot refetch "
+                            "(lag %d->%d buckets)",
+                            symbol,
+                            tf,
+                            _lower_lag,
+                            _retry_lag,
+                        )
+                        bars = _retry_bars
+                        _utc_now = _r_now
+                        _newest_ts = _r_newest
+                        _unshifted_age = _r_now - _r_newest
+                        tick = _r_tick
+                        tick_epoch = _r_tick_epoch
+                        offset_seconds, shift_tag = _r_offset, _r_tag
+            except Exception as _lower_retry_err:
+                log.debug(
+                    "[MT5] %s %s: active-feed lower-TF retry check failed: %s",
+                    symbol,
+                    tf,
+                    _lower_retry_err,
+                    exc_info=True,
+                )
 
         # One-shot refetch for forex H1/H4 when the newest bar is >1 bucket stale. MT5
         # can briefly serve stale history (just-closed/forming bar omitted at a
@@ -6065,20 +6156,35 @@ _VISION_MODEL_DIR = os.path.join(
     "chart_vision_v2",
 )
 
-_init_audit_db(_AUDIT_DB)
-set_lottery_db_path(_AUDIT_DB)
-init_stability_store(_AUDIT_DB)
+_runtime_storage_initialized = False
+_runtime_storage_lock = threading.Lock()
 
-try:
-    from athena_runtime import hydrate_executed_signals_from_db
 
-    _dedup_hydrated = hydrate_executed_signals_from_db()
-    log.info(
-        "[RUNTIME] Hydrated %s executed-signal dedup keys from audit.db",
-        _dedup_hydrated,
-    )
-except Exception as _dedup_exc:
-    log.warning("[RUNTIME] executed-signal dedup hydrate failed: %s", _dedup_exc)
+def _initialize_runtime_storage() -> None:
+    """Initialize audit-backed services only when Athena is actually started."""
+    global _runtime_storage_initialized
+    if _runtime_storage_initialized:
+        return
+    with _runtime_storage_lock:
+        if _runtime_storage_initialized:
+            return
+        _init_audit_db(_AUDIT_DB)
+        set_lottery_db_path(_AUDIT_DB)
+        init_stability_store(_AUDIT_DB)
+        init_learning_db(_AUDIT_DB)
+        ensure_advisory_store(_AUDIT_DB)
+        _configure_auto_trader()
+        try:
+            from athena_runtime import hydrate_executed_signals_from_db
+
+            _dedup_hydrated = hydrate_executed_signals_from_db()
+            log.info(
+                "[RUNTIME] Hydrated %s executed-signal dedup keys from audit.db",
+                _dedup_hydrated,
+            )
+        except Exception as _dedup_exc:
+            log.warning("[RUNTIME] executed-signal dedup hydrate failed: %s", _dedup_exc)
+        _runtime_storage_initialized = True
 
 
 def _stability_engine_from_audit_row(
@@ -6145,10 +6251,6 @@ def _insert_shadow_from_engine_c(consensus: dict) -> None:
 
 from ai_learning import init_learning_db  # noqa: E402
 
-init_learning_db(_AUDIT_DB)
-ensure_advisory_store(_AUDIT_DB)
-
-
 from scanner import (  # noqa: E402
     run_full_scan,
     _engine_b_independent_direction_probe,
@@ -6157,18 +6259,32 @@ from scanner import (  # noqa: E402
 
 from auto_trader import auto_trader as _auto_trader  # noqa: E402
 
-_auto_trader.configure(
-    run_scan_fn=lambda style="auto", asset_class=None: run_full_scan(
-        style, asset_class
-    ),
-    kill_switch_fn=lambda: _kill_switch,
-    test_mode_fn=lambda: _test_mode,
-    audit_db=_AUDIT_DB,
-    config_fn=lambda: CONFIG,
-)
+_auto_trader_configured = False
+
+
+def _configure_auto_trader() -> None:
+    """Inject runtime dependencies without starting a monitor during import."""
+    global _auto_trader_configured
+    if _auto_trader_configured:
+        return
+    _auto_trader.configure(
+        run_scan_fn=lambda style="auto", asset_class=None: run_full_scan(
+            style, asset_class
+        ),
+        kill_switch_fn=lambda: _kill_switch,
+        test_mode_fn=lambda: _test_mode,
+        audit_db=_AUDIT_DB,
+        config_fn=lambda: CONFIG,
+    )
+    _auto_trader_configured = True
 
 
 app = Flask(__name__, static_folder="static")
+
+
+@app.before_request
+def _ensure_runtime_storage() -> None:
+    _initialize_runtime_storage()
 
 
 @app.after_request
@@ -9677,6 +9793,13 @@ def _auto_toggle_pair(pair, result):
     action = None
 
     if should_enable and not was_enabled:
+        if pair.get("auto_enable") is False:
+            log.info(
+                "[BT-AUTO] %s remains disabled: auto-enable is locked",
+                pair["display"],
+            )
+            return None
+
         pair["enabled"] = True
 
         action = "enabled"
@@ -14467,6 +14590,28 @@ def analyze_pair(
     from engine_a_v3.timeframes import resolve_live_v3_entry_timeframe
 
     _score_group = route_specialist(pair).score_group
+    from timeframe_policy import (
+        policy_mode_is_authoritative,
+        resolve_timeframe_policy,
+    )
+
+    _policy_timeframes = None
+    if policy_mode_is_authoritative(None, CONFIG):
+        _resolved_policy = resolve_timeframe_policy(
+            pair.get("display") or pair.get("symbol") or "",
+            pair.get("type", ""),
+            _score_group,
+            style,
+            engine_id="engine_a",
+        )
+        _policy_timeframes = {
+            "regime": _resolved_policy.regime_tf.value,
+            "bias": _resolved_policy.bias_tf.value,
+            "structure": _resolved_policy.structure_tf.value,
+            "setup": _resolved_policy.setup_tf.value,
+            "trigger": _resolved_policy.trigger_tf.value,
+            "execution": _resolved_policy.execution_tf.value,
+        }
     _v3_live_entry_tf = resolve_live_v3_entry_timeframe(
         pair.get("type", ""),
         style,
@@ -14694,6 +14839,34 @@ def analyze_pair(
     _v3_candles = {"D1": d1, "H4": h4, "H1": h1}
     if _v3_live_entry_tf:
         _v3_candles[_v3_live_entry_tf] = _v3_entry_candles
+
+    # The promoted Engine A score consumes the policy's setup and trigger
+    # series.  These are confirmed-only scoring inputs; M5 remains execution
+    # context and is not allowed to create score direction or structure.
+    if _policy_timeframes:
+        for _policy_tf in {
+            _policy_timeframes["setup"],
+            _policy_timeframes["trigger"],
+        }:
+            if _policy_tf in _v3_candles:
+                continue
+            _policy_state = preloaded_market_state.get(_policy_tf)
+            _policy_raw = preloaded_candles.get(_policy_tf)
+            if _policy_raw is None:
+                _policy_raw, _policy_meta = _fetch_ab_crypto_signal_candles(
+                    pair,
+                    _policy_tf,
+                    _lim[_policy_tf],
+                    engine="A",
+                    force_refresh=refresh_market_data,
+                )
+                if _policy_meta:
+                    preloaded_fetch_meta[_policy_tf] = _policy_meta
+            _v3_candles[_policy_tf] = _engine_a_confirmed_candles(
+                _policy_tf,
+                _policy_raw,
+                _policy_state if isinstance(_policy_state, dict) else None,
+            )
 
     if not d1 or not h4 or not h1 or (_v3_live_entry_tf and not _v3_entry_candles):
         log.warning(
@@ -14986,7 +15159,7 @@ def analyze_pair(
         microstructure_metrics=_v3_micro,
     )
 
-    _v3_signal = evaluate_engine_a_v3(
+    _legacy_v3_signal = evaluate_engine_a_v3(
         pair,
         _v3_candles,
         horizon=style,
@@ -14997,6 +15170,21 @@ def analyze_pair(
             _v3_live_entry_tf and (_v3_entry_state or {}).get("forming")
         ),
     ).to_dict()
+    if _policy_timeframes:
+        _v3_signal = evaluate_engine_a_v3(
+            pair,
+            _v3_candles,
+            horizon=style,
+            context=_v3_ctx,
+            current_price=_engine_a_live_price,
+            policy_timeframes=_policy_timeframes,
+        ).to_dict()
+        _v3_signal["legacyScore"] = _legacy_v3_signal.get("confluenceScore")
+        _v3_signal["legacyDirection"] = _legacy_v3_signal.get("direction")
+        _v3_signal["policyScore"] = _v3_signal.get("confluenceScore")
+        _v3_signal["policyDirection"] = _v3_signal.get("direction")
+    else:
+        _v3_signal = _legacy_v3_signal
     _v3_signal["quoteAgeSec"] = _engine_a_quote_diag["ageSec"]
     _v3_signal["quoteTimestamp"] = _engine_a_quote_diag["timestamp"]
     _v3_signal["priceSource"] = "fresh_live_quote"
@@ -17195,7 +17383,27 @@ register_status_routes(
 # Ghost Trade is a standalone scanner with its own database and scheduler.  It
 # consumes shared candle functions but never imports another engine's scoring
 # or the existing auto-trader.  The committed mode is SHADOW.
-_ghost_trade_service = build_ghost_trade_service(
+class _LazyGhostTradeService:
+    """Build the Ghost Trade database-backed service on its first real use."""
+
+    def __init__(self, runtime):
+        self._runtime = runtime
+        self._service = None
+        self._lock = threading.Lock()
+
+    def _get(self):
+        if self._service is not None:
+            return self._service
+        with self._lock:
+            if self._service is None:
+                self._service = build_ghost_trade_service(self._runtime)
+        return self._service
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
+
+
+_ghost_trade_service = _LazyGhostTradeService(
     SimpleNamespace(
         CONFIG=CONFIG,
         AUDIT_DB=_AUDIT_DB,
@@ -17722,6 +17930,9 @@ def ensure_runtime_services_started() -> None:
                     multi = BinanceMicroMultiWS(
                         symbols=multi_syms,
                         stale_symbol_seconds=stale_after,
+                        depth_speed_ms=int(
+                            CONFIG.get("MICROSTRUCTURE_BINANCE_DEPTH_SPEED_MS", 500)
+                        ),
                     )
                     _ws_clients.append(multi)
                     threading.Thread(
@@ -17792,6 +18003,8 @@ def ensure_runtime_services_started() -> None:
 
 if __name__ == "__main__":
     from timeframe_policy import reconcile_symbol_universe
+
+    _initialize_runtime_storage()
 
     # Development startup is strict: aliases/group conflicts and production
     # fallback policies are configuration errors, not runtime fallbacks.

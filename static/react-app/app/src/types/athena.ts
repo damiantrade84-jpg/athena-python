@@ -272,6 +272,15 @@ export interface EngineASignal {
   maxScore?: number;
   threshold?: number;
   confluenceScore?: number;
+  legacyScore?: number;
+  legacyDirection?: Direction;
+  policyScore?: number;
+  policyDirection?: Direction;
+  authoritativeScore?: number;
+  authoritativeDirection?: Direction;
+  authoritativeScoreSource?: 'POLICY' | 'LEGACY';
+  scoreDelta?: number | null;
+  directionChanged?: boolean;
   confluenceThreshold?: number;
   confluencePct?: number;
   /** Pre-blend score fields (V3: decision uses score before intermarket/news). */

@@ -271,8 +271,25 @@ def _engine_b_scan_freshness_stale_tfs(
         stale_tfs.append(f"{tf}:{sev}")
 
     # Lower entry/trigger series intentionally includes the active bar. Unlike
-    # confirmed structure, stale_1_bucket is not acceptable here: a missing
-    # current M15/M30 bucket would score the previous close as the entry.
+    # confirmed structure, stale_1_bucket is not acceptable here for real-time
+    # feeds: a missing current M15/M30 bucket would score the previous close as
+    # the entry.
+    #
+    # MT5 equity CFDs (stock/etf/etf_bond) are the deliberate exception. Their
+    # intraday bars legitimately lag ~1 bucket on the broker feed, so under an
+    # M15 trigger the whole US equity/ETF universe was hard-blocked every scan
+    # (STALE_DATA_ENGINE_B:M15:stale_1_bucket). The executable price for these
+    # groups is guarded SEPARATELY by the live-quote gate (LIVE_PRICE_MAX_AGE_SEC
+    # stock/etf = 90s), so a one-bucket-stale signal bar must not determine entry
+    # here. Only stale_1_bucket is tolerated; stale_multi_bucket / missing still
+    # fail closed. Config-reversible via ENGINE_B_ENTRY_TF_ALLOW_MT5_EQUITY_STALE_1.
+    _entry_tf_allow_mt5_equity_stale_1 = bool(
+        cfg.get("ENGINE_B_ENTRY_TF_ALLOW_MT5_EQUITY_STALE_1", True)
+    )
+    _is_mt5_equity = (
+        str(pair.get("source") or "").strip().lower() == "mt5"
+        and pair_type in ("stock", "etf", "etf_bond")
+    )
     for tf, candles in (active_entry_tfs or {}).items():
         tf_u = str(tf or "").upper()
         diag = candle_freshness_diagnostic(
@@ -283,8 +300,15 @@ def _engine_b_scan_freshness_stale_tfs(
         )
         freshness_diag[tf_u] = diag
         sev = str(diag.get("stalenessSeverity") or "missing")
-        if sev != "fresh":
-            stale_tfs.append(f"{tf_u}:{sev}")
+        if sev == "fresh":
+            continue
+        if (
+            _entry_tf_allow_mt5_equity_stale_1
+            and _is_mt5_equity
+            and sev == "stale_1_bucket"
+        ):
+            continue
+        stale_tfs.append(f"{tf_u}:{sev}")
 
     if pair.get("type") == "crypto" and d1 and d1_required:
         try:
@@ -2991,7 +3015,9 @@ def run_full_scan(
                                     market_states=preloaded_market_state,
                                     speed_state=_speed_state,
                                 )
-                                if str(CONFIG.get("TF_POLICY_MODE", "shadow")).lower() == "enforced":
+                                from timeframe_policy import policy_mode_is_authoritative
+
+                                if policy_mode_is_authoritative(None, CONFIG):
                                     res_b["structure_tf"] = _engine_b_policy.structure_tf.value
                                     res_b["entry_tf"] = _engine_b_policy.setup_tf.value
                                     res_b["trigger_tf"] = _engine_b_policy.trigger_tf.value

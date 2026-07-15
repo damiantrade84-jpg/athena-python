@@ -19,7 +19,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-POLICY_VERSION = "timeframe_policy.v2"
+POLICY_VERSION = "timeframe_policy.v3"
 
 
 class PolicyConfigurationError(ValueError):
@@ -95,8 +95,20 @@ def parse_m5_matrix_language(value: str) -> tuple[M5Role, Timeframe | None]:
 
 class PolicyMode(str, Enum):
     OFF = "off"
-    SHADOW = "shadow"
-    ENFORCED = "enforced"
+    ENFORCED_DEMO = "enforced_demo"
+    ENFORCED_LIVE = "enforced_live"
+    # Source-compatible aliases for callers that still import the previous enum.
+    SHADOW = "off"
+    ENFORCED = "enforced_demo"
+
+
+# Compatibility aliases are deliberately parsed at the boundary only.  They are
+# not emitted in payloads, so live callers can distinguish the two approved
+# promotion states from historical shadow/enforced configuration.
+_LEGACY_POLICY_MODE_ALIASES = {
+    "shadow": PolicyMode.OFF,
+    "enforced": PolicyMode.ENFORCED_DEMO,
+}
 
 
 class SessionCalendarSource(str, Enum):
@@ -435,6 +447,7 @@ class _Template:
     m5_role: M5Role = M5Role.REFINEMENT
     baseline_speed: SpeedClass = SpeedClass.NORMAL
     m15_confirmation_required_for_m5: bool = False
+    allow_dynamic_m5_execution: bool = False
 
 
 def _template(
@@ -448,6 +461,7 @@ def _template(
     m5_role: M5Role = M5Role.REFINEMENT,
     speed: SpeedClass = SpeedClass.NORMAL,
     confirm_m15: bool = False,
+    allow_dynamic_m5_execution: bool = False,
 ) -> _Template:
     return _Template(
         profile=profile,
@@ -459,6 +473,7 @@ def _template(
         m5_role=m5_role,
         baseline_speed=speed,
         m15_confirmation_required_for_m5=confirm_m15,
+        allow_dynamic_m5_execution=allow_dynamic_m5_execution,
     )
 
 
@@ -467,30 +482,42 @@ _LIQUID_FAST = _template(
     execution=Timeframe.M5,
     m5_role=M5Role.EXECUTION,
     speed=SpeedClass.FAST,
+    confirm_m15=True,
 )
-_STANDARD = _template("STANDARD", m5_role=M5Role.REFINEMENT)
-_NO_M5 = _template("NO_M5", m5_role=M5Role.DISABLED)
-_SLOW_RANGE = _template(
-    "SLOW_RANGE",
+_STANDARD = _template("STANDARD_LIQUID", m5_role=M5Role.REFINEMENT)
+_SESSION_FAST = _template(
+    "LIQUID_FAST_SESSION_CONDITIONAL",
+    m5_role=M5Role.REFINEMENT,
+    speed=SpeedClass.FAST,
+    confirm_m15=True,
+    allow_dynamic_m5_execution=True,
+)
+_BROAD_STRUCTURE_CROSS = _template(
+    "BROAD_STRUCTURE_CROSS",
     bias=Timeframe.H4,
     structure=Timeframe.H4,
     setup=Timeframe.H1,
     trigger=Timeframe.M30,
     execution=Timeframe.M15,
-    m5_role=M5Role.DISABLED,
-    speed=SpeedClass.SLOW,
+    m5_role=M5Role.ADVISORY,
 )
-_EXOTIC = _template("EXOTIC", m5_role=M5Role.ADVISORY, speed=SpeedClass.SLOW)
+_YEN_CROSS = _template("STANDARD_YEN_CROSS", m5_role=M5Role.REFINEMENT)
+_VOLATILE_FAST = _template("VOLATILE_FAST", m5_role=M5Role.REFINEMENT, speed=SpeedClass.FAST)
+_THIN_EVENT_SENSITIVE = _template("THIN_EVENT_SENSITIVE", m5_role=M5Role.ADVISORY)
+_NO_M5 = _template("EXTREME_EVENT_SENSITIVE", m5_role=M5Role.DISABLED, speed=SpeedClass.FAST)
+_EXOTIC = _template("THIN_EVENT_SENSITIVE", m5_role=M5Role.ADVISORY, speed=SpeedClass.SLOW)
 _EQUITY = _template(
-    "CASH_EQUITY",
+    "CASH_EQUITY_LIQUID",
     bias=Timeframe.D1,
     structure=Timeframe.H1,
     execution=Timeframe.M5,
     m5_role=M5Role.EXECUTION,
     speed=SpeedClass.NORMAL,
+    confirm_m15=True,
 )
+_EQUITY_FAST = replace(_EQUITY, profile="CASH_EQUITY_FAST")
 _OIL = _template(
-    "ENERGY_FAST_CONFIRMED",
+    "LIQUID_EVENT_FAST",
     execution=Timeframe.M5,
     m5_role=M5Role.EXECUTION,
     speed=SpeedClass.FAST,
@@ -571,50 +598,50 @@ for _canonical, _values in {
 _SYMBOL_OVERRIDES: dict[str, _Template] = {
     "EURUSD": _STANDARD,
     "GBPUSD": _LIQUID_FAST,
-    "USDJPY": _LIQUID_FAST,
+    "USDJPY": _SESSION_FAST,
     "USDCHF": _STANDARD,
     "AUDUSD": _STANDARD,
-    "USDCAD": _STANDARD,
-    "EURGBP": _SLOW_RANGE,
-    "AUDNZD": _SLOW_RANGE,
-    "GBPJPY": _LIQUID_FAST,
-    "EURJPY": _LIQUID_FAST,
-    "AUDJPY": _LIQUID_FAST,
-    "EURCHF": _SLOW_RANGE,
+    "USDCAD": _template("STANDARD_SESSION_FAST", m5_role=M5Role.REFINEMENT),
+    "EURGBP": _BROAD_STRUCTURE_CROSS,
+    "AUDNZD": _BROAD_STRUCTURE_CROSS,
+    "GBPJPY": _SESSION_FAST,
+    "EURJPY": _YEN_CROSS,
+    "AUDJPY": _YEN_CROSS,
+    "EURCHF": _BROAD_STRUCTURE_CROSS,
     "XAUUSD": _LIQUID_FAST,
-    "XAGUSD": _STANDARD,
-    "XPTUSD": _NO_M5,
-    "XPDUSD": _NO_M5,
+    "XAGUSD": _VOLATILE_FAST,
+    "XPTUSD": _THIN_EVENT_SENSITIVE,
+    "XPDUSD": _THIN_EVENT_SENSITIVE,
     "WTI": _OIL,
     "BRENT": _OIL,
     "NATGAS": replace(_NO_M5, profile="NATGAS_NO_M5", baseline_speed=SpeedClass.FAST),
-    "NAS100": _LIQUID_FAST,
-    "US30": _LIQUID_FAST,
-    "GER40": _LIQUID_FAST,
-    "JPN225": _LIQUID_FAST,
-    "US500": _STANDARD,
-    "UK100": _STANDARD,
-    "AAPL": _EQUITY,
+    "NAS100": _template("LIQUID_FAST", m5_role=M5Role.REFINEMENT, speed=SpeedClass.FAST, confirm_m15=True, allow_dynamic_m5_execution=True),
+    "US30": _template("LIQUID_FAST", m5_role=M5Role.REFINEMENT, speed=SpeedClass.FAST, confirm_m15=True, allow_dynamic_m5_execution=True),
+    "GER40": _SESSION_FAST,
+    "JPN225": _template("STANDARD_INDEX_SESSION_CONDITIONAL", m5_role=M5Role.REFINEMENT, confirm_m15=True, allow_dynamic_m5_execution=True),
+    "US500": _template("STANDARD_LIQUID_INDEX", m5_role=M5Role.REFINEMENT),
+    "UK100": _template("STANDARD_LIQUID_INDEX", m5_role=M5Role.REFINEMENT),
+    "AAPL": _EQUITY_FAST,
     "SPY": _EQUITY,
-    "BTCUSDT": _LIQUID_FAST,
-    "ETHUSDT": _LIQUID_FAST,
-    "BNBUSDT": _STANDARD,
-    "SOLUSDT": _STANDARD,
-    "XRPUSDT": _STANDARD,
-    "DOGEUSDT": replace(_STANDARD, profile="CRYPTO_REFINEMENT", baseline_speed=SpeedClass.FAST),
-    "ADAUSDT": _STANDARD,
-    "LINKUSDT": _STANDARD,
+    "BTCUSDT": replace(_LIQUID_FAST, profile="CRYPTO_LIQUID_FAST"),
+    "ETHUSDT": replace(_LIQUID_FAST, profile="CRYPTO_LIQUID_FAST"),
+    "BNBUSDT": replace(_STANDARD, profile="CRYPTO_STANDARD"),
+    "SOLUSDT": replace(_STANDARD, profile="CRYPTO_HIGH_BETA"),
+    "XRPUSDT": replace(_STANDARD, profile="CRYPTO_HIGH_BETA_EVENT"),
+    "DOGEUSDT": replace(_STANDARD, profile="CRYPTO_HIGH_BETA_SPECULATIVE", baseline_speed=SpeedClass.FAST),
+    "ADAUSDT": replace(_STANDARD, profile="CRYPTO_HIGH_BETA"),
+    "LINKUSDT": replace(_STANDARD, profile="CRYPTO_HIGH_BETA"),
 }
 
 
 _GROUP_OVERRIDES: dict[str, _Template] = {
-    "forex_crosses": _SLOW_RANGE,
+    "forex_crosses": _BROAD_STRUCTURE_CROSS,
     "forex_exotics": _EXOTIC,
     "energy_oil": _OIL,
     "nat_gas": replace(_NO_M5, profile="NATGAS_NO_M5", baseline_speed=SpeedClass.FAST),
-    "pgm_metals": _NO_M5,
-    "base_metals": _NO_M5,
-    "softs": _NO_M5,
+    "pgm_metals": _THIN_EVENT_SENSITIVE,
+    "base_metals": _THIN_EVENT_SENSITIVE,
+    "softs": _THIN_EVENT_SENSITIVE,
     "us_stock_single": _EQUITY,
     "bond_tlt": _EQUITY,
     "smallcap_em_etf": _EQUITY,
@@ -625,7 +652,7 @@ _GROUP_OVERRIDES: dict[str, _Template] = {
 
 _ASSET_DEFAULTS: dict[str, _Template] = {
     "forex": _STANDARD,
-    "commodity": _NO_M5,
+    "commodity": _THIN_EVENT_SENSITIVE,
     "index": _STANDARD,
     "stock": _EQUITY,
     "etf": _EQUITY,
@@ -731,12 +758,6 @@ def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
         return replace(
             base,
             profile=f"ENGINE_B_INTRADAY_{base.profile}",
-            bias=Timeframe.H4,
-            structure=Timeframe.H1,
-            setup=Timeframe.M30,
-            trigger=Timeframe.M15,
-            execution=Timeframe.M15,
-            m5_role=M5Role.REFINEMENT if base.m5_role != M5Role.DISABLED else M5Role.DISABLED,
         )
     if engine_id == "engine_b" and style == "scalp":
         return _Template(
@@ -749,6 +770,15 @@ def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
             execution=Timeframe.M5,
             m5_role=M5Role.EXECUTION,
             baseline_speed=base.baseline_speed,
+        )
+    # Engine A retains the symbol profile for intraday.  Its swing path uses the
+    # documented D1/H4/H1 hierarchy without changing either engine's score.
+    if engine_id == "engine_a" and style == "swing":
+        return replace(
+            base,
+            profile=f"ENGINE_A_SWING_{base.profile}",
+            bias=Timeframe.D1,
+            structure=Timeframe.H4,
         )
     return base
 
@@ -821,7 +851,7 @@ def resolve_timeframe_policy(
         if execution != Timeframe.M5 and m5_role == M5Role.EXECUTION:
             m5_role = M5Role.REFINEMENT
     elif effective_speed in {SpeedClass.FAST, SpeedClass.EXTREME}:
-        if selected.m5_role in {M5Role.EXECUTION, M5Role.REFINEMENT}:
+        if selected.allow_dynamic_m5_execution and selected.m5_role == M5Role.REFINEMENT:
             if (
                 speed_state.m5_quality_acceptable
                 and speed_state.liquidity_class in {LiquidityClass.DEEP, LiquidityClass.NORMAL}
@@ -1357,8 +1387,9 @@ def calculate_speed_state(
 def _policy_runtime_settings(
     policy_mode: str | PolicyMode | None,
     config: Mapping[str, Any] | None,
-) -> tuple[PolicyMode, bool]:
+) -> tuple[PolicyMode, bool, bool]:
     cfg = config
+    supplied_config = cfg is not None
     if cfg is None:
         try:
             from config import CONFIG
@@ -1368,18 +1399,119 @@ def _policy_runtime_settings(
             cfg = {}
     raw_mode = policy_mode.value if isinstance(policy_mode, PolicyMode) else policy_mode
     if raw_mode is None:
-        raw_mode = cfg.get("TF_POLICY_MODE", PolicyMode.SHADOW.value)
+        raw_mode = cfg.get(
+            "TF_POLICY_MODE",
+            PolicyMode.OFF.value if supplied_config else PolicyMode.ENFORCED_DEMO.value,
+        )
     try:
         mode = PolicyMode(str(raw_mode).strip().lower())
     except ValueError:
-        mode = PolicyMode.SHADOW
-    autotrade_enabled = bool(cfg.get("TF_POLICY_AUTOTRADE_ENABLED", False))
-    return mode, autotrade_enabled
+        mode = _LEGACY_POLICY_MODE_ALIASES.get(
+            str(raw_mode).strip().lower(), PolicyMode.OFF
+        )
+    demo_autotrade_enabled = bool(
+        cfg.get(
+            "TF_POLICY_DEMO_AUTOTRADE_ENABLED",
+            # Compatibility only; new configuration must use the explicit demo
+            # key so it cannot also authorize real accounts.
+            cfg.get("TF_POLICY_AUTOTRADE_ENABLED", False),
+        )
+    )
+    real_autotrade_enabled = bool(
+        cfg.get("TF_POLICY_REAL_AUTOTRADE_ENABLED", False)
+    )
+    return mode, demo_autotrade_enabled, real_autotrade_enabled
+
+
+def policy_mode_is_authoritative(mode: str | PolicyMode | None, config: Mapping[str, Any] | None = None) -> bool:
+    """Return whether policy score/direction must control the live result."""
+    resolved, _, _ = _policy_runtime_settings(mode, config)
+    return resolved in {PolicyMode.ENFORCED_DEMO, PolicyMode.ENFORCED_LIVE}
+
+
+def apply_authoritative_policy_result(
+    signal: dict[str, Any],
+    *,
+    policy_score: Any | None = None,
+    policy_direction: Any | None = None,
+    policy_mode: str | PolicyMode | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> None:
+    """Expose both calculations and promote policy only in an enforced mode.
+
+    This is intentionally the single mutation point for score authority.  It
+    keeps rollback diagnostics stable while preventing serializers, rankers and
+    auto-traders that consume ``confluenceScore``/``direction`` from silently
+    retaining the legacy result after promotion.
+    """
+    mode, _, _ = _policy_runtime_settings(policy_mode, config)
+    legacy_score = signal.get("legacyScore", signal.get("confluenceScore", signal.get("score")))
+    legacy_direction = signal.get("legacyDirection", signal.get("direction"))
+    resolved_policy_score = signal.get("policyScore", policy_score)
+    resolved_policy_direction = signal.get("policyDirection", policy_direction)
+    if resolved_policy_score is None:
+        resolved_policy_score = legacy_score
+    if resolved_policy_direction is None:
+        resolved_policy_direction = legacy_direction
+
+    signal["legacyScore"] = legacy_score
+    signal["legacyDirection"] = legacy_direction
+    signal["policyScore"] = resolved_policy_score
+    signal["policyDirection"] = resolved_policy_direction
+    try:
+        signal["scoreDelta"] = round(float(resolved_policy_score) - float(legacy_score), 6)
+    except (TypeError, ValueError):
+        signal["scoreDelta"] = None
+    signal["directionChanged"] = resolved_policy_direction != legacy_direction
+
+    if mode in {PolicyMode.ENFORCED_DEMO, PolicyMode.ENFORCED_LIVE}:
+        signal["authoritativeScore"] = resolved_policy_score
+        signal["authoritativeDirection"] = resolved_policy_direction
+        signal["authoritativeScoreSource"] = "POLICY"
+        signal["confluenceScore"] = resolved_policy_score
+        signal["score"] = resolved_policy_score
+        signal["direction"] = resolved_policy_direction
+        max_score = signal.get("maxScore")
+        try:
+            if float(max_score) > 0:
+                signal["scoreNorm"] = float(resolved_policy_score) / float(max_score)
+        except (TypeError, ValueError):
+            pass
+    else:
+        signal["authoritativeScore"] = legacy_score
+        signal["authoritativeDirection"] = legacy_direction
+        signal["authoritativeScoreSource"] = "LEGACY"
+
+
+def classify_broker_account(account: Mapping[str, Any] | None) -> tuple[str, str | None]:
+    """Classify account environment from broker metadata, failing closed.
+
+    Explicit broker environment metadata always wins.  Name/server text is used
+    only as a final compatibility hint when no stronger signal exists.
+    """
+    details = account if isinstance(account, Mapping) else {}
+    raw_environment = str(
+        details.get("accountEnvironment") or details.get("environment") or ""
+    ).strip().lower()
+    if raw_environment in {"demo", "paper", "testnet", "sandbox"}:
+        return "demo", None
+    if raw_environment in {"live", "real", "production"}:
+        return "real", None
+    if details.get("demo") is True or details.get("testnet") is True:
+        return "demo", None
+    if details.get("demo") is False or details.get("testnet") is False:
+        # A broker-provided false value is stronger than account-name heuristics.
+        return "real", None
+    hint = " ".join(str(details.get(key) or "") for key in ("server", "name", "accountName"))
+    if "demo" in hint.lower() or "test" in hint.lower():
+        return "demo", "ACCOUNT_NAME_FALLBACK"
+    return "unknown", "BROKER_ENVIRONMENT_UNAVAILABLE"
 
 
 def timeframe_policy_execution_block_reason(
     signal: Mapping[str, Any],
     config: Mapping[str, Any],
+    account: Mapping[str, Any] | None = None,
 ) -> str | None:
     """Fail closed only for policy config errors or explicitly enforced rollout."""
     if (
@@ -1387,9 +1519,51 @@ def timeframe_policy_execution_block_reason(
         or signal.get("entryReadiness") == "CONFIG_ERROR"
     ):
         return "TF_POLICY_CONFIG_CONFLICT"
-    mode, autotrade_enabled = _policy_runtime_settings(None, config)
-    if mode == PolicyMode.ENFORCED and not autotrade_enabled:
-        return "TF_POLICY_AUTOTRADE_DISABLED"
+    mode, demo_autotrade_enabled, real_autotrade_enabled = _policy_runtime_settings(None, config)
+    if mode == PolicyMode.ENFORCED_DEMO:
+        if not demo_autotrade_enabled:
+            return "TF_POLICY_DEMO_AUTOTRADE_DISABLED"
+        if account is None:
+            # _can_execute runs before broker retrieval; account scope is checked
+            # again immediately before execution with broker metadata.
+            return None
+        environment, detail = classify_broker_account(account)
+        allowed = environment == "demo"
+        reason = (
+            None if allowed else
+            ("TF_POLICY_REAL_ACCOUNT_LOCKED" if environment == "real" else
+             f"TF_POLICY_ACCOUNT_ENVIRONMENT_UNVERIFIED:{detail or 'UNKNOWN'}")
+        )
+        if isinstance(signal, dict):
+            signal["timeframePolicyExecution"] = {
+                "accountId": account.get("login") or account.get("accountId") or account.get("id"),
+                "broker": account.get("exchange") or account.get("symbol") or account.get("broker"),
+                "accountEnvironment": environment,
+                "policyMode": mode.value,
+                "executionAllowed": allowed,
+                "executionRestrictionReason": reason,
+            }
+        return reason
+    if mode == PolicyMode.ENFORCED_LIVE:
+        if account is None:
+            return None
+        environment, detail = classify_broker_account(account)
+        allowed = environment == "demo" or (environment == "real" and real_autotrade_enabled)
+        reason = (
+            None if allowed else
+            ("TF_POLICY_REAL_AUTOTRADE_DISABLED" if environment == "real" else
+             f"TF_POLICY_ACCOUNT_ENVIRONMENT_UNVERIFIED:{detail or 'UNKNOWN'}")
+        )
+        if isinstance(signal, dict):
+            signal["timeframePolicyExecution"] = {
+                "accountId": account.get("login") or account.get("accountId") or account.get("id"),
+                "broker": account.get("exchange") or account.get("symbol") or account.get("broker"),
+                "accountEnvironment": environment,
+                "policyMode": mode.value,
+                "executionAllowed": allowed,
+                "executionRestrictionReason": reason,
+            }
+        return reason
     return None
 
 
@@ -1441,12 +1615,14 @@ def attach_timeframe_policy_payload(
     config: Mapping[str, Any] | None = None,
     session_calendar: SessionCalendarResolution | None = None,
 ) -> TimeframePolicy:
-    """Attach server-authoritative policy/readiness fields without altering scores."""
+    """Attach policy/readiness fields and promote the current policy result."""
     symbol = str(pair.get("display") or pair.get("symbol") or signal.get("display") or "")
     asset_type = str(pair.get("type") or pair.get("asset_type") or signal.get("type") or "")
     score_group = pair.get("score_group") or signal.get("scoreGroup") or signal.get("score_group")
     engine_key, style_key = _normalize_policy_identity(engine, str(style or "intraday"))
-    mode, policy_autotrade_enabled = _policy_runtime_settings(policy_mode, config)
+    mode, demo_autotrade_enabled, real_autotrade_enabled = _policy_runtime_settings(
+        policy_mode, config
+    )
     authoritative_group = pair.get("authoritative_score_group")
     if not authoritative_group:
         try:
@@ -1509,10 +1685,20 @@ def attach_timeframe_policy_payload(
         speed_state.last_speed_transition_utc if speed_state else None
     )
     payload["timeframePolicyMode"] = mode.value
-    payload["timeframePolicyAutotradeEnabled"] = bool(
-        mode == PolicyMode.ENFORCED
-        and policy_autotrade_enabled
+    payload["timeframePolicyDemoAutotradeEnabled"] = bool(
+        mode == PolicyMode.ENFORCED_DEMO
+        and demo_autotrade_enabled
         and policy.policy_source != PolicySource.CONFIG_CONFLICT
+    )
+    payload["timeframePolicyRealAutotradeEnabled"] = bool(
+        mode == PolicyMode.ENFORCED_LIVE
+        and real_autotrade_enabled
+        and policy.policy_source != PolicySource.CONFIG_CONFLICT
+    )
+    # Retained for consumers that only display a single policy auto-trade flag.
+    payload["timeframePolicyAutotradeEnabled"] = bool(
+        payload["timeframePolicyDemoAutotradeEnabled"]
+        or payload["timeframePolicyRealAutotradeEnabled"]
     )
     payload["proposedVersusLegacy"] = {
         key: {"legacy": legacy.get(key), "proposed": payload.get(key)}
@@ -1520,6 +1706,11 @@ def attach_timeframe_policy_payload(
         if legacy.get(key) != payload.get(key)
     }
     signal.update(payload)
+    apply_authoritative_policy_result(
+        signal,
+        policy_mode=mode,
+        config=config,
+    )
     signal["signalId"] = _signal_id(signal, policy.policy_key)
     signal["engineId"] = policy.engine_id
     signal["style"] = policy.style
