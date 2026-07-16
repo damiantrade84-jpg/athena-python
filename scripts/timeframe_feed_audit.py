@@ -147,8 +147,11 @@ MT5_PROBE_SYMBOLS = {
     "XAU/USD": "metals_xau", "XAG/USD": "metals_other",
     "XPT/USD": "metals_other", "XPD/USD": "metals_other",
     "WTI Oil": "energy_oil", "Brent Oil": "energy_oil", "Nat Gas": "energy_gas",
-    "NAS100": "indices", "US500": "indices", "US30": "indices", "GER40": "indices",
-    "UK100": "indices", "JPN225": "indices",
+    # Index keys must be the production display names (mt5_map_symbol input);
+    # short forms like "US500" fall through to the .US stock fallback and
+    # probe as BLOCKED_SYMBOL_UNAVAILABLE even though the feed is fine.
+    "NAS100": "indices", "S&P 500": "indices", "Dow Jones": "indices",
+    "DAX 40": "indices", "UK100": "indices", "JPN225": "indices",
     "AAPL": "stocks_etf", "SPY": "stocks_etf",
 }
 BYBIT_PROBE_SYMBOLS = {
@@ -171,6 +174,47 @@ def _market_probably_closed(now: float | None = None) -> bool:
     if wday == 4 and hour >= 21:  # Friday after close
         return True
     return False
+
+
+# US cash equities trade ~13:30-20:00 UTC on weekdays. Without this, every
+# overnight/weekend probe flags stocks/ETFs as DEGRADED_STALE_DATA.
+def _us_equity_probably_closed(now: float | None = None) -> bool:
+    t = time.gmtime(now if now is not None else time.time())
+    if t.tm_wday >= 5:
+        return True
+    minutes = t.tm_hour * 60 + t.tm_min
+    return not (13 * 60 + 30 <= minutes < 20 * 60)
+
+
+def _closed_seconds_between(start: float, end: float, group: str) -> float:
+    """Approximate closed-market seconds in [start, end) for gap crediting.
+
+    All groups: Saturday/Sunday (UTC). stocks_etf additionally: weekday hours
+    outside the 13:30-20:00 UTC US cash session. DST shifts and broker-time
+    offsets are absorbed by the 0.5*tf_sec gap tolerance.
+    """
+    if end <= start:
+        return 0.0
+    total = 0.0
+    t = start
+    while t < end:
+        tm = time.gmtime(t)
+        second_of_day = tm.tm_hour * 3600 + tm.tm_min * 60 + tm.tm_sec
+        day_end = t + (86400 - second_of_day)
+        seg_end = min(end, day_end)
+        if tm.tm_wday >= 5:
+            total += seg_end - t
+        elif group == "stocks_etf":
+            open_s = 13 * 3600 + 30 * 60
+            close_s = 20 * 3600
+            day_start = t - second_of_day
+            open_t = day_start + open_s
+            close_t = day_start + close_s
+            overlap_open = max(t, min(seg_end, open_t)) - t
+            overlap_close = seg_end - max(t, min(seg_end, close_t))
+            total += max(0.0, overlap_open) + max(0.0, overlap_close)
+        t = seg_end
+    return total
 
 
 def _now_iso() -> str:
@@ -355,10 +399,14 @@ def probe_mt5(symbols: dict, bars: int = 60) -> dict:
         "D1": mt5.TIMEFRAME_D1, "H4": mt5.TIMEFRAME_H4, "H1": mt5.TIMEFRAME_H1,
         "M30": mt5.TIMEFRAME_M30, "M15": mt5.TIMEFRAME_M15, "M5": mt5.TIMEFRAME_M5,
     }
-    closed = _market_probably_closed()
     now = time.time()
 
     for display, group in symbols.items():
+        closed = (
+            _us_equity_probably_closed(now)
+            if group == "stocks_etf"
+            else _market_probably_closed(now)
+        )
         mt5_symbol = None
         try:
             mt5_symbol = mt5_executor.mt5_map_symbol(display)
@@ -372,13 +420,13 @@ def probe_mt5(symbols: dict, bars: int = 60) -> dict:
             continue
         for tf in ALL_TFS:
             row["per_tf"][tf] = _probe_one_mt5(mt5, mt5_symbol, tf, tf_const[tf],
-                                               bars, now, closed)
+                                               bars, now, closed, group)
         row["status"] = _rollup_symbol_status(row["per_tf"])
         out["rows"].append(row)
     return out
 
 
-def _probe_one_mt5(mt5, symbol, tf, tf_c, bars, now, closed) -> dict:
+def _probe_one_mt5(mt5, symbol, tf, tf_c, bars, now, closed, group="") -> dict:
     try:
         rates = mt5.copy_rates_from_pos(symbol, tf_c, 0, bars)
     except Exception as exc:
@@ -392,10 +440,16 @@ def _probe_one_mt5(mt5, symbol, tf, tf_c, bars, now, closed) -> dict:
     forming = (last_open + tf_sec) > now
     last_closed_open = float(rates[-2]["time"]) if n >= 2 else last_open
     age_sec = now - (last_closed_open + tf_sec)
-    # gaps: count bars whose spacing != tf_sec (ignoring weekend gap on HTF).
+    # gaps: count bars whose spacing != tf_sec after crediting closed-market
+    # time (weekends; US session hours for stocks/ETFs). A 5-day D1 series has
+    # ~12 weekend gaps per 60 bars and would otherwise always flag DEGRADED_GAPS.
     gaps = 0
     for i in range(1, n):
-        d = float(rates[i]["time"]) - float(rates[i - 1]["time"])
+        prev_t = float(rates[i - 1]["time"])
+        cur_t = float(rates[i]["time"])
+        d = cur_t - prev_t
+        if d > tf_sec:
+            d -= _closed_seconds_between(prev_t + tf_sec, cur_t + tf_sec, group)
         if abs(d - tf_sec) > tf_sec * 0.5:
             gaps += 1
     rec = {

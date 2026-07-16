@@ -3519,10 +3519,9 @@ ENGINE_B_RESEARCH_LAB_FACTORS:
 
 NAKED_ENGINE:
 
-  # Deprecated compatibility input. Timeframe roles are now owned by
-  # timeframe_policy.py; runtime profiles ignore this override.
-  LIVE_TRIGGER_TF_BY_STYLE:
-    intraday: { forex: M30 }
+  # 2026-07-16: removed deprecated LIVE_TRIGGER_TF_BY_STYLE (intraday forex M30).
+  # Timeframe roles are owned by timeframe_policy.py; runtime profiles ignored
+  # the override, so the key only misdocumented the live trigger (policy M15).
 
   # 2026-07-02 audit: aligned to the effective value. engine_b_config.yaml
   # (crypto_aggtrade.alignment_bonus) merges last and was already 0.5; the 1.0
@@ -3604,8 +3603,6 @@ NAKED_ENGINE:
   sweep_wick_atr_mult: 0.3
   equal_extrema_atr_mult: 0.15
   structural_tp_min_distance_atr: 0.5
-  # Commodity swing: force require_macro_align (default off — trust style_profiles).
-  commodity_swing_force_macro_align: false
 
   # D1 PD-array conflict penalty (points deducted from score; gate_score unchanged)
   d1_pd_array_penalty: 0.25

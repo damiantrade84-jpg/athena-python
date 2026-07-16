@@ -201,12 +201,12 @@ def test_intraday_override_m15_uses_m15_series_not_h1(monkeypatch):
     pair = {"display": "EUR/USD", "type": "forex", "source": "mt5"}
     engine = NakedEngine()
 
+    # Enforced policy makes M15 the required intraday trigger series; calling
+    # without it fails closed instead of silently substituting H1.
     baseline = engine.precompute_structure_data(
         d1, h4, h1, 200.0, 1.0, style="intraday", asset_type="forex", pair=pair
     )
-    assert baseline.get("_error") is None
-    assert baseline["_tfs"]["trigger"] == "H1"
-    assert baseline["_trigger_candles"][-1]["close"] == pytest.approx(200.0)
+    assert baseline.get("_error") == "missing_required_trigger_timeframe:M15"
 
     overridden = engine.precompute_structure_data(
         d1,
@@ -224,10 +224,11 @@ def test_intraday_override_m15_uses_m15_series_not_h1(monkeypatch):
     assert overridden["_tfs"]["trigger"] == "M15"
     assert overridden["_trigger_tf_override"] == "M15"
     assert overridden["_trigger_candles"][-1]["close"] == pytest.approx(15.0)
-    # Structure still H4 for forex intraday.
-    assert overridden["_structure_tf"] == "H4"
+    # Structure follows the authoritative policy (intraday H1); trigger noise
+    # never resizes structural ATR.
+    assert overridden["_structure_tf"] == "H1"
     assert overridden["trigger_atr"] == pytest.approx(0.2)
-    assert overridden["struct_atr"] == pytest.approx(4.0)
+    assert overridden["struct_atr"] == pytest.approx(1.0)
 
 
 def test_h4_macro_sequence_uses_h4_atr_not_policy_zone_atr(monkeypatch):
@@ -285,9 +286,8 @@ def test_override_empty_m15_does_not_silently_use_h1(monkeypatch):
         role_candles={"M15": []},
         trigger_tf_override="M15",
     )
-    assert pre.get("_error") is None
-    assert pre["_tfs"]["trigger"] == "M15"
-    assert pre["_trigger_candles"] == []
+    # An empty override series fails closed — never silently uses H1.
+    assert pre.get("_error") == "missing_required_trigger_timeframe:M15"
 
 
 def test_analyze_structure_stamps_override_trigger_timeframe(monkeypatch):
