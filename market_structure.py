@@ -6317,6 +6317,10 @@ class NakedEngine:
             if gate_max_possible > 0
             else 0
         )
+        lifecycle_state, lifecycle_reason = self._determine_lifecycle_state(
+            res, current_price, direction, trigger_ok
+        )
+        terminal_lifecycle = lifecycle_state in {"invalidated", "expired"}
         if checklist_mode == "strict":
             passed = structure_ok and zone_ok and trigger_ok and space_gate_ok and rr_ok and macro_ok
         else:
@@ -6331,6 +6335,8 @@ class NakedEngine:
                 and rr_ok
                 and (macro_ok if require_macro_align else True)
             )
+        if terminal_lifecycle:
+            passed = False
         if _aggtrade_hard_required and not _aggtrade_available:
             passed = False
 
@@ -6353,10 +6359,8 @@ class NakedEngine:
             failed_gate_names.append("max_sl_exceeded")
         if _aggtrade_hard_required and not _aggtrade_available:
             failed_gate_names.append(ENGINE_B_REASON_AGGTRADE_REQUIRED)
-
-        lifecycle_state, lifecycle_reason = self._determine_lifecycle_state(
-            res, current_price, direction, trigger_ok
-        )
+        if terminal_lifecycle:
+            failed_gate_names.append(f"lifecycle_{lifecycle_state}")
 
         # FIX 10: Per-gate failure histogram logging
         for gate_name, gate_result in [
@@ -6449,6 +6453,8 @@ class NakedEngine:
                 _hard_fail_reasons.append("engine_b_aggtrade_required_false")
             if not trigger_timeframe_gate_ok:
                 _hard_fail_reasons.append("engine_b_trigger_timeframe_false")
+            if terminal_lifecycle:
+                _hard_fail_reasons.append(f"engine_b_lifecycle_{lifecycle_state}")
             _hard_fail_reasons = sorted(set(_hard_fail_reasons))
 
         _conf_result = {

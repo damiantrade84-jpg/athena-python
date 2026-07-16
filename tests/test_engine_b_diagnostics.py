@@ -2447,3 +2447,61 @@ def test_calculate_confidence_hard_fail_reasons_empty_when_passed():
     assert conf["passed"] is True
     assert "hard_fail_reasons" in conf
     assert conf["hard_fail_reasons"] == []
+
+
+@pytest.mark.parametrize(
+    ("direction", "sequence", "structural_sl", "structural_tp", "lifecycle_state"),
+    [
+        ("LONG", "HH_HL", 101.0, 112.0, "invalidated"),
+        ("LONG", "HH_HL", 95.0, 99.0, "expired"),
+        ("SHORT", "LH_LL", 99.0, 88.0, "invalidated"),
+        ("SHORT", "LH_LL", 105.0, 101.0, "expired"),
+    ],
+)
+def test_calculate_confidence_rejects_terminal_lifecycle_candidates(
+    direction,
+    sequence,
+    structural_sl,
+    structural_tp,
+    lifecycle_state,
+):
+    engine = NakedEngine()
+    res = {
+        "atr": 5.0,
+        "asset_type": "crypto",
+        "current_swing_sequence": sequence,
+        "macro_swing_sequence": sequence,
+        "zone_touched": True,
+        "trigger_ok": True,
+        "distance_to_res": 20.0,
+        "distance_to_sup": 20.0,
+        "recommended_stop_loss": structural_sl,
+        "recommended_take_profit": structural_tp,
+        "bos_confirmed": True,
+        "bos_volume_confirmed": True,
+        "aggtrade_required": True,
+        "aggtrade_available": True,
+        "aggtrade_cvd_direction": direction,
+        "aggtrade_cvd_source": "binance_aggtrade",
+        "engine_b_data_fidelity": {
+            "vp_uses_real_trade_buckets": True,
+            "cvd_uses_real_trade_buckets": True,
+        },
+    }
+    profile = {"style": "intraday", "min_rr": 1.0, "min_room_atr": 0.25}
+
+    conf = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction=direction,
+        style_profile=profile,
+    )
+
+    assert conf["execution_levels_valid"] is True
+    assert conf["lifecycle_state"] == lifecycle_state
+    assert conf["passed"] is False
+    assert conf["final_engine_b_passed"] is False
+    assert conf["engine_b_canonical_actionable"] is False
+    assert conf["canonical_trade_ok"] is False
+    assert f"lifecycle_{lifecycle_state}" in conf["failed_gate_names"]
+    assert f"engine_b_lifecycle_{lifecycle_state}" in conf["hard_fail_reasons"]

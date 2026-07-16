@@ -1323,6 +1323,11 @@ def _engine_b_independent_direction_probe(
             entry_candles=entry_candles,
             style_profile=style_profile,
         )
+        if str(conf_b.get("lifecycle_state") or "").lower() in {
+            "invalidated",
+            "expired",
+        }:
+            continue
         gate_ok, _ = engine_b_confidence_passes(
             conf_b, style_profile, regime_label, asset_type,
         )

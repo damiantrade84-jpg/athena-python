@@ -175,6 +175,12 @@ class _FakeEngine:
     def set_registry_context(self, _symbol):
         return self
 
+    def precompute_structure_data(self, *_args, **_kwargs):
+        return {}
+
+    def analyze_structure_direction(self, _precompute, _price, direction):
+        return dict(self._per_direction.get(direction, {"structural_verdict": "NONE"}))
+
     def analyze_structure(self, *_args, **_kwargs):
         direction = _args[4]
         return dict(self._per_direction.get(direction, {"structural_verdict": "NONE"}))
@@ -184,6 +190,7 @@ class _FakeEngine:
             "score": res.get("_score", 0.0),
             "max_possible": 5.0,
             "passed": bool(res.get("_passed", False)),
+            "lifecycle_state": res.get("_lifecycle_state", "triggered"),
             "failed_gate_names": list(res.get("_failed_gates", [])),
             "rr_ok": bool(res.get("_rr_ok", True)),
         }
@@ -216,6 +223,48 @@ def test_engine_b_independent_direction_probe_picks_best_passing_direction(monke
     # Even though SHORT scores higher, LONG passed gate so it wins.
     assert direction == "LONG"
     assert conf_b is not None and conf_b["passed"] is True
+
+
+def test_engine_b_independent_direction_probe_never_selects_terminal_candidate(
+    monkeypatch,
+):
+    import scanner as scanner_mod
+
+    monkeypatch.setattr(
+        scanner_mod,
+        "engine_b_confidence_passes",
+        lambda conf, *_a, **_kw: (bool(conf.get("passed", False)), 0.0),
+    )
+    for terminal_state in ("invalidated", "expired"):
+        fake = _FakeEngine({
+            "LONG": {
+                "structural_verdict": "CLEAR",
+                "_score": 5.0,
+                "_passed": True,
+                "_lifecycle_state": terminal_state,
+            },
+            "SHORT": {
+                "structural_verdict": "CLEAR",
+                "_score": 4.0,
+                "_passed": True,
+                "_lifecycle_state": "triggered",
+            },
+        })
+
+        direction, res_b, conf_b = _engine_b_independent_direction_probe(
+            {"display": "X", "symbol": "X", "type": "crypto"},
+            engine=fake,
+            d1_candles=[], h4_candles=[], h1_candles=[], entry_candles=[],
+            current_price=100.0, atr=1.0, regime_label="TRENDING",
+            style_profile={"fallback_rr": 2.0, "min_rr": 1.5},
+            resolved_style="intraday",
+            asset_type="crypto",
+            d1_snap={}, h4_snap={},
+        )
+
+        assert direction == "SHORT"
+        assert res_b is not None
+        assert conf_b is not None and conf_b["lifecycle_state"] == "triggered"
 
 
 def test_engine_b_independent_direction_probe_returns_none_when_no_clear(monkeypatch):
