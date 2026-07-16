@@ -87,7 +87,7 @@ def _resolve_setup_candle_frames(
     *,
     entry_tf_override: str | None = None,
 ) -> tuple[list[dict], list[dict], str, str]:
-    """Primary/context frames aligned with quant entry TF (execution_tf overrides)."""
+    """Primary/context frames aligned with the selected style's quant entry TF."""
     from engine_a_v3.timeframes import (
         resolve_diagnostic_v3_entry_timeframe,
         resolve_v3_entry_timeframe,

@@ -180,3 +180,18 @@ def test_classifier_does_not_mutate_inputs() -> None:
     )
     for k in snapshot:
         assert facts[k] == snapshot[k], f"classifier mutated facts[{k}]"
+
+
+def test_classifier_carries_selected_style_and_timeframe_into_candidates() -> None:
+    out = classify_strategy(
+        price_action_facts=_facts(),
+        engine_a_summary={"regime": "balance"},
+        asset_group="forex",
+        style="intraday",
+        timeframe="M30",
+    )
+
+    assert out["evaluation_style"] == "intraday"
+    assert out["evaluation_timeframe"] == "M30"
+    assert all(row["evaluation_style"] == "intraday" for row in out["candidate_models"])
+    assert all(row["evaluation_timeframe"] == "M30" for row in out["candidate_models"])

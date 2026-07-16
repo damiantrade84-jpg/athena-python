@@ -3,28 +3,37 @@
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
+from style_resolver import normalize_style, resolve_auto_style
+
 try:
     from ai_signal_trace import ensure_trace_id
 except Exception:  # pragma: no cover - import guard for legacy tooling
     ensure_trace_id = None
 
 def resolve_ai_style(signal: Dict[str, Any], explicit_style: str = "auto") -> str:
-    """Resolve trading style based on UI selection, signal content, or asset rules.
-    
+    """Resolve AI style from the selected signal contract, then shared Auto policy.
+
     Style resolution order:
     1. explicit UI style if not auto
-    2. signal["style"] if available and not auto
+    2. signal style/horizon fields if available and not auto
     3. signal["signalClass"] and signal["entryMode"]
-    4. style_levels if available
-    5. asset type and RR profile
-    6. fallback to raw score/maxScore only if nothing else exists
+    4. style_levels only when exactly one style is represented
+    5. shared pair/group Auto policy
     """
-    if explicit_style and explicit_style != "auto":
-        return explicit_style.upper()
-        
-    sig_style = signal.get("style") or signal.get("tradeStyle") or signal.get("requested_style")
-    if sig_style and sig_style != "auto":
-        return str(sig_style).upper()
+    explicit = normalize_style(explicit_style)
+    if explicit != "auto":
+        return explicit.upper()
+
+    for key in (
+        "style",
+        "horizon",
+        "requestedStyle",
+        "requested_style",
+        "tradeStyle",
+    ):
+        resolved = normalize_style(signal.get(key))
+        if resolved != "auto":
+            return resolved.upper()
         
     # 3. signalClass and entryMode
     sig_class = str(signal.get("signalClass", "")).upper()
@@ -38,30 +47,21 @@ def resolve_ai_style(signal: Dict[str, Any], explicit_style: str = "auto") -> st
         
     # 4. style_levels
     levels = signal.get("style_levels") or {}
-    if levels:
-        if levels.get("scalp"): return "SCALP"
-        if levels.get("intraday"): return "INTRADAY"
-        if levels.get("swing"): return "SWING"
-        
-    # 5. asset type and RR profile
-    asset_type = str(signal.get("type") or signal.get("asset_type", "")).lower()
-    rr = float(signal.get("rr1") or signal.get("rr", 1.0))
-    if asset_type == "crypto":
-        if rr < 2.0: return "SCALP"
-        return "INTRADAY"
-    elif asset_type == "forex":
-        if rr >= 3.0: return "SWING"
-        return "INTRADAY"
-        
-    # 6. fallback to raw score/maxScore only if nothing else exists
-    confluence_score = float(signal.get("confluenceScore", 0) or 0)
-    max_score = float(signal.get("maxScore", 3.0) or 3.0)
-    score_pct = (confluence_score / max_score * 100) if max_score > 0 else 0
-    if score_pct >= 70:
-        return "SWING"
-    elif score_pct >= 50:
-        return "INTRADAY"
-    return "SCALP"
+    if isinstance(levels, dict):
+        represented = [
+            style for style in ("scalp", "intraday", "swing") if levels.get(style)
+        ]
+        if len(represented) == 1:
+            return represented[0].upper()
+
+    # 5. Never infer style from RR or score quality. Use the same pair-aware
+    # Auto policy as the deterministic engines.
+    return resolve_auto_style(
+        "auto",
+        signal,
+        score_group=signal.get("scoreGroup") or signal.get("score_group"),
+        asset_type=signal.get("type") or signal.get("asset_type"),
+    ).upper()
 
 def resolve_ai_review_min_rr(signal: Dict[str, Any], resolved_style: str) -> float:
     """Resolve min RR for AI review context from signal payload or config."""

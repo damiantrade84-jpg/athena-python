@@ -29,7 +29,7 @@ import { fmtNum, toNum, cn } from '@/lib/utils';
 import { engineAListScore, fmtAtrMeta, fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 import { readEngineBCanonicalGatesFromNaked } from '@/lib/engineBCanonicalGates';
 import { engineAV3DecisionRank, engineAV3ListLabel, isEngineAV3Signal } from '@/lib/engineAV3';
-import { fetchVisionCandlePayload } from '@/lib/visionReview';
+import { fetchVisionCandlePayload, preferredVisionReviewTf } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
 import {
   aiLevelOverrideFromReview,
@@ -426,20 +426,7 @@ function resolveSignalSymbol(signal: EngineASignal): string {
 }
 
 export function preferredTvChartTf(signal: EngineASignal): string {
-  const route = (signal as { timeframe_route?: { autoSelectTf?: string } }).timeframe_route?.autoSelectTf;
-  const direct = signal.setupTf
-    || signal.triggerTf
-    || signal.entryTimeframe
-    || signal.executionTf
-    || signal.structureTf
-    || signal.timeframe
-    || route;
-  if (direct && typeof direct === 'string') {
-    return direct.toUpperCase();
-  }
-  const style = String(signal.style || signal.requestedStyle || '').toLowerCase();
-  if (style === 'scalp' || style === 'intraday') return 'H1';
-  return 'H4';
+  return preferredVisionReviewTf(signal);
 }
 
 function intentSourceForRow(row: UnifiedRow): 'signals' | 'engine_a' | 'engine_b' {
@@ -783,10 +770,12 @@ export default function SignalsPanel() {
         return;
       }
       try {
-        const candlePayload = await fetchVisionCandlePayload(sym);
+        const reviewTf = preferredVisionReviewTf(sig);
+        const candlePayload = await fetchVisionCandlePayload(sym, reviewTf);
         const result = await postVision('/api/chart-analysis', {
           symbol: sym,
-          tf: 'H4',
+          tf: reviewTf,
+          resolvedStyle: sig.style || sig.horizon,
           signal: sig,
           engineB: sig.naked_data || sig.engine_b,
           server_render: true,

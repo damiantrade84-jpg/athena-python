@@ -54,6 +54,8 @@ def test_layer_includes_all_required_top_level_keys() -> None:
         "rejected_models",
         "classification_warnings",
         "engines_considered",
+        "evaluation_style",
+        "evaluation_timeframe",
         "raw_ohlcv_window",
         "vision_routing_todo",
         "advisory_only_notice",
@@ -74,6 +76,22 @@ def test_prompt_includes_candle_read_order() -> None:
     text = render_strategy_block_for_prompt(layer)
     assert "CANDLE UNDERSTANDING read order" in text
     assert "Regime gate" in text
+
+
+def test_strategy_layer_preserves_selected_style_independent_of_chart_tf() -> None:
+    explicit = build_strategy_layer(
+        engine_a_ctx=_engine_a_ctx(analyze_style="intraday"),
+        timeframe="D1",
+    )
+    auto = build_strategy_layer(
+        engine_a_ctx=_engine_a_ctx(),
+        timeframe="D1",
+    )
+
+    assert explicit["evaluation_style"] == "intraday"
+    assert auto["evaluation_style"] == "intraday"
+    assert explicit["evaluation_timeframe"] == "D1"
+    assert "style=intraday timeframe=D1" in render_strategy_block_for_prompt(explicit)
 
 
 def test_advisory_notice_states_read_only() -> None:

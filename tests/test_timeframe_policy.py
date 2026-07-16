@@ -362,7 +362,36 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
         "EUR/USD", "forex", "forex_majors", "swing", engine_id="engine_a"
     )
     assert eng_a_intra.structure_tf == Timeframe.H1
+    assert eng_a_intra.setup_tf == Timeframe.M30
+    assert eng_a_intra.trigger_tf == Timeframe.M15
+    assert eng_a_intra.execution_tf == Timeframe.M15
+    assert eng_a_swing.regime_tf == Timeframe.D1
+    assert eng_a_swing.bias_tf == Timeframe.D1
     assert eng_a_swing.structure_tf == Timeframe.H4
+    assert eng_a_swing.setup_tf == Timeframe.H4
+    assert eng_a_swing.trigger_tf == Timeframe.H1
+    assert eng_a_swing.execution_tf == Timeframe.H1
+    assert eng_a_swing.m5_role == M5Role.DISABLED
+
+
+def test_auto_policy_matches_shared_pair_class_routing() -> None:
+    major = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "auto", engine_id="engine_a"
+    )
+    exotic_a = resolve_timeframe_policy(
+        "USD/ZAR", "forex", "forex_exotics", "auto", engine_id="engine_a"
+    )
+    exotic_b = resolve_timeframe_policy(
+        "USD/ZAR", "forex", "forex_exotics", "auto", engine_id="engine_b"
+    )
+    equity = resolve_timeframe_policy(
+        "MSFT", "stock", "us_stock_single", "auto", engine_id="engine_a"
+    )
+
+    assert major.style == "intraday"
+    assert exotic_a.style == "swing"
+    assert exotic_b.style == "swing"
+    assert equity.style == "swing"
 
 
 def test_engine_a_payload_attachment_does_not_change_score_or_direction() -> None:

@@ -7,6 +7,7 @@ from typing import Optional, get_type_hints
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from engine_b_ai import (
+    _bind_engine_b_selected_style,
     _call_ai_with_retry,
     _is_retryable_ai_error,
     _normalise_engine_b_grade,
@@ -77,6 +78,73 @@ def test_build_engine_b_signal_message_preserves_explicit_zero_engine_a_values()
     )
 
     assert "Engine A Confluence: 0.00 / 0.0 (0%)" in message
+
+
+def test_engine_b_message_uses_selected_style_and_engine_b_policy_roles():
+    message = build_engine_b_signal_message(
+        pair="EUR/USD",
+        direction="LONG",
+        current_price=1.1,
+        structure_result={
+            "style": "intraday",
+            "structure_tf": "H1",
+            "zone_tf": "H1",
+            "setup_tf": "M30",
+            "entry_tf": "M15",
+            "atr_tf": "H1",
+        },
+        confidence_result={"score": 4.0, "max_possible": 8.0, "passed": True},
+        engine_a_ctx={"style": "swing", "type": "forex"},
+        style="intraday",
+        asset_type="forex",
+    )
+
+    assert "Resolved AI style: INTRADAY" in message
+    assert "Resolved AI style: SWING" not in message
+    assert (
+        "Engine B timeframe roles: struct=H1 zone=H1 setup=M30 "
+        "trigger=M15 execution=M15 atr=H1"
+    ) in message
+
+
+def test_engine_b_headline_is_bound_to_selected_style_rating():
+    result = _bind_engine_b_selected_style(
+        {
+            "grade": "A+",
+            "edgeProbability": 88,
+            "riskLevel": "Low",
+            "style_ratings": {
+                "intraday": {"grade": "B", "edgeProbability": 61, "riskLevel": "Medium"},
+                "swing": {"grade": "A+", "edgeProbability": 88, "riskLevel": "Low"},
+            },
+        },
+        "intraday",
+    )
+
+    assert result["resolvedStyle"] == "INTRADAY"
+    assert result["bestValidStyle"] == "INTRADAY"
+    assert result["grade"] == "B"
+    assert result["edgeProbability"] == 61
+    assert result["riskLevel"] == "Medium"
+
+
+def test_engine_b_does_not_borrow_nonselected_style_when_selected_is_missing():
+    result = _bind_engine_b_selected_style(
+        {
+            "grade": "A+",
+            "edgeProbability": 88,
+            "riskLevel": "Low",
+            "style_ratings": {
+                "swing": {"grade": "A+", "edgeProbability": 88, "riskLevel": "Low"},
+            },
+        },
+        "intraday",
+    )
+
+    assert result["resolvedStyle"] == "INTRADAY"
+    assert result["grade"] == "C"
+    assert result["edgeProbability"] == 50.0
+    assert result["riskLevel"] == "Medium"
 
 
 def test_get_engine_b_ai_verdict_api_key_annotation_is_optional():

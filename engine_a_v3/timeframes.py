@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from style_resolver import resolve_auto_style
+
 
 VALID_V3_ENTRY_TIMEFRAMES = frozenset({"H1", "H4", "D1"})
 # Diagnostic-only allowlist for entry_tf_override experiments (not production).
@@ -43,9 +45,18 @@ def resolve_v3_entry_timeframe(
     asset_type: str,
     horizon: str,
 ) -> str | None:
-    """Return the configured decision timeframe, or ``None`` if it is invalid."""
-    del asset_type
-    fallback = "H1" if str(horizon).lower() == "intraday" else "H4"
+    """Return the style-owned legacy decision timeframe.
+
+    A group may override this only inside its selected-style block. A flat
+    group ``execution_tf`` must not collapse intraday and swing onto one TF.
+    """
+    resolved_horizon = resolve_auto_style(
+        horizon,
+        {"type": asset_type},
+        score_group=score_group,
+        asset_type=asset_type,
+    )
+    fallback = "H1" if resolved_horizon == "intraday" else "H4"
     try:
         from config import CONFIG
 
@@ -53,7 +64,13 @@ def resolve_v3_entry_timeframe(
             (CONFIG.get("ENGINE_A_SCORING_PROFILE") or {}).get("BY_SCORE_GROUP")
             or {}
         )
-        raw_override = (by_group.get(score_group) or {}).get("execution_tf")
+        group_block = by_group.get(score_group) or {}
+        style_block = group_block.get(resolved_horizon) or {}
+        raw_override = (
+            style_block.get("execution_tf")
+            if isinstance(style_block, dict)
+            else None
+        )
     except Exception:
         raw_override = None
     resolved = str(raw_override or fallback).strip().upper()

@@ -9,6 +9,7 @@ from ai_context import (
     build_ai_review_packet,
     build_engine_d_context,
     derive_engine_b_score_pct,
+    resolve_ai_style,
     resolve_ai_review_min_rr,
 )
 from ai_contracts import AIReviewPacket
@@ -439,6 +440,37 @@ def test_calibration_context_uses_canonical_not_passed_fallback():
 def test_resolve_ai_review_min_rr_prefers_signal_min_rr():
     signal = {"min_rr": 1.8, "style": "intraday"}
     assert resolve_ai_review_min_rr(signal, "intraday") == 1.8
+
+
+def test_resolve_ai_style_does_not_pick_first_populated_style_level():
+    signal = {
+        "pair": "EUR/USD",
+        "type": "forex",
+        "scoreGroup": "forex_majors",
+        "style_levels": {
+            "scalp": {"sl": 1.0},
+            "intraday": {"sl": 1.0},
+            "swing": {"sl": 1.0},
+        },
+    }
+    assert resolve_ai_style(signal, "auto") == "INTRADAY"
+
+
+def test_resolve_ai_style_uses_selected_style_or_shared_auto_group():
+    signal = {
+        "pair": "USD/ZAR",
+        "type": "forex",
+        "scoreGroup": "forex_exotics",
+    }
+    assert resolve_ai_style({**signal, "style": "intraday"}, "auto") == "INTRADAY"
+    assert (
+        resolve_ai_style(
+            {**signal, "requestedStyle": "intraday", "tradeStyle": "swing"},
+            "auto",
+        )
+        == "INTRADAY"
+    )
+    assert resolve_ai_style(signal, "auto") == "SWING"
 
 
 def _read_repo_prompt(relative_path: str) -> str:

@@ -86,10 +86,11 @@ STRUCTURED SCORE OUTPUT:
 - ai_action is advisory only. ATHENA Python hard rules decide advisory_rule_trade_allowed after parsing.
 - Use blocking_reasons for data-supported blockers only: NO_STOP_LOSS, RR_BELOW_MIN (only when the relevant configured RR gate failed — RR2/style min for scale-out, not RR1 alone), DAILY_LOSS_LIMIT_HIT, HIGH_IMPACT_NEWS_NEARBY, or DATA_UNAVAILABLE.
 
-PER-STYLE RATINGS - rate ALL THREE independently using specific data:
-- SCALP: ADX > 30, clean H1 entry, vol_ratio > 1.5, RR1 vs Style min RR for scalp in config context
-- INTRADAY: H4+H1 aligned, same session, momentum confirming, RR1 vs Style min RR for intraday in config context
-- SWING: D1 EMA stack + trendCoherence > 0.8, no upcoming high-impact events, RR1 vs Style min RR for swing in config context
+PER-STYLE RATINGS:
+- The caller-selected Resolved AI style is authoritative for grade, edgeProbability, riskLevel, and selectedStyleGrade.
+- Judge that style only from its server-supplied regime/bias/structure/setup/trigger/execution roles and configured RR gates.
+- Never transpose another style's timeframe, holding-period, or RR rules onto the selected setup.
+- Non-selected style ratings are comparison-only and must never replace the selected-style headline.
 
 reviewSource: use "engine_c_marcus" when Engine source is Engine C consensus; use "engine_b_marcus" when Engine source is Engine B naked market structure; otherwise use "engine_a_marcus".
 

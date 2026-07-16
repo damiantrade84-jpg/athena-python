@@ -6,6 +6,7 @@ from typing import Any
 
 from ai_playbooks import get_engine_a_playbook, get_engine_b_playbook, render_playbook_prompt_block
 from ai_schemas import EngineAResponse, EngineBResponse, EngineCMarcusResponse
+from style_resolver import normalize_style
 
 ENGINE_A_SOURCE = "engine_a"
 ENGINE_B_SOURCE = "engine_b"
@@ -151,6 +152,42 @@ def build_marcus_playbook_block(signal: dict[str, Any]) -> str:
         if _has_engine_b_context(signal):
             playbooks.append(get_engine_b_playbook())
     return render_playbook_prompt_block(playbooks, compact=True)
+
+
+def bind_marcus_selected_style(result: dict[str, Any], style: str) -> dict[str, Any]:
+    """Make Marcus headline fields represent the caller-selected style only."""
+    selected = normalize_style(style)
+    if selected == "auto":
+        return result
+
+    ratings = result.get("style_ratings")
+    selected_row = None
+    if isinstance(ratings, dict):
+        for key, value in ratings.items():
+            if str(key).strip().lower() == selected and isinstance(value, dict):
+                selected_row = value
+                break
+
+    result["resolvedStyle"] = selected.upper()
+    result["tradeStyle"] = selected.upper()
+    result["bestValidStyle"] = selected.upper()
+    if selected_row:
+        if selected_row.get("grade") is not None:
+            result["grade"] = selected_row["grade"]
+            result["selectedStyleGrade"] = selected_row["grade"]
+        if selected_row.get("edgeProbability") is not None:
+            result["edgeProbability"] = selected_row["edgeProbability"]
+        if selected_row.get("riskLevel") is not None:
+            result["riskLevel"] = selected_row["riskLevel"]
+    elif isinstance(ratings, dict) and ratings:
+        # Never borrow a populated non-selected style's headline.
+        result["grade"] = "C"
+        result["edgeProbability"] = 50.0
+        result["riskLevel"] = "Medium"
+        result["selectedStyleGrade"] = "C"
+    else:
+        result["selectedStyleGrade"] = result.get("grade")
+    return result
 
 
 def marcus_review_source(engine_source: str) -> str:

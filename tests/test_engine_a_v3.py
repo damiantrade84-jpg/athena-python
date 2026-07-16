@@ -271,8 +271,8 @@ def test_v3_signal_serializes_resolved_entry_timeframe(tmp_path):
         registry=_registry(tmp_path, pair, "intraday"),
     )
 
-    assert getattr(signal, "entryTimeframe", None) == "H4"
-    assert signal.to_dict().get("entryTimeframe") == "H4"
+    assert getattr(signal, "entryTimeframe", None) == "H1"
+    assert signal.to_dict().get("entryTimeframe") == "H1"
 
 
 def test_demo_research_missing_promotion_artifact_keeps_trade_signal(monkeypatch, tmp_path):

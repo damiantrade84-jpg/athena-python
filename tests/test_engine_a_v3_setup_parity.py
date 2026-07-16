@@ -56,7 +56,7 @@ def _frame_bundle() -> dict[str, list[dict]]:
     }
 
 
-def test_setup_primary_tf_follows_execution_tf_override(monkeypatch):
+def test_setup_primary_tf_follows_style_not_flat_group_override(monkeypatch):
     from config import CONFIG
 
     monkeypatch.setitem(
@@ -92,8 +92,8 @@ def test_setup_primary_tf_follows_execution_tf_override(monkeypatch):
         {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex", "score_group": "forex_majors"}
     )
 
-    assert _resolve_v3_entry_tf("forex_exotics", "forex", "intraday") == "H4"
-    assert _resolve_v3_entry_tf("crypto_other", "crypto", "intraday") == "H4"
+    assert _resolve_v3_entry_tf("forex_exotics", "forex", "intraday") == "H1"
+    assert _resolve_v3_entry_tf("crypto_other", "crypto", "intraday") == "H1"
 
     primary_ex, context_ex, primary_tf_ex, context_tf_ex = _resolve_setup_candle_frames(
         exotic, "intraday", candles
@@ -104,19 +104,27 @@ def test_setup_primary_tf_follows_execution_tf_override(monkeypatch):
     primary_mj, _ctx_mj, primary_tf_mj, context_tf_mj = _resolve_setup_candle_frames(
         majors, "intraday", candles
     )
+    primary_swing, context_swing, primary_tf_swing, context_tf_swing = (
+        _resolve_setup_candle_frames(exotic, "swing", candles)
+    )
 
-    assert primary_tf_ex == "H4"
-    assert context_tf_ex == "D1"
-    assert primary_ex[-1]["tf_tag"] == "H4"
-    assert context_ex[-1]["tf_tag"] == "D1"
+    assert primary_tf_ex == "H1"
+    assert context_tf_ex == "H4"
+    assert primary_ex[-1]["tf_tag"] == "H1"
+    assert context_ex[-1]["tf_tag"] == "H4"
 
-    assert primary_tf_cr == "H4"
-    assert context_tf_cr == "D1"
-    assert primary_cr[-1]["tf_tag"] == "H4"
+    assert primary_tf_cr == "H1"
+    assert context_tf_cr == "H4"
+    assert primary_cr[-1]["tf_tag"] == "H1"
 
     assert primary_tf_mj == "H1"
     assert context_tf_mj == "H4"
     assert primary_mj[-1]["tf_tag"] == "H1"
+
+    assert primary_tf_swing == "H4"
+    assert context_tf_swing == "D1"
+    assert primary_swing[-1]["tf_tag"] == "H4"
+    assert context_swing[-1]["tf_tag"] == "D1"
 
     # detect_setup must not crash and must use the resolved frames internally.
     detect_setup(exotic, "intraday", candles)
@@ -127,8 +135,10 @@ def test_setup_primary_tf_follows_execution_tf_override(monkeypatch):
     ("score_group", "asset_type", "horizon", "expected"),
     [
         ("forex_majors", "forex", "intraday", "H1"),
-        ("forex_exotics", "forex", "intraday", "H4"),
-        ("crypto_other", "crypto", "intraday", "H4"),
+        ("forex_exotics", "forex", "intraday", "H1"),
+        ("crypto_other", "crypto", "intraday", "H1"),
+        ("forex_exotics", "forex", "swing", "H4"),
+        ("crypto_other", "crypto", "swing", "H4"),
     ],
 )
 def test_public_v3_entry_timeframe_resolver_is_group_aware(
@@ -149,7 +159,7 @@ def test_invalid_v3_entry_timeframe_override_fails_closed(monkeypatch):
     )
     by_group["forex_exotics"] = {
         **dict(by_group.get("forex_exotics") or {}),
-        "execution_tf": "M15",
+        "intraday": {"execution_tf": "M15"},
     }
     monkeypatch.setitem(
         CONFIG.setdefault("ENGINE_A_SCORING_PROFILE", {}), "BY_SCORE_GROUP", by_group
@@ -178,10 +188,10 @@ def test_invalid_v3_entry_timeframe_override_fails_closed(monkeypatch):
         ("SEI/USDT", "SEIUSDT", "crypto"),
     ],
 )
-def test_configured_h4_entry_pairs_route_to_h4(display, symbol, asset_type):
+def test_explicit_intraday_pairs_route_to_h1(display, symbol, asset_type):
     route = route_specialist({"display": display, "symbol": symbol, "type": asset_type})
     assert route.score_group in {"forex_exotics", "crypto_other"}
-    assert _resolve_v3_entry_tf(route.score_group, asset_type, "intraday") == "H4"
+    assert _resolve_v3_entry_tf(route.score_group, asset_type, "intraday") == "H1"
 
 
 def test_setup_uses_group_ema_periods_forex_vs_crypto():

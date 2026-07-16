@@ -7,6 +7,7 @@ from ai_schemas import (
     normalize_marcus_advisory_levels,
 )
 from marcus_review import (
+    bind_marcus_selected_style,
     marcus_response_model,
     marcus_review_source,
     marcus_structured_required_keys,
@@ -79,3 +80,45 @@ def test_engine_b_coerces_numeric_advisory_levels():
     validated = EngineBResponse.model_validate(payload)
     assert validated.suggestedSL == "161.33921043846448"
     assert validated.suggestedTP == "163.12"
+
+
+def test_marcus_headline_is_bound_to_caller_selected_style():
+    result = bind_marcus_selected_style(
+        {
+            "grade": "A+",
+            "edgeProbability": 82,
+            "riskLevel": "Low",
+            "style_ratings": {
+                "intraday": {"grade": "B", "edgeProbability": 59, "riskLevel": "Medium"},
+                "swing": {"grade": "A+", "edgeProbability": 82, "riskLevel": "Low"},
+            },
+        },
+        "intraday",
+    )
+
+    assert result["resolvedStyle"] == "INTRADAY"
+    assert result["tradeStyle"] == "INTRADAY"
+    assert result["selectedStyleGrade"] == "B"
+    assert result["grade"] == "B"
+    assert result["edgeProbability"] == 59
+    assert result["riskLevel"] == "Medium"
+
+
+def test_marcus_does_not_borrow_nonselected_style_when_selected_is_missing():
+    result = bind_marcus_selected_style(
+        {
+            "grade": "A+",
+            "edgeProbability": 82,
+            "riskLevel": "Low",
+            "style_ratings": {
+                "swing": {"grade": "A+", "edgeProbability": 82, "riskLevel": "Low"},
+            },
+        },
+        "intraday",
+    )
+
+    assert result["resolvedStyle"] == "INTRADAY"
+    assert result["selectedStyleGrade"] == "C"
+    assert result["grade"] == "C"
+    assert result["edgeProbability"] == 50.0
+    assert result["riskLevel"] == "Medium"

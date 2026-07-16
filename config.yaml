@@ -1060,12 +1060,6 @@ ENGINE_A_SCORING_PROFILE:
       trend_weights: { d1_ema_trend: 0.20, h4_ema_trend: 0.45, ema_trend: 0.35 }
       momentum_tf: H4
       regime_tf: H4
-    forex_exotics:
-      execution_tf: H4
-      chart_tf: H4
-    crypto_other:
-      execution_tf: H4
-      chart_tf: H4
     # Restores stock/index D1 weight to 0.40 (vs 0.50 profile default).
     # INDICATOR_WEIGHTS.trend had these values but was silently bypassed by
     # SCORING_PROFILE: ENABLED: true. Explicitly set here to preserve intent.

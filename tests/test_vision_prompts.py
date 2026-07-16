@@ -1,5 +1,6 @@
 from vision_prompts import (
     build_dual_prompt,
+    build_policy_prompt,
     build_single_prompt,
     build_system_prompt,
     build_triple_prompt,
@@ -79,3 +80,21 @@ def test_triple_prompt_uses_h1_authoritative_right_edge():
     assert "End with exactly these 8 lines" in prompt
     assert "REQUEST_METADATA: symbol=XAU/USD" in prompt
     assert "REQUEST_METADATA: chart_frames=D1+H4+H1" in prompt
+
+
+def test_policy_prompt_labels_selected_style_and_authoritative_tf():
+    prompt = build_policy_prompt(
+        symbol="EUR/USD",
+        direction_str="LONG",
+        algo_context="TIMEFRAME POLICY: setup=M30",
+        asset_type="forex",
+        frames=["D1", "H4", "H1", "M30"],
+        authority_tf="M30",
+        selected_style="intraday",
+    )
+
+    assert "IMAGE 4 = M30" in prompt
+    assert "REQUEST_METADATA: primary_chart_tf=M30" in prompt
+    assert "REQUEST_METADATA: selected_style=INTRADAY" in prompt
+    assert "M30 is the authoritative RIGHT EDGE chart" in prompt
+    assert "Non-selected style ratings are comparison-only" in prompt

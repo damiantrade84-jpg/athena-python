@@ -134,8 +134,8 @@ def _costs() -> dict[str, float]:
     ("pair", "expected_timeframe"),
     [
         (_pair("forex_majors", display="EUR/USD", symbol="EURUSD", asset_type="forex"), "H1"),
-        (_pair("forex_exotics", display="USD/MXN", symbol="USDMXN", asset_type="forex"), "H4"),
-        (_pair("crypto_other", display="AAVE/USDT", symbol="AAVEUSDT", asset_type="crypto"), "H4"),
+        (_pair("forex_exotics", display="USD/MXN", symbol="USDMXN", asset_type="forex"), "H1"),
+        (_pair("crypto_other", display="AAVE/USDT", symbol="AAVEUSDT", asset_type="crypto"), "H1"),
     ],
 )
 def test_v3_backtest_uses_resolved_entry_timeframe(monkeypatch, pair, expected_timeframe):

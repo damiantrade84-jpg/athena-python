@@ -25,6 +25,7 @@ from athena_ai.strategy_playbook_loader import (
     get_enabled_playbooks,
     loaded_playbook_ids,
 )
+from style_resolver import normalize_style, resolve_auto_style
 
 _DEFAULT_OHLCV_LIMIT = 80
 _VISION_TODO = (
@@ -99,6 +100,7 @@ def build_strategy_layer(
     asset_group: str | None = None,
     symbol: str | None = None,
     timeframe: str | None = None,
+    style: str | None = None,
     ohlcv_limit: int = _DEFAULT_OHLCV_LIMIT,
     playbook_path: str | None = None,
 ) -> dict[str, Any]:
@@ -114,6 +116,36 @@ def build_strategy_layer(
         or (engine_a_ctx or {}).get("bias")
     )
     resolved_asset_group = asset_group or (engine_a_ctx or {}).get("asset_group")
+    resolved_style = normalize_style(
+        style
+        or (engine_a_ctx or {}).get("analyze_style")
+        or (engine_a_ctx or {}).get("scoring_style")
+        or (engine_a_ctx or {}).get("style")
+        or (engine_a_ctx or {}).get("horizon")
+        or (engine_b_summary or {}).get("style")
+    )
+    if resolved_style == "auto":
+        score_group = (
+            (engine_a_ctx or {}).get("scoreGroup")
+            or (engine_a_ctx or {}).get("score_group")
+            or (engine_a_ctx or {}).get("asset_group")
+            or (engine_b_summary or {}).get("scoreGroup")
+            or (engine_b_summary or {}).get("score_group")
+        )
+        asset_type = (
+            (engine_a_ctx or {}).get("type")
+            or (engine_a_ctx or {}).get("asset_type")
+            or (engine_a_ctx or {}).get("asset_class")
+            or (engine_b_summary or {}).get("type")
+            or (engine_b_summary or {}).get("asset_type")
+            or resolved_asset_group
+        )
+        resolved_style = resolve_auto_style(
+            "auto",
+            {"type": asset_type},
+            score_group=str(score_group) if score_group else None,
+            asset_type=str(asset_type) if asset_type else None,
+        )
 
     bounded_bars = _bounded_ohlcv(ohlcv_window, ohlcv_limit)
 
@@ -148,6 +180,7 @@ def build_strategy_layer(
         asset_group=str(resolved_asset_group) if resolved_asset_group else None,
         symbol=symbol,
         timeframe=timeframe,
+        style=resolved_style,
         direction=str(resolved_direction) if resolved_direction else None,
         playbook_path=playbook_path,
     )
@@ -179,6 +212,8 @@ def build_strategy_layer(
         "rejected_models": classification.get("rejected_models", []),
         "classification_warnings": classification.get("classification_warnings", []),
         "engines_considered": classification.get("engines_considered", []),
+        "evaluation_style": classification.get("evaluation_style"),
+        "evaluation_timeframe": classification.get("evaluation_timeframe"),
         "raw_ohlcv_window": {
             "bars": bounded_bars,
             "bar_count": len(bounded_bars),
@@ -212,6 +247,11 @@ def render_strategy_block_for_prompt(strategy_layer: dict[str, Any]) -> str:
         "The deterministic classifier has produced an OPINION. You MAY override "
         "it but must explain WHY in plain_english_reason and set "
         "classifier_agreement accordingly."
+    )
+    lines.append(
+        "Evaluate playbooks for selected style/timeframe only: "
+        f"style={strategy_layer.get('evaluation_style') or 'unresolved'} "
+        f"timeframe={strategy_layer.get('evaluation_timeframe') or 'unresolved'}."
     )
     lines.append("")
     lines.append("Candidate playbooks (ranked):")

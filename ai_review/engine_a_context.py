@@ -9,6 +9,7 @@ from typing import Any, Callable
 from ai_review.engine_snapshots import extract_engine_snapshots
 from market_structure import build_engine_b_profile_vp_context, sanitize_engine_b_structure_profile_fields
 from scoring import get_pair_score_group
+from style_resolver import normalize_style, resolve_auto_style
 
 
 def _to_float(value: Any) -> float | None:
@@ -704,33 +705,37 @@ def resolve_chart_review_analyze_style(
     screenshot_meta: dict[str, Any] | None,
     pair: dict[str, Any] | None,
 ) -> str:
-    """Map chart timeframe (or explicit meta) to analyze_pair style."""
+    """Resolve review style without treating the visible chart TF as trade style."""
     meta = screenshot_meta or {}
-    explicit = str(meta.get("analyze_style") or "").strip().lower()
-    if explicit in ("scalp", "intraday", "swing"):
-        return explicit
+    for key in (
+        "analyze_style",
+        "signal_style",
+        "scoring_style",
+        "resolvedStyle",
+        "style",
+        "requestedStyle",
+        "horizon",
+        "tradeStyle",
+    ):
+        explicit = normalize_style(meta.get(key))
+        if explicit != "auto":
+            return explicit
 
-    signal_style = str(meta.get("signal_style") or meta.get("scoring_style") or "").strip().lower()
-    if signal_style in ("scalp", "intraday", "swing"):
-        return signal_style
-
-    raw_tf = str(meta.get("chart_timeframe") or timeframe or "").strip()
-    tf_upper = raw_tf.upper()
-    if tf_upper in ("M1", "M2", "M3", "M5", "M15"):
-        return "scalp"
-    if tf_upper in ("M30", "H1", "H2", "H3", "H4"):
-        return "intraday"
-    if tf_upper in ("D1", "D2", "W1", "MN", "MONTHLY"):
-        return "swing"
-
-    lowered = raw_tf.lower()
-    if lowered in ("scalp", "intraday", "swing"):
-        return lowered
-
-    ptype = str((pair or {}).get("type") or "").lower()
-    if ptype in ("crypto", "forex"):
-        return "intraday"
-    return "swing"
+    pair_data = pair or {}
+    score_group = pair_data.get("scoreGroup") or pair_data.get("score_group")
+    if not score_group and any(
+        pair_data.get(key) for key in ("symbol", "display", "pair")
+    ):
+        try:
+            score_group = get_pair_score_group(pair_data)
+        except Exception:
+            score_group = None
+    return resolve_auto_style(
+        "auto",
+        pair_data,
+        score_group=score_group,
+        asset_type=pair_data.get("type") or pair_data.get("asset_type"),
+    )
 
 
 def _merge_factor_diagnostics(
@@ -1129,12 +1134,7 @@ def _review_style_diagnostic(
     screenshot_meta: dict[str, Any] | None,
     timeframe: str,
 ) -> dict[str, Any]:
-    """Surface how the review re-scored Engine A vs the candidate's own style.
-
-    Advisory only: the review re-runs Engine A in the analyze_style derived from
-    the chart timeframe, which can differ from the style that produced the scan
-    candidate. This records the difference; it never changes scoring.
-    """
+    """Surface whether review scoring stayed on the candidate-selected style."""
     meta = screenshot_meta or {}
     candidate_style = (
         str(meta.get("signal_style") or meta.get("scoring_style") or "").strip().lower()
@@ -1152,8 +1152,8 @@ def _review_style_diagnostic(
             None
             if matches
             else (
-                "Engine A re-scored in the chart timeframe's style "
-                f"('{style}'); candidate's original style was '{candidate_style}'."
+                f"Engine A review style '{style}' differs from the candidate's "
+                f"selected style '{candidate_style}'."
             )
         ),
     }

@@ -3520,10 +3520,8 @@ from vision_hybrid import (  # noqa: E402
     train_hybrid_model as _train_hybrid_model,
 )
 from vision_prompts import (  # noqa: E402
-    build_dual_prompt,
-    build_single_prompt,
+    build_policy_prompt,
     build_system_prompt,
-    build_triple_prompt,
 )
 
 
@@ -3591,27 +3589,21 @@ def _normalize_style(style: str | None) -> str:
 
 
 def resolve_auto_style(requested_style: str, pair: dict | None) -> str:
-    """Resolve auto style by asset class.
+    """Resolve Auto through the shared pair-aware Engine A/B policy."""
+    from style_resolver import resolve_auto_style as _resolve_shared_auto_style
 
-    Keeps scan/backtest style routing local to athena.py to avoid runtime
-    dependency on optional helper modules.
-    """
-    requested = str(requested_style or "auto").lower()
-    if requested != "auto":
-        return requested
-
-    ptype = str((pair or {}).get("type") or "").lower()
+    score_group = None
     try:
         from scoring import get_pair_score_group
 
         score_group = get_pair_score_group(pair or {})
-        if score_group in ("forex_exotics", "crypto_other"):
-            return "swing"
     except Exception:
-        pass
-    if ptype in ("crypto", "forex"):
-        return "intraday"
-    return "swing"
+        score_group = None
+    return _resolve_shared_auto_style(
+        requested_style,
+        pair,
+        score_group=score_group,
+    )
 
 
 def _resolve_scan_style(requested_style: str, pair: dict) -> str:
@@ -3708,10 +3700,11 @@ STRUCTURED SCORE OUTPUT:
 - ai_action is advisory only. ATHENA Python hard rules decide advisory_rule_trade_allowed after parsing.
 - Use blocking_reasons for data-supported blockers only: NO_STOP_LOSS, RR_BELOW_MIN (only when RR1 is below Style min RR config), DAILY_LOSS_LIMIT_HIT, HIGH_IMPACT_NEWS_NEARBY, or DATA_UNAVAILABLE.
 
-PER-STYLE RATINGS - rate ALL THREE independently using specific data:
-- SCALP: ADX > 30, clean H1 entry, vol_ratio > 1.5, RR1 vs Style min RR for scalp in config context
-- INTRADAY: H4+H1 aligned, same session, momentum confirming, RR1 vs Style min RR for intraday in config context
-- SWING: D1 EMA stack + trendCoherence > 0.8, no upcoming high-impact events, RR1 vs Style min RR for swing in config context
+PER-STYLE RATINGS:
+- The caller-selected Resolved AI style is authoritative for grade, edgeProbability, riskLevel, and selectedStyleGrade.
+- Judge that style only from its server-supplied regime/bias/structure/setup/trigger/execution roles and configured RR gates.
+- Never transpose another style's timeframe, holding-period, or RR rules onto the selected setup.
+- Non-selected style ratings are comparison-only and must never replace the selected-style headline.
 
 reviewSource: use "engine_c_marcus" when Engine source is Engine C consensus; use "engine_b_marcus" when Engine source is Engine B naked market structure; otherwise use "engine_a_marcus".
 
@@ -5724,19 +5717,14 @@ def run_ai(
         _temp = float(AITemperatureConfig.get_temperature("marcus"))
 
         style_labels = {
-            "scalp": "SCALP - focus on H1 exhaustion, tight 1.5R, quick execution",
-            "intraday": "INTRADAY - H4+H1 alignment, same-session execution, 2-3R",
-            "swing": "SWING - D1 trend dominance, EMA200 slope, 4-6R multi-day hold",
+            "scalp": "SCALP - use the supplied scalp policy roles and configured risk gates",
+            "intraday": "INTRADAY - use the supplied intraday policy roles and configured risk gates",
+            "swing": "SWING - use the supplied swing policy roles and configured risk gates",
         }
 
-        if style_pref == "auto":
-            _sc = signal.get("confluenceScore", 0)
-            _max = signal.get("maxScore", 3.0) or 3.0
-            _pct = (_sc / _max * 100) if _max > 0 else 0
+        from ai_context import resolve_ai_style
 
-            style_pref = (
-                "swing" if _pct >= 75 else "intraday" if _pct >= 50 else "scalp"
-            )
+        style_pref = resolve_ai_style(signal, style_pref).lower()
         _prompt_started = time.monotonic()
         msg = _build_signal_message(
             signal,
@@ -5748,6 +5736,7 @@ def run_ai(
             learning_ctx=learning_ctx,
         )
         from marcus_review import (
+            bind_marcus_selected_style,
             build_marcus_playbook_block,
             build_marcus_system_prompt,
             marcus_legacy_required_keys,
@@ -5940,6 +5929,7 @@ def run_ai(
             result.setdefault("provider_failure", _ai_runtime.get("provider_failure"))
 
         result.setdefault("reviewSource", _marcus_review_source)
+        bind_marcus_selected_style(result, style_pref)
 
         try:
             from ai_schemas import (
@@ -7081,7 +7071,14 @@ def _naked_scan_style_profile(
 ) -> tuple[str, dict]:
     resolved = _normalize_style(style)
     if resolved == "auto":
-        resolved = "intraday"  # Engine B walks H4 bars - intraday is the natural default
+        from style_resolver import resolve_auto_style as _resolve_shared_auto_style
+
+        resolved = _resolve_shared_auto_style(
+            "auto",
+            {"type": asset_type or "forex"},
+            score_group=score_group,
+            asset_type=asset_type or "forex",
+        )
     # TFs come from market_structure.resolve_engine_b_tfs (single source of truth).
     # asset_type defaults to "forex" when caller omits it; this matches legacy behaviour
     # for tests / callers that don't supply pair context.
@@ -7163,6 +7160,9 @@ def _naked_scan_style_profile(
     }.get(resolved, _tf_scalp)
     resolved_profile.update(
         {
+            "regime_tf": _selected_tfs["regime"],
+            "bias_tf": _selected_tfs["bias"],
+            "structure_tf": _selected_tfs["struct"],
             "zone_tf": _selected_tfs["zone"],
             "setup_tf": _selected_tfs["setup"],
             "entry_tf": _selected_tfs["trigger"],
@@ -7687,6 +7687,17 @@ def _compute_naked_analysis(
         res["direction"] = direction
         res["direction_source"] = _direction_source
         res["style"] = resolved_style
+        res["regime_tf"] = style_profile.get("regime_tf")
+        res["bias_tf"] = style_profile.get("bias_tf")
+        res["structure_tf"] = style_profile.get("structure_tf")
+        res["zone_tf"] = style_profile.get("zone_tf")
+        res["setup_tf"] = style_profile.get("setup_tf")
+        res["entry_tf"] = style_profile.get("entry_tf")
+        res["execution_tf"] = style_profile.get("execution_tf")
+        res["atr_tf"] = style_profile.get("atr_tf")
+        res["timeframe_policy_version"] = style_profile.get(
+            "timeframe_policy_version"
+        )
         res["regime"] = regime_label
         res["is_forming"] = is_forming_b
         res["atr_source"] = atr_source
@@ -7795,6 +7806,7 @@ def _compute_naked_analysis(
                         news_ctx=_news_ctx,
                         freshness_ctx=engine_a_ctx if isinstance(engine_a_ctx, dict) else None,
                         asset_type=pair_obj.get("type"),
+                        style=resolved_style,
                     )
                     if "error" not in ai_verdict:
                         res["ai_analysis"] = _enrich_engine_b_ai_payload(ai_verdict)
@@ -12523,6 +12535,7 @@ def api_chart_analysis():
         except (TypeError, ValueError):
             return None
 
+    _primary_tf = str(tf or "H4").strip().upper()
     if not data.get("image") and bool(data.get("server_render")) and data.get("candles"):
         try:
             from chart_renderer import render_chart_image
@@ -12539,7 +12552,7 @@ def api_chart_analysis():
                 show_pattern_labels=bool(data.get("show_pattern_labels", True)),
                 pattern_lookback=int(data.get("pattern_lookback") or 10),
             )
-            if data.get("candles_d1"):
+            if data.get("candles_d1") and _primary_tf != "D1":
                 data["image_d1"] = render_chart_image(
                     candles=data.get("candles_d1") or [],
                     title=f"{symbol or 'UNKNOWN'} D1",
@@ -12549,7 +12562,17 @@ def api_chart_analysis():
                     show_pattern_labels=bool(data.get("show_pattern_labels", True)),
                     pattern_lookback=int(data.get("pattern_lookback") or 10),
                 )
-            if data.get("candles_h1"):
+            if data.get("candles_h4") and _primary_tf != "H4":
+                data["image_h4"] = render_chart_image(
+                    candles=data.get("candles_h4") or [],
+                    title=f"{symbol or 'UNKNOWN'} H4",
+                    engine_b=data.get("engineB") if isinstance(data.get("engineB"), dict) else None,
+                    bars_window=int(data.get("bars_window") or 80),
+                    dpi=int(data.get("dpi") or 200),
+                    show_pattern_labels=bool(data.get("show_pattern_labels", True)),
+                    pattern_lookback=int(data.get("pattern_lookback") or 10),
+                )
+            if data.get("candles_h1") and _primary_tf != "H1":
                 data["image_h1"] = render_chart_image(
                     candles=data.get("candles_h1") or [],
                     title=f"{symbol or 'UNKNOWN'} H1",
@@ -12609,7 +12632,25 @@ def api_chart_analysis():
                 sig = s
                 break
 
-    if sig:
+    from style_resolver import resolve_auto_style as _resolve_shared_auto_style
+
+    _sig_dict = sig if isinstance(sig, dict) else {}
+    sig = _sig_dict
+    _selected_style = _resolve_shared_auto_style(
+        data.get("resolvedStyle")
+        or _sig_dict.get("style")
+        or _sig_dict.get("horizon")
+        or _sig_dict.get("requestedStyle")
+        or _sig_dict.get("requested_style")
+        or _sig_dict.get("tradeStyle")
+        or "auto",
+        _sig_dict or pair,
+        score_group=_sig_dict.get("scoreGroup") or _sig_dict.get("score_group"),
+        asset_type=_sig_dict.get("type") or (pair or {}).get("type"),
+    )
+    data["resolvedStyle"] = _selected_style
+
+    if _sig_dict:
         _regime_raw = sig.get("regime", {})
         _regime_label = (
             _regime_raw.get("label", "UNKNOWN")
@@ -12620,7 +12661,13 @@ def api_chart_analysis():
             f"ENGINE A: direction={sig.get('direction')}, "
             f"score={sig.get('confluenceScore')}/{sig.get('maxScore', 3.0)}, "
             f"regime={_regime_label}, "
-            f"style={sig.get('tradeStyle', 'swing')}"
+            f"style={_selected_style}"
+        )
+        context_parts.append(
+            "TIMEFRAME POLICY: "
+            f"regime={sig.get('regimeTf')}, bias={sig.get('biasTf')}, "
+            f"structure={sig.get('structureTf')}, setup={sig.get('setupTf') or sig.get('entryTimeframe')}, "
+            f"trigger={sig.get('triggerTf')}, execution={sig.get('executionTf')}"
         )
         context_parts.append(
             f"LEVELS: entry={sig.get('price')}, sl={sig.get('sl')}, "
@@ -12891,18 +12938,15 @@ def api_chart_analysis():
                 out["style_ratings"][style.lower()] = val
 
         if out["style_ratings"]:
-            vals = set(out["style_ratings"].values())
-            supportive = {"STRONG", "MODERATE"}
-            negative = {"CONTRADICTS", "AVOID"}
-
-            if (vals & supportive) and (vals & negative):
-                out["rating"] = "MODERATE"
-                out["confirms_direction"] = False
+            selected_rating = out["style_ratings"].get(_selected_style)
+            if selected_rating:
+                out["rating"] = selected_rating
+                if selected_rating in {"CONTRADICTS", "AVOID"}:
+                    out["confirms_direction"] = False
             else:
-                for label in ("CONTRADICTS", "AVOID", "STRONG", "MODERATE", "WEAK"):
-                    if label in vals:
-                        out["rating"] = label
-                        break
+                # Other styles cannot stand in for missing selected-style evidence.
+                out["rating"] = "AVOID"
+                out["confirms_direction"] = False
 
         if not out["rating"]:
             for label in ("CONTRADICTS", "AVOID", "WEAK", "MODERATE", "STRONG"):
@@ -13028,30 +13072,18 @@ def api_chart_analysis():
             # Fail closed: missing footer ratings must not default to confirm-tier MODERATE
             out["rating"] = "AVOID"
 
-        _res_style = str(data.get("resolvedStyle") or (sig or {}).get("tradeStyle") or "swing").lower()
+        _res_style = _selected_style
         if _res_style in out["style_ratings"]:
             out["selectedStyleGrade"] = out["style_ratings"][_res_style]
         elif out["style_ratings"]:
-            _hierarchy = ["STRONG", "MODERATE", "WEAK", "AVOID", "CONTRADICTS"]
-            _best = "WEAK"
-            for _h in _hierarchy:
-                if _h in out["style_ratings"].values():
-                    _best = _h
-                    break
-            out["selectedStyleGrade"] = _best
+            # Never borrow another style's rating when the selected style is
+            # missing. Missing selected-style evidence is fail-closed.
+            out["selectedStyleGrade"] = "AVOID"
         else:
             out["selectedStyleGrade"] = out["rating"]
 
         return out
 
-
-    user_prompt = build_single_prompt(
-        symbol=symbol,
-        tf=tf,
-        direction_str=direction_str,
-        algo_context=algo_context,
-        asset_type=asset_type,
-    )
 
     try:
         _ai_runtime = resolve_ai_review_runtime(CONFIG)
@@ -13075,59 +13107,60 @@ def api_chart_analysis():
             f"model={get_ai_model(CONFIG, 'VISION_MODEL', 'grok-4.5', provider=_active_provider)}"
         )
 
-        img_h4 = str(data["image"])
-        if img_h4.startswith("data:"):
-            img_h4 = img_h4.split(",", 1)[1]
+        def _vision_image_payload(value):
+            if not isinstance(value, str) or not value:
+                return None
+            return value.split(",", 1)[1] if value.startswith("data:") else value
 
-        img_d1 = data.get("image_d1")
-        if isinstance(img_d1, str) and img_d1.startswith("data:"):
-            img_d1 = img_d1.split(",", 1)[1]
+        img_primary = _vision_image_payload(str(data["image"]))
+        _frame_images = {
+            "D1": _vision_image_payload(data.get("image_d1")),
+            "H4": _vision_image_payload(data.get("image_h4")),
+            "H1": _vision_image_payload(data.get("image_h1")),
+        }
+        _frame_images[_primary_tf] = img_primary
+        _ordered_tfs = []
+        for _frame_tf in ("D1", "H4", "H1", _primary_tf):
+            if _frame_tf not in _ordered_tfs and _frame_images.get(_frame_tf):
+                _ordered_tfs.append(_frame_tf)
 
-        img_h1 = data.get("image_h1")
-        if isinstance(img_h1, str) and img_h1.startswith("data:"):
-            img_h1 = img_h1.split(",", 1)[1]
-
-        dual_mode = bool(img_d1)
-        triple_mode = bool(img_d1 and img_h1)
-
-        if triple_mode:
-            triple_prompt = build_triple_prompt(
-                symbol=symbol,
-                direction_str=direction_str,
-                algo_context=algo_context,
-                asset_type=asset_type,
+        img_d1 = _frame_images.get("D1")
+        img_h4_context = _frame_images.get("H4")
+        img_h1 = _frame_images.get("H1")
+        dual_mode = len(_ordered_tfs) == 2
+        triple_mode = len(_ordered_tfs) >= 3
+        _policy_prompt = build_policy_prompt(
+            symbol=symbol,
+            direction_str=direction_str,
+            algo_context=algo_context,
+            asset_type=asset_type,
+            frames=_ordered_tfs,
+            authority_tf=_primary_tf,
+            selected_style=_selected_style,
+        )
+        content = []
+        for _image_index, _frame_tf in enumerate(_ordered_tfs, start=1):
+            content.extend(
+                [
+                    {"type": "text", "text": f"IMAGE {_image_index} - {_frame_tf} CHART:"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": _frame_images[_frame_tf],
+                        },
+                    },
+                ]
             )
-            content = [
-                {"type": "text", "text": "IMAGE 1 - D1 DAILY BIAS CHART:"},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_d1}},
-                {"type": "text", "text": "IMAGE 2 - H4 INTERMEDIATE CHART:"},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_h4}},
-                {"type": "text", "text": "IMAGE 3 - H1 ENTRY TIMING CHART:"},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_h1}},
-                {"type": "text", "text": triple_prompt},
-            ]
-            log.info(f"[AI CHART] Triple-screen D1+H4+H1 analysis for {symbol}")
-        elif dual_mode:
-            dual_prompt = build_dual_prompt(
-                symbol=symbol,
-                direction_str=direction_str,
-                algo_context=algo_context,
-                asset_type=asset_type,
-            )
-            content = [
-                {"type": "text", "text": "IMAGE 1 - D1 DAILY BIAS CHART:"},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_d1}},
-                {"type": "text", "text": "IMAGE 2 - H4 ENTRY CHART:"},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_h4}},
-                {"type": "text", "text": dual_prompt},
-            ]
-            log.info(f"[AI CHART] Dual-TF D1+H4 analysis for {symbol}")
-        else:
-            content = [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_h4}},
-                {"type": "text", "text": user_prompt},
-            ]
-            log.info(f"[AI CHART] Single-TF {tf} analysis for {symbol}")
+        content.append({"type": "text", "text": _policy_prompt})
+        log.info(
+            "[AI CHART] Policy-labelled %s analysis for %s; authority=%s style=%s",
+            "+".join(_ordered_tfs),
+            symbol,
+            _primary_tf,
+            _selected_style,
+        )
 
         import base64 as _b64_vision
 
@@ -13135,7 +13168,7 @@ def api_chart_analysis():
         try:
             from ai_review_logger import store_vision_image
 
-            _raw_b64 = str(img_h4).strip()
+            _raw_b64 = str(img_primary).strip()
             if _raw_b64.startswith("data:"):
                 _raw_b64 = _raw_b64.split(",", 1)[1]
             _pad_v = (-len(_raw_b64)) % 4
@@ -13155,8 +13188,8 @@ def api_chart_analysis():
             log.debug("[AI CHART] vision image retention skipped: %s", _vs_err)
 
         # Vision body was trimmed to A-H framework + 8-line structured footer (audit fix).
-        # Token budgets cut accordingly: triple 1100->450, dual/single 800->350.
-        _vision_default_max = 450 if triple_mode else 350
+        # Token budgets cut accordingly: multi-image 450, single-image 350.
+        _vision_default_max = 450 if len(_ordered_tfs) > 1 else 350
         _max_tokens = int(CONFIG.get("VISION_MAX_TOKENS", _vision_default_max) or _vision_default_max)
         _vision_model = get_ai_model(
             CONFIG,
@@ -13201,7 +13234,7 @@ def api_chart_analysis():
         try:
             from vision_trade_read import parse_vision_trade_read
 
-            _vision_authoritative_tf = "H1" if triple_mode else ("H4" if dual_mode else tf)
+            _vision_authoritative_tf = _primary_tf
             structured_trade_read = parse_vision_trade_read(
                 analysis,
                 structured=structured,
@@ -13224,8 +13257,8 @@ def api_chart_analysis():
 
         try:
             if bool(CONFIG.get("CHART_VISION_DATASET_ENABLED", True)):
-                authoritative_tf = "H1" if triple_mode else ("H4" if dual_mode else tf)
-                authoritative_image = img_h1 if triple_mode and img_h1 else img_h4
+                authoritative_tf = _primary_tf
+                authoritative_image = img_primary
                 sample = _create_vision_sample(
                     _AUDIT_DB,
                     {
@@ -13322,7 +13355,7 @@ def api_chart_analysis():
         except Exception as _vision_log_err:
             log.debug(f"[AI CHART] vision sample/prediction log skipped: {_vision_log_err}")
 
-        _tf_label = "D1+H4+H1" if triple_mode else ("D1+H4" if dual_mode else tf)
+        _tf_label = "+".join(_ordered_tfs)
         _vision_payload = {
             "analysis": analysis,
             "structured": structured,
@@ -13332,6 +13365,7 @@ def api_chart_analysis():
             "fallbackUsed": bool(_ai_runtime.get("fallbackUsed")),
             "symbol": symbol,
             "tf": _tf_label,
+            "resolvedStyle": _selected_style,
         }
         if _ai_runtime.get("providerFailure"):
             _vision_payload["providerFailure"] = _ai_runtime.get("providerFailure")
@@ -13411,6 +13445,7 @@ def api_chart_analysis():
             "fallbackUsed": bool(_ai_runtime.get("fallbackUsed")),
             "symbol": symbol,
             "tf": _tf_label,
+            "resolvedStyle": _selected_style,
             "dual_tf": dual_mode,
             "triple_tf": triple_mode,
         }
@@ -13418,8 +13453,10 @@ def api_chart_analysis():
             _response_payload["providerFailure"] = _ai_runtime.get("providerFailure")
             _response_payload["provider_failure"] = _ai_runtime.get("provider_failure")
         # Return the rendered chart image so the UI can display what the AI analyzed
-        if img_h4:
-            _response_payload["chart_image"] = img_h4
+        if img_primary:
+            _response_payload["chart_image"] = img_primary
+        if img_h4_context:
+            _response_payload["chart_image_h4"] = img_h4_context
         if img_h1:
             _response_payload["chart_image_h1"] = img_h1
         if img_d1:

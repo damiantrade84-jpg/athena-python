@@ -18,6 +18,8 @@ import statistics
 from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from style_resolver import resolve_auto_style
+
 
 POLICY_VERSION = "timeframe_policy.v3"
 
@@ -687,8 +689,6 @@ def _normalize_policy_identity(engine_id: str, style: str) -> tuple[str, str]:
         engine = "engine_b"
     elif engine in {"d", "scalp", "engined"}:
         engine = "engine_d"
-    if normalized_style == "auto":
-        normalized_style = "intraday"
     return engine, normalized_style
 
 
@@ -771,14 +771,20 @@ def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
             m5_role=M5Role.EXECUTION,
             baseline_speed=base.baseline_speed,
         )
-    # Engine A retains the symbol profile for intraday.  Its swing path uses the
-    # documented D1/H4/H1 hierarchy without changing either engine's score.
+    # Engine A retains the symbol profile for intraday. Its swing path uses the
+    # documented D1/H4/H1 hierarchy for both scoring and execution roles.
     if engine_id == "engine_a" and style == "swing":
         return replace(
             base,
             profile=f"ENGINE_A_SWING_{base.profile}",
             bias=Timeframe.D1,
             structure=Timeframe.H4,
+            setup=Timeframe.H4,
+            trigger=Timeframe.H1,
+            execution=Timeframe.H1,
+            m5_role=M5Role.DISABLED,
+            m15_confirmation_required_for_m5=False,
+            allow_dynamic_m5_execution=False,
         )
     return base
 
@@ -800,6 +806,12 @@ def resolve_timeframe_policy(
     group = str(score_group or "").strip().lower() or None
     authoritative = str(authoritative_group or "").strip().lower() or None
     resolved_engine, resolved_style = _normalize_policy_identity(engine_id, style)
+    resolved_style = resolve_auto_style(
+        resolved_style,
+        {"type": asset},
+        score_group=group,
+        asset_type=asset,
+    )
     messages: list[str] = []
 
     config_conflict = bool(authoritative and group != authoritative)

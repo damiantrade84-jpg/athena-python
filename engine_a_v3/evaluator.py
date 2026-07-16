@@ -29,6 +29,7 @@ from engine_a_v3.timeframes import (
     resolve_diagnostic_v3_entry_timeframe,
     resolve_v3_entry_timeframe,
 )
+from style_resolver import resolve_auto_style
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -189,8 +190,6 @@ def _horizon(value: str | None) -> str | None:
     normalized = str(value or "").lower()
     if normalized in {"intraday", "swing"}:
         return normalized
-    if normalized == "auto":
-        return "swing"
     return None
 
 
@@ -204,10 +203,8 @@ def _expiry(decision_time: datetime, horizon: str, primary_tf: str = "H1") -> da
 
     Intraday validity must cover at least two primary bars: decision_time is the
     open of the last CONFIRMED bar, so a window shorter than 2x the primary TF
-    expires at (or before) evaluation time. Groups whose intraday entry TF is
-    overridden to H4 (ENGINE_A_SCORING_PROFILE.BY_SCORE_GROUP.execution_tf) were
-    born expired under the flat 4h window and could never pass
-    verify_refreshed_signal. Default H1 groups keep the historical 4h window.
+    expires at (or before) evaluation time. Default H1 groups keep the historical
+    4h window; valid style-nested H4 overrides receive an 8h window.
     """
     if horizon == "intraday":
         tf_hours = {"H1": 1, "H4": 4, "D1": 24}.get(str(primary_tf or "").upper(), 1)
@@ -312,7 +309,15 @@ def evaluate_engine_a_v3(
     candle_validation_index: BacktestCandleValidationIndex | None = None,
 ) -> EngineASetupSignal:
     route = route_specialist(pair)
-    normalized_horizon = _horizon(horizon)
+    asset_type = str(pair.get("type") or pair.get("asset_type") or "other")
+    normalized_horizon = _horizon(
+        resolve_auto_style(
+            horizon,
+            pair,
+            score_group=route.score_group,
+            asset_type=asset_type,
+        )
+    )
     diagnostic_override = resolve_diagnostic_v3_entry_timeframe(entry_tf_override)
     policy = policy_timeframes if isinstance(policy_timeframes, Mapping) else None
     policy_entry_tf = str(
@@ -330,7 +335,7 @@ def evaluate_engine_a_v3(
     else:
         primary_tf = resolve_v3_entry_timeframe(
             route.score_group,
-            str(pair.get("type") or pair.get("asset_type") or "other"),
+            asset_type,
             normalized_horizon or "intraday",
         )
     primary = candles.get(primary_tf, []) if normalized_horizon and primary_tf else []
@@ -348,7 +353,6 @@ def evaluate_engine_a_v3(
         last_confirmed_ts = _confirmed_dt.isoformat() if _confirmed_dt else None
     display = str(pair.get("display") or pair.get("pair") or pair.get("symbol") or "")
     symbol = str(pair.get("symbol") or display)
-    asset_type = str(pair.get("type") or pair.get("asset_type") or "other")
     valid_candles, candle_reasons = _validate_candles(
         candles,
         validation_index=candle_validation_index,

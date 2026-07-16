@@ -140,6 +140,50 @@ def build_single_prompt(
     )
 
 
+def build_policy_prompt(
+    *,
+    symbol: str,
+    direction_str: str,
+    algo_context: str,
+    asset_type: str,
+    frames: list[str],
+    authority_tf: str,
+    selected_style: str,
+) -> str:
+    """Build a dynamically labelled multi-TF prompt for the selected style."""
+    normalized_frames = [
+        str(frame).strip().upper() for frame in frames if str(frame).strip()
+    ]
+    frame_list = "+".join(normalized_frames) or str(authority_tf).upper()
+    image_map = ", ".join(
+        f"IMAGE {index} = {frame}"
+        for index, frame in enumerate(normalized_frames, start=1)
+    )
+    style = str(selected_style or "auto").strip().upper()
+    authority = str(authority_tf or "H4").strip().upper()
+    return (
+        f"{len(normalized_frames)} chart image(s) are attached: {image_map}.\n\n"
+        f"{_request_metadata(symbol, direction_str, tf=authority, frames=frame_list)}\n"
+        f"REQUEST_METADATA: selected_style={style}\n\n"
+        "STEP 1 - VISUAL READ FIRST:\n"
+        "- Read instrument/timeframe from every chart label. If unreadable, use request metadata only.\n"
+        f"- {authority} is the authoritative RIGHT EDGE chart for the selected {style} setup. "
+        "Other frames are context only.\n"
+        "- Do not apply another style's timeframe, holding-period, or RR rules to the selected setup.\n\n"
+        "STEP 2 - ALGORITHMIC CONTEXT (cross-check after STEP 1; image wins on conflict):\n"
+        f"{algo_context}\n\n"
+        f"CONTEXT: asset={asset_type.upper()}\n\n"
+        f"{_ae_framework(authority)}\n"
+        "Multi-TF rules:\n"
+        "- Follow the server-supplied regime/bias/structure/setup/trigger/execution roles.\n"
+        f"- Grade {style} from {authority} right-edge evidence plus its assigned context frames.\n"
+        "- Non-selected style ratings are comparison-only and cannot replace the selected-style result.\n\n"
+        f"{_VISION_TRADE_READ_JSON}\n\n"
+        "End with exactly these 8 lines, with nothing after:\n"
+        f"{_STRUCTURED_FOOTER}\n"
+    )
+
+
 def build_dual_prompt(
     *,
     symbol: str,

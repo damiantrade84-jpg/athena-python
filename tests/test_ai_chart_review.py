@@ -1736,11 +1736,12 @@ def test_route_dedup_response_exposes_non_visual_context_and_score_attribution(t
     assert data["scoreAttribution"]["finalEngineAScore"] == data["engine_a_context"]["confluence_score"]
 
 
-def test_resolve_chart_review_analyze_style_maps_h4_to_intraday():
+def test_resolve_chart_review_analyze_style_does_not_infer_style_from_chart_tf():
     from ai_review.engine_a_context import resolve_chart_review_analyze_style
 
     assert resolve_chart_review_analyze_style("H4", {"chart_timeframe": "H4"}, {"type": "crypto"}) == "intraday"
-    assert resolve_chart_review_analyze_style("H4", {"chart_timeframe": "M1"}, {"type": "crypto"}) == "scalp"
+    assert resolve_chart_review_analyze_style("H4", {"chart_timeframe": "M1"}, {"type": "crypto"}) == "intraday"
+    assert resolve_chart_review_analyze_style("M1", {"signal_style": "scalp"}, {"type": "crypto"}) == "scalp"
     assert resolve_chart_review_analyze_style("D1", {"chart_timeframe": "D1"}, {"type": "stock"}) == "swing"
 
 

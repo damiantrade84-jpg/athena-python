@@ -115,9 +115,9 @@ def _resolve_v3_momentum_tf(score_group: str, asset_type: str, horizon: str) -> 
 def _resolve_v3_entry_tf(score_group: str, asset_type: str, horizon: str) -> str | None:
     """Resolve primary entry TF for V3 scoring.
 
-    Default remains H1 (intraday) / H4 (swing). Only ``BY_SCORE_GROUP.execution_tf``
-    overrides change the entry anchor — not the universal ``BY_STYLE.execution_tf``,
-    which describes chart/execution context rather than the quant entry bar.
+    Default remains H1 (intraday) / H4 (swing). Only a style-nested score-group
+    override may change the quant entry bar; flat group overrides are ignored so
+    they cannot collapse both styles onto one timeframe.
     """
     return resolve_v3_entry_timeframe(score_group, asset_type, horizon)
 

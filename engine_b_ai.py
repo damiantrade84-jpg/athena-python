@@ -12,6 +12,7 @@ from ai_schemas import EngineBResponse
 from ai_utils import parse_json_object
 from config import CONFIG, AITemperatureConfig, create_ai_client, get_ai_model, resolve_ai_review_runtime
 from prompt_store import load_prompt
+from style_resolver import resolve_auto_style
 
 log = logging.getLogger("athena")
 VALID_ENGINE_B_GRADES = {"A+", "A", "B", "C", "D", "F"}
@@ -173,6 +174,32 @@ def _validate_engine_b_ai_payload(parsed: dict, pair: str) -> dict:
     return out
 
 
+def _bind_engine_b_selected_style(parsed: dict, selected_style: str) -> dict:
+    """Bind Engine B headline fields to the deterministic selected style."""
+    selected = str(selected_style or "intraday").strip().lower()
+    if selected not in REQUIRED_STYLE_KEYS:
+        selected = "intraday"
+    ratings = parsed.get("style_ratings") or {}
+    selected_row = ratings.get(selected) if isinstance(ratings, dict) else None
+
+    parsed["resolvedStyle"] = selected.upper()
+    parsed["bestValidStyle"] = selected.upper()
+    if isinstance(selected_row, dict):
+        parsed["grade"] = selected_row.get("grade", parsed.get("grade", "C"))
+        parsed["edgeProbability"] = selected_row.get(
+            "edgeProbability", parsed.get("edgeProbability", 50.0)
+        )
+        parsed["riskLevel"] = selected_row.get(
+            "riskLevel", parsed.get("riskLevel", "Medium")
+        )
+    elif isinstance(ratings, dict) and ratings:
+        # Ratings for other styles are not evidence for the selected style.
+        parsed["grade"] = "C"
+        parsed["edgeProbability"] = 50.0
+        parsed["riskLevel"] = "Medium"
+    return parsed
+
+
 def _get_present_value(payload: dict | None, *keys, default=None):
     if not isinstance(payload, dict):
         return default
@@ -239,6 +266,8 @@ def build_engine_b_signal_message(
     engine_a_ctx: Optional[dict] = None,
     news_ctx: Optional[dict] = None,
     freshness_ctx: Optional[dict] = None,
+    style: Optional[str] = None,
+    asset_type: Optional[str] = None,
 ) -> str:
     """
     Build AI prompt message for Engine B structural signals.
@@ -259,15 +288,71 @@ def build_engine_b_signal_message(
     """
     lines = []
 
+    resolved_style = resolve_auto_style(
+        style
+        or structure_result.get("style")
+        or (engine_a_ctx or {}).get("style")
+        or "auto",
+        {
+            "type": asset_type
+            or structure_result.get("asset_type")
+            or (engine_a_ctx or {}).get("type")
+        },
+        score_group=(
+            structure_result.get("scoreGroup")
+            or structure_result.get("score_group")
+            or (engine_a_ctx or {}).get("scoreGroup")
+            or (engine_a_ctx or {}).get("score_group")
+        ),
+        asset_type=(
+            asset_type
+            or structure_result.get("asset_type")
+            or (engine_a_ctx or {}).get("type")
+        ),
+    )
+    _engine_b_proxy = dict(structure_result)
+    _engine_b_proxy["style"] = resolved_style
     _signal_proxy = dict(engine_a_ctx or {})
-    _signal_proxy.update({
-        "pair": pair,
-        "display": pair,
-        "direction": direction,
-        "price": current_price,
-        "engine_b": structure_result,
-        "engine_b_overlay": structure_result,
-    })
+    _signal_proxy.update(
+        {
+            "pair": pair,
+            "display": pair,
+            "direction": direction,
+            "price": current_price,
+            "type": asset_type
+            or structure_result.get("asset_type")
+            or (engine_a_ctx or {}).get("type"),
+            "engine": "engine_b",
+            "is_naked": True,
+            "style": resolved_style,
+            "requested_style": resolved_style,
+            "engine_b": _engine_b_proxy,
+            "engine_b_overlay": _engine_b_proxy,
+        }
+    )
+    _role_aliases = {
+        "timeframePolicyVersion": ("timeframePolicyVersion", "timeframe_policy_version"),
+        "regimeTf": ("regimeTf", "regime_tf"),
+        "biasTf": ("biasTf", "bias_tf"),
+        "structureTf": ("structureTf", "structure_tf", "zone_tf"),
+        "setupTf": ("setupTf", "setup_tf"),
+        "triggerTf": ("triggerTf", "trigger_tf", "trigger_timeframe_actual", "entry_tf"),
+        "executionTf": ("executionTf", "execution_tf", "entry_tf"),
+    }
+    for target, aliases in _role_aliases.items():
+        value = _get_present_value(structure_result, *aliases)
+        if value is None:
+            value = _get_present_value(confidence_result, *aliases)
+        if value is not None:
+            _signal_proxy[target] = value
+            if target == "structureTf":
+                _engine_b_proxy["struct_tf"] = value
+            elif target == "setupTf":
+                _engine_b_proxy["setup_tf"] = value
+            elif target == "triggerTf":
+                _engine_b_proxy["trigger_tf_actual"] = value
+            elif target == "executionTf":
+                _engine_b_proxy["execution_tf_actual"] = value
 
     try:
         from ai_context import build_ai_calibration_context_string
@@ -597,6 +682,7 @@ def get_engine_b_ai_verdict(
     news_ctx: Optional[dict] = None,
     freshness_ctx: Optional[dict] = None,
     asset_type: Optional[str] = None,
+    style: Optional[str] = None,
 ) -> dict:
     """
     Get AI analysis for Engine B signal using the configured AI provider.
@@ -624,6 +710,25 @@ def get_engine_b_ai_verdict(
         client = create_ai_client(CONFIG, api_key=api_key, provider=active_provider)
         model_override = None if runtime.get("fallbackUsed") else xai_model
         model = str(model_override or get_ai_model(CONFIG, "AI_MODEL", provider=active_provider)).strip()
+        resolved_asset_type = (
+            asset_type
+            or structure_result.get("asset_type")
+            or (engine_a_ctx or {}).get("type")
+        )
+        resolved_style = resolve_auto_style(
+            style
+            or structure_result.get("style")
+            or (engine_a_ctx or {}).get("style")
+            or "auto",
+            {"type": resolved_asset_type},
+            score_group=(
+                structure_result.get("scoreGroup")
+                or structure_result.get("score_group")
+                or (engine_a_ctx or {}).get("scoreGroup")
+                or (engine_a_ctx or {}).get("score_group")
+            ),
+            asset_type=resolved_asset_type,
+        )
 
         message = build_engine_b_signal_message(
             pair,
@@ -635,6 +740,8 @@ def get_engine_b_ai_verdict(
             engine_a_ctx=engine_a_ctx,
             news_ctx=news_ctx,
             freshness_ctx=freshness_ctx,
+            style=resolved_style,
+            asset_type=resolved_asset_type,
         )
 
         cross_engine_note = (
@@ -653,8 +760,11 @@ def get_engine_b_ai_verdict(
             + cross_engine_note
             + " Weigh: overall structural conviction; distance to boundary; "
             "trigger quality; multi-TF alignment (explicit Y/N with evidence from available swing sequences). "
-            "Rate all three styles independently: SCALP(H1, 1.5-2R), INTRADAY(H4, 2-3R), SWING(D1, 3-6R). "
-            "Top-level grade/edgeProbability/riskLevel must represent the best style. "
+            f"The deterministic selected style is {resolved_style.upper()}. "
+            "Judge it only from the server-supplied policy roles and configured Style min RR; "
+            "never apply another style's timeframe, holding-period, or RR rules. "
+            "Top-level grade/edgeProbability/riskLevel and resolvedStyle must represent the selected style. "
+            "Other style_ratings are comparison-only and must not replace the selected-style headline. "
             "Output strict JSON only with exactly these top-level keys in this precise order: "
             "reasoning, verdict, reviewSource, resolvedStyle, bestValidStyle, grade, edgeProbability, riskLevel, style_ratings. "
             "style_ratings must contain scalp, intraday, and swing objects with grade, edgeProbability, riskLevel."
@@ -703,7 +813,11 @@ def get_engine_b_ai_verdict(
             parsed.setdefault("verdict", "Model response missing fields; using safe defaults.")
 
 
+        # Bind before style completion so a missing selected-style row cannot be
+        # synthesized from a headline that represented another style.
+        parsed = _bind_engine_b_selected_style(parsed, resolved_style)
         parsed = _validate_engine_b_ai_payload(parsed, pair)
+        parsed = _bind_engine_b_selected_style(parsed, resolved_style)
         parsed["grade"] = _normalise_engine_b_grade(parsed.get("grade"), pair)
 
         log.info(

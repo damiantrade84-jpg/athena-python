@@ -14,7 +14,7 @@ import { ErrorBanner } from '@/components/shared';
 import { Search, Eye, Newspaper, GitCompare, Zap, Layers, Activity, ExternalLink, AlertTriangle } from 'lucide-react';
 import { fmtNum, cn } from '@/lib/utils';
 import { fmtPrice } from '@/lib/athenaFormat';
-import { fetchVisionCandlePayload } from '@/lib/visionReview';
+import { fetchVisionCandlePayload, preferredVisionReviewTf } from '@/lib/visionReview';
 import { EngineASignalCard, EngineBChecklistCard, VisionReviewCard } from '@/components/athena';
 import type {
   EngineASignal,
@@ -201,10 +201,12 @@ export default function PairBrowserPanel() {
     }
     const sym = signal.symbol || selectedSym;
     try {
-      const candlePayload = await fetchVisionCandlePayload(sym);
+      const reviewTf = preferredVisionReviewTf(signal);
+      const candlePayload = await fetchVisionCandlePayload(sym, reviewTf);
       const result = await postVision('/api/chart-analysis', {
         symbol: sym,
-        tf: 'H4',
+        tf: reviewTf,
+        resolvedStyle: signal.style || signal.horizon,
         signal: signal,
         engineB: engineB,
         server_render: true,

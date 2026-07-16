@@ -36,6 +36,49 @@ def test_style_adjusts_trend_weights():
     assert swing["execution_tf"] == "D1"
 
 
+def test_auto_and_explicit_styles_preserve_style_owned_timeframes():
+    auto_exotic = resolve_engine_a_scoring_profile(
+        score_group="forex_exotics", asset_type="forex", style="auto"
+    )
+    intraday_exotic = resolve_engine_a_scoring_profile(
+        score_group="forex_exotics", asset_type="forex", style="intraday"
+    )
+    swing_exotic = resolve_engine_a_scoring_profile(
+        score_group="forex_exotics", asset_type="forex", style="swing"
+    )
+
+    assert auto_exotic["style"] == "swing"
+    assert auto_exotic["execution_tf"] == "D1"
+    assert intraday_exotic["style"] == "intraday"
+    assert intraday_exotic["execution_tf"] == "H4"
+    assert swing_exotic["execution_tf"] == "D1"
+
+
+def test_flat_group_timeframe_override_cannot_collapse_styles(monkeypatch):
+    from config import CONFIG
+
+    profile_cfg = CONFIG.setdefault("ENGINE_A_SCORING_PROFILE", {})
+    by_group = dict(profile_cfg.get("BY_SCORE_GROUP") or {})
+    by_group["forex_exotics"] = {
+        **dict(by_group.get("forex_exotics") or {}),
+        "execution_tf": "H1",
+        "chart_tf": "H1",
+    }
+    monkeypatch.setitem(profile_cfg, "BY_SCORE_GROUP", by_group)
+
+    intraday = resolve_engine_a_scoring_profile(
+        score_group="forex_exotics", asset_type="forex", style="intraday"
+    )
+    swing = resolve_engine_a_scoring_profile(
+        score_group="forex_exotics", asset_type="forex", style="swing"
+    )
+
+    assert intraday["execution_tf"] == "H4"
+    assert intraday["chart_tf"] == "H4"
+    assert swing["execution_tf"] == "D1"
+    assert swing["chart_tf"] == "D1"
+
+
 def test_snap_for_tf_maps_snaps():
     d1 = {"close": 1.0, "rsi": 55.0}
     h4 = {"close": 2.0, "rsi": 60.0}

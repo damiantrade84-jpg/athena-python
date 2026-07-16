@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from athena_ai.strategy_playbook_loader import get_enabled_playbooks
+from style_resolver import normalize_style
 
 # Numeric tags used purely for ranking — not exposed as a "score".
 _HINT_TO_PLAYBOOK_AFFINITY: dict[str, dict[str, int]] = {
@@ -104,6 +105,7 @@ def classify_strategy(
     asset_group: str | None = None,
     symbol: str | None = None,
     timeframe: str | None = None,
+    style: str | None = None,
     direction: str | None = None,
     playbook_path: str | None = None,
 ) -> dict[str, Any]:
@@ -118,7 +120,11 @@ def classify_strategy(
     profile_loc = facts.get("profile_location") or {}
     profile_vp_ctx = facts.get("profile_vp_context") or {}
 
-    del symbol, timeframe  # reserved for future per-symbol/tf gating
+    del symbol  # reserved for future per-symbol gating
+    evaluation_style = normalize_style(style)
+    if evaluation_style == "auto":
+        evaluation_style = None
+    evaluation_timeframe = str(timeframe or "").strip().upper() or None
 
     engines_present: set[str] = {"A"}
     if isinstance(engine_b_summary, dict) and engine_b_summary.get("available", True):
@@ -273,6 +279,8 @@ def classify_strategy(
         candidates.append({
             "id": pid,
             "affinity": weight,
+            "evaluation_style": evaluation_style,
+            "evaluation_timeframe": evaluation_timeframe,
             "supporting_hints": [
                 h for h in setup_hints
                 if pid in _HINT_TO_PLAYBOOK_AFFINITY.get(h, {})
@@ -306,4 +314,6 @@ def classify_strategy(
         "rejected_models": rejected,
         "classification_warnings": warnings,
         "engines_considered": sorted(engines_present),
+        "evaluation_style": evaluation_style,
+        "evaluation_timeframe": evaluation_timeframe,
     }

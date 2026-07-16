@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from config import CONFIG
+from style_resolver import resolve_auto_style
 
 _DEFAULT_LAYERS: tuple[dict[str, str], ...] = (
     {"tf": "D1", "weight_key": "d1_ema_trend", "fast_ema": "ema21", "slow_ema": "ema200"},
@@ -41,13 +42,18 @@ _STYLE_CHART_TF = {
 }
 
 
-def _normalize_style(style: str | None) -> str:
-    s = str(style or "swing").strip().lower()
-    if s == "auto":
-        return "intraday"
-    if s in ("scalp", "intraday", "swing"):
-        return s
-    return "swing"
+def _normalize_style(
+    style: str | None,
+    *,
+    score_group: str | None,
+    asset_type: str,
+) -> str:
+    return resolve_auto_style(
+        style,
+        {"type": asset_type},
+        score_group=score_group,
+        asset_type=asset_type,
+    )
 
 
 def _profile_cfg() -> dict[str, Any]:
@@ -89,7 +95,11 @@ def resolve_engine_a_scoring_profile(
     style: str | None,
 ) -> dict[str, Any]:
     """Return resolved trend layers, weights, and anchor TFs for Engine A scoring."""
-    resolved_style = _normalize_style(style)
+    resolved_style = _normalize_style(
+        style,
+        score_group=score_group,
+        asset_type=asset_type,
+    )
     cfg = _profile_cfg()
     default_block = _resolve_block(cfg.get("DEFAULT_BY_CLASS"), score_group=score_group, asset_type=asset_type) or {}
     style_block = _resolve_block(
@@ -102,6 +112,11 @@ def resolve_engine_a_scoring_profile(
         score_group=score_group,
         asset_type=asset_type,
     ) or {}
+    group_style_block = (
+        group_block.get(resolved_style)
+        if isinstance(group_block.get(resolved_style), dict)
+        else {}
+    )
 
     layers_raw = (
         group_block.get("trend_layers")
@@ -133,13 +148,13 @@ def resolve_engine_a_scoring_profile(
         or momentum_tf
     ).upper()
     execution_tf = str(
-        group_block.get("execution_tf")
+        group_style_block.get("execution_tf")
         or style_block.get("execution_tf")
         or default_block.get("execution_tf")
         or _STYLE_EXECUTION_TF.get(resolved_style, "H4")
     ).upper()
     chart_tf = str(
-        group_block.get("chart_tf")
+        group_style_block.get("chart_tf")
         or style_block.get("chart_tf")
         or default_block.get("chart_tf")
         or _STYLE_CHART_TF.get(resolved_style, momentum_tf)

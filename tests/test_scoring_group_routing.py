@@ -170,6 +170,28 @@ def test_engine_b_base_style_profiles_keep_min_score_contract():
     assert float(swing["min_score"]) == 5.0
 
 
+def test_engine_a_and_engine_b_share_auto_style_resolution():
+    athena_root = _load_root_athena_module()
+    cases = [
+        ({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}, "intraday"),
+        ({"display": "USD/ZAR", "symbol": "USDZAR", "type": "forex"}, "swing"),
+        ({"display": "AAVE/USDT", "symbol": "AAVEUSDT", "type": "crypto"}, "swing"),
+        ({"display": "MSFT", "symbol": "MSFT", "type": "stock"}, "swing"),
+    ]
+
+    for pair, expected in cases:
+        score_group = get_pair_score_group(pair)
+        engine_a_style = athena_root.resolve_auto_style("auto", pair)
+        engine_b_style, _profile = athena_root._naked_scan_style_profile(
+            "auto",
+            score_group=score_group,
+            asset_type=pair["type"],
+            symbol=pair["display"],
+        )
+        assert engine_a_style == expected
+        assert engine_b_style == expected
+
+
 def test_min_confluence_threshold_tiers():
     """3-tier ladder: stable → 1.5; exotic → 1.7; volatile → 2.0.
 
