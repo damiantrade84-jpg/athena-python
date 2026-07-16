@@ -1025,6 +1025,42 @@ def test_mt5_market_open_state_rejects_stale_tick(monkeypatch):
     assert state["reason"] == "MARKET_CLOSED_STALE_TICK"
 
 
+def test_mt5_market_open_state_normalizes_broker_clock_before_age_check(monkeypatch):
+    now = datetime(2026, 7, 15, 15, 13, tzinfo=timezone.utc)
+    broker_offset_seconds = 3 * 3600
+    stale_tick = types.SimpleNamespace(
+        bid=1.1434,
+        ask=1.1435,
+        last=1.14345,
+        time=int(now.timestamp() + broker_offset_seconds - 1384),
+    )
+    fake_mt5 = types.SimpleNamespace(
+        SYMBOL_TRADE_MODE_DISABLED=0,
+        symbol_select=lambda s, e: True,
+        symbol_info=lambda s: types.SimpleNamespace(trade_mode=1),
+        symbol_info_tick=lambda s: stale_tick,
+    )
+    monkeypatch.setitem(sys.modules, "MetaTrader5", fake_mt5)
+    monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
+    monkeypatch.setattr(scalp_engine, "_current_utc_datetime", lambda: now)
+    monkeypatch.setitem(scalp_engine.CONFIG, "MT5_BROKER_UTC_OFFSET", 3)
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MARKET_OPEN_CHECK_ENABLED": True,
+            "MARKET_TICK_MAX_AGE_SEC": 900,
+        },
+    )
+
+    state = mt5_market_open_state("EURUSD")
+
+    assert state["open"] is False
+    assert state["reason"] == "MARKET_CLOSED_STALE_TICK"
+    assert state["age_sec"] == 1384.0
+
+
 def test_scalp_candles_fresh_rejects_stale_structure(monkeypatch):
     now = datetime(2026, 4, 14, 12, 0, tzinfo=timezone.utc)
     stale = _dated_candles(40, now - timedelta(hours=12), step_seconds=900)
@@ -1065,6 +1101,61 @@ def test_scalp_candles_fresh_allows_normal_confirmed_h1_age(monkeypatch):
     fresh, reason = scalp_engine._scalp_candles_fresh(truly_stale, "H1", "bias", "forex")
     assert fresh is False
     assert reason.startswith("MARKET_DATA_STALE_BIAS_")
+
+
+def test_stale_mt5_context_refetches_once_and_stays_fail_closed(monkeypatch):
+    now = datetime(2026, 7, 15, 15, 13, tzinfo=timezone.utc)
+    stale = [{"time": (now - timedelta(seconds=1384)).isoformat()}]
+    recovered = [{"time": (now - timedelta(seconds=180)).isoformat()}]
+    calls = []
+
+    monkeypatch.setattr(scalp_engine, "_current_utc_datetime", lambda: now)
+    monkeypatch.setattr(
+        scalp_engine,
+        "mt5_market_open_state",
+        lambda _symbol: {"open": True, "reason": "market_open"},
+    )
+    monkeypatch.setattr(
+        scalp_engine,
+        "mt5_fetch_scalp_candles",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or recovered,
+    )
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "MARKET_CANDLE_MAX_AGE_SEC": 900,
+            "USE_FORMING_FOR_TRIGGER": True,
+        },
+    )
+
+    candles, fresh, reason = scalp_engine._retry_stale_mt5_scalp_candles(
+        stale,
+        "EURUSD",
+        "M5",
+        1000,
+        role="context",
+        asset_type="forex",
+        include_forming=True,
+    )
+
+    assert candles == recovered
+    assert (fresh, reason) == (True, "fresh")
+    assert len(calls) == 1
+
+    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", lambda *args, **kwargs: stale)
+    _, fresh, reason = scalp_engine._retry_stale_mt5_scalp_candles(
+        stale,
+        "EURUSD",
+        "M5",
+        1000,
+        role="context",
+        asset_type="forex",
+        include_forming=True,
+    )
+    assert fresh is False
+    assert reason.startswith("MARKET_DATA_STALE_CONTEXT_")
 
 
 def test_scalp_candles_fresh_rejects_missing_timestamp_by_default(monkeypatch):

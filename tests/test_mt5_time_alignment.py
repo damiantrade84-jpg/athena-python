@@ -166,6 +166,30 @@ def test_active_m15_one_bucket_lag_with_fresh_tick_retries():
     assert lag == 1
 
 
+def test_active_m15_small_multi_bucket_lag_with_fresh_tick_retries():
+    now = 1_781_034_014.0
+    current_bucket = int(now // 900) * 900
+
+    should, lag = should_refetch_active_lower_tf(
+        "M15",
+        now,
+        current_bucket - (2 * 900),
+        now - 10,
+        60,
+    )
+    assert (should, lag) == (True, 2)
+
+    # The cap must stay bounded even when the tick itself is fresh.
+    should, lag = should_refetch_active_lower_tf(
+        "M15",
+        now,
+        current_bucket - (4 * 900),
+        now - 10,
+        60,
+    )
+    assert (should, lag) == (False, 4)
+
+
 def test_active_m15_current_bucket_does_not_retry():
     now = 1_781_034_014.0
     current_bucket = int(now // 900) * 900

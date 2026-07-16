@@ -653,9 +653,18 @@ def mt5_market_open_state(mt5_symbol: str) -> dict:
             tick_time = float(tick_time) / 1000.0
         else:
             tick_time = _tick_value(tick, "time", None)
+        now_dt = _current_utc_datetime()
+        if tick_time is not None:
+            from athena_app.services.mt5_time_alignment import normalize_mt5_tick_epoch_utc
+
+            tick_time = normalize_mt5_tick_epoch_utc(
+                tick_time,
+                now_dt.timestamp(),
+                int(CONFIG.get("MT5_BROKER_UTC_OFFSET", 3)),
+            )
         tick_dt = _coerce_utc_datetime(tick_time)
         if tick_dt is not None:
-            age_s = (_current_utc_datetime() - tick_dt).total_seconds()
+            age_s = (now_dt - tick_dt).total_seconds()
             if age_s > max_age:
                 return {
                     "open": False,
@@ -719,6 +728,56 @@ def _scalp_candles_fresh(candles: list, timeframe: str, role: str = "execution",
 
 def _execution_candles_fresh(candles: list, timeframe: str) -> tuple[bool, str]:
     return _scalp_candles_fresh(candles, timeframe, "execution")
+
+
+def _retry_stale_mt5_scalp_candles(
+    candles: list,
+    mt5_symbol: str,
+    timeframe: str,
+    count: int,
+    *,
+    role: str,
+    asset_type: str,
+    include_forming: bool,
+) -> tuple[list, bool, str]:
+    """Retry one stale MT5 candle read while the broker tick is still fresh.
+
+    MT5 can briefly keep ``copy_rates_from_pos`` on an old history bucket even
+    while live ticks continue. This is a read-only recovery attempt; the normal
+    freshness gate remains authoritative if the second read is still stale.
+    """
+    fresh, reason = _scalp_candles_fresh(candles, timeframe, role, asset_type)
+    if fresh or not reason.startswith("MARKET_DATA_STALE_"):
+        return candles, fresh, reason
+
+    market_state = mt5_market_open_state(mt5_symbol)
+    if not market_state.get("open"):
+        return candles, fresh, reason
+
+    retried = mt5_fetch_scalp_candles(
+        mt5_symbol,
+        timeframe,
+        count,
+        include_forming=include_forming,
+    )
+    if not retried:
+        return candles, fresh, reason
+
+    retry_fresh, retry_reason = _scalp_candles_fresh(
+        retried,
+        timeframe,
+        role,
+        asset_type,
+    )
+    log.info(
+        "[SCALP-DATA] %s %s stale %s one-shot refetch: %s -> %s",
+        mt5_symbol,
+        timeframe,
+        role,
+        reason,
+        retry_reason,
+    )
+    return retried, retry_fresh, retry_reason
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -4796,20 +4855,28 @@ def run_scalp_scan(
                 candles_m5 = mt5_fetch_scalp_candles(
                     mt5_sym, "M5", m5_count, include_forming=trigger_include_forming
                 )
+                if len(candles_m5) < 10:
+                    _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
+                    skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
+                    continue
+                candles_m5, fresh, stale_reason = _retry_stale_mt5_scalp_candles(
+                    candles_m5,
+                    mt5_sym,
+                    "M5",
+                    m5_count,
+                    role="context",
+                    asset_type=asset_type,
+                    include_forming=trigger_include_forming,
+                )
+                if not fresh:
+                    _record_stability_sample(display, asset_type, False, reason=stale_reason)
+                    skipped.append({"pair": display, "reason": stale_reason})
+                    continue
                 candles_m5, _vol_src_m5 = _overlay_eodhd_volume_for_scalp(display, asset_type, "M5", candles_m5)
                 _vol_src_dominant = _vol_src_m5
                 if _vol_src_m5 == "real_vol_required_unavailable":
                     _record_stability_sample(display, asset_type, False, reason="real_volume_required_unavailable")
                     skipped.append({"pair": display, "reason": "real_volume_required_unavailable"})
-                    continue
-                if len(candles_m5) < 10:
-                    _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
-                    skipped.append({"pair": display, "reason": "insufficient_m5_candles"})
-                    continue
-                fresh, stale_reason = _scalp_candles_fresh(candles_m5, "M5", "context")
-                if not fresh:
-                    _record_stability_sample(display, asset_type, False, reason=stale_reason)
-                    skipped.append({"pair": display, "reason": stale_reason})
                     continue
 
                 # dominant volume source = M15 (used for VP), fallback to M5

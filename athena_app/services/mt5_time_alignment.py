@@ -16,6 +16,11 @@ _MAX_ABS_TICK_TZ_SECONDS = 14 * 3600
 # offset (tracks broker DST drift); anything further means the tick itself is stale.
 _TICK_TZ_DST_BAND_HOURS = 1
 
+# Small active-feed history gaps can occur while MT5 lazily synchronizes a
+# symbol after terminal/server startup. Three M15 buckets is only 45 minutes;
+# weekend/closed feeds remain excluded by the independent fresh-tick check.
+_MAX_ACTIVE_LOWER_TF_RETRY_LAG = 3
+
 # If the newest MT5 bar predates wall clock by this much, assume illiquid/stale —
 # not solvable via tick TZ nudge — keep offset at 0 to avoid hallucinated series.
 _DEFAULT_STALE_UNSHIFTED_AGE_SEC = int(36 * 3600)
@@ -68,11 +73,12 @@ def should_refetch_active_lower_tf(
 ) -> tuple[bool, int]:
     """Return whether an active MT5 M15/M30 feed warrants one read-only retry.
 
-    A one-bucket bar lag can be a transient MT5 history-sync omission even while
-    live ticks are current.  Closed/frozen markets must not retry: the normalized
-    broker tick has to satisfy the same per-asset age limit as the live-quote
-    gate.  The caller still applies the normal freshness gate if the retry stays
-    stale, so this helper cannot turn stale data into an executable signal.
+    A small multi-bucket lag can be a transient MT5 history-sync omission while
+    a symbol is lazily synchronized after terminal/server startup. Closed/frozen
+    markets must not retry: the normalized broker tick has to satisfy the same
+    per-asset age limit as the live-quote gate. The caller still applies the
+    normal freshness gate if the retry stays stale, so this helper cannot turn
+    stale data into an executable signal.
     """
     tf_upper = str(timeframe or "").upper()
     if tf_upper not in {"M15", "M30"}:
@@ -96,7 +102,7 @@ def should_refetch_active_lower_tf(
     current_bucket = int(now // tf_sec) * tf_sec
     newest_bucket = int(newest // tf_sec) * tf_sec
     lag = max(0, int((current_bucket - newest_bucket) // tf_sec))
-    return lag == 1, lag
+    return 1 <= lag <= _MAX_ACTIVE_LOWER_TF_RETRY_LAG, lag
 
 
 def infer_mt5_rates_time_shift_seconds(
