@@ -4409,6 +4409,7 @@ class NakedEngine:
         trade_bucket_historical_mode: bool = False,
         role_candles: dict[str, list] | None = None,
         trigger_tf_override: str | None = None,
+        struct_candles_confirmed: bool = False,
     ) -> dict:
         """Precompute all direction-independent structure analysis data.
 
@@ -4422,6 +4423,8 @@ class NakedEngine:
         Diagnostic kwargs (default None — production path unchanged):
           * ``role_candles`` — optional map of TF → candle series (e.g. M15/M30)
           * ``trigger_tf_override`` — force trigger pattern detection onto that TF
+          * ``struct_candles_confirmed`` — caller already supplied a confirmed-only
+            historical structure window; avoids repeating the live forming-bar split
         """
         if not d1_candles or not h4_candles or not h1_candles or atr <= 0:
             return {"_error": "Missing data or valid ATR"}
@@ -4456,12 +4459,42 @@ class NakedEngine:
         else:
             struct_candles = h1_candles
         forming_strip_diag: dict = {}
-        struct_candles = _engine_b_confirmed_only_struct_candles(
-            struct_candles,
-            structure_tf,
-            pair=pair,
-            diagnostics=forming_strip_diag,
-        )
+        if struct_candles_confirmed:
+            if not bool(config.CONFIG.get("ENGINE_B_STRIP_FORMING_STRUCT", True)):
+                forming_strip_diag["reason"] = "disabled"
+            elif not struct_candles or len(struct_candles) < 2:
+                forming_strip_diag.update(
+                    {"reason": "insufficient_input", "candle_count": len(struct_candles or [])}
+                )
+            elif not pair or not isinstance(pair, dict):
+                forming_strip_diag["reason"] = "missing_pair_context"
+            else:
+                min_bars = int(
+                    config.CONFIG.get("ENGINE_B_STRUCT_CONFIRMED_MIN_BARS", 20) or 20
+                )
+                if len(struct_candles) >= min_bars:
+                    forming_strip_diag.update(
+                        {
+                            "reason": "preconfirmed_by_caller",
+                            "confirmed_count": len(struct_candles),
+                            "min_bars": min_bars,
+                        }
+                    )
+                else:
+                    forming_strip_diag.update(
+                        {
+                            "reason": "insufficient_confirmed_bars",
+                            "confirmed_count": len(struct_candles),
+                            "min_bars": min_bars,
+                        }
+                    )
+        else:
+            struct_candles = _engine_b_confirmed_only_struct_candles(
+                struct_candles,
+                structure_tf,
+                pair=pair,
+                diagnostics=forming_strip_diag,
+            )
         _strip_reason = str(forming_strip_diag.get("reason") or "")
         if _strip_reason == "missing_pair_context":
             return {

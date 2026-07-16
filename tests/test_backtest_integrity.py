@@ -318,7 +318,7 @@ def test_backtest_pair_naked_enters_on_next_bar_open_with_slippage(monkeypatch):
         extract_candles=lambda candles: candles,
         fetch_candles=lambda *_args, **_kwargs: d1,
         fetch_eodhd_intraday_bt=lambda *_args, **_kwargs: (h4, h1),
-        naked_scan_style_profile=lambda style, score_group=None, asset_type=None: (
+        naked_scan_style_profile=lambda style, score_group=None, asset_type=None, **_kwargs: (
             "intraday",
             {
                 "min_score": 0.5,

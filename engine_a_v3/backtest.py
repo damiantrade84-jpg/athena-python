@@ -405,6 +405,21 @@ def run_v3_backtest(
     # the underlying candle lists are immutable for the whole run and the prefix
     # for a given (tf, k) is always candles[tf][:k].
     snapshot_cache: dict = {}
+    candle_validation_index = None
+    try:
+        from config import CONFIG
+
+        if bool(CONFIG.get("BT_VECTORIZED", False)):
+            from engine_a_v3.indicator_adapter import BacktestIndicatorSnapshotCache
+            from engine_a_v3.evaluator import BacktestCandleValidationIndex
+
+            snapshot_cache = BacktestIndicatorSnapshotCache(candles)
+            candle_validation_index = BacktestCandleValidationIndex(candles)
+    except (ImportError, KeyError, TypeError, ValueError, OverflowError):
+        # Preserve the established per-prefix cache if the optimized cache cannot
+        # be initialized. Backtest scoring remains fail-compatible, not fail-open.
+        snapshot_cache = {}
+        candle_validation_index = None
 
     _bt_cfg: dict = {}
     try:
@@ -431,6 +446,7 @@ def run_v3_backtest(
             registry=registry,
             snapshot_cache=snapshot_cache,
             policy_timeframes=policy,
+            candle_validation_index=candle_validation_index,
         )
         _im_confirmation = None
         if intermarket_context_provider is not None:
@@ -577,6 +593,7 @@ def run_v3_backtest(
                 registry=registry,
                 snapshot_cache=snapshot_cache,
                 policy_timeframes=policy,
+                candle_validation_index=candle_validation_index,
             )
             decisions[sig.decision] = decisions.get(sig.decision, 0) + 1
             qualified += 1 if sig.qualified else 0

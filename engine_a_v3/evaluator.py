@@ -45,7 +45,64 @@ def _parse_time(value: Any) -> datetime | None:
     return parsed
 
 
-def _validate_candles(candles: dict[str, list[dict]]) -> tuple[bool, tuple[str, ...]]:
+def _first_candle_validation_failure(rows: list[dict]) -> tuple[int | None, str | None]:
+    previous_ts = None
+    for index, candle in enumerate(rows):
+        if not isinstance(candle, dict):
+            return index, "candle_malformed"
+        try:
+            open_ = float(candle["open"])
+            high = float(candle["high"])
+            low = float(candle["low"])
+            close = float(candle["close"])
+        except (KeyError, TypeError, ValueError):
+            return index, "candle_malformed"
+        if not all(math.isfinite(value) for value in (open_, high, low, close)):
+            return index, "ohlc_nonfinite"
+        if (
+            min(open_, high, low, close) <= 0
+            or high < max(open_, close)
+            or low > min(open_, close)
+            or high < low
+        ):
+            return index, "ohlc_invalid"
+        timestamp = _parse_time(candle.get("time") or candle.get("datetime"))
+        if timestamp is None or (previous_ts is not None and timestamp <= previous_ts):
+            return index, "timestamps_invalid"
+        previous_ts = timestamp
+    return None, None
+
+
+class BacktestCandleValidationIndex:
+    """O(1) validity lookup for immutable historical candle prefixes."""
+
+    def __init__(self, candles: Mapping[str, list[dict]]):
+        self._candles = candles
+        self._failures = {
+            timeframe: _first_candle_validation_failure(rows)
+            for timeframe, rows in candles.items()
+            if isinstance(rows, list)
+        }
+
+    def failure_for(self, timeframe: str, rows: list[dict]) -> tuple[bool, str | None]:
+        full_rows = self._candles.get(timeframe)
+        if not isinstance(full_rows, list) or not isinstance(rows, list):
+            return False, None
+        length = len(rows)
+        if length > len(full_rows):
+            return False, None
+        if length and (rows[0] is not full_rows[0] or rows[-1] is not full_rows[length - 1]):
+            return False, None
+        invalid_index, reason = self._failures.get(timeframe, (None, None))
+        if invalid_index is not None and invalid_index < length:
+            return True, reason
+        return True, None
+
+
+def _validate_candles(
+    candles: dict[str, list[dict]],
+    validation_index: BacktestCandleValidationIndex | None = None,
+) -> tuple[bool, tuple[str, ...]]:
     reasons: list[str] = []
     from config import CONFIG
     try:
@@ -66,6 +123,12 @@ def _validate_candles(candles: dict[str, list[dict]]) -> tuple[bool, tuple[str, 
         if len(rows) < minimums[timeframe]:
             reasons.append(f"{timeframe.lower()}_history_insufficient")
             continue
+        if validation_index is not None:
+            supported, failure = validation_index.failure_for(timeframe, rows)
+            if supported:
+                if failure:
+                    reasons.append(f"{timeframe.lower()}_{failure}")
+                continue
         previous_ts = None
         for candle in rows:
             if not isinstance(candle, dict):
@@ -246,6 +309,7 @@ def evaluate_engine_a_v3(
     entry_tf_override: str | None = None,
     policy_timeframes: Mapping[str, Any] | None = None,
     entry_candle_is_forming: bool = False,
+    candle_validation_index: BacktestCandleValidationIndex | None = None,
 ) -> EngineASetupSignal:
     route = route_specialist(pair)
     normalized_horizon = _horizon(horizon)
@@ -285,7 +349,10 @@ def evaluate_engine_a_v3(
     display = str(pair.get("display") or pair.get("pair") or pair.get("symbol") or "")
     symbol = str(pair.get("symbol") or display)
     asset_type = str(pair.get("type") or pair.get("asset_type") or "other")
-    valid_candles, candle_reasons = _validate_candles(candles)
+    valid_candles, candle_reasons = _validate_candles(
+        candles,
+        validation_index=candle_validation_index,
+    )
     promotion = None
     profile = None
     if normalized_horizon is not None and primary_tf is not None and valid_candles:
@@ -315,6 +382,13 @@ def evaluate_engine_a_v3(
             candle_reasons = candle_reasons + (f"{role_name}_history_insufficient",)
             valid_candles = False
         else:
+            if candle_validation_index is not None:
+                supported, failure = candle_validation_index.failure_for(role_tf, role_candles)
+                if supported:
+                    if failure:
+                        candle_reasons = candle_reasons + (f"{role_name}_candles_invalid",)
+                        valid_candles = False
+                    continue
             _entry_prev_ts = None
             for _entry_bar in role_candles:
                 try:

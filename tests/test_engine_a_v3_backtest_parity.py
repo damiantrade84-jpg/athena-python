@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,8 @@ import pytest
 import engine_a_v3.backtest as backtest_module
 from engine_a_v3.backtest import _cost_r, _simulate_exit, _summarize, run_v3_backtest
 from engine_a_v3.contract import PriceZone
+from engine_a_v3.evaluator import BacktestCandleValidationIndex
+from engine_a_v3.indicator_adapter import BacktestIndicatorSnapshotCache, indicator_snapshot
 
 
 def _bars(*, timeframe: str, count: int = 100) -> list[dict]:
@@ -35,6 +38,49 @@ def _bars(*, timeframe: str, count: int = 100) -> list[dict]:
 
 def _candles() -> dict[str, list[dict]]:
     return {timeframe: _bars(timeframe=timeframe) for timeframe in ("D1", "H4", "H1")}
+
+
+def test_vectorized_snapshot_cache_matches_prefix_indicator_path_exactly():
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    rows = []
+    for index in range(420):
+        center = 100.0 + math.sin(index / 7.0)
+        rows.append(
+            {
+                "time": (start + timedelta(hours=index)).isoformat(),
+                "open": center,
+                "high": center + 1.2,
+                "low": center - 1.2,
+                "close": center + (0.2 * math.cos(index / 3.0)),
+                "vol": 1_000.0 + index,
+            }
+        )
+    periods = {
+        "ema_trend": 21,
+        "ema_momentum": 50,
+        "ema_long": 200,
+        "rsi": 14,
+        "macd_fast": 12,
+        "macd_slow": 26,
+        "macd_signal": 9,
+        "atr": 14,
+        "adx": 14,
+    }
+    cache = BacktestIndicatorSnapshotCache({"H1": rows})
+
+    for length in (80, 120, 220, 319, 420):
+        expected = indicator_snapshot(rows[:length], periods, "forex")
+        actual = cache.snapshot_at("H1", length, periods, "forex")
+        assert actual == expected
+
+
+def test_backtest_validation_index_preserves_point_in_time_invalid_boundary():
+    rows = _bars(timeframe="H1", count=120)
+    rows[90] = {**rows[90], "high": 98.0}
+    index = BacktestCandleValidationIndex({"H1": rows})
+
+    assert index.failure_for("H1", rows[:90]) == (True, None)
+    assert index.failure_for("H1", rows[:91]) == (True, "ohlc_invalid")
 
 
 def _pair(score_group: str, *, display: str, symbol: str, asset_type: str) -> dict:

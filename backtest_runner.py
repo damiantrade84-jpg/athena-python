@@ -39,7 +39,7 @@ from athena_app.services.engine_b_direction import independent_conflict_blocks_e
 from engine_b_subsystems import engine_b_direction_min_score_gap, engine_b_pick_directional_candidate
 from backtest_candle_cache import fetch_backtest_candles, fetch_backtest_eodhd_intraday
 from calibration import calibration_report
-from config import CONFIG, _json_safe, get_optimal_workers
+from config import CONFIG, _json_safe, get_optimal_workers, scan_candle_limits
 from indicators import (
     calc_atr,
     calc_fib,
@@ -5114,6 +5114,26 @@ def _engine_b_monitoring_context(
     return monitor_tf, monitor_candles, h4_hold_multiplier
 
 
+def _bt_engine_b_live_context(
+    candles: list,
+    end_index: int,
+    timeframe: str,
+    limits: dict[str, int] | None = None,
+) -> list:
+    """Return the confirmed prefix window available to a live Engine B scan.
+
+    Historical fetch depth determines how many decisions the backtest can replay;
+    it must not give one decision more context than the live scanner receives.
+    """
+    end = max(0, min(int(end_index), len(candles or [])))
+    resolved_limits = limits if isinstance(limits, dict) else scan_candle_limits()
+    try:
+        limit = max(1, int(resolved_limits[str(timeframe or "").upper()]))
+    except (KeyError, TypeError, ValueError):
+        limit = end
+    return (candles or [])[max(0, end - limit) : end]
+
+
 def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="standard", purge_gap=200, folds=3):
     """Separate backtest loop for NakedEngine (Engine B).
     Completely isolated from Engine A backtest_pair()."""
@@ -5350,6 +5370,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         for tf, series in _role_series.items()
     }
     _tf_seconds = _ENGINE_B_BT_TF_SECONDS
+    _live_context_limits = scan_candle_limits()
 
     # PRECOMPUTE ATR SERIES: Compute the full ATR array once per timeframe to avoid O(N^2) complexity.
     # We compute for all three timeframes to ensure we can resolve the _atr_tf at any scan index.
@@ -5444,10 +5465,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
         _decision_epoch = _entry_epoch + _tf_seconds.get(str(_execution_tf).upper(), 0)
         _h4_cut_idx = bisect.bisect_right(_h4_epochs, _decision_epoch - 14400)
         _d1_cut_idx = bisect.bisect_right(_d1_epochs, _decision_epoch - 86400)
-        h4_ctx = candles_h4[:_h4_cut_idx]
-        d1_ctx = candles_d1[:_d1_cut_idx]
         _h1_cut_idx = bisect.bisect_right(_h1_epochs, _decision_epoch - 3600)
-        h1_ctx = candles_h1[:_h1_cut_idx]
 
         _role_contexts = {}
         for _tf, _series in _role_series.items():
@@ -5455,7 +5473,15 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
                 _role_epochs[_tf],
                 _decision_epoch - _tf_seconds[_tf],
             )
-            _role_contexts[_tf] = _series[:_cut]
+            _role_contexts[_tf] = _bt_engine_b_live_context(
+                _series,
+                _cut,
+                _tf,
+                _live_context_limits,
+            )
+        d1_ctx = _role_contexts.get("D1") or []
+        h4_ctx = _role_contexts.get("H4") or []
+        h1_ctx = _role_contexts.get("H1") or []
         entry_ctx = _role_contexts.get(str(_entry_tf).upper()) or []
 
         if len(d1_ctx) < 20 or len(h4_ctx) < 20 or len(h1_ctx) < 20 or len(entry_ctx) < 20:
@@ -5564,6 +5590,7 @@ def backtest_pair_naked(pair: dict, style: str = "naked", validation_mode="stand
             # or hard-fail every crypto bar in a standalone run.
             trade_bucket_historical_mode=True,
             role_candles=_role_contexts,
+            struct_candles_confirmed=True,
         )
         candidates = []
         for direction in ["LONG", "SHORT"]:

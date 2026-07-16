@@ -604,6 +604,13 @@ def _snapshots(
             if cached is not None:
                 snaps[tf] = cached
                 continue
+            snapshot_at = getattr(snapshot_cache, "snapshot_at", None)
+            if callable(snapshot_at):
+                cached = snapshot_at(tf, len(rows), periods, asset_type)
+                if cached is not None:
+                    snapshot_cache[key] = cached
+                    snaps[tf] = cached
+                    continue
         snap = indicator_snapshot(rows, periods, asset_type)
         if snapshot_cache is not None:
             snapshot_cache[(tf, len(rows))] = snap
