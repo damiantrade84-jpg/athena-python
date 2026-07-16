@@ -237,7 +237,7 @@ def _engine_b_atr_for_scan_levels(
         and str(cfg.get("ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")).lower() == "bybit"
         and hasattr(runtime, "bybit_atr_for_levels")
     ):
-        bybit_atr = runtime.bybit_atr_for_levels(pair, resolved_style)
+        bybit_atr = runtime.bybit_atr_for_levels(pair, resolved_style, atr_tf=tf)
         if bybit_atr:
             return float(bybit_atr), "bybit"
         if not bool(cfg.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
@@ -2565,13 +2565,14 @@ def api_engine_c_scan():
                     requested_style,
                     score_group=_pair_score_group,
                     asset_type=ptype,
+                    symbol=pair.get("display") or pair.get("symbol") or "",
                     live_entry_tf=True,
                     source=pair.get("source"),
                 )
             except TypeError as _profile_type_err:
                 if not any(
                     name in str(_profile_type_err)
-                    for name in ("live_entry_tf", "source")
+                    for name in ("live_entry_tf", "source", "symbol")
                 ):
                     raise
                 resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
