@@ -60,6 +60,10 @@ _URL = (
     "https://www.dukascopy.com/datafeed/"
     "{symbol}/{year}/{month:02d}/{day:02d}/{hour:02d}h_ticks.bi5"
 )
+_REQUEST_HEADERS = {
+    "User-Agent": "Athena-Sentinel/4.0",
+    "Accept": "application/octet-stream,*/*;q=0.8",
+}
 
 _TOKEN_SIZE = 20  # bytes per raw tick record (struct !IIIff)
 _TIMEOUT_S = 15  # per-hour HTTP timeout
@@ -68,6 +72,10 @@ _H4_SECONDS = 14400
 
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "duka_volume.db")
 _db_lock = threading.Lock()
+_BACKGROUND_REFRESH_WORKERS = 3
+_background_refresh_slots = threading.BoundedSemaphore(_BACKGROUND_REFRESH_WORKERS)
+_background_refresh_lock = threading.Lock()
+_background_refresh_pending: set[str] = set()
 
 
 # ── SQLite cache ──────────────────────────────────────────────────────────────
@@ -109,7 +117,7 @@ def _fetch_hour_raw(duka_symbol: str, day: datetime.date, hour: int) -> bytes:
         hour=hour,
     )
     try:
-        resp = requests.get(url, timeout=_TIMEOUT_S)
+        resp = requests.get(url, headers=_REQUEST_HEADERS, timeout=_TIMEOUT_S)
         if resp.status_code == 200 and resp.content:
             return resp.content
         return b""
@@ -264,6 +272,67 @@ def fetch_and_cache(display: str, days: int = 90):
     log.info(f"[DUKA] {display}: fetched {fetched} days, cached in {_DB_PATH}")
 
 
+def refresh_forex_volume_background(display: str, days: int = 60) -> bool:
+    """Schedule one bounded, single-flight cache refresh without blocking callers."""
+    duka_sym = DUKA_SYMBOL_MAP.get(display)
+    if not duka_sym:
+        return False
+
+    try:
+        refresh_days = max(1, int(days))
+    except (TypeError, ValueError):
+        refresh_days = 60
+
+    with _background_refresh_lock:
+        if display in _background_refresh_pending:
+            return False
+        _background_refresh_pending.add(display)
+
+    def _run() -> None:
+        try:
+            with _background_refresh_slots:
+                log.info(
+                    "[DUKA] %s background refresh started (%s days)",
+                    display,
+                    refresh_days,
+                )
+                fetch_and_cache(display, days=refresh_days)
+        except Exception as exc:
+            log.warning("[DUKA] %s background refresh failed: %s", display, exc)
+        finally:
+            with _background_refresh_lock:
+                _background_refresh_pending.discard(display)
+
+    worker = threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"DukaRefresh-{duka_sym}",
+    )
+    try:
+        worker.start()
+    except Exception:
+        with _background_refresh_lock:
+            _background_refresh_pending.discard(display)
+        raise
+    return True
+
+
+def seed_all_forex_background(days: int = 90) -> int:
+    """Queue every mapped forex pair on the bounded background refresher."""
+    scheduled = sum(
+        1
+        for display in DUKA_SYMBOL_MAP
+        if refresh_forex_volume_background(display, days=days)
+    )
+    log.info(
+        "[DUKA] Background seed queued: %s new pair(s), %s total, %s workers",
+        scheduled,
+        len(DUKA_SYMBOL_MAP),
+        _BACKGROUND_REFRESH_WORKERS,
+    )
+    return scheduled
+
+
 # ── Public: get volume bars ───────────────────────────────────────────────────
 
 
@@ -327,9 +396,9 @@ def get_forex_vr(
         float >= 0.0; typical range 0.3–3.0; 1.0 = average volume.
     """
     if force_refresh:
-        # Manual scans refresh the two most recent trading days before using the
-        # local series. Background scans remain read-only and inexpensive.
-        fetch_and_cache(display, days=60)
+        # Hydrating an empty cache can require thousands of hourly files. Queue
+        # that work and return the existing cached/neutral result immediately.
+        refresh_forex_volume_background(display, days=60)
     bars = get_forex_volume_bars(display, tf=tf, days=60, blocking_fetch=False)
     if len(bars) < lookback + 1:
         return 1.0

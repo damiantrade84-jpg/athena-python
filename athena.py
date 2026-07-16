@@ -18370,13 +18370,13 @@ if __name__ == "__main__":
     # Seed Dukascopy forex volume cache in background (skips days already cached)
     def _duka_seed():
         try:
-            from duka_volume import seed_all_forex
+            from duka_volume import seed_all_forex_background
 
-            seed_all_forex(days=90, workers=3)
+            seed_all_forex_background(days=90)
         except Exception as e:
             log.warning(f"[DUKA] Startup seed failed: {e}")
 
-    # threading.Thread(target=_duka_seed, daemon=True, name="DukaSeed").start()
+    threading.Thread(target=_duka_seed, daemon=True, name="DukaSeed").start()
 
     # Seed COT (CFTC) and carry (FRED) data in background
     try:
