@@ -668,6 +668,7 @@ ENGINE_B_REASON_SL_WRONG_SIDE = "sl_wrong_side"
 ENGINE_B_REASON_SEQUENCE_COUNTER_TREND = "sequence_counter_trend"
 ENGINE_B_REASON_NO_TRIGGER_PATTERN = "no_trigger_pattern"
 ENGINE_B_REASON_BOS_WITHOUT_VOLUME = "bos_without_volume"
+ENGINE_B_REASON_BOS_VOLUME_BELOW_THRESHOLD = "bos_volume_below_threshold"
 ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT = "d1_pd_array_conflict"
 ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE = "structural_tp_too_close"
 ENGINE_B_REASON_AGGTRADE_REQUIRED = "aggtrade_required_for_crypto"
@@ -3328,8 +3329,8 @@ class NakedEngine:
         retest entries that the legacy last-bar-only logic missed.
 
         volumes: numpy array of bar volumes. Volume gate now applies only when
-        volumes are real (Binance contract volume). MT5 tick-volume gating is
-        handled by the caller — see analyze_structure().
+        volumes are real exchange contract volume (Bybit/Binance). MT5
+        tick-volume gating is handled by the caller — see analyze_structure().
         closes: numpy array of bar closes; falls back to highs/lows when absent.
         """
         try:
@@ -3406,27 +3407,46 @@ class NakedEngine:
                     break
 
             bos_volume_confirmed = False
-            if volumes is not None and len(volumes) >= 20 and (bos_bull or bos_bear):
-                positive_vols = [float(v) for v in volumes[-20:] if float(v) > 0]
-                avg_vol_20 = float(np.mean(positive_vols)) if positive_vols else 0.0
-                ref_idx = bos_bull_vol_ref if bos_bull else bos_bear_vol_ref
-                # C-3: when forming bars are NOT stripped from the structure TF, the
-                # last bar can be a forming (unconfirmed) candle whose volume is
-                # incomplete; do not gate BOS on partial volume. Default config strips
-                # forming bars (ENGINE_B_STRIP_FORMING_STRUCT=True) so this is a no-op
-                # there — the gate still uses the confirmed last bar.
-                _strip_forming = bool(config.CONFIG.get("ENGINE_B_STRIP_FORMING_STRUCT", True))
-                _bos_on_last_bar = ref_idx is None or ref_idx >= n - 1
-                if _bos_on_last_bar and not _strip_forming:
-                    bos_volume_confirmed = False
-                elif avg_vol_20 > 0:
-                    bar_vol = float(volumes[ref_idx]) if ref_idx is not None else float(volumes[-1])
-                    multiplier = float(
-                        config.CONFIG.get("NAKED_ENGINE", {}).get("bos_volume_multiplier", 1.3)
-                    )
-                    bos_volume_confirmed = bar_vol >= avg_vol_20 * multiplier
-                else:
-                    bos_volume_confirmed = False
+            bos_volume_available = False
+            bos_bar_volume = None
+            bos_average_volume_20 = None
+            bos_volume_ratio = None
+            bos_volume_status = "no_bos"
+            multiplier = float(
+                config.CONFIG.get("NAKED_ENGINE", {}).get("bos_volume_multiplier", 1.3)
+            )
+            if bos_bull or bos_bear:
+                bos_volume_status = "unavailable"
+                if volumes is not None and len(volumes) >= 20:
+                    positive_vols = [float(v) for v in volumes[-20:] if float(v) > 0]
+                    avg_vol_20 = float(np.mean(positive_vols)) if positive_vols else 0.0
+                    ref_idx = bos_bull_vol_ref if bos_bull else bos_bear_vol_ref
+                    if avg_vol_20 > 0:
+                        bos_average_volume_20 = avg_vol_20
+                        if ref_idx is not None and 0 <= ref_idx < len(volumes):
+                            bos_bar_volume = float(volumes[ref_idx])
+                        elif ref_idx is None and len(volumes):
+                            bos_bar_volume = float(volumes[-1])
+                    if bos_bar_volume is not None and bos_bar_volume > 0 and avg_vol_20 > 0:
+                        bos_volume_available = True
+                        bos_volume_ratio = bos_bar_volume / avg_vol_20
+                        # C-3: when forming bars are NOT stripped from the structure TF,
+                        # the last bar can be a forming (unconfirmed) candle whose volume
+                        # is incomplete; do not gate BOS on partial volume. Default config
+                        # strips forming bars, so the gate uses the confirmed last bar.
+                        _strip_forming = bool(
+                            config.CONFIG.get("ENGINE_B_STRIP_FORMING_STRUCT", True)
+                        )
+                        _bos_on_last_bar = ref_idx is None or ref_idx >= n - 1
+                        if _bos_on_last_bar and not _strip_forming:
+                            bos_volume_status = "forming_bar_unconfirmed"
+                        else:
+                            bos_volume_confirmed = bos_volume_ratio >= multiplier
+                            bos_volume_status = (
+                                "confirmed" if bos_volume_confirmed else "below_threshold"
+                            )
+                elif volumes is not None:
+                    bos_volume_status = "insufficient_history"
 
             return {
                 "bos_bull": bos_bull,
@@ -3438,6 +3458,16 @@ class NakedEngine:
                 "bos_reference_high_index": prior_high_idx,
                 "bos_reference_low_index": prior_low_idx,
                 "bos_volume_confirmed": bos_volume_confirmed,
+                "bos_volume_available": bos_volume_available,
+                "bos_bar_volume": round(bos_bar_volume, 4) if bos_bar_volume is not None else None,
+                "bos_average_volume_20": (
+                    round(bos_average_volume_20, 4)
+                    if bos_average_volume_20 is not None
+                    else None
+                ),
+                "bos_volume_ratio": round(bos_volume_ratio, 4) if bos_volume_ratio is not None else None,
+                "bos_volume_threshold": multiplier,
+                "bos_volume_status": bos_volume_status,
                 "bos_bull_bar_index": bos_bull_idx,
                 "bos_bear_bar_index": bos_bear_idx,
             }
@@ -6008,6 +6038,7 @@ class NakedEngine:
 
         # Stage 2.8: Optional volume confirmation gate.
         # Contributes to gate_score (+1 bonus) but is NOT mandatory for pass.
+        _bos_data = res.get("bos_data") if isinstance(res.get("bos_data"), dict) else {}
         volume_ok = bool(res.get("bos_confirmed") and res.get("bos_volume_confirmed", False))
 
         gate_confirmations = [structure_ok, location_ok, entry_ok, space_gate_ok, rr_ok]
@@ -6344,7 +6375,10 @@ class NakedEngine:
         if not trigger_ok and not breakout_ok:
             _diag_codes.append(ENGINE_B_REASON_NO_TRIGGER_PATTERN)
         elif breakout_ok and not res.get("bos_volume_confirmed", False):
-            _diag_codes.append(ENGINE_B_REASON_BOS_WITHOUT_VOLUME)
+            if _bos_data.get("bos_volume_status") == "below_threshold":
+                _diag_codes.append(ENGINE_B_REASON_BOS_VOLUME_BELOW_THRESHOLD)
+            else:
+                _diag_codes.append(ENGINE_B_REASON_BOS_WITHOUT_VOLUME)
         if _d1_conflict:
             _diag_codes.append(ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT)
         if _aggtrade_required and not _aggtrade_available:
@@ -6366,6 +6400,16 @@ class NakedEngine:
         # diagnostic because low ADX is no longer a structure gate failure.
 
         _engine_b_diag_payload = {"reason_codes": _diag_codes}
+        if _bos_data:
+            _engine_b_diag_payload["bos_volume"] = {
+                "available": _bos_data.get("bos_volume_available"),
+                "status": _bos_data.get("bos_volume_status"),
+                "bar_volume": _bos_data.get("bos_bar_volume"),
+                "average_volume_20": _bos_data.get("bos_average_volume_20"),
+                "ratio": _bos_data.get("bos_volume_ratio"),
+                "threshold": _bos_data.get("bos_volume_threshold"),
+                "confirmed": bool(res.get("bos_volume_confirmed", False)),
+            }
         if asset_type_lower == "crypto" and isinstance(res.get("crypto_structure_diagnostics"), dict):
             _engine_b_diag_payload["crypto_structure"] = res.get("crypto_structure_diagnostics")
         if asset_type_lower == "crypto":
@@ -6536,6 +6580,13 @@ class NakedEngine:
             "ob_at_zone": ob_at_zone,
             "bos_mtf_confirmed": bos_mtf,
             "volume_bonus": 1.0 if volume_ok else 0.0,
+            "bos_volume_confirmed": bool(res.get("bos_volume_confirmed", False)),
+            "bos_volume_available": _bos_data.get("bos_volume_available"),
+            "bos_bar_volume": _bos_data.get("bos_bar_volume"),
+            "bos_average_volume_20": _bos_data.get("bos_average_volume_20"),
+            "bos_volume_ratio": _bos_data.get("bos_volume_ratio"),
+            "bos_volume_threshold": _bos_data.get("bos_volume_threshold"),
+            "bos_volume_status": _bos_data.get("bos_volume_status"),
             "breaker_active": bool(res.get("breaker_block")),
             "profile_points": round(_profile_points, 2),
             "profile_ok": _profile_ok,

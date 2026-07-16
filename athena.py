@@ -4872,7 +4872,16 @@ def _build_signal_message(
         if _present(signal.get("stochK")) or _present(signal.get("stochD")):
             lines.append(f"  Stoch K/D: {signal.get('stochK')}/{signal.get('stochD')}")
         if _present(signal.get("volRatio")):
-            lines.append(f"  Volume ratio: {signal.get('volRatio')}x avg")
+            _bos_vol_threshold = engine_b_for_signal.get("bos_volume_threshold")
+            _bos_vol_threshold_text = (
+                f"; confirmation threshold={_bos_vol_threshold}x"
+                if _present(_bos_vol_threshold)
+                else ""
+            )
+            lines.append(
+                f"  BOS volume ratio: {signal.get('volRatio')}x 20-bar avg"
+                f"{_bos_vol_threshold_text}"
+            )
         if _present(signal.get("ema200Slope")):
             lines.append(f"  EMA200 slope: {signal.get('ema200Slope')}%")
         if _present(signal.get("weinsteinLabel")):
@@ -8804,7 +8813,7 @@ def api_scan_naked():
                     "confluencePct": conf_data["pct"],
                     "maxScore": conf_data.get("max_possible"),
                     "threshold": _min_score_scaled,
-                    "volRatio": 1.0,
+                    "volRatio": _res.get("bos_volume_ratio"),
                     "stochK": None,
                     "stochD": None,
                     "ema200Slope": 0.0,

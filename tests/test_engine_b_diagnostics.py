@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
 from market_structure import (
     ENGINE_B_REASON_ADVERSE_DXY,
+    ENGINE_B_REASON_BOS_VOLUME_BELOW_THRESHOLD,
     ENGINE_B_REASON_BOS_WITHOUT_VOLUME,
     ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT,
     ENGINE_B_REASON_FOREX_ADX_LOW,
@@ -133,6 +134,56 @@ def test_crypto_structure_adjustment_enabled_requires_stronger_bos(monkeypatch):
 
     assert legacy["bos_bull"] is True
     assert adjusted["bos_bull"] is False
+
+
+def test_detect_bos_emits_measured_below_threshold_volume_diagnostics(monkeypatch):
+    local_engine = NakedEngine()
+    monkeypatch.setitem(config.CONFIG["NAKED_ENGINE"], "bos_volume_multiplier", 1.3)
+    highs = np.full(20, 104.0, dtype=float)
+    lows = np.full(20, 99.0, dtype=float)
+    closes = np.full(20, 100.0, dtype=float)
+    highs[5] = 105.0
+    highs[15] = 104.5
+    lows[4] = 98.0
+    lows[14] = 98.5
+    closes[-1] = 106.0
+    volumes = np.full(20, 100.0, dtype=float)
+    volumes[-1] = 120.0
+    swings = {"peak_idx": np.array([5, 15]), "trough_idx": np.array([4, 14])}
+
+    out = local_engine._detect_bos(
+        highs,
+        lows,
+        atr=2.0,
+        volumes=volumes,
+        closes=closes,
+        swings=swings,
+    )
+
+    assert out["bos_bull"] is True
+    assert out["bos_volume_available"] is True
+    assert out["bos_volume_confirmed"] is False
+    assert out["bos_volume_status"] == "below_threshold"
+    assert out["bos_bar_volume"] == pytest.approx(120.0)
+    assert out["bos_average_volume_20"] == pytest.approx(101.0)
+    assert out["bos_volume_ratio"] == pytest.approx(1.1881)
+    assert out["bos_volume_threshold"] == pytest.approx(1.3)
+
+    confirmed_volumes = volumes.copy()
+    confirmed_volumes[-1] = 200.0
+    confirmed = local_engine._detect_bos(
+        highs,
+        lows,
+        atr=2.0,
+        volumes=confirmed_volumes,
+        closes=closes,
+        swings=swings,
+    )
+
+    assert confirmed["bos_volume_available"] is True
+    assert confirmed["bos_volume_confirmed"] is True
+    assert confirmed["bos_volume_status"] == "confirmed"
+    assert confirmed["bos_volume_ratio"] == pytest.approx(1.9048)
 
 
 def test_forex_asset_structure_adjustment_applies_configured_bos_min_break(monkeypatch):
@@ -1469,6 +1520,41 @@ def test_calculate_confidence_emits_bos_without_volume():
     )
     codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
     assert ENGINE_B_REASON_BOS_WITHOUT_VOLUME in codes
+
+
+def test_calculate_confidence_distinguishes_bos_volume_below_threshold():
+    res = _base_res_long()
+    res["bos_volume_confirmed"] = False
+    res["trigger_ok"] = False
+    res["bos_data"] = {
+        "bos_volume_available": True,
+        "bos_volume_status": "below_threshold",
+        "bos_bar_volume": 120.0,
+        "bos_average_volume_20": 101.0,
+        "bos_volume_ratio": 1.1881,
+        "bos_volume_threshold": 1.3,
+    }
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+    assert ENGINE_B_REASON_BOS_VOLUME_BELOW_THRESHOLD in codes
+    assert ENGINE_B_REASON_BOS_WITHOUT_VOLUME not in codes
+    assert out["engine_b_diagnostics"]["bos_volume"] == {
+        "available": True,
+        "status": "below_threshold",
+        "bar_volume": 120.0,
+        "average_volume_20": 101.0,
+        "ratio": 1.1881,
+        "threshold": 1.3,
+        "confirmed": False,
+    }
 
 
 def test_calculate_confidence_emits_d1_pd_array_conflict():

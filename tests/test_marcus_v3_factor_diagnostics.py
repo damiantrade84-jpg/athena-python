@@ -37,6 +37,52 @@ def _load_build_signal_message():
     return namespace["_build_signal_message"]
 
 
+def test_engine_b_message_uses_measured_bos_volume_ratio():
+    signal = {
+        "pair": "BTC/USDT",
+        "display": "BTC/USDT",
+        "symbol": "BTCUSDT",
+        "type": "crypto",
+        "direction": "SHORT",
+        "engine": "engine_b",
+        "is_naked": True,
+        "confluenceScore": 5.6594,
+        "maxScore": 6.04,
+        "volRatio": 1.1881,
+        "price": 64000.0,
+        "sl": 65174.85,
+        "tp1": 62282.55,
+        "tp2": 62282.55,
+        "rr1": 1.77,
+        "rr2": 1.77,
+        "votes": {},
+        "naked_data": {
+            "score": 5.6594,
+            "max_possible": 6.04,
+            "structural_verdict": "CLEAR",
+            "bos_volume_confirmed": False,
+            "bos_volume_available": True,
+            "bos_volume_ratio": 1.1881,
+            "bos_volume_threshold": 1.3,
+            "bos_volume_status": "below_threshold",
+            "engine_b_diagnostics": {
+                "reason_codes": ["bos_volume_below_threshold"],
+            },
+        },
+    }
+
+    message = _load_build_signal_message()(
+        signal,
+        None,
+        "intraday",
+        {"intraday": "H1+M30+M15"},
+    )
+
+    assert "=== OPTIONAL TECHNICALS (not Engine B scoring) ===" in message
+    assert "BOS volume ratio: 1.1881x 20-bar avg; confirmation threshold=1.3x" in message
+    assert "Volume ratio: 1.0x avg" not in message
+
+
 def test_build_signal_message_emits_v3_components():
     build_msg = _load_build_signal_message()
     signal = {
