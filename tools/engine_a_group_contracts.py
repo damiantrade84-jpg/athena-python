@@ -105,6 +105,61 @@ def validate_engine_a_group_coverage() -> dict:
     return report
 
 
+def _load_pair_universe() -> list:
+    """Import the root athena module lazily to reuse its canonical ALL_PAIRS."""
+    import importlib.util
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "_athena_root_for_contracts", root / "athena.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return list(getattr(module, "ALL_PAIRS", []) or [])
+
+
+def validate_pair_profile_group_overrides() -> dict:
+    """PAIR_PROFILES score_group overrides must agree with the canonical dispatch.
+
+    Dual registration is intentional for some symbols (e.g. USDX/EURX/JPYX are
+    in both ``_CURRENCY_INDICES`` and ``PAIR_PROFILES``); this check fails
+    loudly if the two registrations drift apart. Keys not present in the pair
+    universe are reported as warnings only.
+    """
+    from config import CONFIG
+    from engine_a_groups import resolve_score_group_by_type
+
+    profiles = CONFIG.get("PAIR_PROFILES") or {}
+    overrides = {
+        str(k): str(v.get("score_group"))
+        for k, v in profiles.items()
+        if isinstance(v, dict) and v.get("score_group")
+    }
+    report = {"ok": True, "mismatches": [], "unmatched_keys": [], "checked": 0}
+    if not overrides:
+        return report
+    by_name: dict[str, dict] = {}
+    for pair in _load_pair_universe():
+        if not isinstance(pair, dict):
+            continue
+        for key in (pair.get("display"), pair.get("symbol")):
+            if key and str(key) not in by_name:
+                by_name[str(key)] = pair
+    for key, group in sorted(overrides.items()):
+        pair = by_name.get(key)
+        if pair is None:
+            report["unmatched_keys"].append(key)
+            continue
+        report["checked"] += 1
+        canonical = resolve_score_group_by_type(pair)
+        if canonical != group:
+            report["mismatches"].append((key, group, canonical))
+            report["ok"] = False
+    return report
+
+
 def print_report(report: dict) -> None:
     if report["ok"] and not report["class_keyed_only_default"]:
         print("[OK] Engine A group coverage contract satisfied for all known groups.")
@@ -137,8 +192,22 @@ if __name__ == "__main__":
     report = validate_engine_a_group_coverage()
     print_report(report)
 
+    overrides_report = validate_pair_profile_group_overrides()
+    if not overrides_report["ok"]:
+        print("CRITICAL - PAIR_PROFILES score_group overrides disagree with the type table:")
+        for key, override, canonical in overrides_report["mismatches"]:
+            print(f"  {key}: PAIR_PROFILES={override} vs resolve_score_group_by_type={canonical}")
+        print()
+    if overrides_report["unmatched_keys"]:
+        print("WARNING - PAIR_PROFILES score_group keys not in the pair universe:")
+        for key in overrides_report["unmatched_keys"]:
+            print(f"  {key}")
+        print()
+    if overrides_report["ok"] and not overrides_report["unmatched_keys"]:
+        print(f"[OK] PAIR_PROFILES score_group overrides consistent ({overrides_report['checked']} checked).")
+
     # Machine readable for CI / probe scripts
     if "--json" in sys.argv:
-        print(json.dumps(report, indent=2))
+        print(json.dumps({"coverage": report, "overrides": overrides_report}, indent=2))
 
-    sys.exit(0 if report["ok"] else 2)
+    sys.exit(0 if report["ok"] and overrides_report["ok"] else 2)

@@ -45,8 +45,9 @@ def _rows(count: int, step: timedelta, *, falling: bool = False) -> list[dict]:
 def _candles() -> dict[str, list[dict]]:
     return {
         "D1": _rows(220, timedelta(days=1)),
-        "H4": _rows(50, timedelta(hours=4)),
-        "H1": _rows(50, timedelta(hours=1)),
+        # 60 bars: matches the ENGINE_A_MIN_H4_BARS/H1_BARS floor (raised from 50).
+        "H4": _rows(60, timedelta(hours=4)),
+        "H1": _rows(60, timedelta(hours=1)),
     }
 
 
@@ -430,3 +431,57 @@ def test_trend_health_mult_prefers_entry_tf_snap_for_swing():
     h1_mult = _trend_health_mult(0.8, snaps, None, None, entry_tf="H1")
     h4_mult = _trend_health_mult(0.8, snaps, None, None, entry_tf="H4")
     assert h1_mult < h4_mult
+
+
+def test_f1_macd_slope_term_monotonic_for_large_histograms():
+    """F1: a rising MACD histogram must never reduce the slope term.
+
+    The old absolute 0.05 divisor floor + |term|<0.05 snap made the term
+    non-monotonic (hist 1.03 -> 0.8 but 1.06 -> 0.06).
+    """
+    terms = []
+    for hist in (1.01, 1.03, 1.06, 1.5):
+        snap = {
+            "rsi": 55.0,
+            "plusDI": 24.0,
+            "minusDI": 14.0,
+            "macdHist": hist,
+            "macdHistPrev": 1.0,
+            "adx": 28.0,
+        }
+        _comp, diag = _momentum_component(snap, "crypto", "crypto_btc")
+        terms.append(diag["macdSlopeTerm"])
+    assert all(a <= b for a, b in zip(terms, terms[1:])), terms
+
+
+def test_f1_macd_slope_term_varies_at_forex_scale():
+    """F1: forex-scale histograms (~1e-4) must produce slope-dependent terms,
+    not the old constant +/-0.8 snap that discarded slope information."""
+    cases = [
+        (0.00010, 0.00005),  # doubling
+        (0.00011, 0.00010),  # slight rise
+        (0.00005, 0.00010),  # halving
+    ]
+    terms = []
+    for hist, hist_prev in cases:
+        snap = {
+            "rsi": 55.0,
+            "plusDI": 24.0,
+            "minusDI": 14.0,
+            "macdHist": hist,
+            "macdHistPrev": hist_prev,
+            "adx": 28.0,
+        }
+        _comp, diag = _momentum_component(snap, "forex", "forex_majors")
+        terms.append(diag["macdSlopeTerm"])
+    assert len({round(t, 4) for t in terms}) == len(terms), terms
+    # A weakening positive histogram scores below strengthening ones.
+    assert terms[2] < terms[0] and terms[2] < terms[1]
+
+
+def test_f13_score_pair_rejects_unsupported_horizon():
+    """F13: an unsupported horizon fails closed instead of silently scoring as swing."""
+    route = route_specialist({"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"})
+    quant = score_pair(route, "scalp", {"D1": [], "H4": [], "H1": []})
+    assert quant.direction == "FLAT"
+    assert quant.factor_diagnostics.get("rejectionReason") == "unsupported_horizon"

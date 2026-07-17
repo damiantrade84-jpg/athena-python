@@ -14688,13 +14688,47 @@ def fetch_eodhd_indicators(pair):
         return None
 
 
+def _format_engine_a_chart_candles(candles, limit: int = 120) -> list[dict]:
+    """Normalize candle rows for AI chart-review strategy facts.
+
+    Mirrors scalp_engine._format_scalp_chart_candles (kept separate: Engine A
+    must not import Engine D internals). Attached only on the AI-review path
+    via analyze_pair(attach_chart_candles=True) so scan/live payloads stay lean.
+    """
+    if not candles:
+        return []
+    out: list[dict] = []
+    for candle in list(candles)[-int(max(1, limit)):]:
+        if not isinstance(candle, dict):
+            continue
+        out.append(
+            {
+                "time": candle.get("time") or candle.get("t"),
+                "open": candle.get("open") or candle.get("o"),
+                "high": candle.get("high") or candle.get("h"),
+                "low": candle.get("low") or candle.get("l"),
+                "close": candle.get("close") or candle.get("c"),
+                "volume": candle.get("volume") or candle.get("v") or candle.get("vol"),
+            }
+        )
+    return out
+
+
 def _attach_v3_intermarket_confirmation(
     signal: dict,
     pair: dict,
     *,
     intermarket_snapshot: dict | None,
+    chart_candles: dict | None = None,
 ) -> dict:
     """Attach intermarket confirmation and optional score delta to an Engine A v3 signal."""
+    if chart_candles:
+        # AI-review-only payload (analyze_pair(attach_chart_candles=True)):
+        # per-TF OHLCV series so the review context can quote real bars.
+        for _tf, _rows in chart_candles.items():
+            _key = str(_tf or "").strip().upper()
+            if _key:
+                signal[f"{_key.lower()}Candles"] = _format_engine_a_chart_candles(_rows)
     from athena_app.services.engine_a_direction import apply_direction_conflict_to_result
     from athena_app.services.engine_a_v3_classify import retier_v3_after_score_adjust
 
@@ -14790,6 +14824,7 @@ def analyze_pair(
     intermarket_snapshot=None,
     refresh_market_data: bool = False,
     timeframe_speed_state=None,
+    attach_chart_candles: bool = False,
 ):
 
     pair_profile = get_pair_profile(pair)
@@ -15112,6 +15147,7 @@ def analyze_pair(
             ).to_dict(),
             pair,
             intermarket_snapshot=intermarket_snapshot,
+            chart_candles=_v3_candles if attach_chart_candles else None,
         )
 
     # Engine A scores confirmed candles only. Forming-bar state remains diagnostic
@@ -15283,6 +15319,7 @@ def analyze_pair(
                     _blocked,
                     pair,
                     intermarket_snapshot=intermarket_snapshot,
+                    chart_candles=_v3_candles if attach_chart_candles else None,
                 )
         except Exception as _prefresh_err:
             log.warning(
@@ -15309,6 +15346,7 @@ def analyze_pair(
                 _blocked,
                 pair,
                 intermarket_snapshot=intermarket_snapshot,
+                chart_candles=_v3_candles if attach_chart_candles else None,
             )
 
     # Scoring remains confirmed-only, but executable geometry must be anchored
@@ -15345,6 +15383,7 @@ def analyze_pair(
             _blocked,
             pair,
             intermarket_snapshot=intermarket_snapshot,
+            chart_candles=_v3_candles if attach_chart_candles else None,
         )
 
     from engine_a_v3.evaluator import evaluate_engine_a_v3
@@ -15373,17 +15412,26 @@ def analyze_pair(
         microstructure_metrics=_v3_micro,
     )
 
-    _legacy_v3_signal = evaluate_engine_a_v3(
-        pair,
-        _v3_candles,
-        horizon=style,
-        context=_v3_ctx,
-        current_price=_engine_a_live_price,
-        entry_tf_override=_v3_live_entry_tf,
-        entry_candle_is_forming=bool(
-            _v3_live_entry_tf and (_v3_entry_state or {}).get("forming")
-        ),
-    ).to_dict()
+    # The legacy (pre-policy) evaluation is a deliberate shadow: its score feeds
+    # the rollback path in timeframe_policy.apply_authoritative_policy_result and
+    # the signal-card UI. ENGINE_A_V3_LEGACY_SHADOW_ENABLED=false skips the second
+    # scoring pass when the policy path is authoritative. Without a policy the
+    # legacy evaluation is the primary one and always runs.
+    _legacy_shadow_enabled = bool(CONFIG.get("ENGINE_A_V3_LEGACY_SHADOW_ENABLED", True))
+    if _legacy_shadow_enabled or not _policy_timeframes:
+        _legacy_v3_signal = evaluate_engine_a_v3(
+            pair,
+            _v3_candles,
+            horizon=style,
+            context=_v3_ctx,
+            current_price=_engine_a_live_price,
+            entry_tf_override=_v3_live_entry_tf,
+            entry_candle_is_forming=bool(
+                _v3_live_entry_tf and (_v3_entry_state or {}).get("forming")
+            ),
+        ).to_dict()
+    else:
+        _legacy_v3_signal = None
     if _policy_timeframes:
         _v3_signal = evaluate_engine_a_v3(
             pair,
@@ -15393,8 +15441,9 @@ def analyze_pair(
             current_price=_engine_a_live_price,
             policy_timeframes=_policy_timeframes,
         ).to_dict()
-        _v3_signal["legacyScore"] = _legacy_v3_signal.get("confluenceScore")
-        _v3_signal["legacyDirection"] = _legacy_v3_signal.get("direction")
+        if _legacy_v3_signal is not None:
+            _v3_signal["legacyScore"] = _legacy_v3_signal.get("confluenceScore")
+            _v3_signal["legacyDirection"] = _legacy_v3_signal.get("direction")
         _v3_signal["policyScore"] = _v3_signal.get("confluenceScore")
         _v3_signal["policyDirection"] = _v3_signal.get("direction")
     else:
@@ -15463,6 +15512,7 @@ def analyze_pair(
         _v3_signal,
         pair,
         intermarket_snapshot=intermarket_snapshot,
+        chart_candles=_v3_candles if attach_chart_candles else None,
     )
 
 
@@ -17466,6 +17516,7 @@ register_ai_chart_review_routes(
             btc_bias,
             style=style,
             refresh_market_data=True,
+            attach_chart_candles=True,
             # Capture cache metadata before analyze_pair's own fetch overwrites it
             # so AI-review payloads surface cacheHit. Diagnostics only, advisory path.
             preloaded_fetch_meta={

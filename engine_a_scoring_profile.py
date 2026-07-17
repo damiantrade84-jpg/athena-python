@@ -42,6 +42,26 @@ _STYLE_CHART_TF = {
 }
 
 
+def default_trend_tf_weights(style: str) -> dict[str, float]:
+    """TF-keyed default trend weights for one style.
+
+    Derived from ``_DEFAULT_LAYERS`` + ``_STYLE_TREND_WEIGHTS`` so fallback
+    consumers (e.g. quant_scorer when the profile is disabled/erroring) share
+    one source of truth with the configured profile instead of a divergent
+    hardcoded table.
+    """
+    weights = (
+        _STYLE_TREND_WEIGHTS.get(str(style or "").strip().lower())
+        or _DEFAULT_TREND_WEIGHTS
+    )
+    out: dict[str, float] = {}
+    for layer in _DEFAULT_LAYERS:
+        wkey = str(layer.get("weight_key") or "")
+        if wkey and wkey in weights:
+            out[str(layer["tf"]).upper()] = float(weights[wkey])
+    return out
+
+
 def _normalize_style(
     style: str | None,
     *,

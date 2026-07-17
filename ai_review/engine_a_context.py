@@ -823,7 +823,11 @@ def select_ohlcv_bars_for_chart(
             or signal.get("h1Candles")
         )
     elif tf in ("M30", "H1", "H2", "H3"):
-        raw = signal.get("h1Candles") or signal.get("h4Candles")
+        raw = (
+            signal.get("m30Candles")
+            or signal.get("h1Candles")
+            or signal.get("h4Candles")
+        )
     elif tf == "H4":
         raw = signal.get("h4Candles") or signal.get("h1Candles")
     else:

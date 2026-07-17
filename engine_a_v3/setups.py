@@ -148,7 +148,9 @@ def _parse_time(value: Any) -> datetime | None:
     )
 
 
-def _session_window(route: SpecialistRoute) -> tuple[int, int, str]:
+def _session_window(
+    route: SpecialistRoute, display: str | None = None
+) -> tuple[int, int, str]:
     if route.family == "forex":
         return 6, 21, "London/NY 06:00-21:00 UTC"
     if route.subclass in {"xau", "precious"}:
@@ -161,6 +163,12 @@ def _session_window(route: SpecialistRoute) -> tuple[int, int, str]:
         return 0, 9, "Asian cash session 00:00-09:00 UTC"
     if route.subclass == "jse_equity":
         return 7, 16, "JSE cash session 07:00-16:00 UTC"
+    # US2000 routes to the index_other catch-all subclass but trades the US
+    # cash session like the other US indices; subclass alone loses that.
+    if str(display or "").strip().upper() in {
+        "US2000", "US 2000", "RUSSELL 2000", "RUSSELL",
+    }:
+        return 13, 21, "US cash session 13:00-21:00 UTC"
     return 6, 18, "regional cash session 06:00-18:00 UTC"
 
 
@@ -168,8 +176,9 @@ def _with_session_gate(
     candidate: SetupCandidate,
     primary: list[dict],
     route: SpecialistRoute,
+    display: str | None = None,
 ) -> SetupCandidate:
-    start_hour, end_hour, label = _session_window(route)
+    start_hour, end_hour, label = _session_window(route, display)
     current_time = _parse_time(primary[-1].get("time") or primary[-1].get("datetime"))
     active = current_time is not None and start_hour <= current_time.hour < end_hour
     predicates = candidate.predicates + (
@@ -368,10 +377,11 @@ def _opening_range_gap_candidate(
     route: SpecialistRoute,
     *,
     periods: SetupPeriods | None = None,
+    display: str | None = None,
 ) -> SetupCandidate:
     periods = periods or SetupPeriods()
     direction, context_predicates = _trend_direction(context, periods=periods)
-    start_hour, end_hour, label = _session_window(route)
+    start_hour, end_hour, label = _session_window(route, display)
     current_time = _parse_time(primary[-1].get("time") or primary[-1].get("datetime"))
     session_rows: list[tuple[datetime, dict]] = []
     if current_time is not None:
@@ -747,6 +757,7 @@ def detect_setup(
                     ),
                     primary,
                     route,
+                    display=display,
                 ),
                 _pullback_candidate(
                     setup_ids[-1], primary, context, periods=periods
@@ -776,6 +787,7 @@ def detect_setup(
                 ),
                 primary,
                 route,
+                display=display,
             )
             if horizon == "intraday"
             else _pullback_candidate(
@@ -812,6 +824,7 @@ def detect_setup(
                     context,
                     route,
                     periods=periods,
+                    display=display,
                 ),
             )
         else:

@@ -563,3 +563,18 @@ def test_intraday_expiry_covers_h4_entry_tf_groups():
     # A confirmed H4 bar closes at open+4h: the old flat 4h window expired at
     # evaluation time; the widened window leaves a full H4 bar of validity.
     assert _expiry(decision_time, "intraday", "H4") > decision_time + timedelta(hours=4)
+
+
+def test_us2000_uses_us_cash_session_window():
+    """F5: US2000 routes to the index_other catch-all subclass but trades the
+    US cash session like the other US indices."""
+    from engine_a_v3.setups import _session_window
+
+    pair = {"display": "US2000", "symbol": "US2000", "type": "index"}
+    route = route_specialist(pair)
+    assert route.subclass == "index_other"
+    start, end, _label = _session_window(route, pair["display"])
+    assert (start, end) == (13, 21)
+    # Without display, the subclass fallback remains the regional window.
+    start2, end2, _ = _session_window(route)
+    assert (start2, end2) == (6, 18)

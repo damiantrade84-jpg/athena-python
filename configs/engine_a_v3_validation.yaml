@@ -178,12 +178,48 @@ groups:
   forex_other:
     <<: *unvalidated_lane
     pairs: [{display: USD/ILS, symbol: USDILS, type: forex, dataSymbol: USD/ILS}]
+  # crypto_alt_majors/crypto_other enabled 2026-07: both are Bybit linear perps,
+  # so the venue is verifiable. Commission is the published Bybit taker rate
+  # (5.5 bps/leg, same as the BTC/ETH/DOGE lanes); spread/slippage are
+  # deliberately conservative (wider than majors) for thinner books.
   crypto_alt_majors:
-    <<: *unvalidated_lane
-    pairs: [{display: SOL/USDT, symbol: SOLUSDT, type: crypto, dataSymbol: SOL/USDT}]
+    horizons: [intraday, swing]
+    validationEnabled: true
+    requiredProvider: bybit
+    costsVerified: true
+    pairs:
+      - display: SOL/USDT
+        symbol: SOLUSDT
+        type: crypto
+        dataSymbol: SOL/USDT
+    costs:
+      spreadBps: 4.0
+      commissionBps: 5.5  # per leg (see crypto_btc note)
+      slippageBps: 3.0
+      swapBpsPerDay: 1.0
+    purgeBars: 5
+    maxHoldBars:
+      intraday: 24
+      swing: 30
   crypto_other:
-    <<: *unvalidated_lane
-    pairs: [{display: AAVE/USDT, symbol: AAVEUSDT, type: crypto, dataSymbol: AAVE/USDT}]
+    horizons: [intraday, swing]
+    validationEnabled: true
+    requiredProvider: bybit
+    costsVerified: true
+    pairs:
+      - display: AAVE/USDT
+        symbol: AAVEUSDT
+        type: crypto
+        dataSymbol: AAVE/USDT
+    costs:
+      spreadBps: 8.0
+      commissionBps: 5.5  # per leg (see crypto_btc note)
+      slippageBps: 5.0
+      swapBpsPerDay: 1.0
+    purgeBars: 5
+    maxHoldBars:
+      intraday: 24
+      swing: 30
   precious_trackers:
     <<: *unvalidated_lane
     pairs: [{display: XAU/USD, symbol: XAUUSD, type: commodity, dataSymbol: XAU/USD}]

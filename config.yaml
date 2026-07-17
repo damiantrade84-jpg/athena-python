@@ -89,8 +89,11 @@ MT5_INTRADAY_CALENDAR_GAP_GRACE_BUCKETS:
 
 # Engine A minimum confirmed bars after market-state split (defaults unchanged).
 ENGINE_A_MIN_D1_BARS: 220
-ENGINE_A_MIN_H4_BARS: 50
-ENGINE_A_MIN_H1_BARS: 50
+# H4/H1 minimums are 60: V3 setup candidates (breakout/ORB/london_open) need
+# >=60 confirmed bars; the old 50-bar floor let setups compute on insufficient
+# history (evaluator hard reject stays at <50).
+ENGINE_A_MIN_H4_BARS: 60
+ENGINE_A_MIN_H1_BARS: 60
 ENGINE_A_V3_BACKTEST:
   SPREAD_BPS: 2.0
   COMMISSION_BPS: 1.0
@@ -111,6 +114,13 @@ ENGINE_A_V3_BACKTEST:
 # This does not force TRADE decisions and cannot pass the V3 live/autopilot guards.
 ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED: true
 ENGINE_A_V3_PROFILE_TTL_DAYS: 90
+
+# Run the pre-policy V3 evaluation as a shadow alongside the policy-authoritative
+# evaluation. The shadow feeds legacyScore/legacyDirection (rollback diagnostics in
+# timeframe_policy.apply_authoritative_policy_result and the signal-card UI).
+# Default ON; set false to skip the second scoring pass. Ignored when no
+# authoritative policy is active (the legacy evaluation is then the primary one).
+ENGINE_A_V3_LEGACY_SHADOW_ENABLED: true
 
 # Per-group thesis for the v3 forex specialist: "trend" (default, unchanged) or
 # "mean_reversion" (range-fade, counter-trend). Reversible via this key.
@@ -210,6 +220,9 @@ ENGINE_A_V3_SUBSYSTEMS:
 ENGINE_A_V3_MICROSTRUCTURE:
   ENABLED: true
   MAX_AGE_SEC: 120
+  # EXCHANGE: binance is a deliberate opt-in (MICROSTRUCTURE_BINANCE_FEEDS_ENABLED
+  # + TRADE_BUCKET_EXCHANGE: binance). microstructure.db currently holds binance
+  # rows only - flipping this to bybit would silently disable the subsystem.
   EXCHANGE: binance
 
 # Richer momentum blend: RSI extremity + DI alignment + MACD histogram slope.

@@ -1876,8 +1876,8 @@ CONFIG: dict = {
     "MT5_INTRADAY_CALENDAR_GAP_GRACE_BUCKETS": {"H4": 30, "H1": 120, "default": 24},
     "MT5_INTRADAY_CALENDAR_GAP_TYPES": ["stock", "index", "commodity", "etf", "etf_bond"],
     "ENGINE_A_MIN_D1_BARS": 220,
-    "ENGINE_A_MIN_H4_BARS": 50,
-    "ENGINE_A_MIN_H1_BARS": 50,
+    "ENGINE_A_MIN_H4_BARS": 60,
+    "ENGINE_A_MIN_H1_BARS": 60,
     "ENGINE_A_V3_BACKTEST": {
         "SPREAD_BPS": 2.0,
         "COMMISSION_BPS": 1.0,
@@ -1887,6 +1887,7 @@ CONFIG: dict = {
     },
     "ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED": False,
     "ENGINE_A_V3_PROFILE_TTL_DAYS": 90,
+    "ENGINE_A_V3_LEGACY_SHADOW_ENABLED": True,
     # Best-effort JSONL journal of live V3 signals for offline live-vs-backtest
     # reconciliation (engine_a_v3/shadow_journal.py). Diagnostic only: gates
     # nothing, blocks nothing, fails silently. Off by default (disk growth).

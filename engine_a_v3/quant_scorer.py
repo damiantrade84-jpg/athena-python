@@ -30,7 +30,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from factor_scoring import _adx_multiplier_from_value, _resolve_adx_thresholds
-from engine_a_scoring_profile import resolve_engine_a_scoring_profile
+from engine_a_scoring_profile import (
+    default_trend_tf_weights,
+    resolve_engine_a_scoring_profile,
+)
 from engine_a_v3.profile import CORE_COMPONENTS
 from engine_a_v3.timeframes import (
     resolve_diagnostic_v3_entry_timeframe,
@@ -53,10 +56,31 @@ MAX_SCORE = 3.0
 
 # Multi-timeframe trend weights by horizon (Elder triple screen: D1 tide,
 # H4 momentum, H1 entry). Intraday emphasises faster TFs; swing emphasises D1.
-_TF_WEIGHTS: dict[str, dict[str, float]] = {
-    "swing":    {"D1": 0.50, "H4": 0.32, "H1": 0.18},
-    "intraday": {"D1": 0.28, "H4": 0.40, "H1": 0.32},
-}
+# The fallback is derived from engine_a_scoring_profile defaults so a disabled
+# or erroring profile cannot silently switch scoring to a divergent hardcoded
+# table (the previous _TF_WEIGHTS disagreed with the profile defaults).
+def _fallback_tf_weights(horizon: str) -> dict[str, float]:
+    try:
+        weights = default_trend_tf_weights(horizon)
+        if weights:
+            return weights
+    except Exception:
+        pass
+    return (
+        {"D1": 0.50, "H4": 0.30, "H1": 0.20}
+        if horizon == "swing"
+        else {"D1": 0.42, "H4": 0.33, "H1": 0.25}
+    )
+
+
+# Policy-role trend weights used when an authoritative timeframe policy drives
+# scoring: structure carries the most weight, regime the least. Single source
+# for the policy path in score_pair.
+_POLICY_ROLE_TF_WEIGHTS: tuple[tuple[str, str, float], ...] = (
+    ("regime", "regimeTf", 0.18),
+    ("bias", "biasTf", 0.37),
+    ("structure", "structureTf", 0.45),
+)
 
 
 def _resolve_v3_tf_weights(score_group: str, asset_type: str, horizon: str) -> dict[str, float]:
@@ -67,17 +91,17 @@ def _resolve_v3_tf_weights(score_group: str, asset_type: str, horizon: str) -> d
     us_stock_single uses 0.40/0.35/0.25). The profile's ``trend_layers`` map each
     ``weight_key`` to a ``tf``; the returned dict is keyed by TF (D1/H4/H1) so
     ``_trend_component`` can consume it directly. Falls back to the hardcoded
-    ``_TF_WEIGHTS[horizon]`` when the profile is disabled or yields no usable
-    weights, preserving prior behaviour for unaudited groups / disabled config.
+    ``_fallback_tf_weights(horizon)`` when the profile is disabled or yields no usable
+    weights, preserving fail-closed behaviour for unaudited groups / disabled config.
     """
     try:
         profile = resolve_engine_a_scoring_profile(
             score_group=score_group, asset_type=asset_type, style=horizon
         )
     except Exception:
-        return dict(_TF_WEIGHTS[horizon])
+        return _fallback_tf_weights(horizon)
     if not profile.get("enabled"):
-        return dict(_TF_WEIGHTS[horizon])
+        return _fallback_tf_weights(horizon)
     layers = profile.get("trend_layers") or []
     weights = profile.get("trend_weights") or {}
     tf_weights: dict[str, float] = {}
@@ -90,7 +114,7 @@ def _resolve_v3_tf_weights(score_group: str, asset_type: str, horizon: str) -> d
             tf_weights[tf] = float(weights[wkey])
         except (TypeError, ValueError):
             pass
-    return tf_weights or dict(_TF_WEIGHTS[horizon])
+    return tf_weights or _fallback_tf_weights(horizon)
 
 
 def _resolve_v3_momentum_tf(score_group: str, asset_type: str, horizon: str) -> str:
@@ -386,9 +410,24 @@ def _momentum_component(
     if hist is not None:
         if hist_prev is not None and _momentum_blend_enabled():
             slope = hist - hist_prev
-            macd_term = _clamp(slope / max(abs(hist_prev), 0.05), -1.0, 1.0)
-            if abs(macd_term) < 0.05 and hist != 0.0:
-                macd_term = 0.8 if hist > 0 else -0.8 if hist < 0 else 0.0
+            # Scale-invariant slope: normalize by the histogram's own magnitude.
+            # The previous absolute 0.05 divisor floor + |term|<0.05 snap made the
+            # term non-monotonic (hist 1.03 -> 0.8 but 1.06 -> 0.06) and pinned it
+            # at a constant +/-0.8 for any instrument whose |hist| < 0.05 (all
+            # forex, most commodities), discarding slope information entirely.
+            base = max(abs(hist_prev), abs(hist))
+            rel_slope = _clamp(slope / base, -1.0, 1.0) if base > 0 else 0.0
+            sign_term = 0.8 if hist > 0 else -0.8 if hist < 0 else 0.0
+            if sign_term != 0.0:
+                rising = hist > hist_prev
+                strengthening = (sign_term > 0 and rising) or (sign_term < 0 and not rising)
+                macd_term = (
+                    _clamp(sign_term + 0.2 * rel_slope, -1.0, 1.0)
+                    if strengthening
+                    else sign_term * 0.6
+                )
+            else:
+                macd_term = rel_slope
         else:
             macd_term = 1.0 if hist > 0 else -1.0 if hist < 0 else 0.0
             if hist_prev is not None and macd_term != 0.0:
@@ -465,12 +504,12 @@ def _location_component(
     best entry (high quality); over-extension lowers quality but never vetoes.
     In a weak-ADX, BB-stretched regime, flips to a mean-reversion fade signal."""
     if not snap:
-        return Component(0.0, 0.5), "trend"
+        return Component(0.0, 0.0, available=False), "trend"
     close = _f(snap.get("close"))
     e_trend = _f(snap.get("ema21"))
     atr = _f(snap.get("atr"))
     if close is None or e_trend is None or atr is None or atr <= 0:
-        return Component(0.0, 0.5), "trend"
+        return Component(0.0, 0.0, available=False), "trend"
     dist = (close - e_trend) / atr  # >0 above trend EMA
     adx = _f(snap.get("adx"), 0.0) or 0.0
     bb_u = _f(snap.get("bbUpper"))
@@ -671,7 +710,17 @@ def score_pair(
     group = getattr(route, "score_group", "unknown")
     family = getattr(route, "family", "unknown")
     asset_type = _FAMILY_ASSET.get(family, "other")
-    horizon = "intraday" if str(horizon).lower() == "intraday" else "swing"
+    horizon_raw = str(horizon or "").strip().lower()
+    if horizon_raw not in ("intraday", "swing"):
+        # Fail closed on unsupported horizons instead of silently coercing to
+        # swing: a typo'd horizon would otherwise score with the wrong profile.
+        from engine_a_v3.profile import baseline_profile
+        return _unavailable_quant(
+            profile or baseline_profile(group, "swing"),
+            entry_tf=None,
+            rejection_reason="unsupported_horizon",
+        )
+    horizon = horizon_raw
     diagnostic_override = resolve_diagnostic_v3_entry_timeframe(entry_tf_override)
     policy = policy_timeframes if isinstance(policy_timeframes, Mapping) else None
     policy_setup_tf = str((policy or {}).get("setup") or (policy or {}).get("setupTf") or "").upper()
@@ -705,14 +754,9 @@ def score_pair(
         )
 
     if policy:
-        policy_roles = (
-            ("regime", "regimeTf"),
-            ("bias", "biasTf"),
-            ("structure", "structureTf"),
-        )
         tf_weights: dict[str, float] = {}
-        for keys, weight in zip(policy_roles, (0.18, 0.37, 0.45)):
-            tf = str((policy.get(keys[0]) or policy.get(keys[1]) or "")).upper()
+        for key, alias, weight in _POLICY_ROLE_TF_WEIGHTS:
+            tf = str((policy.get(key) or policy.get(alias) or "")).upper()
             if tf:
                 tf_weights[tf] = tf_weights.get(tf, 0.0) + weight
         momentum_tf = policy_trigger_tf

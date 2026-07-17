@@ -457,9 +457,16 @@ def evaluate_engine_a_v3(
             direction=None,
             decisionTime=decision_time.isoformat(),
             lastConfirmedCandleTs=last_confirmed_ts,
-            validUntil=_expiry(
-                decision_time, normalized_horizon or "intraday", primary_tf
-            ).isoformat(),
+            # With no parseable last-candle timestamp, decision_time is the
+            # epoch sentinel - an expiry computed from it (epoch+4h) is
+            # misleading. Emit an already-expired validUntil instead.
+            validUntil=(
+                _expiry(
+                    decision_time, normalized_horizon or "intraday", primary_tf
+                ).isoformat()
+                if last_ts_raw is not None
+                else decision_time.isoformat()
+            ),
             entryZone=None,
             invalidation=None,
             targets=(),
@@ -609,12 +616,10 @@ def evaluate_engine_a_v3(
         direction = quant.direction if quant.direction in {"LONG", "SHORT"} else None
         level_style = quant.level_style
         setup_id = f"quant_{quant.level_style}"
-        if level_style == "mean_reversion" and direction is not None:
-            loc = quant.components.get("location")
-            if loc is not None and loc.signal != 0.0:
-                mr_direction = "LONG" if loc.signal > 0 else "SHORT"
-                if mr_direction != direction:
-                    direction = mr_direction
+        # NOTE: no evaluator-side mean-reversion direction flip here.
+        # quant_scorer already derives `direction` from the location signal in
+        # MR regimes (and flips level_style to "trend" when its opposition
+        # guard blocks the fade), so re-deriving it here was a proven no-op.
 
     levels = None
     atr_pct = quant.factor_diagnostics.get("atrPct") if quant.factor_diagnostics else None
