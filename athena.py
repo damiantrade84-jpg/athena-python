@@ -7420,11 +7420,19 @@ def _compute_naked_analysis(
 
         _pair_score_group = get_pair_score_group(pair_obj)
         _requested_style_naked = sig.get("style", "auto")
+        from timeframe_policy import speed_state_from_policy_payload
+
+        _execution_speed_state = (
+            speed_state_from_policy_payload(sig)
+            if execution_mode and sig.get("timeframePolicyHash")
+            else None
+        )
         resolved_style, style_profile = _naked_scan_style_profile(
             _requested_style_naked,
             score_group=_pair_score_group,
             asset_type=pair_obj.get("type", ""),
             symbol=pair_obj.get("display") or pair_obj.get("symbol") or "",
+            speed_state=_execution_speed_state,
         )
         _dxy_h4_closes_b = None
         if str(pair_obj.get("type") or "").lower() == "forex" and (
@@ -7439,28 +7447,46 @@ def _compute_naked_analysis(
                     pair_obj.get("display", "?"),
                     _dxy_err,
                 )
+        _setup_tf = str(style_profile.get("setup_tf", "H1")).upper()
         _entry_tf = str(style_profile.get("entry_tf", "H1")).upper()
-        _lower_entry_state = None
-        if _entry_tf not in {"D1", "H4", "H1"}:
+        _execution_tf = str(
+            style_profile.get("execution_tf", _entry_tf)
+        ).upper()
+        _role_market_states = {
+            "D1": d1_state,
+            "H4": h4_state,
+            "H1": h1_state,
+        }
+        for _lower_tf in {
+            _setup_tf,
+            _entry_tf,
+            _execution_tf,
+        } - {"D1", "H4", "H1"}:
             if pair_obj.get("source") == "mt5":
-                _lower_entry_state = _engine_b_live_market_state(
-                    pair_obj, _entry_tf, _clim[_entry_tf]
+                _lower_state = _engine_b_live_market_state(
+                    pair_obj, _lower_tf, _clim[_lower_tf]
                 )
             else:
-                from athena_app.services.market_state import (
-                    market_state_offset_hours,
-                    split_market_state,
-                )
+                from athena_app.services.market_state import get_tf_market_state
 
                 _lower_raw, _ = _fetch_ab_crypto_signal_candles(
-                    pair_obj, _entry_tf, _clim[_entry_tf]
+                    pair_obj, _lower_tf, _clim[_lower_tf]
                 )
-                _lower_entry_state = split_market_state(
-                    list(_lower_raw or []),
-                    _entry_tf,
-                    pair_obj.get("display") or pair_obj.get("symbol") or "",
-                    offset_hours=market_state_offset_hours(pair_obj, _entry_tf),
+                _lower_state = get_tf_market_state(
+                    pair_obj,
+                    _lower_tf,
+                    candles=list(_lower_raw or []),
                 )
+            _role_market_states[_lower_tf] = _lower_state
+        is_forming_b = bool(
+            is_forming_b
+            or any(
+                bool(state.get("is_live"))
+                for state in _role_market_states.values()
+                if isinstance(state, dict)
+            )
+        )
+        _lower_entry_state = _role_market_states.get(_entry_tf)
         _lower_structure = _market_state_series(
             _lower_entry_state, include_forming=False
         )
@@ -7498,13 +7524,23 @@ def _compute_naked_analysis(
             "D1": d1,
             "H4": h4,
             "H1": h1,
-            **({_entry_tf: _lower_structure} if _lower_entry_state else {}),
+            **{
+                tf: _market_state_series(state, include_forming=False)
+                for tf, state in _role_market_states.items()
+                if tf not in {"D1", "H4", "H1"}
+            },
         }
         _trigger_tf_map = {
             "D1": d1,
             "H4": h4_trigger,
             "H1": h1_trigger,
-            **({_entry_tf: _lower_trigger} if _lower_entry_state else {}),
+            **{
+                tf: _market_state_series(
+                    state, include_forming=_use_forming_trigger
+                )
+                for tf, state in _role_market_states.items()
+                if tf not in {"D1", "H4", "H1"}
+            },
         }
         zone_candles = _tf_map.get(_zone_tf, h4)
         structure_entry_candles = _tf_map.get(_entry_tf, h1)
@@ -7723,9 +7759,6 @@ def _compute_naked_analysis(
         res["setup_tf"] = style_profile.get("setup_tf")
         res["entry_tf"] = style_profile.get("entry_tf")
         res["execution_tf"] = style_profile.get("execution_tf")
-        res["execution_tf_policy"] = style_profile.get("execution_tf")
-        res["execution_tf_actual"] = None
-        res["execution_tf_consumed"] = False
         res["atr_tf"] = style_profile.get("atr_tf")
         res["timeframe_policy_version"] = style_profile.get(
             "timeframe_policy_version"
@@ -7733,6 +7766,22 @@ def _compute_naked_analysis(
         res["regime"] = regime_label
         res["is_forming"] = is_forming_b
         res["atr_source"] = atr_source
+        from timeframe_policy import attach_timeframe_policy_payload
+
+        attach_timeframe_policy_payload(
+            res,
+            pair_obj,
+            resolved_style,
+            engine="engine_b",
+            market_states=_role_market_states,
+            speed_state=_execution_speed_state,
+        )
+        res["execution_tf_policy"] = res.get("executionTf")
+        res["execution_tf_actual"] = res.get("executionTfActual")
+        res["execution_tf_consumed"] = bool(res.get("executionTfConsumed"))
+        res["execution_timing_passed"] = res.get("entryReadiness") == "READY"
+        if not res["execution_timing_passed"]:
+            res["execution_block_reason"] = res.get("entryReadinessReason")
         # Expose execution-resolved levels as final levels for consumers
         res["final_stop_loss"] = conf.get("execution_sl") or res.get("recommended_stop_loss")
         res["final_take_profit"] = conf.get("execution_tp") or res.get("recommended_take_profit")
@@ -7958,6 +8007,9 @@ def _revalidate_engine_b_scan_signal(
 
     updated = dict(signal or {})
     now_iso = datetime.now(timezone.utc).isoformat()
+    from timeframe_policy import policy_mode_is_authoritative
+
+    execution_timing_enforced = policy_mode_is_authoritative(None, CONFIG)
     updated.update(
         {
             "engine": "engine_b",
@@ -7990,9 +8042,36 @@ def _revalidate_engine_b_scan_signal(
             "exit_strategy": refreshed.get("exit_strategy"),
             "naked_data": refreshed,
             "engine_b": refreshed,
-            "executable": True,
+            "executable": (
+                refreshed.get("entryReadiness") == "READY"
+                if execution_timing_enforced
+                else True
+            ),
         }
     )
+    for timeframe_key in (
+        "timeframePolicyVersion",
+        "policyKey",
+        "regimeTf",
+        "biasTf",
+        "structureTf",
+        "setupTf",
+        "triggerTf",
+        "executionTf",
+        "executionPrerequisiteTf",
+        "m5Role",
+        "entryReadiness",
+        "entryReadinessReason",
+        "executionTfActual",
+        "executionTfConsumed",
+        "executionTimingStatus",
+        "executionTimingAligned",
+        "executionTimingDirection",
+        "executionTimingSource",
+        "executionCandleTime",
+    ):
+        if timeframe_key in refreshed:
+            updated[timeframe_key] = refreshed[timeframe_key]
     for canonical_key in (
         "is_actionable",
         "engine_b_canonical_actionable",
@@ -15129,18 +15208,49 @@ def analyze_pair(
     if _v3_live_entry_tf:
         _v3_candles[_v3_live_entry_tf] = _v3_entry_candles
 
-    # The promoted Engine A score consumes the policy's setup and trigger
-    # series.  These are confirmed-only scoring inputs; M5 remains execution
-    # context and is not allowed to create score direction or structure.
+    # The promoted Engine A score consumes only the policy setup and trigger
+    # series.  The execution series is fetched into market-state diagnostics so
+    # it can gate entry timing without changing score, direction, or structure.
+    _policy_role_states: dict[str, dict] = {}
     if _policy_timeframes:
         for _policy_tf in {
             _policy_timeframes["setup"],
             _policy_timeframes["trigger"],
+            _policy_timeframes["execution"],
         }:
-            if _policy_tf in _v3_candles:
-                continue
             _policy_state = preloaded_market_state.get(_policy_tf)
+            if _policy_tf == "D1":
+                _policy_state = (
+                    _d1_state
+                    if isinstance(_d1_state, dict)
+                    else {"confirmed": d1 or []}
+                )
+            elif _policy_tf == "H4":
+                _policy_state = (
+                    _h4_state
+                    if isinstance(_h4_state, dict)
+                    else {"confirmed": h4 or []}
+                )
+            elif _policy_tf == "H1":
+                _policy_state = (
+                    _h1_state
+                    if isinstance(_h1_state, dict)
+                    else {"confirmed": h1 or []}
+                )
+            elif (
+                _policy_tf == _v3_live_entry_tf
+                and isinstance(_v3_entry_state, dict)
+            ):
+                _policy_state = _v3_entry_state
+            if isinstance(_policy_state, dict):
+                _policy_role_states[_policy_tf] = _policy_state
+            if _policy_tf in {"D1", "H4", "H1"}:
+                continue
             _policy_raw = preloaded_candles.get(_policy_tf)
+            if _policy_raw is None and isinstance(_policy_state, dict):
+                _policy_raw = list(_policy_state.get("confirmed") or [])
+                if _policy_state.get("forming"):
+                    _policy_raw.append(_policy_state["forming"])
             if _policy_raw is None:
                 _policy_raw, _policy_meta = _fetch_ab_crypto_signal_candles(
                     pair,
@@ -15151,11 +15261,32 @@ def analyze_pair(
                 )
                 if _policy_meta:
                     preloaded_fetch_meta[_policy_tf] = _policy_meta
-            _v3_candles[_policy_tf] = _engine_a_confirmed_candles(
-                _policy_tf,
-                _policy_raw,
-                _policy_state if isinstance(_policy_state, dict) else None,
-            )
+            if not isinstance(_policy_state, dict):
+                try:
+                    from athena_app.services.market_state import get_tf_market_state
+
+                    _policy_state = get_tf_market_state(
+                        pair,
+                        _policy_tf,
+                        candles=list(_policy_raw or []),
+                    )
+                except Exception as _policy_state_err:
+                    _mark_confirmed_split_failed(
+                        _policy_tf, str(_policy_state_err)
+                    )
+                    _policy_state = {}
+            if isinstance(_policy_state, dict):
+                _policy_role_states[_policy_tf] = _policy_state
+            if (
+                _policy_tf
+                in {_policy_timeframes["setup"], _policy_timeframes["trigger"]}
+                and _policy_tf not in _v3_candles
+            ):
+                _v3_candles[_policy_tf] = _engine_a_confirmed_candles(
+                    _policy_tf,
+                    _policy_raw,
+                    _policy_state if isinstance(_policy_state, dict) else None,
+                )
 
     if not d1 or not h4 or not h1 or (_v3_live_entry_tf and not _v3_entry_candles):
         log.warning(
@@ -15527,6 +15658,7 @@ def analyze_pair(
     for _tf, _state in (preloaded_market_state or {}).items():
         if isinstance(_state, dict):
             _policy_market_states[str(_tf).upper()] = _state
+    _policy_market_states.update(_policy_role_states)
     if _v3_live_entry_tf and isinstance(_v3_entry_state, dict):
         _policy_market_states[_v3_live_entry_tf] = _v3_entry_state
     attach_timeframe_policy_payload(

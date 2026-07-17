@@ -1787,6 +1787,39 @@ def _refresh_engine_b_execution_context(
         return None, "ENGINE_B_REFRESH_REQUIRED: Engine B refresh function unavailable"
 
     seed = dict(sig or {})
+    signal_engine_name = str(
+        sig.get("engine") or sig.get("engine_source") or ""
+    ).lower()
+    top_level_engine_b_owned = bool(
+        sig.get("is_naked") or signal_engine_name in {"b", "engine_b"}
+    )
+    policy_source = next(
+        (
+            candidate
+            for candidate in (
+                engine_b,
+                sig.get("engine_b"),
+                sig.get("naked_data"),
+            )
+            if isinstance(candidate, dict) and candidate.get("timeframePolicyHash")
+        ),
+        None,
+    )
+    if policy_source is None:
+        if top_level_engine_b_owned:
+            policy_source = sig
+    if isinstance(policy_source, dict):
+        for policy_key in (
+            "timeframePolicyHash",
+            "currentSpeedClass",
+            "liveSpeedClass",
+            "liquidityClass",
+            "speedPercentile",
+            "executionTf",
+            "m5Role",
+        ):
+            if policy_source.get(policy_key) is not None:
+                seed[policy_key] = policy_source[policy_key]
     if pip_mode:
         seed["style"] = pip_mode
 
@@ -1805,6 +1838,24 @@ def _refresh_engine_b_execution_context(
             None,
             f"ENGINE_B_SIGNAL_FLIPPED: {sig.get('pair')} is now {refreshed_direction} (was {original_direction})",
         )
+
+    original_policy_hash = str(
+        (policy_source or {}).get("timeframePolicyHash") or ""
+    )
+    refreshed_policy_hash = str(refreshed.get("timeframePolicyHash") or "")
+    if original_policy_hash and refreshed_policy_hash != original_policy_hash:
+        return None, "ENGINE_B_TF_POLICY_CHANGED: refreshed timeframe policy differs from scan"
+
+    from timeframe_policy import policy_mode_is_authoritative
+
+    if policy_mode_is_authoritative(None, getattr(runtime, "CONFIG", {}) or {}):
+        readiness = str(refreshed.get("entryReadiness") or "UNAVAILABLE").upper()
+        if readiness != "READY":
+            detail = str(
+                refreshed.get("entryReadinessReason")
+                or "execution timeframe is not aligned"
+            )
+            return None, f"ENGINE_B_ENTRY_NOT_READY: {readiness}: {detail}"
 
     if not bool(refreshed.get("passed")):
         return None, "ENGINE_B_NOT_CONFIRMED: refreshed Engine B confirmation failed before execution"
@@ -1850,6 +1901,21 @@ def _refresh_engine_b_execution_context(
     sig["is_naked"] = True
     sig["naked_data"] = refreshed
     sig["engine_b"] = refreshed
+    if top_level_engine_b_owned:
+        for policy_key in (
+            "timeframePolicyHash",
+            "entryReadiness",
+            "entryReadinessReason",
+            "executionTfActual",
+            "executionTfConsumed",
+            "executionTimingStatus",
+            "executionTimingAligned",
+            "executionTimingDirection",
+            "executionTimingSource",
+            "executionCandleTime",
+        ):
+            if refreshed.get(policy_key) is not None:
+                sig[policy_key] = refreshed[policy_key]
     sig["price"] = current_price
     sig["entry"] = current_price
     sig["timestamp"] = now_iso
@@ -1880,7 +1946,13 @@ def _should_refresh_engine_b_before_execute(
     max_age: float,
     missing_price: bool,
 ) -> bool:
-    """Refresh Engine B before execute when stale, missing price, or crypto (Bybit drift parity)."""
+    """Refresh Engine B before execute when policy timing must be revalidated."""
+    if (
+        sig.get("timeframePolicyVersion")
+        or sig.get("executionTf")
+        or sig.get("execution_tf_policy")
+    ):
+        return True
     if missing_price:
         return True
     if sig_age > max_age / 2:
@@ -1971,14 +2043,40 @@ def _refresh_engine_a_v3_execution_context(
     except Exception:
         _preloaded_state = None
     try:
+        from timeframe_policy import speed_state_from_policy_payload
+
+        _execution_speed_state = (
+            speed_state_from_policy_payload(sig)
+            if sig.get("timeframePolicyHash")
+            else None
+        )
+        _analysis_kwargs = {
+            "style": _style,
+            "preloaded_market_state": _preloaded_state,
+        }
+        if _execution_speed_state is not None:
+            _analysis_kwargs["timeframe_speed_state"] = _execution_speed_state
         refreshed = runtime.analyze_pair(
             pair_obj,
             "neutral",
-            style=_style,
-            preloaded_market_state=_preloaded_state,
+            **_analysis_kwargs,
         )
     except Exception as exc:
         return f"ENGINE_A_V3_REFRESH_FAILED: {exc}"
+    original_policy_hash = str(sig.get("timeframePolicyHash") or "")
+    refreshed_policy_hash = str((refreshed or {}).get("timeframePolicyHash") or "")
+    if original_policy_hash and refreshed_policy_hash != original_policy_hash:
+        return "ENGINE_A_V3_TF_POLICY_CHANGED: refreshed timeframe policy differs from scan"
+    from timeframe_policy import policy_mode_is_authoritative
+
+    if policy_mode_is_authoritative(None, getattr(runtime, "CONFIG", {}) or {}):
+        readiness = str((refreshed or {}).get("entryReadiness") or "UNAVAILABLE").upper()
+        if readiness != "READY":
+            detail = str(
+                (refreshed or {}).get("entryReadinessReason")
+                or "execution timeframe is not aligned"
+            )
+            return f"ENGINE_A_V3_ENTRY_NOT_READY: {readiness}: {detail}"
     allowed, reason = verify_refreshed_signal(sig, refreshed)
     if not allowed:
         return reason or "ENGINE_A_V3_REFRESH_REJECTED"

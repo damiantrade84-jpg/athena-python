@@ -1468,6 +1468,19 @@ class AutoTrader:
                         self._write_error(sig, f"NAKED_MAX_DAILY:{naked_max_daily}")
                         continue
 
+            timing_ok, timing_reason = self._refresh_execution_timing(sig, cfg)
+            if not timing_ok:
+                log.info(f"[AUTO] {sig.get('pair')} skipped: {timing_reason}")
+                _finalize_trace(
+                    sig,
+                    cfg,
+                    action="block",
+                    stage="executionTimingRefresh",
+                    reason=timing_reason,
+                )
+                self._write_error(sig, timing_reason)
+                continue
+
             ok, reason = self._can_execute(sig, cfg)
 
             if not ok:
@@ -1597,6 +1610,41 @@ class AutoTrader:
                 signal["conductor"].setdefault("notUsedForExecution", True)
         except Exception as _e:
             log.warning("[AUTO] conductor hydrate failed: %s", _e)
+
+    def _refresh_execution_timing(
+        self,
+        signal: dict,
+        cfg: dict,
+    ) -> tuple[bool, str]:
+        """Refresh authoritative Engine B timing before execution gates."""
+        from timeframe_policy import policy_mode_is_authoritative
+
+        if (
+            _signal_engine(signal) != "engine_b"
+            or not policy_mode_is_authoritative(None, cfg)
+            or not (
+                signal.get("timeframePolicyVersion")
+                or signal.get("executionTf")
+                or signal.get("execution_tf_policy")
+            )
+        ):
+            return True, "OK"
+        try:
+            from athena_runtime import rt as _auto_rt
+            from execution import _refresh_engine_b_execution_context
+
+            engine_b_context = signal.get("engine_b") or signal.get("naked_data") or {}
+            refreshed, error = _refresh_engine_b_execution_context(
+                signal,
+                engine_b_context,
+                _auto_rt(),
+                str(signal.get("style") or "intraday"),
+            )
+        except Exception as exc:
+            return False, f"ENGINE_B_REFRESH_FAILED: {exc}"
+        if error or not refreshed:
+            return False, error or "ENGINE_B_REFRESH_FAILED: no refreshed context"
+        return True, "OK"
 
     def _can_execute(self, signal: dict, cfg: dict) -> tuple[bool, str]:
         """Check deterministic auto-execution gates without mutating Engine A score."""

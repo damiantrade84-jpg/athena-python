@@ -308,6 +308,53 @@ class SpeedState:
     liquidity_thresholds: LiquidityThresholds = field(default_factory=LiquidityThresholds)
 
 
+def speed_state_from_policy_payload(
+    signal: Mapping[str, Any] | None,
+) -> SpeedState | None:
+    """Rebuild only the policy-selection state emitted on a policy-stamped signal.
+
+    This is used by execute-time server recomputation so a session-conditional
+    M5 promotion is resolved to the same role instead of silently reverting to
+    the baseline timeframe.  It does not restore indicator inputs or bypass the
+    resolver; malformed values fail closed to baseline resolution, and callers
+    verify that the recomputed policy hash still matches the stamped hash.
+    """
+    payload = signal if isinstance(signal, Mapping) else {}
+    raw_speed = payload.get("currentSpeedClass", payload.get("liveSpeedClass"))
+    try:
+        live_speed = SpeedClass(str(raw_speed or SpeedClass.UNAVAILABLE.value).upper())
+    except ValueError:
+        return None
+    raw_liquidity = payload.get("liquidityClass", LiquidityClass.UNAVAILABLE.value)
+    try:
+        liquidity = LiquidityClass(str(raw_liquidity or "").upper())
+    except ValueError:
+        return None
+    try:
+        speed_percentile = (
+            float(payload.get("speedPercentile"))
+            if payload.get("speedPercentile") is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        speed_percentile = None
+    execution_tf = str(payload.get("executionTf") or "").upper()
+    m5_role = str(payload.get("m5Role") or "").lower()
+    return SpeedState(
+        live_speed_class=live_speed,
+        liquidity_class=liquidity,
+        history_ready=live_speed != SpeedClass.UNAVAILABLE,
+        speed_percentile=speed_percentile,
+        thin_liquidity=liquidity in {
+            LiquidityClass.THIN,
+            LiquidityClass.UNAVAILABLE,
+        },
+        m5_quality_acceptable=(
+            execution_tf == Timeframe.M5.value and m5_role == M5Role.EXECUTION.value
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class PolicyDiagnostics:
     canonical_symbol: str
@@ -1508,6 +1555,174 @@ def classify_broker_account(account: Mapping[str, Any] | None) -> tuple[str, str
     return "unknown", "BROKER_ENVIRONMENT_UNAVAILABLE"
 
 
+def evaluate_execution_timeframe(
+    policy: TimeframePolicy,
+    signal: Mapping[str, Any],
+    market_states: Mapping[str, Mapping[str, Any]] | None,
+    *,
+    trigger_confirmed: bool,
+) -> dict[str, Any]:
+    """Evaluate entry timing on the policy execution TF without changing the thesis.
+
+    The trigger remains the final analytical confirmation.  This helper compares
+    the current forming/live move on the policy execution timeframe with the
+    signal direction and only decides whether the entry may be taken now.  It
+    never changes score, direction, structure, or SL/TP, and it never substitutes
+    a slower timeframe when execution data is unavailable.
+    """
+    states = market_states or {}
+    execution_tf = policy.execution_tf.value
+    trigger_tf = policy.trigger_tf.value
+    raw_state = states.get(execution_tf) or {}
+    state = raw_state if isinstance(raw_state, Mapping) else {}
+    confirmed = list(state.get("confirmed") or [])
+    forming = state.get("forming") if isinstance(state.get("forming"), Mapping) else None
+
+    if not (confirmed or forming):
+        return {
+            "executionTfActual": None,
+            "executionTfConsumed": False,
+            "executionTimingStatus": "UNAVAILABLE",
+            "executionTimingAligned": None,
+            "executionTimingDirection": None,
+            "executionTimingSource": None,
+            "executionCandleTime": None,
+        }
+    if state.get("stale") is True:
+        return {
+            "executionTfActual": execution_tf,
+            "executionTfConsumed": False,
+            "executionTimingStatus": "STALE",
+            "executionTimingAligned": None,
+            "executionTimingDirection": None,
+            "executionTimingSource": None,
+            "executionCandleTime": None,
+        }
+
+    shared_trigger = execution_tf == trigger_tf
+    if shared_trigger and not trigger_confirmed:
+        candle = forming or (confirmed[-1] if confirmed else None)
+        candle_time = (
+            candle.get("time")
+            or candle.get("timestamp")
+            or candle.get("datetime")
+            or candle.get("date")
+        ) if isinstance(candle, Mapping) else None
+        return {
+            "executionTfActual": execution_tf,
+            "executionTfConsumed": True,
+            "executionTimingStatus": "AWAITING_TRIGGER",
+            "executionTimingAligned": None,
+            "executionTimingDirection": None,
+            "executionTimingSource": "trigger_timeframe",
+            "executionCandleTime": candle_time,
+        }
+
+    live_price_raw = signal.get("current_price") or signal.get("price")
+    try:
+        live_price = float(live_price_raw) if live_price_raw is not None else None
+        if live_price is not None and (not math.isfinite(live_price) or live_price <= 0):
+            live_price = None
+    except (TypeError, ValueError):
+        live_price = None
+
+    reference_candle = forming or (confirmed[-1] if confirmed else None)
+    if not isinstance(reference_candle, Mapping):
+        return {
+            "executionTfActual": execution_tf,
+            "executionTfConsumed": False,
+            "executionTimingStatus": "UNAVAILABLE",
+            "executionTimingAligned": None,
+            "executionTimingDirection": None,
+            "executionTimingSource": None,
+            "executionCandleTime": None,
+        }
+
+    if forming is not None:
+        source = "forming_candle_live_price" if live_price is not None else "forming_candle"
+        reference_value = reference_candle.get("open")
+        current_value = live_price if live_price is not None else reference_candle.get("close")
+    elif live_price is not None:
+        source = "live_price_vs_confirmed_close"
+        reference_value = reference_candle.get("close")
+        current_value = live_price
+    elif shared_trigger:
+        candle_time = (
+            reference_candle.get("time")
+            or reference_candle.get("timestamp")
+            or reference_candle.get("datetime")
+            or reference_candle.get("date")
+        )
+        return {
+            "executionTfActual": execution_tf,
+            "executionTfConsumed": True,
+            "executionTimingStatus": "SHARED_TRIGGER_CONFIRMED",
+            "executionTimingAligned": True,
+            "executionTimingDirection": str(signal.get("direction") or "").upper() or None,
+            "executionTimingSource": "confirmed_trigger",
+            "executionCandleTime": candle_time,
+        }
+    else:
+        return {
+            "executionTfActual": execution_tf,
+            "executionTfConsumed": False,
+            "executionTimingStatus": "UNAVAILABLE",
+            "executionTimingAligned": None,
+            "executionTimingDirection": None,
+            "executionTimingSource": None,
+            "executionCandleTime": None,
+        }
+
+    candle_time = (
+        reference_candle.get("time")
+        or reference_candle.get("timestamp")
+        or reference_candle.get("datetime")
+        or reference_candle.get("date")
+    )
+    try:
+        candle_open = float(reference_value)
+        candle_close = float(current_value)
+    except (TypeError, ValueError):
+        candle_open = candle_close = float("nan")
+
+    direction = str(signal.get("direction") or "").upper()
+    if (
+        direction not in {"LONG", "SHORT"}
+        or not math.isfinite(candle_open)
+        or not math.isfinite(candle_close)
+        or candle_open <= 0
+        or candle_close <= 0
+    ):
+        return {
+            "executionTfActual": execution_tf,
+            "executionTfConsumed": False,
+            "executionTimingStatus": "UNAVAILABLE",
+            "executionTimingAligned": None,
+            "executionTimingDirection": None,
+            "executionTimingSource": source,
+            "executionCandleTime": candle_time,
+        }
+
+    if candle_close > candle_open:
+        execution_direction = "LONG"
+    elif candle_close < candle_open:
+        execution_direction = "SHORT"
+    else:
+        execution_direction = "NEUTRAL"
+    aligned = execution_direction == direction if execution_direction != "NEUTRAL" else None
+    return {
+        "executionTfActual": execution_tf,
+        "executionTfConsumed": True,
+        "executionTimingStatus": (
+            "ALIGNED" if aligned is True else "OPPOSED" if aligned is False else "NEUTRAL"
+        ),
+        "executionTimingAligned": aligned,
+        "executionTimingDirection": execution_direction,
+        "executionTimingSource": source,
+        "executionCandleTime": candle_time,
+    }
+
+
 def timeframe_policy_execution_block_reason(
     signal: Mapping[str, Any],
     config: Mapping[str, Any],
@@ -1523,6 +1738,10 @@ def timeframe_policy_execution_block_reason(
     if mode == PolicyMode.ENFORCED_DEMO:
         if not demo_autotrade_enabled:
             return "TF_POLICY_DEMO_AUTOTRADE_DISABLED"
+        if "entryReadiness" in signal:
+            readiness = str(signal.get("entryReadiness") or "UNAVAILABLE").upper()
+            if readiness != "READY":
+                return f"TF_POLICY_ENTRY_READINESS_{readiness}"
         if account is None:
             # _can_execute runs before broker retrieval; account scope is checked
             # again immediately before execution with broker metadata.
@@ -1545,6 +1764,10 @@ def timeframe_policy_execution_block_reason(
             }
         return reason
     if mode == PolicyMode.ENFORCED_LIVE:
+        if "entryReadiness" in signal:
+            readiness = str(signal.get("entryReadiness") or "UNAVAILABLE").upper()
+            if readiness != "READY":
+                return f"TF_POLICY_ENTRY_READINESS_{readiness}"
         if account is None:
             return None
         environment, detail = classify_broker_account(account)
@@ -1755,6 +1978,14 @@ def attach_timeframe_policy_payload(
             None,
         )
     trigger_confirmed = bool(explicit_trigger) if explicit_trigger is not None else False
+    execution_timing = evaluate_execution_timeframe(
+        policy,
+        signal,
+        states,
+        trigger_confirmed=trigger_confirmed,
+    )
+    signal.update(execution_timing)
+    execution_status = str(execution_timing.get("executionTimingStatus") or "UNAVAILABLE")
     if policy.policy_source == PolicySource.CONFIG_CONFLICT:
         readiness = "CONFIG_ERROR"
         reason = "CONFIG_CONFLICT"
@@ -1767,9 +1998,21 @@ def attach_timeframe_policy_payload(
     elif not trigger_confirmed:
         readiness = "PENDING"
         reason = "confirmed trigger condition not supplied"
+    elif execution_status in {"UNAVAILABLE", "STALE"}:
+        readiness = "UNAVAILABLE"
+        reason = (
+            f"execution timeframe {policy.execution_tf.value} "
+            f"{execution_status.lower()}"
+        )
+    elif execution_status in {"OPPOSED", "NEUTRAL"}:
+        readiness = "PENDING"
+        reason = (
+            f"execution timeframe {policy.execution_tf.value} "
+            f"{execution_status.lower()} signal direction"
+        )
     else:
         readiness = "READY"
-        reason = "required closed timeframes and trigger are confirmed"
+        reason = "required closed timeframes, trigger, and execution timing are aligned"
     signal["entryReadiness"] = readiness
     signal["entryReadinessReason"] = reason
     signal["triggerConfirmed"] = trigger_confirmed

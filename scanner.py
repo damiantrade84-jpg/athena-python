@@ -1602,10 +1602,19 @@ def _attach_engine_b_timeframe_provenance(
     actual_trigger_tf: str,
     actual_atr_tf: str,
 ) -> None:
-    """Record consumed TFs separately from the unconsumed execution policy role."""
+    """Record actual consumed TFs without relabelling policy-only roles."""
     structure_tf = str(res_b.get("structure_tf") or actual_structure_tf).upper()
     trigger_tf = str(res_b.get("trigger_timeframe") or actual_trigger_tf).upper()
     atr_tf = str(actual_atr_tf).upper()
+    execution_tf_actual = (
+        res_b.get("executionTfActual") or res_b.get("execution_tf_actual")
+    )
+    execution_tf_actual = (
+        str(execution_tf_actual).upper() if execution_tf_actual else None
+    )
+    execution_tf_consumed = bool(
+        res_b.get("executionTfConsumed", res_b.get("execution_tf_consumed", False))
+    )
     res_b.update(
         {
             "structure_tf": structure_tf,
@@ -1616,8 +1625,8 @@ def _attach_engine_b_timeframe_provenance(
             "structure_tf_actual": structure_tf,
             "entry_tf_actual": trigger_tf,
             "trigger_tf_actual": trigger_tf,
-            "execution_tf_actual": None,
-            "execution_tf_consumed": False,
+            "execution_tf_actual": execution_tf_actual,
+            "execution_tf_consumed": execution_tf_consumed,
             "atr_tf_actual": atr_tf,
             "structure_tf_policy": policy.structure_tf.value,
             "setup_tf_policy": policy.setup_tf.value,
@@ -2241,7 +2250,7 @@ def run_full_scan(
                     f"engine_b_{_pair_style}",
                 )
 
-                _live_entry_tfs = {
+                _required_analysis_tfs = {
                     tf
                     for tf in (
                         resolve_live_v3_entry_timeframe(
@@ -2254,6 +2263,17 @@ def run_full_scan(
                     )
                     if tf and tf not in {"D1", "H4", "H1"}
                 }
+                _execution_only_tfs = {
+                    tf
+                    for tf in (
+                        _policy_a.execution_tf.value,
+                        _policy_b.execution_tf.value,
+                    )
+                    if tf
+                    and tf not in {"D1", "H4", "H1"}
+                    and tf not in _required_analysis_tfs
+                }
+                _live_entry_tfs = _required_analysis_tfs | _execution_only_tfs
                 _lower_results: dict[str, tuple[list | None, dict | None]] = {}
                 for _tf in _live_entry_tfs:
                     _lower_results[_tf] = _fetch_ab_crypto_signal_candles(
@@ -2380,6 +2400,7 @@ def run_full_scan(
                 rate_limited_tfs = [
                     tf
                     for tf, meta in fetch_meta.items()
+                    if tf in _required_analysis_tfs or tf in {"D1", "H4", "H1"}
                     if isinstance(meta, dict)
                     and (
                         meta.get("rateLimited") is True
@@ -2552,6 +2573,41 @@ def run_full_scan(
                                     pair.get("display", "?"),
                                     _dxy_err,
                                 )
+
+                    _resolved_execution_tf_b = str(
+                        style_profile_b.get("execution_tf")
+                        or style_profile_b.get("entry_tf")
+                        or "H1"
+                    ).upper()
+                    if (
+                        _resolved_execution_tf_b not in {"D1", "H4", "H1"}
+                        and _resolved_execution_tf_b not in preloaded_market_state
+                    ):
+                        _exec_raw_b, _exec_meta_b = _fetch_ab_crypto_signal_candles(
+                            r,
+                            pair,
+                            _resolved_execution_tf_b,
+                            _lim[_resolved_execution_tf_b],
+                            force_refresh=refresh_market_data,
+                        )
+                        from athena_app.services.market_state import get_tf_market_state
+
+                        _exec_state_b = get_tf_market_state(
+                            pair,
+                            _resolved_execution_tf_b,
+                            candles=list(_exec_raw_b or []),
+                        )
+                        raw_candles[_resolved_execution_tf_b] = list(_exec_raw_b or [])
+                        preloaded_market_state[_resolved_execution_tf_b] = _exec_state_b
+                        _live_entry_tfs.add(_resolved_execution_tf_b)
+                        fetch_meta[_resolved_execution_tf_b] = (
+                            _exec_meta_b
+                            or get_candle_fetch_meta(
+                                pair,
+                                _resolved_execution_tf_b,
+                                _lim[_resolved_execution_tf_b],
+                            )
+                        )
 
                     d1 = raw_candles.get("D1")
                     h4 = raw_candles.get("H4")

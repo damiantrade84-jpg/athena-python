@@ -389,8 +389,9 @@ def test_execution_accepts_pass_in_top_level_engine_b_payload():
     assert _engine_b_context_confirmed({"is_naked": True}, {"passed": True}) is True
 
 
-def test_engine_b_execution_refresh_requests_fail_closed_execution_mode():
+def test_engine_b_execution_refresh_requests_fail_closed_execution_mode(monkeypatch):
     calls = {}
+    monkeypatch.setattr(execution, "rt", lambda: SimpleNamespace(CONFIG={}))
 
     def refresh(seed, **kwargs):
         calls.update(kwargs)
@@ -418,6 +419,93 @@ def test_engine_b_execution_refresh_requests_fail_closed_execution_mode():
     assert refreshed is not None
     assert calls["force_ai"] is False
     assert calls["execution_mode"] is True
+
+
+def test_engine_b_execution_refresh_blocks_unaligned_policy_timing():
+    def refresh(seed, **kwargs):
+        assert seed["timeframePolicyHash"] == "engine-b-hash"
+        return (
+            {
+                "passed": True,
+                "direction": "LONG",
+                "current_price": 100.0,
+                "execution_sl": 98.0,
+                "execution_tp": 104.0,
+                "entryReadiness": "PENDING",
+                "entryReadinessReason": "execution timeframe M5 opposed signal direction",
+                "timeframePolicyHash": "engine-b-hash",
+            },
+            {"display": "TEST"},
+            None,
+        )
+
+    sig = {
+        "pair": "TEST",
+        "direction": "LONG",
+        "is_naked": True,
+        "timeframePolicyVersion": "timeframe_policy.v3",
+        "timeframePolicyHash": "engine-a-hash",
+    }
+    refreshed, err = _refresh_engine_b_execution_context(
+        sig,
+        {"timeframePolicyHash": "engine-b-hash"},
+        SimpleNamespace(
+            compute_naked_analysis=refresh,
+            CONFIG={
+                "TF_POLICY_MODE": "enforced_demo",
+                "TF_POLICY_DEMO_AUTOTRADE_ENABLED": True,
+            },
+        ),
+        "intraday",
+    )
+
+    assert refreshed is None
+    assert err == (
+        "ENGINE_B_ENTRY_NOT_READY: PENDING: "
+        "execution timeframe M5 opposed signal direction"
+    )
+
+    assert execution._should_refresh_engine_b_before_execute(
+        sig,
+        sig_age=1,
+        max_age=300,
+        missing_price=False,
+    )
+
+
+def test_auto_trader_refreshes_engine_b_policy_timing_before_broker(monkeypatch):
+    import athena_runtime
+    from auto_trader import AutoTrader
+
+    trader = AutoTrader()
+    monkeypatch.setattr(athena_runtime, "rt", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        execution,
+        "_refresh_engine_b_execution_context",
+        lambda *args, **kwargs: (
+            None,
+            "ENGINE_B_ENTRY_NOT_READY: PENDING: execution timeframe M5 opposed",
+        ),
+    )
+
+    allowed, reason = trader._refresh_execution_timing(
+        {
+            "engine": "B",
+            "pair": "TEST",
+            "type": "forex",
+            "direction": "LONG",
+            "style": "intraday",
+            "timeframePolicyVersion": "timeframe_policy.v3",
+            "entryReadiness": "READY",
+        },
+        {
+            "TF_POLICY_MODE": "enforced_demo",
+            "TF_POLICY_DEMO_AUTOTRADE_ENABLED": True,
+        },
+    )
+
+    assert allowed is False
+    assert reason == "ENGINE_B_ENTRY_NOT_READY: PENDING: execution timeframe M5 opposed"
 
 
 def test_choch_uses_bos_reference_level_when_bos_context_present():

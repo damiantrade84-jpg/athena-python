@@ -28,6 +28,7 @@ from timeframe_policy import (
     reconcile_symbol_universe,
     resolve_session_calendar,
     resolve_timeframe_policy,
+    speed_state_from_policy_payload,
     speed_class_for_percentile,
     speed_transition_candidate,
     timeframe_policy_execution_block_reason,
@@ -438,6 +439,183 @@ def test_confirmed_engine_b_trigger_sets_ready_without_changing_structure_result
     assert signal["triggerConfirmed"] is True
 
 
+def test_shared_trigger_execution_tf_uses_current_forming_direction() -> None:
+    signal = {
+        "score": 2.7,
+        "direction": "LONG",
+        "trigger_ok": True,
+        "current_price": 1.095,
+    }
+    states = {
+        tf: {
+            "confirmed": [
+                {
+                    "time": "2026-07-13T10:00:00Z",
+                    "open": 1.09,
+                    "high": 1.105,
+                    "low": 1.085,
+                    "close": 1.10,
+                }
+            ],
+            "stale": False,
+        }
+        for tf in ("D1", "H4", "H1", "M30", "M15")
+    }
+    states["M15"]["forming"] = {
+        "time": "2026-07-13T10:15:00Z",
+        "open": 1.10,
+        "high": 1.101,
+        "low": 1.094,
+        "close": 1.096,
+    }
+
+    attach_timeframe_policy_payload(
+        signal,
+        {"display": "EUR/USD", "type": "forex", "score_group": "forex_majors"},
+        "intraday",
+        engine="engine_b",
+        market_states=states,
+    )
+
+    assert signal["triggerTf"] == signal["executionTf"] == "M15"
+    assert signal["executionTimingStatus"] == "OPPOSED"
+    assert signal["entryReadiness"] == "PENDING"
+    assert signal["score"] == 2.7
+    assert signal["direction"] == "LONG"
+
+
+def test_distinct_execution_tf_holds_entry_without_rescoring_engine_a_or_b() -> None:
+    required_states = {
+        tf: {
+            "confirmed": [
+                {
+                    "time": "2026-07-13T10:00:00Z",
+                    "open": 1.10,
+                    "high": 1.11,
+                    "low": 1.09,
+                    "close": 1.105,
+                }
+            ],
+            "stale": False,
+        }
+        for tf in ("D1", "H4", "H1", "M30")
+    }
+
+    for engine in ("engine_a", "engine_b"):
+        opposed = {
+            "score": 2.4,
+            "direction": "SHORT",
+            "trigger_ok": True,
+            "current_price": 1.106,
+        }
+        states = {
+            **required_states,
+            "M15": {
+                "confirmed": [],
+                "forming": {
+                    "time": "2026-07-13T10:15:00Z",
+                    "open": 1.10,
+                    "high": 1.102,
+                    "low": 1.094,
+                    "close": 1.096,
+                },
+                "stale": False,
+            },
+        }
+        attach_timeframe_policy_payload(
+            opposed,
+            {
+                "display": "EUR/GBP",
+                "type": "forex",
+                "score_group": "forex_crosses",
+            },
+            "intraday",
+            engine=engine,
+            market_states=states,
+        )
+
+        assert opposed["triggerTf"] == "M30"
+        assert opposed["executionTf"] == "M15"
+        assert opposed["executionTfActual"] == "M15"
+        assert opposed["executionTfConsumed"] is True
+        assert opposed["executionTimingStatus"] == "OPPOSED"
+        assert opposed["entryReadiness"] == "PENDING"
+        assert opposed["score"] == 2.4
+        assert opposed["direction"] == "SHORT"
+        assert timeframe_policy_execution_block_reason(
+            opposed,
+            {
+                "TF_POLICY_MODE": "enforced_demo",
+                "TF_POLICY_DEMO_AUTOTRADE_ENABLED": True,
+            },
+        ) == "TF_POLICY_ENTRY_READINESS_PENDING"
+
+        aligned = {
+            "score": 2.4,
+            "direction": "SHORT",
+            "trigger_ok": True,
+            "current_price": 1.095,
+        }
+        attach_timeframe_policy_payload(
+            aligned,
+            {
+                "display": "EUR/GBP",
+                "type": "forex",
+                "score_group": "forex_crosses",
+            },
+            "intraday",
+            engine=engine,
+            market_states=states,
+        )
+
+        assert aligned["executionTimingStatus"] == "ALIGNED"
+        assert aligned["entryReadiness"] == "READY"
+        assert aligned["score"] == 2.4
+        assert aligned["direction"] == "SHORT"
+
+        unavailable = {
+            "score": 2.4,
+            "direction": "SHORT",
+            "trigger_ok": True,
+        }
+        attach_timeframe_policy_payload(
+            unavailable,
+            {
+                "display": "EUR/GBP",
+                "type": "forex",
+                "score_group": "forex_crosses",
+            },
+            "intraday",
+            engine=engine,
+            market_states=required_states,
+        )
+
+        assert unavailable["executionTfActual"] is None
+        assert unavailable["executionTimingStatus"] == "UNAVAILABLE"
+        assert unavailable["entryReadiness"] == "UNAVAILABLE"
+        assert unavailable["score"] == 2.4
+        assert unavailable["direction"] == "SHORT"
+
+
+def test_policy_payload_rebuild_preserves_dynamic_execution_selection() -> None:
+    rebuilt = speed_state_from_policy_payload(
+        {
+            "currentSpeedClass": "FAST",
+            "liquidityClass": "NORMAL",
+            "speedPercentile": 80.0,
+            "executionTf": "M5",
+            "m5Role": "execution",
+        }
+    )
+
+    assert rebuilt is not None
+    policy = resolve_timeframe_policy(
+        "USD/JPY", "forex", "forex_majors", "intraday", rebuilt
+    )
+    assert policy.execution_tf == Timeframe.M5
+    assert policy.m5_role == M5Role.EXECUTION
+
+
 def test_missing_lower_tf_preserves_payload_and_execution_has_no_higher_tf_fallback() -> None:
     signal = {"score": 2.0, "direction": "SHORT"}
     attach_timeframe_policy_payload(
@@ -720,8 +898,25 @@ def test_enforced_policy_requires_separate_autotrade_promotion() -> None:
     ) == "TF_POLICY_DEMO_AUTOTRADE_DISABLED"
 
 
+def test_policy_readiness_gate_does_not_capture_unstamped_engine_d() -> None:
+    assert timeframe_policy_execution_block_reason(
+        {"engine": "scalp", "direction": "LONG"},
+        {
+            "TF_POLICY_MODE": "enforced_demo",
+            "TF_POLICY_DEMO_AUTOTRADE_ENABLED": True,
+        },
+        {"accountId": "demo-42", "demo": True},
+    ) is None
+
+
 def test_enforced_demo_promotes_policy_score_direction_and_locks_real_account() -> None:
-    signal = {"confluenceScore": 5.9, "score": 5.9, "direction": "SHORT", "maxScore": 10}
+    signal = {
+        "confluenceScore": 5.9,
+        "score": 5.9,
+        "direction": "SHORT",
+        "maxScore": 10,
+        "entryReadiness": "READY",
+    }
     cfg = {
         "TF_POLICY_MODE": "enforced_demo",
         "TF_POLICY_DEMO_AUTOTRADE_ENABLED": True,
