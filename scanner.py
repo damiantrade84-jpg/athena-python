@@ -38,6 +38,7 @@ from market_structure import (
     NakedEngine,
     _reset_engine_b_gate_failures,
     engine_b_confidence_passes,
+    engine_b_low_volatility_gate,
     engine_b_live_trigger_kwargs,
     engine_b_forex_asian_session_blocks_bar,
     engine_b_min_score_threshold,
@@ -170,16 +171,6 @@ def _select_engine_b_tf_candles(tf: str | None, tf_map: dict[str, list]) -> list
     return list(tf_map.get(key) or [])
 
 
-def _last_atr_from_candles(candles: list, period: int = 14) -> float:
-    if not candles or len(candles) < period + 1:
-        return 0.0
-    highs = [float(c["high"]) for c in candles]
-    lows = [float(c["low"]) for c in candles]
-    closes = [float(c["close"]) for c in candles]
-    atr_series = calc_atr(highs, lows, closes, period)
-    return float(atr_series[-1]) if atr_series else 0.0
-
-
 def _engine_b_scan_freshness_stale_tfs(
     pair: dict,
     d1: list | None,
@@ -193,7 +184,7 @@ def _engine_b_scan_freshness_stale_tfs(
 ) -> tuple[list[str], dict[str, dict]]:
     """Return stale TF labels for Engine B scan when freshness gate is enabled."""
     cfg = config or CONFIG
-    if not bool(cfg.get("ENGINE_B_SCAN_FRESHNESS_GATE", True)) and not active_entry_tfs:
+    if not bool(cfg.get("ENGINE_B_SCAN_FRESHNESS_GATE", True)):
         return [], {}
 
     try:
@@ -203,8 +194,13 @@ def _engine_b_scan_freshness_stale_tfs(
             pre_scoring_allows_intraday_calendar_gap,
         )
         from athena_app.services.market_state import candle_freshness_diagnostic
-    except Exception:
-        return [], {}
+    except Exception as exc:
+        return ["FRESHNESS_DEPENDENCY_UNAVAILABLE"], {
+            "FRESHNESS_DEPENDENCY_UNAVAILABLE": {
+                "stalenessSeverity": "dependency_unavailable",
+                "errorType": type(exc).__name__,
+            }
+        }
 
     stale_tfs: list[str] = []
     freshness_diag: dict[str, dict] = {}
@@ -1282,6 +1278,7 @@ def _engine_b_independent_direction_probe(
     d1_snap: dict | None,
     h4_snap: dict | None,
     role_candles: dict[str, list] | None = None,
+    dxy_h4_closes: list | None = None,
 ) -> tuple[str | None, dict | None, dict | None]:
     """Pick best Engine B direction independently of Engine A.
 
@@ -1308,6 +1305,7 @@ def _engine_b_independent_direction_probe(
         h4_snap=h4_snap or {},
         style=resolved_style,
         pair=pair,
+        dxy_h4_closes=dxy_h4_closes,
         **_diag_kw,
     )
     for try_direction in ("LONG", "SHORT"):
@@ -1604,7 +1602,7 @@ def _attach_engine_b_timeframe_provenance(
     actual_trigger_tf: str,
     actual_atr_tf: str,
 ) -> None:
-    """Keep computed TFs authoritative while recording policy TFs separately."""
+    """Record consumed TFs separately from the unconsumed execution policy role."""
     structure_tf = str(res_b.get("structure_tf") or actual_structure_tf).upper()
     trigger_tf = str(res_b.get("trigger_timeframe") or actual_trigger_tf).upper()
     atr_tf = str(actual_atr_tf).upper()
@@ -1613,12 +1611,13 @@ def _attach_engine_b_timeframe_provenance(
             "structure_tf": structure_tf,
             "entry_tf": trigger_tf,
             "trigger_tf": trigger_tf,
-            "execution_tf": trigger_tf,
+            "execution_tf": policy.execution_tf.value,
             "atr_tf": atr_tf,
             "structure_tf_actual": structure_tf,
             "entry_tf_actual": trigger_tf,
             "trigger_tf_actual": trigger_tf,
-            "execution_tf_actual": trigger_tf,
+            "execution_tf_actual": None,
+            "execution_tf_consumed": False,
             "atr_tf_actual": atr_tf,
             "structure_tf_policy": policy.structure_tf.value,
             "setup_tf_policy": policy.setup_tf.value,
@@ -2226,7 +2225,6 @@ def run_full_scan(
                 )
                 from engine_a_v3.timeframes import resolve_live_v3_entry_timeframe
                 from engine_a_groups import resolve_score_group_by_type
-                from market_structure import resolve_live_engine_b_trigger_tf
                 from timeframe_policy import resolve_timeframe_policy
 
                 _policy_score_group = resolve_score_group_by_type(pair)
@@ -2249,15 +2247,10 @@ def run_full_scan(
                         resolve_live_v3_entry_timeframe(
                             pair.get("type", ""), _pair_style, source=pair.get("source")
                         ),
-                        resolve_live_engine_b_trigger_tf(
-                            pair.get("type", ""), _pair_style, source=pair.get("source")
-                        ),
                         _policy_a.setup_tf.value,
                         _policy_a.trigger_tf.value,
-                        _policy_a.execution_tf.value,
                         _policy_b.setup_tf.value,
                         _policy_b.trigger_tf.value,
-                        _policy_b.execution_tf.value,
                     )
                     if tf and tf not in {"D1", "H4", "H1"}
                 }
@@ -2537,37 +2530,28 @@ def run_full_scan(
                         "entry_price": None,
                     }
                     _pair_score_group = get_pair_score_group(pair)
-                    try:
-                        resolved_style_b, style_profile_b = r.naked_scan_style_profile(
-                            _pair_style,
-                            score_group=_pair_score_group,
-                            asset_type=ptype,
-                            symbol=pair.get("display") or pair.get("symbol") or "",
-                            live_entry_tf=True,
-                            source=pair.get("source"),
-                            speed_state=_speed_state,
-                        )
-                    except TypeError as _profile_type_err:
-                        if not any(
-                            name in str(_profile_type_err)
-                            for name in ("live_entry_tf", "source", "symbol", "speed_state")
-                        ):
-                            raise
-                        resolved_style_b, style_profile_b = r.naked_scan_style_profile(
-                            _pair_style,
-                            score_group=_pair_score_group,
-                            asset_type=ptype,
-                        )
-                        _compat_trigger_tf = resolve_live_engine_b_trigger_tf(
-                            ptype,
-                            resolved_style_b,
-                            source=pair.get("source"),
-                        )
-                        if _compat_trigger_tf:
-                            style_profile_b = {
-                                **style_profile_b,
-                                "entry_tf": _compat_trigger_tf,
-                            }
+                    resolved_style_b, style_profile_b = r.naked_scan_style_profile(
+                        _pair_style,
+                        score_group=_pair_score_group,
+                        asset_type=ptype,
+                        symbol=pair.get("display") or pair.get("symbol") or "",
+                        speed_state=_speed_state,
+                    )
+                    _dxy_h4_closes_b = None
+                    if ptype == "forex" and (
+                        bool(CONFIG.get("ENGINE_B_DXY_MACRO_GATE_ENABLED", False))
+                        or bool(style_profile_b.get("macro_required", False))
+                    ):
+                        _dxy_fetch = getattr(r, "get_dxy_h4_closes", None)
+                        if callable(_dxy_fetch):
+                            try:
+                                _dxy_h4_closes_b = _dxy_fetch()
+                            except Exception as _dxy_err:
+                                log.warning(
+                                    "[SCAN+B] %s DXY history unavailable: %s",
+                                    pair.get("display", "?"),
+                                    _dxy_err,
+                                )
 
                     d1 = raw_candles.get("D1")
                     h4 = raw_candles.get("H4")
@@ -2785,7 +2769,13 @@ def run_full_scan(
                                 extras=dict(_eb_funnel_extras),
                             )
                             return pair, sig_a, None
-                        atr_signal = float(_last_atr_from_candles(atr_candles_b, 14))
+                        _atr_highs_b = [float(c["high"]) for c in atr_candles_b]
+                        _atr_lows_b = [float(c["low"]) for c in atr_candles_b]
+                        _atr_closes_b = [float(c["close"]) for c in atr_candles_b]
+                        _atr_series_b = calc_atr(
+                            _atr_highs_b, _atr_lows_b, _atr_closes_b, 14
+                        )
+                        atr_signal = float(_atr_series_b[-1]) if _atr_series_b else 0.0
                         atr = atr_signal
                         _eb_funnel_extras["atr_value"] = atr
                         _eb_funnel_extras["atr_source"] = "candle_atr_tf"
@@ -2808,6 +2798,30 @@ def run_full_scan(
                             elif not bool(CONFIG.get("ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK", False)):
                                 atr = 0.0
                                 sig_a["engine_b_error"] = "bybit_atr_unavailable"
+                        if atr and atr > 0:
+                            _volatility_ok_b, _volatility_diag_b = engine_b_low_volatility_gate(
+                                atr,
+                                _atr_series_b,
+                                config_map=CONFIG,
+                            )
+                        else:
+                            _volatility_ok_b = True
+                            _volatility_diag_b = {"reason": "invalid_atr_preexisting_block"}
+                        _eb_funnel_extras["volatility_gate"] = _volatility_diag_b
+                        if not _volatility_ok_b:
+                            sig_a["engine_b_error"] = "volatility_gate"
+                            _eb_funnel_extras["engine_b_skip_stage"] = "volatility_gate"
+                            _attach_engine_b_scan_gate_funnel(
+                                sig=sig_a,
+                                pair=pair,
+                                score_group=_pair_score_group,
+                                resolved_style=resolved_style_b,
+                                style_profile_b=style_profile_b,
+                                conf_b=_eb_snap["conf"],
+                                res_b=_eb_snap["res"],
+                                extras=dict(_eb_funnel_extras),
+                            )
+                            return pair, sig_a, None
                         from athena_app.services.engine_b_market_state import engine_b_live_gate_quote
 
                         try:
@@ -2898,6 +2912,7 @@ def run_full_scan(
                                         d1_snap=_sc_d1_snap,
                                         h4_snap=_sc_h4_snap,
                                         role_candles=_tf_map_b,
+                                        dxy_h4_closes=_dxy_h4_closes_b,
                                     )
                                 )
                                 if _b_dir not in ("LONG", "SHORT"):
@@ -2940,6 +2955,7 @@ def run_full_scan(
                                         h4_snap=_sc_h4_snap,
                                         style=resolved_style_b,
                                         pair=pair,
+                                        dxy_h4_closes=_dxy_h4_closes_b,
                                         **engine_b_live_trigger_kwargs(
                                             style_profile_b, _tf_map_b
                                         ),

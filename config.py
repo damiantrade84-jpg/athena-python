@@ -1424,7 +1424,6 @@ CONFIG: dict = {
     "ENGINE_B_TIME_EXIT_BARS": 0,
     # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).
     "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED": True,
-    "ENGINE_B_FOREX_PRE_ASIAN_SESSION_SKIP_ENABLED": True,
     # Diagnostics-first forex session weighting for Engine B structure context.
     # Disabled by default; score influence requires SCORE_INFLUENCE_ENABLED too.
     "ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING": {
@@ -2527,6 +2526,11 @@ CONFIG: dict = {
     "ENGINE_B_DIRECTION_INDEPENDENT_CONFLICT_MIN_CONFIDENCE": "HIGH",
     "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF": True,
     "ENGINE_B_ROOM_NO_WALL_REQUIRE_MTF": True,
+    "ENGINE_B_LOW_VOLATILITY_GATE_ENABLED": True,
+    "ENGINE_B_LOW_VOLATILITY_LOOKBACK": 50,
+    "ENGINE_B_LOW_VOLATILITY_MIN_ATR_RATIO": 0.6,
+    "ENGINE_B_DXY_MACRO_GATE_ENABLED": False,
+    "ENGINE_B_MACRO_CORRELATION_WINDOW": 60,
     "ENGINE_B_MACRO_SHORT_HISTORY_FAIL_CLOSED": True,
     "ENGINE_B_CHOCH_INVALIDATION_BARS": 5,
     "ENGINE_B_INDEPENDENT_DIRECTION_SCORE_THRESHOLD": 0.15,
@@ -2617,26 +2621,21 @@ CONFIG: dict = {
             "scalp": {
                 "min_score": 4.0,
                 "min_rr": 1.5,
-                "fallback_rr": 2.0,
+                "fallback_rr": 1.8,
                 "require_macro_align": False,
             },
             "intraday": {
                 "min_score": 4.5,
                 "min_rr": 1.5,
-                "fallback_rr": 2.0,
+                "fallback_rr": 1.8,
                 "require_macro_align": False,
             },
             "swing": {
                 "min_score": 5.0,
                 "min_rr": 2.0,
-                "fallback_rr": 3.0,
+                "fallback_rr": 2.5,
                 "require_macro_align": False,
             },
-        },
-        # Live-only trigger timing. H4 remains the intraday structure/zone TF;
-        # M30 supplies the active entry trigger and trigger-local ATR.
-        "LIVE_TRIGGER_TF_BY_STYLE": {
-            "intraday": {"forex": "M30"},
         },
         # Stage 2.5: Collapsed Engine B group overrides.
         # Only 4 groups retain overrides; all others use base profiles.
@@ -2675,16 +2674,12 @@ CONFIG: dict = {
         "RANGING": 1.10,
         "HIGH_VOLATILITY": 1.10,
         "LOW_VOLATILITY": 1.0,
+        "UNKNOWN": 1.0,
     },
     # True: regime adjusts Engine B min_score via ENGINE_B_REGIME_MULTIPLIERS.
     # False: min_score stays at style profile base (multiplier forced to 1.0).
     "ENGINE_B_REGIME_MULTIPLIERS_ENABLED": True,
-    # False (default): regime multipliers do not raise/lower the mandatory gate floor.
-    # NOTE: with this False the multiplier table is fully inert — the legacy
-    # bonus-scaling application was removed 2026-07-10 (it inverted the intent:
-    # RANGING 1.10 inflated bonus points in ranging regimes instead of
-    # tightening the floor).
-    "ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE": False,
+    "ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE": True,
     "ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED": True,
     "ENGINE_B_STYLE_MIN_SCORE_BY_STYLE": {
         "scalp": 4.0,

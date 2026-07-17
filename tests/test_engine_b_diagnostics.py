@@ -821,6 +821,32 @@ def test_check_macro_correlation_detail_returns_reason_when_blocking():
     assert reason == ENGINE_B_REASON_ADVERSE_DXY
 
 
+def test_dxy_macro_gate_is_consumed_by_confidence(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_DXY_MACRO_GATE_ENABLED", True)
+    rng = np.random.default_rng(7)
+    t = np.arange(60, dtype=float)
+    dxy = 100 + t * 0.05 + rng.normal(0, 0.02, size=60)
+    asset = 200 - t * 0.12 + rng.normal(0, 0.05, size=60)
+    res = {
+        **_base_res_long(),
+        "asset_type": "forex",
+        "_dxy_h4_closes": dxy.tolist(),
+        "_pair_h4_closes": asset.tolist(),
+    }
+
+    out = engine.calculate_confidence(
+        res,
+        100.0,
+        "LONG",
+        style_profile={"style": "intraday", "min_rr": 1.0, "min_score": 0.0},
+    )
+
+    assert out["dxy_gate_enabled"] is True
+    assert out["dxy_ok"] is False
+    assert out["dxy_gate_reason"] == ENGINE_B_REASON_ADVERSE_DXY
+    assert ENGINE_B_REASON_ADVERSE_DXY in out["failed_gate_names"]
+
+
 def test_check_macro_correlation_detail_clear_insufficient_history():
     ok, reason = engine.check_macro_correlation_detail([1.0] * 10, [1.0] * 10, "LONG")
     assert ok is True

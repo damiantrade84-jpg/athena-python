@@ -168,6 +168,9 @@ def test_engine_b_base_style_profiles_keep_min_score_contract():
     assert float(scalp["min_score"]) == 4.0
     assert float(intraday["min_score"]) == 4.5
     assert float(swing["min_score"]) == 5.0
+    assert float(scalp["fallback_rr"]) == 1.8
+    assert float(intraday["fallback_rr"]) == 1.8
+    assert float(swing["fallback_rr"]) == 2.5
 
 
 def test_engine_a_and_engine_b_share_auto_style_resolution():
@@ -190,6 +193,24 @@ def test_engine_a_and_engine_b_share_auto_style_resolution():
         )
         assert engine_a_style == expected
         assert engine_b_style == expected
+
+
+def test_engine_b_cache_uses_one_canonical_symbol_and_clears_analysis_only():
+    athena_root = _load_root_athena_module()
+    athena_root._engine_b_cache.clear()
+    payload = {"pair": "EUR/USD"}
+
+    athena_root._engine_b_cache_put("EUR/USD", payload)
+    athena_root._engine_b_cache_put("EURUSD=X", payload)
+    athena_root._engine_b_cache_put("EUR_USD_vision", {"grade": "A"})
+
+    assert athena_root._engine_b_cache_get("EUR/USD") is payload
+    assert athena_root._engine_b_cache_get("EURUSD=X") is payload
+    assert len(athena_root._engine_b_cache) == 2
+
+    athena_root._engine_b_cache_clear_analysis()
+    assert athena_root._engine_b_cache_get("EUR/USD") is None
+    assert athena_root._engine_b_cache_get("EUR_USD_vision") == {"grade": "A"}
 
 
 def test_min_confluence_threshold_tiers():

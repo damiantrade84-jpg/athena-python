@@ -10,7 +10,7 @@ import yaml
 
 
 _STYLES = ("scalp", "intraday", "swing")
-_REGIMES = ("TRENDING", "RANGING", "HIGH_VOLATILITY", "LOW_VOLATILITY")
+_REGIMES = ("TRENDING", "RANGING", "HIGH_VOLATILITY", "LOW_VOLATILITY", "UNKNOWN")
 _AGGTRADE_MODES = {"required", "preferred", "degraded"}
 _GROUP_OVERRIDE_FIELDS = {
     "min_score",
@@ -152,6 +152,9 @@ def translate_engine_b_config(doc: dict[str, Any]) -> dict[str, Any]:
         },
         "ENGINE_B_REGIME_MULTIPLIERS": regimes,
         "ENGINE_B_REGIME_MULTIPLIERS_ENABLED": _bool(
+            root.get("regime_scaling_enabled"), "regime_scaling_enabled"
+        ),
+        "ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE": _bool(
             root.get("regime_scaling_enabled"), "regime_scaling_enabled"
         ),
         "ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED": True,

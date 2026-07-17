@@ -165,6 +165,17 @@ _eodhd_volume_cache_lock = threading.Lock()
 _EODHD_VOLUME_TTL = {"H1": 55 * 60, "H4": 235 * 60, "D1": 23 * 3600}
 
 
+def _engine_b_cache_key(key: str) -> str:
+    raw = str(key or "").strip()
+    if not raw or raw.endswith("_vision"):
+        return raw
+    candidates = [
+        value for value in symbol_match_keys(raw)
+        if value and all(ch.isalnum() for ch in value)
+    ]
+    return min(candidates, key=lambda value: (len(value), value)) if candidates else raw.upper()
+
+
 def _publish_last_scan_results(result: dict) -> None:
     global _last_scan_results
     with _last_scan_results_lock:
@@ -181,23 +192,31 @@ def _publish_enriched_last_scan_results(enriched: dict, base_result: dict) -> No
 
 
 def _engine_b_cache_put(key: str, value: dict) -> None:
-    if key and value:
-        _engine_b_cache[key] = {"data": value, "ts": time.time()}
+    canonical = _engine_b_cache_key(key)
+    if canonical and value:
+        _engine_b_cache[canonical] = {"data": value, "ts": time.time()}
 
 
 def _engine_b_cache_get(key: str) -> dict | None:
-    if not key:
+    canonical = _engine_b_cache_key(key)
+    if not canonical:
         return None
-    entry = _engine_b_cache.get(key)
+    entry = _engine_b_cache.get(canonical)
     if not entry:
         return None
     # Backward-compatible fallback if older plain dict entries already exist in memory.
     if not isinstance(entry, dict) or "ts" not in entry or "data" not in entry:
         return entry
     if (time.time() - float(entry["ts"])) > _ENGINE_B_CACHE_TTL:
-        _engine_b_cache.pop(key, None)
+        _engine_b_cache.pop(canonical, None)
         return None
     return entry.get("data")
+
+
+def _engine_b_cache_clear_analysis() -> None:
+    for key in list(_engine_b_cache):
+        if not str(key).endswith("_vision"):
+            _engine_b_cache.pop(key, None)
 
 
 from candle_feeds import (  # noqa: E402
@@ -3552,32 +3571,34 @@ def _is_pair_disabled_for_execution(symbol: str) -> bool:
 
 # Per-scan DXY H4 cache to avoid redundant yfinance fetches in Engine B overlay
 _dxy_h4_cache: tuple[list[float], float] | None = None  # (closes, timestamp)
+_dxy_h4_cache_lock = threading.Lock()
 
 
 def _get_dxy_h4_closes(force_refresh: bool = False) -> list[float] | None:
     """Fetch DXY H4 closes with a 5-minute in-memory cache per scan batch."""
     global _dxy_h4_cache
     import time
-    now = time.time()
-    if not force_refresh and _dxy_h4_cache is not None:
-        closes, ts = _dxy_h4_cache
-        if now - ts < 300:  # 5 min cache
+    with _dxy_h4_cache_lock:
+        now = time.time()
+        if not force_refresh and _dxy_h4_cache is not None:
+            closes, ts = _dxy_h4_cache
+            if now - ts < 300:  # 5 min cache
+                return closes
+        _dxy = fetch_candles(
+            {
+                "symbol": "DX-Y.NYB",
+                "display": "DXY",
+                "source": "yfinance",
+                "type": "index",
+            },
+            "H4",
+            100,
+        )
+        if _dxy:
+            closes = [float(c["close"]) for c in _dxy]
+            _dxy_h4_cache = (closes, now)
             return closes
-    _dxy = fetch_candles(
-        {
-            "symbol": "DX-Y.NYB",
-            "display": "DXY",
-            "source": "yfinance",
-            "type": "index",
-        },
-        "H4",
-        100,
-    )
-    if _dxy:
-        closes = [float(c["close"]) for c in _dxy]
-        _dxy_h4_cache = (closes, now)
-        return closes
-    return None
+        return None
 
 
 def _normalize_style(style: str | None) -> str:
@@ -6537,6 +6558,7 @@ def _auth_and_rate_limit():
 def api_scan():
     global _dxy_h4_cache
     _dxy_h4_cache = None  # fresh DXY fetch per scan batch
+    _engine_b_cache_clear_analysis()
     d = request.get_json(force=True, silent=True) or {}
     result = api_scan_impl(
         d,
@@ -6544,6 +6566,11 @@ def api_scan():
             payload, run_full_scan=run_full_scan
         ),
     )
+    for row in (result.get("signals") or []) if isinstance(result, dict) else []:
+        engine_b_row = row.get("engine_b")
+        cache_symbol = row.get("display") or row.get("pair") or row.get("symbol")
+        if isinstance(engine_b_row, dict) and cache_symbol:
+            _engine_b_cache_put(str(cache_symbol), engine_b_row)
 
     publish_scan_result_and_schedule_conductor(
         result,
@@ -7065,8 +7092,6 @@ def _naked_scan_style_profile(
     asset_type: str | None = None,
     *,
     symbol: str = "",
-    live_entry_tf: bool = False,
-    source: str | None = None,
     speed_state: Any | None = None,
 ) -> tuple[str, dict]:
     resolved = _normalize_style(style)
@@ -7098,7 +7123,7 @@ def _naked_scan_style_profile(
             "min_score": 3.0,
             "min_room_atr": 0.35,
             "min_rr": 1.0,
-            "fallback_rr": 1.4,
+            "fallback_rr": 1.8,
             "require_macro_align": False,
             "zone_tf": _tf_scalp["zone"],
             "setup_tf": _tf_scalp["setup"],
@@ -7122,7 +7147,7 @@ def _naked_scan_style_profile(
             "min_score": 4.0,
             "min_room_atr": 1.0,
             "min_rr": 1.6,
-            "fallback_rr": 2.2,
+            "fallback_rr": 2.5,
             "require_macro_align": False,
             "zone_tf": _tf_swing["zone"],
             "setup_tf": _tf_swing["setup"],
@@ -7405,9 +7430,20 @@ def _compute_naked_analysis(
             score_group=_pair_score_group,
             asset_type=pair_obj.get("type", ""),
             symbol=pair_obj.get("display") or pair_obj.get("symbol") or "",
-            live_entry_tf=True,
-            source=pair_obj.get("source"),
         )
+        _dxy_h4_closes_b = None
+        if str(pair_obj.get("type") or "").lower() == "forex" and (
+            bool(CONFIG.get("ENGINE_B_DXY_MACRO_GATE_ENABLED", False))
+            or bool(style_profile.get("macro_required", False))
+        ):
+            try:
+                _dxy_h4_closes_b = _get_dxy_h4_closes()
+            except Exception as _dxy_err:
+                log.warning(
+                    "[NAKED] %s DXY history unavailable: %s",
+                    pair_obj.get("display", "?"),
+                    _dxy_err,
+                )
         _entry_tf = str(style_profile.get("entry_tf", "H1")).upper()
         _lower_entry_state = None
         if _entry_tf not in {"D1", "H4", "H1"}:
@@ -7602,10 +7638,9 @@ def _compute_naked_analysis(
                         "asset_type": pair_obj.get("type", ""),
                         "d1_snap": _na_d1_snap,
                         "h4_snap": _na_h4_snap,
-                        # Detect triggers on the configured live entry TF (M30 for
-                        # intraday forex) instead of the matrix default, so the
-                        # execute-time/naked re-scan matches the scan that surfaced
-                        # the signal. Resolves to H1 (== default) for non-live paths.
+                        "dxy_h4_closes": _dxy_h4_closes_b,
+                        # Detect triggers on the policy-owned Engine B trigger TF so
+                        # execute-time/naked re-scan matches discovery.
                         "role_candles": _trigger_tf_map,
                     },
                 )
@@ -7633,9 +7668,8 @@ def _compute_naked_analysis(
                 h4_snap=_na_h4_snap,
                 style=resolved_style,
                 pair=pair_obj,
-                # Detect triggers on the configured live entry TF (M30 for intraday
-                # forex); resolves to H1 (== matrix default) for non-live paths so
-                # non-forex/swing scoring is unchanged.
+                dxy_h4_closes=_dxy_h4_closes_b,
+                # Detect triggers on the policy-owned Engine B trigger TF.
                 **engine_b_live_trigger_kwargs(style_profile, _trigger_tf_map),
             )
 
@@ -7694,6 +7728,9 @@ def _compute_naked_analysis(
         res["setup_tf"] = style_profile.get("setup_tf")
         res["entry_tf"] = style_profile.get("entry_tf")
         res["execution_tf"] = style_profile.get("execution_tf")
+        res["execution_tf_policy"] = style_profile.get("execution_tf")
+        res["execution_tf_actual"] = None
+        res["execution_tf_consumed"] = False
         res["atr_tf"] = style_profile.get("atr_tf")
         res["timeframe_policy_version"] = style_profile.get(
             "timeframe_policy_version"
@@ -7998,10 +8035,13 @@ def api_naked_analysis():
         return jsonify({"error": err}), 500
     # Cache for chart-analysis context lookup
     sig = d["signal"]
-    _sym = sig.get("symbol") or sig.get("display") or ""
+    _sym = (
+        (_pair_obj or {}).get("display")
+        or sig.get("display")
+        or sig.get("symbol")
+        or ""
+    )
     if _sym and res:
-        _sid = _sym.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
-        _engine_b_cache_put(_sid, res)
         _engine_b_cache_put(_sym, res)
     if isinstance(res, dict):
         active_fvgs = []
@@ -8042,8 +8082,6 @@ def api_compare_engines():
         score_group=_pair_score_group,
         asset_type=pair_obj.get("type", ""),
         symbol=pair_obj.get("display") or pair_obj.get("symbol") or "",
-        live_entry_tf=True,
-        source=pair_obj.get("source"),
     )
 
     try:
@@ -8128,6 +8166,7 @@ def api_compare_engines():
 def api_scan_naked():
     global _dxy_h4_cache
     _dxy_h4_cache = None  # fresh DXY fetch per scan batch
+    _engine_b_cache_clear_analysis()
     d = request.get_json(silent=True) or {}
     asset_class = str(d.get("assetClass") or "").strip().lower()
     requested_style = d.get("style", "auto")
@@ -8174,6 +8213,7 @@ def api_scan_naked():
     from market_structure import (
         NakedEngine,
         engine_b_confidence_passes,
+        engine_b_low_volatility_gate,
         engine_b_live_trigger_kwargs,
     )
 
@@ -8291,9 +8331,20 @@ def api_scan_naked():
                 score_group=_pair_score_group,
                 asset_type=pair.get("type", ""),
                 symbol=pair.get("display") or pair.get("symbol") or "",
-                live_entry_tf=True,
-                source=pair.get("source"),
             )
+            _dxy_h4_closes_b = None
+            if str(pair.get("type") or "").lower() == "forex" and (
+                bool(CONFIG.get("ENGINE_B_DXY_MACRO_GATE_ENABLED", False))
+                or bool(style_profile.get("macro_required", False))
+            ):
+                try:
+                    _dxy_h4_closes_b = _get_dxy_h4_closes()
+                except Exception as _dxy_err:
+                    log.warning(
+                        "[NAKED-SCAN] %s DXY history unavailable: %s",
+                        pair.get("display", "?"),
+                        _dxy_err,
+                    )
             debug_row["style"] = resolved_style
 
             # Timeframes resolved by market_structure.resolve_engine_b_tfs (single source of truth)
@@ -8466,17 +8517,23 @@ def api_scan_naked():
                     return {"debug": debug_row}
                 return []
 
-            # Volatility gate
-            if len(atr_series) >= 50:
-                _valid_atrs = [a for a in atr_series[-50:] if a and a > 0]
-                _atr_avg = sum(_valid_atrs) / len(_valid_atrs) if _valid_atrs else 0
-                if _atr_avg > 0 and atr < _atr_avg * 0.6:
-                    debug_row["volatility_gate_passed"] = False
-                    debug_row["final_reject_reason"] = "volatility_gate"
-                    log.debug(f"[NAKED-DBG] {pair['display']}: ATR={atr:.6f} < 60% avg={_atr_avg:.6f} - VOL GATE")
-                    if debug_mode:
-                        return {"debug": debug_row}
-                    return []
+            _volatility_ok_b, _volatility_diag_b = engine_b_low_volatility_gate(
+                atr,
+                atr_series,
+                config_map=CONFIG,
+            )
+            debug_row["volatility_gate"] = _volatility_diag_b
+            if not _volatility_ok_b:
+                debug_row["volatility_gate_passed"] = False
+                debug_row["final_reject_reason"] = "volatility_gate"
+                log.debug(
+                    "[NAKED-DBG] %s: low-volatility gate block: %s",
+                    pair.get("display", "?"),
+                    _volatility_diag_b,
+                )
+                if debug_mode:
+                    return {"debug": debug_row}
+                return []
 
             from athena_app.services.engine_b_market_state import engine_b_live_gate_quote
 
@@ -8626,6 +8683,7 @@ def api_scan_naked():
                     h4_snap=_eb_h4_snap,
                     style=resolved_style,
                     pair=pair,
+                    dxy_h4_closes=_dxy_h4_closes_b,
                     **engine_b_live_trigger_kwargs(style_profile, _tf_trigger_map),
                 )
 
@@ -9183,15 +9241,9 @@ def api_scan_naked():
         _nd = _row.get("naked_data")
         if not isinstance(_nd, dict):
             continue
-        _disp = str(_row.get("display") or "")
-        _sym = str(_row.get("symbol") or "")
-        if _disp:
-            _engine_b_cache_put(_disp, _nd)
-            _engine_b_cache_put(_disp.upper(), _nd)
-        if _sym:
-            _sid = _sym.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
-            _engine_b_cache_put(_sid, _nd)
-            _engine_b_cache_put(_sym, _nd)
+        _cache_symbol = str(_row.get("display") or _row.get("symbol") or "")
+        if _cache_symbol:
+            _engine_b_cache_put(_cache_symbol, _nd)
 
     # Run Conductor on Engine B signals so widget updates after an Engine B scan
     if results:
@@ -12728,8 +12780,7 @@ def api_chart_analysis():
                     f"is_actionable={_eb_vis.get('is_actionable')}"
                 )
 
-    sid = symbol.replace("/", "_").replace("=", "_").replace("^", "_").replace(".", "_")
-    eb = data.get("engineB") or _engine_b_cache_get(sid) or _engine_b_cache_get(symbol)
+    eb = data.get("engineB") or _engine_b_cache_get(symbol)
     if eb:
         context_parts.append(
             f"ENGINE B: swing_sequence={eb.get('current_swing_sequence')}, "
@@ -17427,6 +17478,7 @@ set_runtime(
         test_mode=lambda: _test_mode,
         analyze_pair=analyze_pair,
         fetch_candles=fetch_candles,
+        get_dxy_h4_closes=_get_dxy_h4_closes,
         fetch_eodhd=fetch_eodhd,
         fetch_polygon=fetch_polygon,
         fetch_yfinance=fetch_yfinance,

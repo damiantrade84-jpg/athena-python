@@ -11,9 +11,33 @@ from market_structure import (
     _engine_b_regime_gate,
     build_engine_b_profile_vp_context,
     engine_b_forex_asian_session_blocks_bar,
+    engine_b_low_volatility_gate,
     engine_b_min_score_threshold,
     resolve_engine_b_execution_levels,
 )
+
+
+def test_engine_b_low_volatility_gate_is_shared_and_configurable():
+    series = [10.0] * 50
+    passed, detail = engine_b_low_volatility_gate(
+        5.9,
+        series,
+        config_map={
+            "ENGINE_B_LOW_VOLATILITY_GATE_ENABLED": True,
+            "ENGINE_B_LOW_VOLATILITY_LOOKBACK": 50,
+            "ENGINE_B_LOW_VOLATILITY_MIN_ATR_RATIO": 0.6,
+        },
+    )
+    assert passed is False
+    assert detail["threshold"] == pytest.approx(6.0)
+
+    disabled, disabled_detail = engine_b_low_volatility_gate(
+        1.0,
+        series,
+        config_map={"ENGINE_B_LOW_VOLATILITY_GATE_ENABLED": False},
+    )
+    assert disabled is True
+    assert disabled_detail["reason"] == "disabled"
 
 
 def test_engine_b_regime_multipliers_are_not_risk_inverted(monkeypatch):
@@ -24,6 +48,21 @@ def test_engine_b_regime_multipliers_are_not_risk_inverted(monkeypatch):
     assert _engine_b_regime_gate("LOW_VOLATILITY", "forex") == pytest.approx(1.0)
     assert _engine_b_regime_gate("RANGING", "forex") == pytest.approx(1.10)
     assert _engine_b_regime_gate("HIGH_VOLATILITY", "forex") == pytest.approx(1.10)
+
+
+def test_engine_b_regime_multiplier_is_applied_to_min_score(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED", False)
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_REGIME_MULTIPLIERS",
+        {"RANGING": 1.10, "UNKNOWN": 1.0},
+    )
+
+    assert engine_b_min_score_threshold(
+        {"style": "intraday", "min_score": 4.5}, "RANGING", "forex"
+    ) == pytest.approx(5.0)
 
 
 def test_engine_b_style_min_score_differentiation_can_be_enabled(monkeypatch):
@@ -317,7 +356,6 @@ def test_engine_b_profile_trust_uses_score_group_allow_list(monkeypatch):
 
 def test_engine_b_forex_session_skip_includes_pre_asian_window(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED", True)
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_PRE_ASIAN_SESSION_SKIP_ENABLED", True)
 
     assert engine_b_forex_asian_session_blocks_bar(
         [{"time": "2026-06-24T23:00:00+00:00"}],
@@ -328,4 +366,17 @@ def test_engine_b_forex_session_skip_includes_pre_asian_window(monkeypatch):
         [{"time": "2026-06-24T23:00:00+00:00"}],
         "forex",
         "AUD/JPY",
+    ) is False
+
+
+def test_engine_b_asian_active_currency_list_is_config_driven(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ASIAN_ACTIVE_CURRENCIES", ["AUD"])
+    candles = [{"time": "2026-06-24T01:00:00+00:00"}]
+
+    assert engine_b_forex_asian_session_blocks_bar(
+        candles, "forex", "EUR/JPY"
+    ) is True
+    assert engine_b_forex_asian_session_blocks_bar(
+        candles, "forex", "EUR/AUD"
     ) is False

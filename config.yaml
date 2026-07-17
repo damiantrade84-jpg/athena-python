@@ -406,7 +406,6 @@ ENGINE_B_HOTLIST_CRYPTO_ANCHORS:          # preferred high-liquidity crypto anch
   - ADAUSDT
 # Engine B: skip forex signals on 22:00–07:00 UTC (Asian); applies to BT + live scan.
 ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED: true
-ENGINE_B_FOREX_PRE_ASIAN_SESSION_SKIP_ENABLED: true
 
 # Engine B forex session diagnostics. ENABLED only enriches structure payloads;
 # SCORE_INFLUENCE_ENABLED must also be true before score adjustment can use it.
@@ -3828,15 +3827,11 @@ NAKED_ENGINE:
 
 
 
-# Regime multipliers for the Engine B min_score floor. They take effect ONLY
-# when BOTH flags are true: ENGINE_B_REGIME_MULTIPLIERS_ENABLED and
-# ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE (config.py default: false).
-# With APPLY_TO_MIN_SCORE false the table below is inert — kept for opt-in
-# tuning (base_min_score * regime_multiplier, 1dp ceil). 2026-07-10 audit: the
-# legacy path that multiplied BONUS points by this table was removed — it
-# inverted the intent (RANGING 1.10 inflated scores in ranging regimes).
+# Regime multipliers adjust the Engine B min_score floor
+# (base_min_score * regime_multiplier, 1dp ceil).
 
 ENGINE_B_REGIME_MULTIPLIERS_ENABLED: true
+ENGINE_B_REGIME_MULTIPLIERS_APPLY_TO_MIN_SCORE: true
 
 ENGINE_B_REGIME_MULTIPLIERS:
 
@@ -4001,6 +3996,13 @@ ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY: true
 ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF: true
 # Open-air room (no opposing wall): require H1+H4 trend alignment + BOS.
 ENGINE_B_ROOM_NO_WALL_REQUIRE_MTF: true
+# Shared pre-score volatility gate used by full scan, naked scan, and Engine C.
+ENGINE_B_LOW_VOLATILITY_GATE_ENABLED: true
+ENGINE_B_LOW_VOLATILITY_LOOKBACK: 50
+ENGINE_B_LOW_VOLATILITY_MIN_ATR_RATIO: 0.6
+# DXY gate is wired but opt-in. A group override with macro_required also activates it.
+ENGINE_B_DXY_MACRO_GATE_ENABLED: false
+ENGINE_B_MACRO_CORRELATION_WINDOW: 60
 # Macro correlation short history fails closed when macro_required for the group.
 ENGINE_B_MACRO_SHORT_HISTORY_FAIL_CLOSED: true
 ENGINE_B_CHOCH_INVALIDATION_BARS: 5

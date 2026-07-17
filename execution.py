@@ -50,6 +50,7 @@ from market_structure import (
     NakedEngine,
     _synthesize_tp_from_sl,
     engine_b_confidence_passes,
+    engine_b_low_volatility_gate,
     engine_b_live_trigger_kwargs,
 )
 from guardian import pre_trade_check as _guardian_pre_trade
@@ -2560,38 +2561,27 @@ def api_engine_c_scan():
                 _r.normalize_style(requested_style), pair
             )
 
-            try:
-                resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
-                    requested_style,
-                    score_group=_pair_score_group,
-                    asset_type=ptype,
-                    symbol=pair.get("display") or pair.get("symbol") or "",
-                    live_entry_tf=True,
-                    source=pair.get("source"),
-                )
-            except TypeError as _profile_type_err:
-                if not any(
-                    name in str(_profile_type_err)
-                    for name in ("live_entry_tf", "source", "symbol")
-                ):
-                    raise
-                resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
-                    requested_style,
-                    score_group=_pair_score_group,
-                    asset_type=ptype,
-                )
-                from market_structure import resolve_live_engine_b_trigger_tf
-
-                _compat_trigger_tf = resolve_live_engine_b_trigger_tf(
-                    ptype,
-                    resolved_style_b,
-                    source=pair.get("source"),
-                )
-                if _compat_trigger_tf:
-                    style_profile_b = {
-                        **style_profile_b,
-                        "entry_tf": _compat_trigger_tf,
-                    }
+            resolved_style_b, style_profile_b = _r.naked_scan_style_profile(
+                requested_style,
+                score_group=_pair_score_group,
+                asset_type=ptype,
+                symbol=pair.get("display") or pair.get("symbol") or "",
+            )
+            _dxy_h4_closes_b = None
+            if ptype == "forex" and (
+                bool(_r.CONFIG.get("ENGINE_B_DXY_MACRO_GATE_ENABLED", False))
+                or bool(style_profile_b.get("macro_required", False))
+            ):
+                _dxy_fetch = getattr(_r, "get_dxy_h4_closes", None)
+                if callable(_dxy_fetch):
+                    try:
+                        _dxy_h4_closes_b = _dxy_fetch()
+                    except Exception as _dxy_err:
+                        _r.log.warning(
+                            "[ENGINE C] %s DXY history unavailable: %s",
+                            display,
+                            _dxy_err,
+                        )
 
             _zone_tf = str(style_profile_b.get("zone_tf", "H4")).upper()
             _entry_tf = str(style_profile_b.get("entry_tf", "H1")).upper()
@@ -2804,6 +2794,28 @@ def api_engine_c_scan():
                     detail=_atr_detail,
                 )
 
+            try:
+                _atr_series_b = calc_atr(
+                    [float(c["high"]) for c in atr_candles],
+                    [float(c["low"]) for c in atr_candles],
+                    [float(c["close"]) for c in atr_candles],
+                    14,
+                )
+            except (KeyError, TypeError, ValueError):
+                _atr_series_b = []
+            _volatility_ok_b, _volatility_diag_b = engine_b_low_volatility_gate(
+                atr,
+                _atr_series_b,
+                config_map=_r.CONFIG,
+            )
+            if not _volatility_ok_b:
+                return "skip", _engine_c_skip_entry(
+                    display,
+                    "Low volatility",
+                    code="volatility_gate",
+                    detail=str(_volatility_diag_b),
+                )
+
             _ec_d1_snap = {}
             _ec_h4_snap = {}
             try:
@@ -2846,6 +2858,7 @@ def api_engine_c_scan():
                     h4_snap=_ec_h4_snap,
                     style=resolved_style_b,
                     pair=pair,
+                    dxy_h4_closes=_dxy_h4_closes_b,
                     **engine_b_live_trigger_kwargs(style_profile_b, _tf_map),
                 )
                 if res_b.get("structural_verdict") == "CLEAR":

@@ -44,11 +44,20 @@ def _naked_engine_atr_mult(key: str, default: float, asset_type: str | None = ""
 _ASIAN_ACTIVE_CURRENCIES = ("JPY", "AUD", "NZD", "CNH", "SGD", "HKD")
 
 
+def _asian_active_currencies() -> tuple[str, ...]:
+    """Config-driven list (ENGINE_B_ASIAN_ACTIVE_CURRENCIES from engine_b_config.yaml)
+    with the historical hardcoded tuple as fallback."""
+    cfg = config.CONFIG.get("ENGINE_B_ASIAN_ACTIVE_CURRENCIES")
+    if isinstance(cfg, (list, tuple)) and cfg:
+        return tuple(str(c).upper() for c in cfg)
+    return _ASIAN_ACTIVE_CURRENCIES
+
+
 def _pair_has_asian_active_currency(display: str | None) -> bool:
     if not display:
         return False
     sym = str(display).upper()
-    return any(ccy in sym for ccy in _ASIAN_ACTIVE_CURRENCIES)
+    return any(ccy in sym for ccy in _asian_active_currencies())
 
 
 def engine_b_forex_asian_session_blocks_bar(
@@ -83,8 +92,6 @@ def engine_b_forex_asian_session_blocks_bar(
         if _bar_dt.tzinfo is None:
             _bar_dt = _bar_dt.replace(tzinfo=timezone.utc)
         h = _bar_dt.hour
-        if bool(config.CONFIG.get("ENGINE_B_FOREX_PRE_ASIAN_SESSION_SKIP_ENABLED", True)) and h == 23:
-            return True
         return h >= 22 or h < 7
     except Exception:
         # Fail closed: when Asian skip is enabled, unparseable bar times are skipped
@@ -543,29 +550,6 @@ def resolve_engine_b_tfs(
     }
 
 
-def resolve_live_engine_b_trigger_tf(
-    asset_type: str,
-    style: str,
-    *,
-    source: str | None = None,
-) -> str | None:
-    """Return the configured live trigger TF, independent of structure roles."""
-    try:
-        by_style = (config.CONFIG.get("NAKED_ENGINE") or {}).get(
-            "LIVE_TRIGGER_TF_BY_STYLE"
-        ) or {}
-        by_type = by_style.get(str(style or "").strip().lower()) or {}
-        raw = by_type.get(str(asset_type or "").strip().lower())
-    except Exception:
-        raw = None
-    tf = str(raw or "").strip().upper()
-    if tf not in _DIAGNOSTIC_TRIGGER_TFS:
-        return None
-    if str(asset_type or "").lower() == "forex" and str(source or "").lower() != "mt5":
-        return None
-    return tf
-
-
 def engine_b_candles_for_tf(
     tf: str,
     d1_candles: list,
@@ -590,6 +574,46 @@ def engine_b_candles_for_tf(
         return []
     series = extra_by_tf.get(key)
     return list(series) if series else []
+
+
+def engine_b_low_volatility_gate(
+    current_atr: float,
+    atr_series: list,
+    *,
+    config_map: dict | None = None,
+) -> tuple[bool, dict]:
+    """Apply the shared Engine B low-volatility pre-score gate."""
+    cfg = config_map if isinstance(config_map, dict) else config.CONFIG
+    if not bool(cfg.get("ENGINE_B_LOW_VOLATILITY_GATE_ENABLED", True)):
+        return True, {"reason": "disabled"}
+    try:
+        lookback = max(1, int(cfg.get("ENGINE_B_LOW_VOLATILITY_LOOKBACK", 50) or 50))
+        ratio = float(cfg.get("ENGINE_B_LOW_VOLATILITY_MIN_ATR_RATIO", 0.6) or 0.6)
+        atr = float(current_atr)
+    except (TypeError, ValueError):
+        return False, {"reason": "invalid_config_or_atr"}
+    if len(atr_series or []) < lookback:
+        return True, {"reason": "insufficient_history", "lookback": lookback}
+    valid = []
+    for value in list(atr_series)[-lookback:]:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            valid.append(parsed)
+    if not valid:
+        return False, {"reason": "no_valid_atr_history", "lookback": lookback}
+    average = sum(valid) / len(valid)
+    threshold = average * ratio
+    return atr >= threshold, {
+        "reason": "pass" if atr >= threshold else "atr_below_average_ratio",
+        "atr": atr,
+        "average_atr": average,
+        "minimum_ratio": ratio,
+        "threshold": threshold,
+        "lookback": lookback,
+    }
 
 
 _DIAGNOSTIC_TRIGGER_TFS = frozenset({"H1", "M15", "M30"})
@@ -4440,6 +4464,7 @@ class NakedEngine:
         role_candles: dict[str, list] | None = None,
         trigger_tf_override: str | None = None,
         struct_candles_confirmed: bool = False,
+        dxy_h4_closes: list | None = None,
     ) -> dict:
         """Precompute all direction-independent structure analysis data.
 
@@ -4587,6 +4612,16 @@ class NakedEngine:
             _zone_tf, d1_candles, h4_candles, h1_candles, extra_by_tf=_extras
         )
 
+        _bias_tf = str(_tfs.get("bias") or "").upper()
+        _bias_candles = engine_b_candles_for_tf(
+            _bias_tf, d1_candles, h4_candles, h1_candles, extra_by_tf=_extras
+        )
+        if not _bias_candles:
+            return {
+                "_error": f"missing_required_bias_timeframe:{_bias_tf or 'UNKNOWN'}",
+                "forming_strip_diagnostics": forming_strip_diag,
+            }
+
         h4_highs = np.array([float(c["high"]) for c in h4_candles])
         h4_lows = np.array([float(c["low"]) for c in h4_candles])
 
@@ -4624,9 +4659,23 @@ class NakedEngine:
         fvgs = self._detect_fvg(_zone_fvg_candles)
         active_fvgs = [f for f in fvgs if not f.get("mitigated", False)]
 
-        h4_swings = self._swing_cache(h4_highs, h4_lows, h4_atr)
         sequence_data = self._determine_sequence(struct_highs, struct_lows, struct_atr, "LONG", swings=struct_swings)
-        macro_seq_data = self._determine_sequence(h4_highs, h4_lows, h4_atr, "LONG", swings=h4_swings)
+        # Macro sequence tracks the policy bias role instead of a hardcoded H4
+        # series. This preserves deliberate same-role policies while preventing
+        # swing structure (H4) from being double-counted as macro bias (D1).
+        if _bias_tf == "H4":
+            _bias_highs, _bias_lows, _bias_atr = h4_highs, h4_lows, h4_atr
+        else:
+            _bias_highs = np.array([float(c["high"]) for c in _bias_candles])
+            _bias_lows = np.array([float(c["low"]) for c in _bias_candles])
+            _bias_atr = self._compute_atr_from_candles(_bias_candles, fallback=0.0)
+            if _bias_atr <= 0:
+                return {
+                    "_error": f"invalid_required_bias_atr:{_bias_tf}",
+                    "forming_strip_diagnostics": forming_strip_diag,
+                }
+        _bias_swings = self._swing_cache(_bias_highs, _bias_lows, _bias_atr)
+        macro_seq_data = self._determine_sequence(_bias_highs, _bias_lows, _bias_atr, "LONG", swings=_bias_swings)
 
         struct_volumes = None
         _allow_tick_vol_gate = bool(config.CONFIG.get("ENGINE_B_BOS_VOLUME_FOR_TICKVOL", False))
@@ -4873,6 +4922,7 @@ class NakedEngine:
             "active_fvgs": active_fvgs,
             "sequence_data": sequence_data,
             "macro_seq_data": macro_seq_data,
+            "macro_sequence_tf": _bias_tf,
             "bos_data": bos_data,
             "d1_bos": d1_bos,
             "sweep_data": sweep_data,
@@ -4914,6 +4964,12 @@ class NakedEngine:
             # Backtest flag: lets calculate_confidence resolve point-in-time
             # subsystem data (carry/COT as-of the bar) instead of current values.
             "historical_mode": bool(trade_bucket_historical_mode),
+            # DXY macro-correlation inputs (only populated when the caller
+            # supplies DXY closes; consumed by the config-gated DXY gate).
+            "_dxy_h4_closes": list(dxy_h4_closes) if dxy_h4_closes else None,
+            "_pair_h4_closes": (
+                [float(c["close"]) for c in h4_candles] if dxy_h4_closes else None
+            ),
         }
 
     def analyze_structure_direction(
@@ -5239,6 +5295,15 @@ class NakedEngine:
             "nearest_support_zone": nearest_sup,
             "current_swing_sequence": sequence_data["state"],
             "macro_swing_sequence": macro_seq_data["state"],
+            "macro_sequence_tf": precompute.get("macro_sequence_tf"),
+            **(
+                {
+                    "_dxy_h4_closes": precompute.get("_dxy_h4_closes"),
+                    "_pair_h4_closes": precompute.get("_pair_h4_closes"),
+                }
+                if precompute.get("_dxy_h4_closes")
+                else {}
+            ),
             "recommended_stop_loss": sl,
             "recommended_take_profit": tp,
             "tp_source": tp_source,
@@ -5364,6 +5429,7 @@ class NakedEngine:
         trade_bucket_historical_mode: bool = False,
         role_candles: dict[str, list] | None = None,
         trigger_tf_override: str | None = None,
+        dxy_h4_closes: list | None = None,
     ) -> dict:
         """
         Analyzes raw candle data to find Support/Resistance zones and trend sequence.
@@ -5388,6 +5454,7 @@ class NakedEngine:
             trade_bucket_historical_mode=trade_bucket_historical_mode,
             role_candles=role_candles,
             trigger_tf_override=trigger_tf_override,
+            dxy_h4_closes=dxy_h4_closes,
         )
         return self.analyze_structure_direction(pre, current_price, direction)
 
@@ -5654,6 +5721,32 @@ class NakedEngine:
             require_macro_align = True
 
         macro_ok = macro_aligned or not require_macro_align
+
+        # DXY macro-correlation gate — globally opt-in for forex; a group-level
+        # macro_required override also activates the same fail-closed gate.
+        _macro_required_group = bool(profile.get("macro_required", False))
+        _dxy_gate_enabled = asset_type_lower == "forex" and (
+            bool(config.CONFIG.get("ENGINE_B_DXY_MACRO_GATE_ENABLED", False))
+            or _macro_required_group
+        )
+        dxy_ok = True
+        dxy_gate_reason = None
+        if _dxy_gate_enabled:
+            _dxy_closes = res.pop("_dxy_h4_closes", None)
+            _pair_h4_closes = res.pop("_pair_h4_closes", None)
+            if _dxy_closes and _pair_h4_closes:
+                dxy_ok, dxy_gate_reason = self.check_macro_correlation_detail(
+                    _pair_h4_closes,
+                    _dxy_closes,
+                    direction,
+                    macro_required=True,
+                )
+            elif bool(
+                config.CONFIG.get("ENGINE_B_MACRO_SHORT_HISTORY_FAIL_CLOSED", True)
+            ):
+                dxy_ok = False
+                dxy_gate_reason = "dxy_series_unavailable"
+
         zone_ok = bool(res.get("zone_touched") or res.get("near_active_zone"))
         trigger_ok = bool(res.get("trigger_ok")) and trigger_timeframe_gate_ok
         breakout_ok = bool(res.get("bos_confirmed")) and bool(
@@ -6339,6 +6432,8 @@ class NakedEngine:
             passed = False
         if _aggtrade_hard_required and not _aggtrade_available:
             passed = False
+        if not dxy_ok:
+            passed = False
 
         failed_gate_names = []
         if not structure_ok:
@@ -6359,6 +6454,8 @@ class NakedEngine:
             failed_gate_names.append("max_sl_exceeded")
         if _aggtrade_hard_required and not _aggtrade_available:
             failed_gate_names.append(ENGINE_B_REASON_AGGTRADE_REQUIRED)
+        if not dxy_ok:
+            failed_gate_names.append(dxy_gate_reason or ENGINE_B_REASON_ADVERSE_DXY)
         if terminal_lifecycle:
             failed_gate_names.append(f"lifecycle_{lifecycle_state}")
 
@@ -6376,6 +6473,8 @@ class NakedEngine:
 
         if hard_counter:
             _diag_codes.append(ENGINE_B_REASON_SEQUENCE_COUNTER_TREND)
+        if not dxy_ok and dxy_gate_reason:
+            _diag_codes.append(dxy_gate_reason)
         if not trigger_ok and not breakout_ok:
             _diag_codes.append(ENGINE_B_REASON_NO_TRIGGER_PATTERN)
         elif breakout_ok and not res.get("bos_volume_confirmed", False):
@@ -6476,6 +6575,9 @@ class NakedEngine:
             "ai_adjustment": 0.0,
             "zone_points": 1.0 if location_ok else 0.0,
             "macro_points": 1.0 if macro_ok and require_macro_align else 0.0,
+            "dxy_gate_enabled": _dxy_gate_enabled,
+            "dxy_ok": dxy_ok,
+            "dxy_gate_reason": dxy_gate_reason,
             "rr": round(rr, 2),
             "rr_used_for_gate": round(rr, 2),
             "rr_source": _exec_lvl["rr_source"],

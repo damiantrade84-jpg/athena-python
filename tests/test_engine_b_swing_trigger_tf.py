@@ -36,7 +36,7 @@ def test_engine_b_candles_for_tf_maps_roles():
     assert engine_b_candles_for_tf("H1", d1, h4, h1)[-1]["close"] == pytest.approx(3.0)
 
 
-def test_swing_precompute_trigger_uses_h4_canonical_slots(monkeypatch):
+def test_swing_precompute_uses_policy_trigger_and_bias_slots(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRIP_FORMING_STRUCT", False)
     d1 = _series(100.0)
     h4 = _series(150.0)
@@ -54,7 +54,24 @@ def test_swing_precompute_trigger_uses_h4_canonical_slots(monkeypatch):
     )
     assert pre.get("_error") is None
     trigger = pre["_trigger_candles"]
-    assert trigger[-1]["close"] == pytest.approx(150.0)
+    assert trigger[-1]["close"] == pytest.approx(200.0)
+    assert pre["macro_sequence_tf"] == "D1"
+
+
+def test_swing_precompute_fails_closed_without_policy_bias_candles(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRIP_FORMING_STRUCT", False)
+    pre = NakedEngine().precompute_structure_data(
+        [],
+        _series(150.0),
+        _series(200.0),
+        150.0,
+        1.0,
+        style="swing",
+        asset_type="forex",
+        pair={"display": "EUR/USD", "type": "forex", "source": "mt5"},
+    )
+
+    assert pre["_error"]
 
 
 def test_intraday_precompute_trigger_uses_h1_canonical_slots(monkeypatch):

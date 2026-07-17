@@ -16,7 +16,6 @@ from market_structure import (
     engine_b_candles_for_tf,
     engine_b_diagnostic_trigger_kwargs,
     engine_b_live_trigger_kwargs,
-    resolve_live_engine_b_trigger_tf,
 )
 
 
@@ -70,14 +69,8 @@ def test_diagnostic_trigger_kwargs_enabled(monkeypatch):
     assert engine_b_diagnostic_trigger_kwargs({"entry_tf": "H4"}, {"H4": m15}) == {}
 
 
-def test_live_forex_intraday_trigger_is_m30_only_on_mt5():
-    assert resolve_live_engine_b_trigger_tf(
-        "forex", "intraday", source="mt5"
-    ) == "M30"
-    assert resolve_live_engine_b_trigger_tf(
-        "forex", "intraday", source="eodhd"
-    ) is None
-    assert resolve_live_engine_b_trigger_tf("forex", "swing", source="mt5") is None
+def test_legacy_live_trigger_override_is_not_resurrected_by_defaults():
+    assert "LIVE_TRIGGER_TF_BY_STYLE" not in config.CONFIG.get("NAKED_ENGINE", {})
 
 
 def test_live_trigger_kwargs_do_not_depend_on_diagnostic_flag(monkeypatch):
@@ -115,7 +108,9 @@ def test_scanner_provenance_does_not_relabel_computed_timeframes():
     assert result["structure_tf"] == "H4"
     assert result["entry_tf"] == "H1"
     assert result["trigger_tf"] == "H1"
-    assert result["execution_tf"] == "H1"
+    assert result["execution_tf"] == "M15"
+    assert result["execution_tf_actual"] is None
+    assert result["execution_tf_consumed"] is False
     assert result["atr_tf"] == "H4"
     assert result["structure_tf_policy"] == "H1"
     assert result["trigger_tf_policy"] == "M15"
@@ -169,7 +164,7 @@ def test_engine_b_backtest_requests_policy_atr_timeframe(monkeypatch):
     assert captured["atr_tf"] == "H1"
 
 
-def test_live_lower_trigger_freshness_cannot_be_disabled(monkeypatch):
+def test_live_lower_trigger_freshness_honors_disabled_gate(monkeypatch):
     import athena_app.services.market_state as market_state
     from scanner import _engine_b_scan_freshness_stale_tfs
 
@@ -188,8 +183,8 @@ def test_live_lower_trigger_freshness_cannot_be_disabled(monkeypatch):
         _series(1.0),
         active_entry_tfs={"M15": _series(1.0)},
     )
-    assert stale == ["M15:stale_1_bucket"]
-    assert diag["M15"]["stalenessSeverity"] == "stale_1_bucket"
+    assert stale == []
+    assert diag == {}
 
 
 def test_intraday_override_m15_uses_m15_series_not_h1(monkeypatch):
