@@ -7096,14 +7096,9 @@ def _naked_scan_style_profile(
 ) -> tuple[str, dict]:
     resolved = _normalize_style(style)
     if resolved == "auto":
-        from style_resolver import resolve_auto_style as _resolve_shared_auto_style
-
-        resolved = _resolve_shared_auto_style(
-            "auto",
-            {"type": asset_type or "forex"},
-            score_group=score_group,
-            asset_type=asset_type or "forex",
-        )
+        # Preserve the pre-style-routing Engine B contract. Explicit swing and
+        # scalp remain selectable, while Auto uses the intraday timing profile.
+        resolved = "intraday"
     # TFs come from market_structure.resolve_engine_b_tfs (single source of truth).
     # asset_type defaults to "forex" when caller omits it; this matches legacy behaviour
     # for tests / callers that don't supply pair context.
