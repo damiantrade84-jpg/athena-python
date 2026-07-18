@@ -7258,6 +7258,63 @@ def _engine_b_regime_label(
         return "RANGING"
 
 
+def _engine_b_scan_speed_state(pair_obj: dict, h1_state: dict | None, clim: dict):
+    """Build the scan-time speed/liquidity state for fresh Engine B scans.
+
+    Mirrors ``scanner._scan_speed_state`` inputs (confirmed H1/M15 bars, live
+    quote quality, session) so a fresh scan stamps the same policy inputs the
+    full scan does, and the execute-time refresh — which pins speed/liquidity
+    from the stamped payload — re-resolves to the same policy hash. Failures
+    fail closed to a non-None UNAVAILABLE state: resolving with ``None`` skips
+    the liquidity gate entirely and stamps a policy the pinned refresh can
+    never reproduce on baseline-M5 symbols (ENGINE_B_TF_POLICY_CHANGED).
+    """
+    from timeframe_policy import SpeedState
+
+    try:
+        from scanner import _scan_speed_state
+
+        if pair_obj.get("source") == "mt5":
+            m15_state = _engine_b_live_market_state(pair_obj, "M15", clim["M15"])
+        else:
+            from athena_app.services.market_state import get_tf_market_state
+
+            _m15_raw, _ = _fetch_ab_crypto_signal_candles(
+                pair_obj, "M15", clim["M15"]
+            )
+            m15_state = get_tf_market_state(
+                pair_obj,
+                "M15",
+                candles=list(_m15_raw or []),
+            )
+        with _live_prices_lock:
+            live_prices = dict(_live_prices)
+        try:
+            from scalp_engine import get_sessions_for_time
+
+            _sessions = get_sessions_for_time(
+                pair_obj.get("type", ""),
+                symbol=pair_obj.get("display") or pair_obj.get("symbol") or "",
+            )
+            current_session = "+".join(_sessions) if _sessions else "closed"
+        except Exception:
+            current_session = None
+        return _scan_speed_state(
+            pair_obj,
+            {"H1": h1_state or {}, "M15": m15_state or {}},
+            live_prices,
+            current_session=current_session,
+            scheduled_event=None,
+        )
+    except Exception as exc:
+        log.debug(
+            "[NAKED-AI] %s scan speed state unavailable, failing closed: %s",
+            pair_obj.get("display", "?"),
+            exc,
+        )
+        return SpeedState()
+
+
 def _compute_naked_analysis(
     sig: dict,
     engine_a_ctx: dict = None,
@@ -7427,6 +7484,10 @@ def _compute_naked_analysis(
             if execution_mode and sig.get("timeframePolicyHash")
             else None
         )
+        if _execution_speed_state is None:
+            _execution_speed_state = _engine_b_scan_speed_state(
+                pair_obj, h1_state, _clim
+            )
         resolved_style, style_profile = _naked_scan_style_profile(
             _requested_style_naked,
             score_group=_pair_score_group,

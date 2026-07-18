@@ -845,6 +845,37 @@ def test_alias_group_conflict_sets_config_error_and_disables_policy_autotrade() 
     ) == "TF_POLICY_CONFIG_CONFLICT"
 
 
+def test_fresh_scan_unavailable_speed_state_round_trips_policy_hash() -> None:
+    """Fresh Engine B scans resolve with a real (possibly UNAVAILABLE) SpeedState.
+
+    The execute-time refresh pins speed/liquidity from the stamped payload via
+    speed_state_from_policy_payload; both passes must produce the same policy
+    hash for a baseline-M5 symbol, otherwise execution is rejected with
+    ENGINE_B_TF_POLICY_CHANGED. Resolving the scan with None (the old
+    fresh-scan wiring) skipped the liquidity demotion gate and stamped an M5
+    policy the pinned refresh could never reproduce.
+    """
+    scan_state = SpeedState()  # fail-closed default: UNAVAILABLE speed/liquidity
+    scan = resolve_timeframe_policy(
+        "BTCUSDT", "crypto", None, "intraday", scan_state, engine_id="engine_b"
+    )
+    stamped = scan.payload()
+
+    pinned = speed_state_from_policy_payload(stamped)
+    assert pinned is not None
+    refreshed = resolve_timeframe_policy(
+        "BTCUSDT", "crypto", None, "intraday", pinned, engine_id="engine_b"
+    )
+    assert refreshed.payload()["timeframePolicyHash"] == stamped["timeframePolicyHash"]
+
+    # The old asymmetry: a scan resolved with speed_state=None kept baseline M5
+    # authority and produced a hash the UNAVAILABLE-pinned refresh never matches.
+    legacy = resolve_timeframe_policy(
+        "BTCUSDT", "crypto", None, "intraday", None, engine_id="engine_b"
+    )
+    assert legacy.payload()["timeframePolicyHash"] != stamped["timeframePolicyHash"]
+
+
 def test_reconciliation_rejects_aliases_assigned_to_conflicting_groups() -> None:
     pairs = [
         {
