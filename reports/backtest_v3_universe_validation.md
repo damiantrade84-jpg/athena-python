@@ -3,7 +3,7 @@
 Run date: 2026-07-20 (UTC). Driver: 3-process pool over all 116 enabled pairs,
 Engine A then Engine B, style `intraday`, full stored history per symbol,
 every result persisted to `backtest_runs_v3` (audit.db). Commits under test:
-`4d4812ef` (rebuild, stages 1–8) + `be7113ef` (legacy archival, stage 9).
+`4d4812ef` (rebuild, stages 1–8) + `b80c433c` (legacy archival, stage 9).
 
 ## Timing
 
