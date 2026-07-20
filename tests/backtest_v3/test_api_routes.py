@@ -30,10 +30,10 @@ def test_retired_endpoints_return_410():
 
 def test_single_pair_requires_symbol_and_known_pair():
     client = _client()
-    assert client.post("/api/backtest", json={}).status_code == 400
-    assert client.post("/api/backtest", json={"symbol": "NOPE"}).status_code == 404
+    assert client.post("/api/v3/backtest", json={}).status_code == 400
+    assert client.post("/api/v3/backtest", json={"symbol": "NOPE"}).status_code == 404
     assert (
-        client.post("/api/backtest", json={"symbol": "EURUSD", "style": "scalp"}).status_code
+        client.post("/api/v3/backtest", json={"symbol": "EURUSD", "style": "scalp"}).status_code
         == 422
     )
 
@@ -54,7 +54,7 @@ def test_single_pair_success_shape(monkeypatch):
     monkeypatch.setattr(runner, "run_pair", _fake_run_pair)
     client = _client()
     resp = client.post(
-        "/api/backtest", json={"symbol": "EURUSD", "style": "intraday", "persist": False}
+        "/api/v3/backtest", json={"symbol": "EURUSD", "style": "intraday", "persist": False}
     )
     assert resp.status_code == 200
     body = resp.get_json()
@@ -82,13 +82,13 @@ def test_backtest_all_starts_job_and_reports_status(monkeypatch):
     app.register_blueprint(create_backtest_v3_blueprint(all_pairs_provider=_pairs))
     client = app.test_client()
 
-    resp = client.post("/api/backtest-all", json={"engine": "B", "style": "intraday"})
+    resp = client.post("/api/v3/backtest-all", json={"engine": "B", "style": "intraday"})
     assert resp.status_code == 202
     assert resp.get_json()["jobId"] == "job123"
     assert started["symbols"] == ["EURUSD", "BTCUSDT"]
     assert started["engine"] == "B"
 
-    status = client.get("/api/backtest-jobs/job123")
+    status = client.get("/api/v3/backtest-jobs/job123")
     assert status.status_code == 200
     assert status.get_json()["state"] == "done"
-    assert client.get("/api/backtest-jobs/nope").status_code == 404
+    assert client.get("/api/v3/backtest-jobs/nope").status_code == 404

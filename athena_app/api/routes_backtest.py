@@ -82,10 +82,10 @@ def register_backtest_history_routes(app, runtime: SimpleNamespace) -> None:
 
     _RUNTIME = runtime
 
-    app.add_url_rule("/api/backtest-history", "api_backtest_history", api_backtest_history)
+    app.add_url_rule("/api/v3/backtest-history", "api_backtest_history", api_backtest_history)
     app.add_url_rule(
-        "/api/backtest-history/<pair_name>",
+        "/api/v3/backtest-history/<pair_name>",
         "api_backtest_history_pair",
         api_backtest_history_pair,
     )
-    app.add_url_rule("/api/backtest-best", "api_backtest_best", api_backtest_best)
+    app.add_url_rule("/api/v3/backtest-best", "api_backtest_best", api_backtest_best)

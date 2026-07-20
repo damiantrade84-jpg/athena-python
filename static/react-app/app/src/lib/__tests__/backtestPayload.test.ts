@@ -11,7 +11,7 @@ describe('buildBacktestRequest', () => {
     });
 
     expect(request).toEqual({
-      endpoint: '/api/backtest',
+      endpoint: '/api/v3/backtest',
       payload: {
         pair: 'EURUSD',
         style: 'intraday',
@@ -27,7 +27,7 @@ describe('buildBacktestRequest', () => {
     });
 
     expect(request).toEqual({
-      endpoint: '/api/backtest-naked',
+      endpoint: '/api/v3/backtest-naked',
       payload: {
         pair: 'EURUSD',
         style: 'intraday',

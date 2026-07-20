@@ -57,9 +57,9 @@ def test_backtest_history_routes_register_expected_methods():
 
     methods_by_path = {rule.rule: rule.methods for rule in app.url_map.iter_rules()}
 
-    assert "GET" in methods_by_path["/api/backtest-history"]
-    assert "GET" in methods_by_path["/api/backtest-history/<pair_name>"]
-    assert "GET" in methods_by_path["/api/backtest-best"]
+    assert "GET" in methods_by_path["/api/v3/backtest-history"]
+    assert "GET" in methods_by_path["/api/v3/backtest-history/<pair_name>"]
+    assert "GET" in methods_by_path["/api/v3/backtest-best"]
     assert client is not None
 
 
@@ -68,7 +68,7 @@ def test_backtest_history_returns_newest_rows_first():
     _create_db(db_path)
     client, _app = _client(db_path)
 
-    resp = client.get("/api/backtest-history")
+    resp = client.get("/api/v3/backtest-history")
 
     assert resp.status_code == 200
     rows = resp.get_json()
@@ -84,7 +84,7 @@ def test_backtest_history_pair_filters_exact_pair():
     _create_db(db_path)
     client, _app = _client(db_path)
 
-    resp = client.get("/api/backtest-history/BTCUSDT")
+    resp = client.get("/api/v3/backtest-history/BTCUSDT")
 
     assert resp.status_code == 200
     rows = resp.get_json()
@@ -98,7 +98,7 @@ def test_backtest_best_returns_latest_row_per_pair_ordered_by_sqn():
     _create_db(db_path)
     client, _app = _client(db_path)
 
-    resp = client.get("/api/backtest-best")
+    resp = client.get("/api/v3/backtest-best")
 
     assert resp.status_code == 200
     rows = resp.get_json()

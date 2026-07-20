@@ -14,7 +14,7 @@ export interface BacktestRequest {
 }
 
 export function backtestEndpointForEngine(engine: BacktestEngineKey): string {
-  return engine === 'B' ? '/api/backtest-naked' : '/api/backtest';
+  return engine === 'B' ? '/api/v3/backtest-naked' : '/api/v3/backtest';
 }
 
 export function buildBacktestRequest(input: BacktestRequestInput): BacktestRequest {

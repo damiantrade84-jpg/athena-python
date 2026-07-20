@@ -1,12 +1,13 @@
 """Flask blueprint for the rebuilt (v3) backtester.
 
-Routes (same paths the retired handlers owned, now served by the new runner):
+Routes are served under /api/v3/* because `athena_backtesting_v2`'s
+legacy-retirement guard 410s every path starting with /api/backtest
+(that whole legacy surface is retired app-wide):
 
-- POST /api/backtest         -> Engine A, one pair, synchronous
-- POST /api/backtest-naked   -> Engine B, one pair, synchronous
-- POST /api/backtest-all     -> async universe run, returns {jobId}
-- GET  /api/backtest-jobs/<id> -> job status/leaderboard
-- POST /api/backtest-scalp|-consensus|-ase|-ase-all|-naked-all -> 410 GONE
+- POST /api/v3/backtest          -> Engine A, one pair, synchronous
+- POST /api/v3/backtest-naked    -> Engine B, one pair, synchronous
+- POST /api/v3/backtest-all      -> async universe run, returns {jobId}
+- GET  /api/v3/backtest-jobs/<id> -> job status/leaderboard
 
 The separately-built `athena_backtesting_v2` package keeps its own routes;
 nothing here reads or writes its state.
@@ -73,15 +74,15 @@ def create_backtest_v3_blueprint(*, all_pairs_provider, json_safe=None, max_work
                 result["persistError"] = True
         return jsonify(_safe(result))
 
-    @bp.route("/api/backtest", methods=["POST"])
+    @bp.route("/api/v3/backtest", methods=["POST"])
     def api_backtest_v3():
         return _run_single("A")
 
-    @bp.route("/api/backtest-naked", methods=["POST"])
+    @bp.route("/api/v3/backtest-naked", methods=["POST"])
     def api_backtest_naked_v3():
         return _run_single("B")
 
-    @bp.route("/api/backtest-all", methods=["POST"])
+    @bp.route("/api/v3/backtest-all", methods=["POST"])
     def api_backtest_all_v3():
         payload = request.get_json(force=True, silent=True) or {}
         engine = str(payload.get("engine") or "A").strip().upper()
@@ -103,7 +104,7 @@ def create_backtest_v3_blueprint(*, all_pairs_provider, json_safe=None, max_work
         job_id = jobs.start(symbols=symbols, engine=engine, style=style)
         return jsonify({"success": True, "jobId": job_id, "total": len(symbols)}), 202
 
-    @bp.route("/api/backtest-jobs/<job_id>", methods=["GET"])
+    @bp.route("/api/v3/backtest-jobs/<job_id>", methods=["GET"])
     def api_backtest_job_v3(job_id: str):
         status = jobs.status(job_id)
         if status is None:
@@ -116,7 +117,7 @@ def create_backtest_v3_blueprint(*, all_pairs_provider, json_safe=None, max_work
                 {
                     "success": False,
                     "error": f"/api/{name} is retired. The rebuilt backtester (v3) covers "
-                    "Engine A (/api/backtest) and Engine B (/api/backtest-naked) only.",
+                    "Engine A (/api/v3/backtest) and Engine B (/api/v3/backtest-naked) only.",
                 }
             ), 410
 
