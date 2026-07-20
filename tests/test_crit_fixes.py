@@ -548,6 +548,9 @@ def test_scan_naked_revalidates_emitted_engine_b_cards_before_response():
 
     assert "execution_mode=True" in helper
     assert 'refreshed.get("canonical_trade_ok") is False' in helper
+    # Scan-time entry readiness must not hard-disable UI execute buttons.
+    assert '"executable": True' in helper
+    assert 'entryReadiness") == "READY"' not in helper
     assert '"engine": "engine_b"' in route
     assert "_revalidate_engine_b_scan_signal(_row)" in route
 

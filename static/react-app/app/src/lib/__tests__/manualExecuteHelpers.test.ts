@@ -147,6 +147,27 @@ describe('engine B execute gating', () => {
     expect(engineBExecuteBlockReason(actionable)).toBeNull();
   });
 
+  it('recognizes engine_b identity and keeps style execute available when timing is pending', () => {
+    const actionable = {
+      ...bchLike,
+      engine: 'engine_b',
+      source_engine: 'engine_b',
+      canonical_trade_ok: true,
+      engine_b_canonical_status: 'ACTIONABLE',
+      entryReadiness: 'PENDING',
+      entryReadinessReason: 'execution timeframe M15 not aligned',
+      naked_data: {
+        ...bchLike.naked_data,
+        canonical_trade_ok: true,
+        engine_b_canonical_actionable: true,
+        engine_b_canonical_status: 'ACTIONABLE',
+        entryReadiness: 'PENDING',
+      },
+    } as EngineASignal;
+    expect(canExecuteEngineBSignal(actionable)).toBe(true);
+    expect(engineBExecuteBlockReason(actionable)).toBeNull();
+  });
+
   it('preserves Engine B identity in the quick-execute payload', () => {
     const actionable = {
       ...bchLike,

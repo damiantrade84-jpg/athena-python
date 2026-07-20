@@ -107,18 +107,29 @@ def engine_b_live_market_state(
     Behavior matches `athena.py` `_engine_b_live_market_state()`:
     - If `candles` are provided, they are split into confirmed/forming directly.
       (Used by scan overlays that already fetched raw candles.)
-    - Else for MT5 pairs, fetch directly from MT5 and split via `split_market_state`.
+    - Else for MT5 pairs, fetch directly from MT5 and normalize via
+      ``get_tf_market_state`` (same stale/calendar-gap rules as Engine A).
     - Else fall back to the shared `fetch_market_state` path.
+
+    Important: do not return raw ``split_market_state`` for live Engine B.
+    Its age>tf_seconds ``stale`` flag ignores D1 weekend calendar-gap grace and
+    false-blocks execute with ``stale_required_closed_timeframes:D1``.
     """
     from athena_app.services.market_state import (
-        market_state_offset_hours,
-        split_market_state,
+        get_tf_market_state,
         trim_mt5_d1_broker_session_ahead_tail,
     )
 
     tf_u = str(tf or "").upper()
     display = pair.get("display") or pair.get("symbol") or ""
-    offset_hours = market_state_offset_hours(pair, tf_u)
+
+    def _state_from_series(series: list[dict[str, Any]]) -> dict:
+        return get_tf_market_state(
+            pair,
+            tf_u,
+            candles=series,
+            time_now=time_now,
+        )
 
     if candles is not None:
         series, _ = trim_mt5_d1_broker_session_ahead_tail(
@@ -127,13 +138,7 @@ def engine_b_live_market_state(
             list(candles or []),
             time_now=time_now,
         )
-        return split_market_state(
-            series,
-            tf_u,
-            display,
-            time_now=time_now,
-            offset_hours=offset_hours,
-        )
+        return _state_from_series(series)
 
     if pair.get("source") == "mt5" and fetch_mt5 is not None:
         try:
@@ -151,13 +156,7 @@ def engine_b_live_market_state(
                 series,
                 time_now=time_now,
             )
-            return split_market_state(
-                series,
-                tf_u,
-                display,
-                time_now=time_now,
-                offset_hours=offset_hours,
-            )
+            return _state_from_series(series)
         except Exception as e:
             if log is not None:
                 try:
@@ -173,13 +172,7 @@ def engine_b_live_market_state(
     if fetch_market_state is None:
         # Best-effort fallback: no market state available.
         return {
-            **split_market_state(
-                [],
-                tf_u,
-                display,
-                time_now=time_now,
-                offset_hours=offset_hours,
-            ),
+            **_state_from_series([]),
             "error": "market_state_unavailable",
             "reason": "no_fetch_market_state_and_no_candles",
         }

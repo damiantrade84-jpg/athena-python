@@ -229,6 +229,44 @@ def test_engine_b_mt5_d1_trims_broker_session_ahead_tail():
     assert state["forming"]["time"] == "2026-05-07T00:00:00Z"
 
 
+def test_engine_b_d1_weekend_gap_does_not_mark_stale(monkeypatch):
+    """Fri→Mon D1 lag must not set stale=True on Engine B live state.
+
+    Regression: engine_b_live_market_state returned raw split_market_state, whose
+    age>tf_seconds stale flag ignored D1 calendar-gap grace and blocked execute
+    with ENGINE_B_ENTRY_NOT_READY: UNAVAILABLE: stale_required_closed_timeframes:D1.
+    """
+    monkeypatch.setitem(CONFIG, "MT5_D1_CALENDAR_GAP_GRACE_BUCKETS", 4)
+    pair = {
+        "display": "EUR/USD",
+        "symbol": "EURUSD",
+        "type": "forex",
+        "source": "mt5",
+    }
+    # Friday open; evaluate Monday noon (bucket lag 3 within grace=4).
+    candles = [_candle("2026-05-08T00:00:00Z")] * 40
+    now = _epoch("2026-05-11T12:00:00Z")
+
+    crude = split_market_state(
+        candles,
+        "D1",
+        pair["display"],
+        time_now=now,
+        offset_hours=market_state_offset_hours(pair, "D1"),
+    )
+    assert crude["stale"] is True
+
+    state = engine_b_live_market_state(
+        pair,
+        "D1",
+        len(candles),
+        candles=candles,
+        time_now=now,
+    )
+    assert state["stale"] is False
+    assert state.get("confirmed")
+
+
 def test_scanner_preloads_engine_a_market_state_for_all_mt5_assets():
     src = Path("scanner.py").read_text(encoding="utf-8")
     assert 'if pair.get("source") == "mt5":' in src

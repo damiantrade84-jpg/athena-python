@@ -284,6 +284,11 @@ def test_scan_speed_state_is_used_for_engine_a_scoring_policy():
 
     assert "timeframe_speed_state=None" in athena_src
     assert "speed_state=timeframe_speed_state" in athena_src
+    # analyze_pair must stamp the same speed_state it resolved with, or
+    # execute-time refresh fails ENGINE_A_V3_TF_POLICY_CHANGED.
+    attach_idx = athena_src.index("attach_timeframe_policy_payload(\n        _v3_signal,")
+    attach_block = athena_src[attach_idx : attach_idx + 800]
+    assert "speed_state=timeframe_speed_state" in attach_block
     assert '"timeframe_speed_state": _speed_state' in scanner_src
 
 

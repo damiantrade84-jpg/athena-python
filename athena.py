@@ -7920,9 +7920,6 @@ def _revalidate_engine_b_scan_signal(
 
     updated = dict(signal or {})
     now_iso = datetime.now(timezone.utc).isoformat()
-    from timeframe_policy import policy_mode_is_authoritative
-
-    execution_timing_enforced = policy_mode_is_authoritative(None, CONFIG)
     updated.update(
         {
             "engine": "engine_b",
@@ -7955,11 +7952,12 @@ def _revalidate_engine_b_scan_signal(
             "exit_strategy": refreshed.get("exit_strategy"),
             "naked_data": refreshed,
             "engine_b": refreshed,
-            "executable": (
-                refreshed.get("entryReadiness") == "READY"
-                if execution_timing_enforced
-                else True
-            ),
+            # Canonical/levels already validated above. Entry-timing readiness is
+            # re-checked on the execute refresh path (ENGINE_B_ENTRY_NOT_READY).
+            # Do not hard-disable UI style execute buttons from a scan-time
+            # PENDING/UNAVAILABLE stamp — that blocks actionable cards until a
+            # full rescan even when timing may be READY moments later.
+            "executable": True,
         }
     )
     for timeframe_key in (
@@ -15267,6 +15265,11 @@ def analyze_pair(
         style,
         engine="engine_a",
         market_states=_policy_market_states,
+        # Must match the speed_state used for resolve_timeframe_policy above.
+        # Execute-time refresh pins this from the stamped payload; omitting it
+        # here re-stamps a baseline/UNAVAILABLE hash and fails with
+        # ENGINE_A_V3_TF_POLICY_CHANGED.
+        speed_state=timeframe_speed_state,
     )
     if CONFIG.get("ENGINE_A_V3_SHADOW_JOURNAL_ENABLED", False):
         try:

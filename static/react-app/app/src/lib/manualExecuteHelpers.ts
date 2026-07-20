@@ -219,6 +219,19 @@ export function engineBExecuteBlockReason(signal: EngineASignal | null): string 
   if (signal.executable === false) {
     const freshness = (signal as { dataFreshness?: { reason?: string } }).dataFreshness;
     if (freshness?.reason) return 'Stale data';
+    const readiness = String(
+      (signal as { entryReadiness?: string }).entryReadiness
+      || (signal.naked_data as { entryReadiness?: string } | undefined)?.entryReadiness
+      || '',
+    ).toUpperCase();
+    if (readiness && readiness !== 'READY') {
+      const detail = String(
+        (signal as { entryReadinessReason?: string }).entryReadinessReason
+        || (signal.naked_data as { entryReadinessReason?: string } | undefined)?.entryReadinessReason
+        || readiness,
+      );
+      return `Entry timing: ${detail}`;
+    }
     return 'Not executable';
   }
   const canonicalOk = engineBCanonicalTradeOk(signal);
@@ -433,9 +446,13 @@ export function aiReviewWarningForExecute(review: AIChartReviewResponse | null):
 export function isEngineBOnlySignal(signal: EngineASignal | null): boolean {
   if (!signal) return false;
   const raw = signal as Record<string, unknown>;
+  const engine = String(
+    raw.engine_source ?? raw.source_engine ?? raw.engine ?? '',
+  ).toUpperCase();
   return (
-    raw.engine === 'B'
-    || raw.engine_source === 'engine_b'
+    engine === 'B'
+    || engine === 'ENGINE_B'
+    || engine === 'NAKED'
     || raw.is_naked === true
     || Boolean(raw.naked_data)
   );
