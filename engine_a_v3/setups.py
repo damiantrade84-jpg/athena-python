@@ -59,8 +59,22 @@ def _ema(values: Iterable[float], period: int) -> list[float]:
     return out
 
 
-def _atr(candles: list[dict], period: int = 14) -> float:
+def _atr(
+    candles: list[dict],
+    period: int = 14,
+    *,
+    series_cache: "SetupSeriesCache | None" = None,
+    timeframe: str | None = None,
+) -> float:
     """Wilder ATR (same algorithm as indicators.calc_atr) — last valid value."""
+    if (
+        series_cache is not None
+        and timeframe is not None
+        and series_cache.matches(timeframe, candles)
+    ):
+        cached = series_cache.atr_at(timeframe, len(candles), period)
+        if cached is not None:
+            return cached
     if len(candles) < 2 or period <= 0:
         return 0.0
     highs = [float(c["high"]) for c in candles]
@@ -78,6 +92,183 @@ def _atr(candles: list[dict], period: int = 14) -> float:
             if out == out and out > 0:  # not NaN
                 return out
     return 0.0
+
+
+def _ema_last(
+    values: Iterable[float],
+    period: int,
+    *,
+    series_cache: "SetupSeriesCache | None" = None,
+    timeframe: str | None = None,
+    candles: list[dict] | None = None,
+) -> float:
+    """Last EMA value — served from a full-series precompute when available.
+
+    ``candles`` is the frame the values were derived from; the cache path is
+    taken only when that frame verifiably is a prefix of the cached series
+    (guards against the frame-resolution fallbacks that substitute another
+    timeframe's rows under the requested name).
+    """
+    if (
+        series_cache is not None
+        and timeframe is not None
+        and candles is not None
+        and series_cache.matches(timeframe, candles)
+    ):
+        values_list = values if isinstance(values, list) else list(values)
+        if len(values_list) == len(candles):
+            cached = series_cache.ema_at(timeframe, len(values_list), period)
+            if cached is not None:
+                return cached
+        values = values_list
+    arr = _ema(values, period)
+    return arr[-1] if arr else 0.0
+
+
+class SetupSeriesCache:
+    """Full-series EMA/ATR precompute for point-in-time V3 backtest setups.
+
+    Mirrors ``indicator_adapter.BacktestIndicatorSnapshotCache``: built once
+    from the full available history per timeframe (causal recurrences don't
+    change with future bars), then reduced to an O(1) at-length lookup instead
+    of recomputing from scratch on every backtest bar. Caller-owned and
+    scoped to one backtest run; never constructed by live scanning, so
+    ``detect_setup``'s default (``series_cache=None``) is byte-identical to
+    the pre-existing behavior.
+    """
+
+    def __init__(self, candles: Mapping[str, list[dict]]):
+        self._candles = candles
+        self._ema_series: dict[tuple[str, int], list[float]] = {}
+        self._atr_series: dict[tuple[str, int], list[float]] = {}
+        self._calc_ema_series: dict[tuple[str, int], list] = {}
+        self._vwap_prefix: dict[str, tuple[list[float], list[float]]] = {}
+
+    def matches(self, timeframe: str, candles: list[dict] | None) -> bool:
+        """True when `candles` verifiably is a prefix of the cached series.
+
+        Frame resolution can substitute another timeframe's rows under the
+        requested name (`candles.get(tf) or candles.get("H4") ...`), and
+        callers may hold prefix *copies*; comparing the last bar's open time
+        at the same index is an O(1) check that accepts prefixes and copies
+        of the cached series while rejecting cross-timeframe substitutions.
+        """
+        rows = self._candles.get(timeframe) or []
+        n = len(candles) if candles else 0
+        if n <= 0 or n > len(rows):
+            return False
+        try:
+            return rows[n - 1].get("time") == candles[-1].get("time")
+        except (AttributeError, TypeError):
+            return False
+
+    def ema_series_view(self, timeframe: str, length: int, period: int) -> list[float] | None:
+        """Shared full-series `_ema` array (do NOT mutate).
+
+        Values at indices < `length` equal `_ema` over that prefix (EMA is a
+        causal recurrence). Caller must not read indices >= length.
+        """
+        rows = self._candles.get(timeframe) or []
+        if length <= 0 or length > len(rows):
+            return None
+        key = (timeframe, period)
+        arr = self._ema_series.get(key)
+        if arr is None:
+            closes = [float(c["close"]) for c in rows]
+            arr = _ema(closes, period)
+            self._ema_series[key] = arr
+        return arr if length <= len(arr) else None
+
+    def calc_ema_series_view(self, timeframe: str, length: int, period: int) -> list | None:
+        """Shared full-series `indicators.calc_ema` array (do NOT mutate).
+
+        Same causal-prefix identity and index contract as `ema_series_view`.
+        """
+        rows = self._candles.get(timeframe) or []
+        if length <= 0 or length > len(rows):
+            return None
+        key = (timeframe, period)
+        arr = self._calc_ema_series.get(key)
+        if arr is None:
+            from indicators import calc_ema
+
+            closes = [float(c["close"]) for c in rows]
+            arr = calc_ema(closes, period)
+            self._calc_ema_series[key] = arr
+        return arr if length <= len(arr) else None
+
+    def ema_at(self, timeframe: str, length: int, period: int) -> float | None:
+        rows = self._candles.get(timeframe) or []
+        if length <= 0 or length > len(rows):
+            return None
+        key = (timeframe, period)
+        arr = self._ema_series.get(key)
+        if arr is None:
+            closes = [float(c["close"]) for c in rows]
+            arr = _ema(closes, period)
+            self._ema_series[key] = arr
+        return arr[length - 1] if arr and length - 1 < len(arr) else None
+
+    def atr_at(self, timeframe: str, length: int, period: int) -> float | None:
+        rows = self._candles.get(timeframe) or []
+        if length <= 0 or length > len(rows) or length < 2 or period <= 0:
+            return None
+        key = (timeframe, period)
+        arr = self._atr_series.get(key)
+        if arr is None:
+            highs = [float(c["high"]) for c in rows]
+            lows = [float(c["low"]) for c in rows]
+            closes = [float(c["close"]) for c in rows]
+            from indicators import calc_atr
+
+            arr = calc_atr(highs, lows, closes, period)
+            self._atr_series[key] = arr
+        for index in range(min(length, len(arr)) - 1, -1, -1):
+            value = arr[index]
+            if value is None:
+                continue
+            try:
+                out = float(value)
+            except (TypeError, ValueError):
+                continue
+            if out == out and out > 0:  # not NaN
+                return out
+        return 0.0
+
+    def rolling_vwap_at(
+        self, timeframe: str, length: int, lookback: int
+    ) -> float | None:
+        """Final anchored VWAP over the requested causal trailing window."""
+        rows = self._candles.get(timeframe) or []
+        if length <= 0 or length > len(rows) or lookback <= 0:
+            return None
+        cached = self._vwap_prefix.get(timeframe)
+        if cached is None:
+            cumulative_volume = [0.0]
+            cumulative_typical_volume = [0.0]
+            for candle in rows:
+                close = float(candle.get("close", 0))
+                typical_price = (
+                    float(candle.get("high", close))
+                    + float(candle.get("low", close))
+                    + close
+                ) / 3.0
+                volume = float(candle.get("vol", 0) or 0.0)
+                cumulative_volume.append(
+                    cumulative_volume[-1] + (volume if volume > 0 else 0.0)
+                )
+                cumulative_typical_volume.append(
+                    cumulative_typical_volume[-1]
+                    + (typical_price * volume if volume > 0 else 0.0)
+                )
+            cached = cumulative_volume, cumulative_typical_volume
+            self._vwap_prefix[timeframe] = cached
+        start = max(0, length - lookback)
+        volume = cached[0][length] - cached[0][start]
+        if volume <= 0:
+            return None
+        typical_volume = cached[1][length] - cached[1][start]
+        return round(typical_volume / volume, 8)
 
 
 def _resolve_setup_candle_frames(
@@ -114,8 +305,8 @@ def _resolve_setup_candle_frames(
         # Entry timing is lower-TF, while structural context stays aligned to
         # the requested horizon: H4 for intraday and D1 for swing.
         context_tf = "D1" if str(horizon).lower() == "swing" else "H4"
-        primary = list(candles.get(primary_tf) or [])
-        context = list(candles.get(context_tf) or candles.get("D1") or [])
+        primary = candles.get(primary_tf) or []
+        context = candles.get(context_tf) or candles.get("D1") or []
         return primary, context, primary_tf, context_tf
 
     primary_tf = resolve_v3_entry_timeframe(route.score_group, asset_type, horizon)
@@ -210,30 +401,47 @@ def _trend_direction(
     context: list[dict],
     *,
     periods: SetupPeriods | None = None,
+    series_cache: "SetupSeriesCache | None" = None,
+    context_tf: str | None = None,
 ) -> tuple[str | None, tuple[PredicateResult, ...]]:
     periods = periods or SetupPeriods()
-    closes = [float(candle["close"]) for candle in context]
     need = max(60, periods.ema_momentum + 10)
-    if len(closes) < need:
+    if len(context) < need:
         return None, (
-            _predicate("context_history", False, len(closes), f"at least {need} bars"),
+            _predicate("context_history", False, len(context), f"at least {need} bars"),
         )
-    ema_fast = _ema(closes, periods.ema_trend)
-    ema_slow = _ema(closes, periods.ema_momentum)
-    long_ok = ema_fast[-1] > ema_slow[-1] and closes[-1] > ema_fast[-1]
-    short_ok = ema_fast[-1] < ema_slow[-1] and closes[-1] < ema_fast[-1]
+    ema_fast_last = None
+    ema_slow_last = None
+    if (
+        series_cache is not None
+        and context_tf is not None
+        and series_cache.matches(context_tf, context)
+    ):
+        ema_fast_last = series_cache.ema_at(
+            context_tf, len(context), periods.ema_trend
+        )
+        ema_slow_last = series_cache.ema_at(
+            context_tf, len(context), periods.ema_momentum
+        )
+    if ema_fast_last is None or ema_slow_last is None:
+        closes = [float(candle["close"]) for candle in context]
+        ema_fast_last = _ema_last(closes, periods.ema_trend)
+        ema_slow_last = _ema_last(closes, periods.ema_momentum)
+    latest_close = float(context[-1]["close"])
+    long_ok = ema_fast_last > ema_slow_last and latest_close > ema_fast_last
+    short_ok = ema_fast_last < ema_slow_last and latest_close < ema_fast_last
     direction = "LONG" if long_ok else "SHORT" if short_ok else None
     return direction, (
         _predicate(
             "context_trend_long",
             long_ok,
-            round(ema_fast[-1] - ema_slow[-1], 8),
+            round(ema_fast_last - ema_slow_last, 8),
             "> 0",
         ),
         _predicate(
             "context_trend_short",
             short_ok,
-            round(ema_fast[-1] - ema_slow[-1], 8),
+            round(ema_fast_last - ema_slow_last, 8),
             "< 0",
         ),
     )
@@ -247,19 +455,32 @@ def _pullback_candidate(
     touch_distance_atr: float = 0.35,
     max_extension_atr: float = 1.25,
     periods: SetupPeriods | None = None,
+    series_cache: "SetupSeriesCache | None" = None,
+    primary_tf: str | None = None,
+    context_tf: str | None = None,
 ) -> SetupCandidate:
     periods = periods or SetupPeriods()
-    direction, context_predicates = _trend_direction(context, periods=periods)
-    closes = [float(candle["close"]) for candle in primary]
-    ema_fast = _ema(closes, periods.ema_trend)
-    atr = _atr(primary, periods.atr)
+    direction, context_predicates = _trend_direction(
+        context, periods=periods, series_cache=series_cache, context_tf=context_tf
+    )
+    ema_now = None
+    if (
+        series_cache is not None
+        and primary_tf is not None
+        and series_cache.matches(primary_tf, primary)
+    ):
+        ema_now = series_cache.ema_at(primary_tf, len(primary), periods.ema_trend)
+    if ema_now is None:
+        ema_now = _ema_last(
+            [float(candle["close"]) for candle in primary], periods.ema_trend
+        )
+    atr = _atr(primary, periods.atr, series_cache=series_cache, timeframe=primary_tf)
     if direction is None or len(primary) < 60 or atr <= 0:
         reasons = ["trend_context_not_directional"] if direction is None else ["insufficient_primary_history"]
         return SetupCandidate(setup_id, "NO_SIGNAL", direction, context_predicates, tuple(reasons))
 
     previous = primary[-2]
     current = primary[-1]
-    ema_now = ema_fast[-1]
     touched = (
         float(previous["low"]) <= ema_now + touch_distance_atr * atr
         if direction == "LONG"
@@ -308,9 +529,13 @@ def _breakout_retest_candidate(
     require_contraction: bool,
     lookback: int = 20,
     periods: SetupPeriods | None = None,
+    series_cache: "SetupSeriesCache | None" = None,
+    context_tf: str | None = None,
 ) -> SetupCandidate:
     periods = periods or SetupPeriods()
-    direction, context_predicates = _trend_direction(context, periods=periods)
+    direction, context_predicates = _trend_direction(
+        context, periods=periods, series_cache=series_cache, context_tf=context_tf
+    )
     if direction is None or len(primary) < 60:
         return SetupCandidate(
             setup_id,
@@ -378,9 +603,14 @@ def _opening_range_gap_candidate(
     *,
     periods: SetupPeriods | None = None,
     display: str | None = None,
+    series_cache: "SetupSeriesCache | None" = None,
+    primary_tf: str | None = None,
+    context_tf: str | None = None,
 ) -> SetupCandidate:
     periods = periods or SetupPeriods()
-    direction, context_predicates = _trend_direction(context, periods=periods)
+    direction, context_predicates = _trend_direction(
+        context, periods=periods, series_cache=series_cache, context_tf=context_tf
+    )
     start_hour, end_hour, label = _session_window(route, display)
     current_time = _parse_time(primary[-1].get("time") or primary[-1].get("datetime"))
     session_rows: list[tuple[datetime, dict]] = []
@@ -424,7 +654,7 @@ def _opening_range_gap_candidate(
             ("prior_session_close_missing",),
         )
 
-    atr = _atr(primary, periods.atr)
+    atr = _atr(primary, periods.atr, series_cache=series_cache, timeframe=primary_tf)
     opening_high = max(float(candle["high"]) for _, candle in opening_rows)
     opening_low = min(float(candle["low"]) for _, candle in opening_rows)
     first_open = float(opening_rows[0][1]["open"])
@@ -548,6 +778,8 @@ def _mean_reversion_candidate(
     eff_max: float = 0.35,
     lookback: int = 20,
     periods: SetupPeriods | None = None,
+    series_cache: "SetupSeriesCache | None" = None,
+    primary_tf: str | None = None,
 ) -> SetupCandidate:
     """Range-fade specialist: in a ranging (low-efficiency) regime, fade a stretch
     away from the EMA mean once the candle turns back toward it. Direction is the
@@ -560,9 +792,18 @@ def _mean_reversion_candidate(
             (_predicate("primary_history", False, len(primary), "at least 60 bars"),),
             ("insufficient_primary_history",), "mean_reversion",
         )
-    closes = [float(candle["close"]) for candle in primary]
-    ema_mean = _ema(closes, periods.ema_trend)
-    atr = _atr(primary, periods.atr)
+    mean = None
+    if (
+        series_cache is not None
+        and primary_tf is not None
+        and series_cache.matches(primary_tf, primary)
+    ):
+        mean = series_cache.ema_at(primary_tf, len(primary), periods.ema_trend)
+    if mean is None:
+        mean = _ema_last(
+            [float(candle["close"]) for candle in primary], periods.ema_trend
+        )
+    atr = _atr(primary, periods.atr, series_cache=series_cache, timeframe=primary_tf)
     efficiency, _ = _efficiency_ratio(primary, lookback)
     if atr <= 0:
         return SetupCandidate(
@@ -575,7 +816,6 @@ def _mean_reversion_candidate(
     close = float(current["close"])
     open_ = float(current["open"])
     prev_close = float(previous["close"])
-    mean = ema_mean[-1]
     z = (close - mean) / atr
     ranging = efficiency <= eff_max
     direction = "SHORT" if z >= z_entry else "LONG" if z <= -z_entry else None
@@ -706,6 +946,7 @@ def detect_setup(
     display: str | None = None,
     indicator_periods: Mapping[str, Any] | None = None,
     entry_tf_override: str | None = None,
+    series_cache: "SetupSeriesCache | None" = None,
 ) -> SetupCandidate:
     if route.family == "unknown":
         return SetupCandidate(
@@ -721,7 +962,7 @@ def detect_setup(
 
         indicator_periods = _resolved_periods(route.score_group, route.family)
     periods = SetupPeriods.from_mapping(indicator_periods)
-    primary, context, _primary_tf, _context_tf = _resolve_setup_candle_frames(
+    primary, context, primary_tf, context_tf = _resolve_setup_candle_frames(
         route, horizon, candles, entry_tf_override=entry_tf_override
     )
     setup_ids = route.setup_ids(horizon)
@@ -741,6 +982,8 @@ def detect_setup(
                     eff_max=float(mr.get("EFF_MAX", 0.35)),
                     lookback=int(mr.get("LOOKBACK", 20)),
                     periods=periods,
+                    series_cache=series_cache,
+                    primary_tf=primary_tf,
                 ),
             )
         elif setup_mode == "london_open":
@@ -754,13 +997,21 @@ def detect_setup(
                         context,
                         require_contraction=False,
                         periods=periods,
+                        series_cache=series_cache,
+                        context_tf=context_tf,
                     ),
                     primary,
                     route,
                     display=display,
                 ),
                 _pullback_candidate(
-                    setup_ids[-1], primary, context, periods=periods
+                    setup_ids[-1],
+                    primary,
+                    context,
+                    periods=periods,
+                    series_cache=series_cache,
+                    primary_tf=primary_tf,
+                    context_tf=context_tf,
                 ),
             )
     elif route.family == "crypto":
@@ -771,8 +1022,18 @@ def detect_setup(
                 context,
                 require_contraction=True,
                 periods=periods,
+                series_cache=series_cache,
+                context_tf=context_tf,
             ),
-            _pullback_candidate(setup_ids[-1], primary, context, periods=periods),
+            _pullback_candidate(
+                setup_ids[-1],
+                primary,
+                context,
+                periods=periods,
+                series_cache=series_cache,
+                primary_tf=primary_tf,
+                context_tf=context_tf,
+            ),
         )
     elif route.subclass in {"xau", "precious"}:
         candidates = (
@@ -784,6 +1045,8 @@ def detect_setup(
                     require_contraction=False,
                     lookback=24,
                     periods=periods,
+                    series_cache=series_cache,
+                    context_tf=context_tf,
                 ),
                 primary,
                 route,
@@ -791,7 +1054,13 @@ def detect_setup(
             )
             if horizon == "intraday"
             else _pullback_candidate(
-                setup_ids[0], primary, context, periods=periods
+                setup_ids[0],
+                primary,
+                context,
+                periods=periods,
+                series_cache=series_cache,
+                primary_tf=primary_tf,
+                context_tf=context_tf,
             ),
         )
     elif route.family == "commodity":
@@ -804,6 +1073,8 @@ def detect_setup(
                 require_contraction=False,
                 lookback=lookback,
                 periods=periods,
+                series_cache=series_cache,
+                context_tf=context_tf,
             )
             if horizon == "intraday"
             else _pullback_candidate(
@@ -813,6 +1084,9 @@ def detect_setup(
                 touch_distance_atr=touch_distance,
                 max_extension_atr=max_extension,
                 periods=periods,
+                series_cache=series_cache,
+                primary_tf=primary_tf,
+                context_tf=context_tf,
             ),
         )
     else:
@@ -825,6 +1099,9 @@ def detect_setup(
                     route,
                     periods=periods,
                     display=display,
+                    series_cache=series_cache,
+                    primary_tf=primary_tf,
+                    context_tf=context_tf,
                 ),
             )
         else:
@@ -838,9 +1115,17 @@ def detect_setup(
                         require_contraction=False,
                         lookback=40,
                         periods=periods,
+                        series_cache=series_cache,
+                        context_tf=context_tf,
                     ),
                     _pullback_candidate(
-                        setup_ids[0], primary, context, periods=periods
+                        setup_ids[0],
+                        primary,
+                        context,
+                        periods=periods,
+                        series_cache=series_cache,
+                        primary_tf=primary_tf,
+                        context_tf=context_tf,
                     ),
                 )
             )
@@ -849,6 +1134,12 @@ def detect_setup(
     return max(candidates, key=lambda candidate: priority[candidate.decision])
 
 
-def atr_for_levels(candles: list[dict], period: int = 14) -> float:
+def atr_for_levels(
+    candles: list[dict],
+    period: int = 14,
+    *,
+    series_cache: "SetupSeriesCache | None" = None,
+    timeframe: str | None = None,
+) -> float:
     """Wilder ATR for SL/TP geometry — matches indicators.calc_atr / quant bundle."""
-    return _atr(candles, period)
+    return _atr(candles, period, series_cache=series_cache, timeframe=timeframe)

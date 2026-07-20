@@ -74,6 +74,80 @@ def test_vectorized_snapshot_cache_matches_prefix_indicator_path_exactly():
         assert actual == expected
 
 
+def test_setup_series_cache_matches_prefix_atr_ema_path_exactly():
+    from engine_a_v3.setups import SetupSeriesCache, _atr, _ema_last
+
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    rows = []
+    for index in range(420):
+        center = 100.0 + math.sin(index / 7.0)
+        rows.append(
+            {
+                "time": (start + timedelta(hours=index)).isoformat(),
+                "open": center,
+                "high": center + 1.2,
+                "low": center - 1.2,
+                "close": center + (0.2 * math.cos(index / 3.0)),
+                "vol": 1_000.0 + index,
+            }
+        )
+    cache = SetupSeriesCache({"H1": rows})
+
+    for length in (2, 15, 80, 120, 220, 319, 420):
+        prefix = rows[:length]
+        closes = [float(c["close"]) for c in prefix]
+        for period in (8, 14, 21, 50):
+            assert _atr(prefix, period, series_cache=cache, timeframe="H1") == _atr(
+                prefix, period
+            )
+            assert _ema_last(
+                closes, period, series_cache=cache, timeframe="H1", candles=prefix
+            ) == _ema_last(closes, period)
+            arr = cache.ema_series_view("H1", length, period)
+            assert arr is not None
+            from engine_a_v3.setups import _ema
+
+            assert arr[length - 1] == _ema(closes, period)[-1]
+            calc_arr = cache.calc_ema_series_view("H1", length, period)
+            from indicators import calc_ema
+
+            expected_calc = calc_ema(closes, period)
+            assert calc_arr is not None
+            assert calc_arr[length - 1] == expected_calc[length - 1]
+
+
+def test_setup_series_cache_matches_rejects_cross_timeframe_substitution():
+    from engine_a_v3.setups import SetupSeriesCache
+
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    def _series(step_hours: int, count: int) -> list[dict]:
+        return [
+            {
+                "time": (start + timedelta(hours=step_hours * i)).isoformat(),
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0 + i * 0.01,
+                "vol": 1.0,
+            }
+            for i in range(count)
+        ]
+
+    h1 = _series(1, 200)
+    h4 = _series(4, 120)
+    cache = SetupSeriesCache({"H1": h1, "H4": h4})
+
+    # True prefixes (and copies of prefixes) are accepted.
+    assert cache.matches("H1", h1[:50])
+    assert cache.matches("H1", [dict(r) for r in h1[:50]])
+    # Another timeframe's rows under the H1 name are rejected -- this is the
+    # frame-resolution fallback (`candles.get(tf) or candles.get("H4")`).
+    assert not cache.matches("H1", h4[:50])
+    assert not cache.matches("H1", [])
+    assert not cache.matches("H1", h1[:50] + h4[:1])
+
+
 def test_backtest_validation_index_preserves_point_in_time_invalid_boundary():
     rows = _bars(timeframe="H1", count=120)
     rows[90] = {**rows[90], "high": 98.0}

@@ -1,1405 +1,664 @@
-import { memo, useCallback, useMemo, useState } from 'react';
-import { useStore } from '@/hooks/useStore';
-import { useApiPoll, useApiPost } from '@/hooks/useApiData';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Activity,
+  AlertTriangle,
+  Archive,
+  BarChart3,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  CircleStop,
+  Clock3,
+  Database,
+  Download,
+  FlaskConical,
+  GitCompareArrows,
+  Layers3,
+  Play,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Sigma,
+  SlidersHorizontal,
+  TimerReset,
+  XCircle,
+} from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Textarea } from '@/components/ui/textarea';
-import { ErrorBanner, SqnBadge, EquityAreaChart } from '@/components/shared';
-import { FlaskConical, Play, AlertTriangle, Trophy, Layers, ChevronsUpDown, Check } from 'lucide-react';
-import { cn, fmtNum, toNum } from '@/lib/utils';
-import {
-  buildBacktestRequest,
-  normalizeBacktestValidationMode,
-  type ASEBacktestHorizon,
-  type BacktestEngineKey,
-} from '@/lib/backtestPayload';
-import {
-  normalizeBacktestDirection,
-  resolveDirectionBreakdown,
-  type DirectionBreakdown,
-  type DirectionKey,
-} from '@/lib/backtestDirection';
-import type { ASEBacktestDiagnostics, PairsResponse, PairListEntry } from '@/types/athena';
+import { useApiPoll, useApiPost } from '@/hooks/useApiData';
+import { useStore } from '@/hooks/useStore';
+import { cn, fmtNum } from '@/lib/utils';
+import EquityAreaChart from '@/components/shared/EquityAreaChart';
+import type {
+  ApiEnvelope,
+  BacktestCapabilities,
+  BacktestMetrics,
+  BacktestRun,
+  BacktestV2Engine,
+  BacktestV2Mode,
+  ComparisonResult,
+  DatasetManifest,
+  PreflightResult,
+  TradePage,
+} from '@/lib/backtestingV2';
+import { assuranceTone, hasExplicitUniverse, statusTone } from '@/lib/backtestingV2';
 
-/**
- * Canonical backtest result shape returned by ALL backtest endpoints
- * (Engine A, B, C, D). All keys are camelCase per backtest_runner.py.
- */
-interface BacktestResult {
-  pair?: string;
-  symbol?: string;
-  type?: string;
-  totalTrades?: number;
-  wins?: number;
-  losses?: number;
-  winRate?: number; // 0-100
-  profitFactor?: number;
-  totalR?: number;
-  expectancy?: number;
-  sqn?: number;
-  sharpe?: number;
-  sortino?: number;
-  avgWin?: number;
-  avgLoss?: number;
-  rSkew?: number;
-  maxDrawdownPct?: number;
-  maxRecoveryBars?: number;
-  mcDD?: number;
-  mcDdP50?: number;
-  mcDdP95?: number;
-  scoreBands?: Record<string, unknown>;
-  regimeStats?: Record<string, unknown>;
-  funnel?: Record<string, unknown>;
-  wfSplit?: {
-    is_sqn?: number | null;
-    oos_sqn?: number | null;
-    is_trades?: number;
-    oos_trades?: number;
-    oosFraction?: number;
-    overfit_flag?: boolean;
-    lowSampleSqnWarning?: boolean;
-    lowSampleSqnTradeFloor?: number;
-    [k: string]: unknown;
-  };
-  confluenceAnalysis?: Record<string, unknown>;
-  btStyle?: string;
-  btStyleRequested?: string;
-  engine?: string;
-  pairMaxScore?: number;
-  bhReturn?: number | null;
-  evalThreshold?: number;
-  equityCurve?: number[] | { idx?: number; equity: number; date?: string }[];
-  directionBreakdown?: DirectionBreakdown;
-  trades?: Array<Record<string, unknown>>;
-  scalp_analysis?: {
-    absorption?: { count: number; wr: number | null; avg_r: number | null };
-    cvd_shift?: { count: number; wr: number | null; avg_r: number | null };
-    rejection?: { count: number; wr: number | null; avg_r: number | null };
-    mean_reversion?: { count: number; wr: number | null; avg_r: number | null };
-    trend?: { count: number; wr: number | null; avg_r: number | null };
-    grade_A?: { count: number; wr: number | null };
-    grade_B?: { count: number; wr: number | null };
-    grade_C?: { count: number; wr: number | null };
-    [k: string]: { count: number; wr: number | null; avg_r?: number | null } | undefined;
-  };
-  vol_quality_pct?: number;
-  vol_quality_warning?: boolean;
-  structure_tf?: string;
-  context_tf?: string;
-  execution_tf?: string;
-  vp_lookback_bars?: number;
-  same_bar_both_hit?: number;
-  exitDiagnostics?: Record<string, unknown>;
-  engineCFunnel?: Record<string, unknown>;
-  notes?: string;
-  error?: string;
-  success?: boolean;
-  researchMetrics?: {
-    tradeCount?: number;
-    psr?: { available?: boolean; value?: number | null; note?: string; sampleCount?: number };
-    dsr?: {
-      available?: boolean;
-      value?: number | null;
-      assumptions?: string[];
-      psrNote?: string;
-    };
-    pbo?: { available?: boolean; value?: number | null; note?: string; method?: string };
-    bootstrapCI?: { available?: boolean; assumptions?: string[] };
-    assumptions?: string[];
-    runtimeHeavy?: string[];
-    sampleMoments?: Record<string, unknown>;
-  };
-  metricsInterpretationNotes?: string[];
-  researchValidation?: Record<string, unknown>;
-  aseDiagnostics?: ASEBacktestDiagnostics;
-  [k: string]: unknown;
+type WorkstationTab = 'run' | 'jobs' | 'results' | 'compare' | 'data';
+
+function isoDateOffset(days: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
-interface EngineBBatchRow {
-  pairKey: string;
-  ok: boolean;
-  error?: string;
-  result?: BacktestResult;
-}
-interface EngineBBatchResponse {
-  success?: boolean;
-  totalPairs?: number;
-  okCount?: number;
-  rows?: EngineBBatchRow[];
-  error?: string;
+function compactHash(value?: string | null, size = 12): string {
+  if (!value) return '—';
+  return value.length > size ? `${value.slice(0, size)}…` : value;
 }
 
-interface BacktestHistoryRow {
-  id?: number;
-  run_date?: string;
-  pair?: string;
-  asset_type?: string;
-  engine?: string;
-  trades?: number;
-  win_rate?: number;
-  profit_factor?: number;
-  expectancy?: number;
-  sqn?: number;
-  sharpe?: number;
-  sortino?: number;
-  is_score?: number;
-  oos_score?: number;
-  max_dd_pct?: number;
-  bt_min?: number;
-  atr_source?: string;
-  notes?: string;
+function formatDuration(seconds?: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds)) return '—';
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds % 60);
+  return `${minutes}m ${remainder}s`;
 }
 
-interface AdvisoryRecommendation {
-  id?: string | number;
-  rec_id?: string | number;
-  pair?: string;
-  title?: string;
-  subtitle?: string;
-  scope_key?: string;
-  engine?: string;
-  metric?: string;
-  current?: number;
-  recommended?: number;
-  current_value?: number;
-  proposed_value?: number;
-  status?: string;
-  reason?: string;
-  reasons?: string[];
-  evidence?: string;
-  created_at?: string;
-  [k: string]: unknown;
+function jobElapsedSeconds(run: BacktestRun): number {
+  const started = Date.parse(run.started_at || run.created_at);
+  const ended = run.completed_at ? Date.parse(run.completed_at) : Date.now();
+  return Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, (ended - started) / 1000) : 0;
 }
 
-interface AdvisoryResponse {
-  summary?: Record<string, unknown>;
-  current_policies?: Record<string, unknown>;
-  pending?: AdvisoryRecommendation[];
-  approved?: AdvisoryRecommendation[];
-  rejected?: AdvisoryRecommendation[];
-  recommendations?: AdvisoryRecommendation[];
-  [k: string]: unknown;
+function jobEtaSeconds(run: BacktestRun, elapsed: number): number | null {
+  if (run.progress_completed <= 0 || run.progress_total <= run.progress_completed) return null;
+  return elapsed * (run.progress_total - run.progress_completed) / run.progress_completed;
 }
 
-type EngineKey = BacktestEngineKey;
+function metricValue(value: number | undefined, digits = 2): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  return value.toFixed(digits);
+}
 
-const ENGINE_OPTIONS: { value: EngineKey; label: string; help: string }[] = [
-  { value: 'A', label: 'Engine A', help: 'factor scoring + asset addon (forex/crypto/equity/commodity/index)' },
-  { value: 'B', label: 'Engine B', help: 'naked structure (BOS / CHoCH / FVG / OB / sweep)' },
-  { value: 'C', label: 'Engine C', help: 'A + B consensus' },
-  { value: 'D', label: 'Engine D (Scalp VP)', help: 'Fabio Valentini VP + orderflow (M15 stable proxy)' },
-  { value: 'ASE', label: 'ASE', help: 'Adaptive Specialist Engine PTIS + predict_batch + cost-aware triple-barrier outcomes' },
-];
+function AssuranceBadge({ value }: { value?: string | null }) {
+  const state = value || 'EXPLORATORY';
+  return (
+    <Badge variant="outline" className={cn('text-[10px] tracking-[0.12em]', assuranceTone(state))}>
+      <ShieldCheck className="mr-1 h-3 w-3" />
+      {state.replaceAll('_', ' ')}
+    </Badge>
+  );
+}
 
-const STYLE_OPTIONS = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'scalp', label: 'Scalp' },
-  { value: 'intraday', label: 'Intraday' },
-  { value: 'swing', label: 'Swing' },
-];
+function MetricTile({ label, value, note, tone }: { label: string; value: string; note?: string; tone?: string }) {
+  return (
+    <div className="relative overflow-hidden rounded-xl border border-border/60 bg-black/20 p-3 stat-card-top-line">
+      <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{label}</div>
+      <div className={cn('mt-1 font-mono text-xl font-semibold text-foreground', tone)}>{value}</div>
+      {note && <div className="mt-1 text-[10px] text-muted-foreground">{note}</div>}
+    </div>
+  );
+}
 
-function flattenPairs(p: PairsResponse | null | undefined): PairListEntry[] {
-  if (!p) return [];
-  if (Array.isArray(p.pairs)) return p.pairs;
+type ResultIssue = { kind: 'EXCLUDED' | 'FAILED'; row: Record<string, unknown> };
 
-  // New /api/pairs format: { groups: { Forex: [{sym, label, enabled}, ...], ... } }
-  const grouped = (p as Record<string, unknown>).groups;
-  if (grouped && typeof grouped === 'object') {
-    const out: PairListEntry[] = [];
-    const typeMap: Record<string, string> = {
-      Forex: 'forex',
-      Crypto: 'crypto',
-      'US Stocks': 'stock',
-      Indices: 'index',
-      Commodities: 'commodity',
-      ETFs: 'etf',
-    };
-    for (const [label, items] of Object.entries(grouped)) {
-      const type = typeMap[label] || label.toLowerCase();
-      if (Array.isArray(items)) {
-        for (const item of items) {
-          if (item && typeof item === 'object') {
-            out.push({
-              symbol: String((item as Record<string, unknown>).sym || ''),
-              display: String((item as Record<string, unknown>).label || (item as Record<string, unknown>).sym || ''),
-              type,
-              enabled: Boolean((item as Record<string, unknown>).enabled),
-            });
-          }
-        }
-      }
+function issueValue(row: Record<string, unknown>, key: string): string {
+  const value = row[key];
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+}
+
+function issueScope(row: Record<string, unknown>): string {
+  const task = row.task && typeof row.task === 'object' && !Array.isArray(row.task)
+    ? row.task as Record<string, unknown>
+    : {};
+  const engine = issueValue(row, 'engine') || issueValue(task, 'engine');
+  const symbol = issueValue(row, 'symbol') || issueValue(task, 'symbol');
+  const timeframe = issueValue(row, 'timeframe');
+  const provider = issueValue(row, 'provider');
+  return [engine ? `Engine ${engine}` : '', symbol, timeframe, provider].filter(Boolean).join(' · ') || 'Run';
+}
+
+function SectionTitle({ icon: Icon, title, note }: { icon: typeof Activity; title: string; note?: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <div className="flex items-center gap-2 panel-header-title">
+          <Icon className="h-4 w-4 text-primary" />
+          {title}
+        </div>
+        {note && <p className="mt-1 text-xs text-muted-foreground">{note}</p>}
+      </div>
+    </div>
+  );
+}
+
+function BacktestPanel() {
+  const { showToast } = useStore();
+  const [tab, setTab] = useState<WorkstationTab>('run');
+  const [engineMode, setEngineMode] = useState<'A' | 'B' | 'AB'>('AB');
+  const [styleA, setStyleA] = useState('auto');
+  const [styleB, setStyleB] = useState('auto');
+  const [mode, setMode] = useState<BacktestV2Mode>('CERTIFIED');
+  const [startDate, setStartDate] = useState(isoDateOffset(-365 * 3));
+  const [endDate, setEndDate] = useState(isoDateOffset(0));
+  const [symbolSearch, setSymbolSearch] = useState('');
+  const [assetFilter, setAssetFilter] = useState('all');
+  const [selectedSymbols, setSelectedSymbols] = useState<Set<string>>(new Set());
+  const [validationEnabled, setValidationEnabled] = useState(true);
+  const [portfolioEnabled, setPortfolioEnabled] = useState(false);
+  const [spreadBps, setSpreadBps] = useState(1);
+  const [commissionBps, setCommissionBps] = useState(0.5);
+  const [slippageBps, setSlippageBps] = useState(0.5);
+  const [fundingBps, setFundingBps] = useState(0);
+  const [swapBps, setSwapBps] = useState(0);
+  const [comparisonFamily, setComparisonFamily] = useState('');
+  const [variantId, setVariantId] = useState('');
+  const [preflight, setPreflight] = useState<PreflightResult | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [tradeOffset, setTradeOffset] = useState(0);
+  const [compareRunIds, setCompareRunIds] = useState<Set<string>>(new Set());
+  const [latestComparison, setLatestComparison] = useState<ComparisonResult | null>(null);
+
+  const capabilitiesPoll = useApiPoll<ApiEnvelope<BacktestCapabilities>>('/api/v2/backtest-capabilities', 60_000);
+  const jobsPoll = useApiPoll<ApiEnvelope<BacktestRun[]>>('/api/v2/backtests?limit=200', 2_000);
+  const datasetsPoll = useApiPoll<ApiEnvelope<DatasetManifest[]>>('/api/v2/backtest-datasets?limit=100', 15_000);
+  const comparisonsPoll = useApiPoll<ApiEnvelope<Array<{ comparisonId: string; result: ComparisonResult }>>>('/api/v2/backtest-comparisons?limit=100', 15_000);
+  const selectedRunPoll = useApiPoll<ApiEnvelope<BacktestRun>>(
+    selectedRunId ? `/api/v2/backtests/${encodeURIComponent(selectedRunId)}` : '/api/v2/backtests/__none__',
+    2_000,
+    Boolean(selectedRunId),
+  );
+  const tradesPoll = useApiPoll<ApiEnvelope<TradePage>>(
+    selectedRunId ? `/api/v2/backtests/${encodeURIComponent(selectedRunId)}/trades?limit=50&offset=${tradeOffset}` : '/api/v2/backtests/__none__/trades',
+    0,
+    Boolean(selectedRunId && selectedRunPoll.data?.data?.status === 'COMPLETED'),
+  );
+  const preflightMutation = useApiPost<ApiEnvelope<PreflightResult & { success?: boolean }>>();
+  const runMutation = useApiPost<ApiEnvelope<{ runId: string; status: string; reused: boolean }>>();
+  const cancelMutation = useApiPost<ApiEnvelope<{ runId: string; cancelRequested: boolean }>>();
+  const compareMutation = useApiPost<ApiEnvelope<ComparisonResult>>();
+
+  const capabilities = capabilitiesPoll.data?.data;
+  const jobs = jobsPoll.data?.data || [];
+  const datasets = datasetsPoll.data?.data || [];
+  const selectedRun = selectedRunPoll.data?.data || jobs.find((run) => run.run_id === selectedRunId) || null;
+  const result = selectedRun?.result || null;
+  const resultIssues: ResultIssue[] = result ? [
+    ...(result.exclusions || []).map((row) => ({ kind: 'EXCLUDED' as const, row })),
+    ...(result.failures || []).map((row) => ({ kind: 'FAILED' as const, row })),
+  ] : [];
+  const hasEvaluatedTasks = Boolean(result?.tasks?.length);
+  const tradePage = tradesPoll.data?.data;
+  const explicitUniverseReady = hasExplicitUniverse(selectedSymbols);
+  const engines = useMemo<BacktestV2Engine[]>(
+    () => (engineMode === 'AB' ? ['A', 'B'] : [engineMode]),
+    [engineMode],
+  );
+
+  useEffect(() => {
+    if (mode === 'CERTIFIED' && !validationEnabled) setValidationEnabled(true);
+  }, [mode, validationEnabled]);
+
+  const filteredUniverse = useMemo(() => {
+    const query = symbolSearch.trim().toUpperCase();
+    return (capabilities?.universe || []).filter((item) => {
+      if (assetFilter !== 'all' && item.assetType !== assetFilter) return false;
+      if (!query) return true;
+      return item.symbol.toUpperCase().includes(query) || item.providerSymbol.toUpperCase().includes(query);
+    });
+  }, [capabilities, symbolSearch, assetFilter]);
+
+  const requestPayload = useMemo<Record<string, unknown>>(
+    () => ({
+      engines,
+      styles: { A: styleA, B: styleB },
+      symbols: Array.from(selectedSymbols).sort(),
+      startDate,
+      endDate,
+      mode,
+      validation: {
+        enabled: validationEnabled,
+        holdoutFraction: 0.2,
+        folds: 5,
+        initialTrainFraction: 0.4,
+        oosFraction: 0.08,
+        maxHoldBars: 240,
+        bootstrapSamples: 1_000,
+      },
+      costModel: {
+        version: 'athena-cost-model-v2.1',
+        spreadBps,
+        commissionBpsPerSide: commissionBps,
+        slippageBps,
+        fundingBpsPerDay: fundingBps,
+        swapBpsPerDay: swapBps,
+        rollBps: 0,
+        dividendMode: 'adjusted_series',
+        source: 'operator_declared_ui',
+      },
+      portfolio: {
+        enabled: portfolioEnabled,
+        initialCapital: 100_000,
+        riskPerTrade: 0.01,
+        maxConcurrentPositions: 10,
+      },
+      comparisonFamily: comparisonFamily.trim() || undefined,
+      variantId: variantId.trim() || undefined,
+    }),
+    [engines, styleA, styleB, selectedSymbols, startDate, endDate, mode, validationEnabled, spreadBps, commissionBps, slippageBps, fundingBps, swapBps, portfolioEnabled, comparisonFamily, variantId],
+  );
+
+  useEffect(() => {
+    setPreflight(null);
+  }, [requestPayload]);
+
+  useEffect(() => {
+    if (!selectedRunId && jobs.length) {
+      setSelectedRunId(jobs[0].run_id);
     }
-    return out;
-  }
+  }, [jobs, selectedRunId]);
 
-  // Legacy bucketed shape
-  const out: PairListEntry[] = [];
-  const legacyGroups: { list?: string[]; type: string }[] = [
-    { list: p.forex, type: 'forex' },
-    { list: p.crypto, type: 'crypto' },
-    { list: p.stocks, type: 'stock' },
-    { list: p.indices, type: 'index' },
-    { list: p.commodities, type: 'commodity' },
-    { list: p.etf, type: 'etf' },
-  ];
-  for (const g of legacyGroups) for (const sym of g.list || []) out.push({ symbol: sym, display: sym, type: g.type });
-  return out;
-}
-
-function resolvePairKey(token: string, allPairs: PairListEntry[]): string {
-  const t = token.trim();
-  if (!t) return t;
-  const u = t.toUpperCase().replace(/\s+/g, '');
-  const tCompact = u.replace(/\//g, '').replace(/-/g, '');
-  for (const p of allPairs) {
-    const disp = String(p.display || '').trim();
-    const sym = String(p.symbol || '').trim();
-    if (!disp && !sym) continue;
-    const dNorm = disp.toUpperCase().replace(/\s+/g, '');
-    const sNorm = sym.toUpperCase().replace(/\s+/g, '');
-    const dCompact = dNorm.replace(/\//g, '').replace(/-/g, '');
-    const sCompact = sNorm.replace(/\//g, '').replace(/-/g, '');
-    if (u === dNorm || u === sNorm || tCompact === dCompact || tCompact === sCompact) {
-      return sym || disp || t;
-    }
-  }
-  return t;
-}
-
-const PAIR_GROUP_ORDER = ['forex', 'crypto', 'stock', 'index', 'commodity', 'etf', 'other'];
-
-function groupPairsByType(allPairs: PairListEntry[]): Record<string, PairListEntry[]> {
-  const groups: Record<string, PairListEntry[]> = {};
-  for (const p of allPairs) {
-    const g = p.type || 'other';
-    (groups[g] ??= []).push(p);
-  }
-  return groups;
-}
-
-function orderedPairGroups(groups: Record<string, PairListEntry[]>): [string, PairListEntry[]][] {
-  const seen = new Set<string>();
-  const out: [string, PairListEntry[]][] = [];
-  for (const g of PAIR_GROUP_ORDER) {
-    const items = groups[g];
-    if (items?.length) {
-      out.push([g, items]);
-      seen.add(g);
-    }
-  }
-  for (const [g, items] of Object.entries(groups)) {
-    if (!seen.has(g) && items.length) out.push([g, items]);
-  }
-  return out;
-}
-
-interface BacktestPairPickerProps {
-  value: string;
-  onChange: (pair: string) => void;
-  allPairs: PairListEntry[];
-}
-
-function BacktestPairPicker({ value, onChange, allPairs }: BacktestPairPickerProps) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-
-  const groupedPairs = useMemo(() => groupPairsByType(allPairs), [allPairs]);
-
-  const filteredGroups = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const entries = orderedPairGroups(groupedPairs);
-    if (!q) return entries;
-    return entries
-      .map(([type, items]) => {
-        const hits = items.filter((p) => {
-          const hay = `${p.display || ''} ${p.symbol || ''} ${type}`.toLowerCase();
-          return hay.includes(q);
-        });
-        return hits.length ? ([type, hits] as [string, PairListEntry[]]) : null;
-      })
-      .filter((row): row is [string, PairListEntry[]] => row !== null);
-  }, [groupedPairs, query]);
-
-  const displayLabel = useMemo(() => {
-    const hit = allPairs.find((p) => (p.symbol || p.display) === value);
-    return hit?.display || hit?.symbol || value || 'Select pair...';
-  }, [allPairs, value]);
-
-  const handleOpenChange = useCallback((next: boolean) => {
-    setOpen(next);
-    if (!next) setQuery('');
+  const toggleSymbol = useCallback((symbol: string) => {
+    setSelectedSymbols((current) => {
+      const next = new Set(current);
+      if (next.has(symbol)) next.delete(symbol);
+      else next.add(symbol);
+      return next;
+    });
   }, []);
 
+  const selectVisible = useCallback(() => {
+    setSelectedSymbols((current) => {
+      const next = new Set(current);
+      filteredUniverse.forEach((item) => next.add(item.symbol));
+      return next;
+    });
+  }, [filteredUniverse]);
+
+  const runPreflight = useCallback(async () => {
+    if (!explicitUniverseReady) {
+      showToast('Select at least one instrument. V2 never interprets an empty universe as “all”.', 'error');
+      return;
+    }
+    const response = await preflightMutation.post('/api/v2/backtest-datasets', requestPayload);
+    if (!response?.success) {
+      showToast(response?.error || 'Preflight failed', 'error');
+      return;
+    }
+    setPreflight(response.data);
+    showToast(`Preflight complete: ${response.data.certification.replaceAll('_', ' ')}`, 'success');
+  }, [preflightMutation, requestPayload, explicitUniverseReady, showToast]);
+
+  const submitRun = useCallback(async () => {
+    if (!preflight?.instruments.length) return;
+    const response = await runMutation.post('/api/v2/backtests', requestPayload);
+    if (!response?.success || !response.data?.runId) {
+      showToast(response?.error || 'Run submission failed', 'error');
+      return;
+    }
+    setSelectedRunId(response.data.runId);
+    setTradeOffset(0);
+    setTab('jobs');
+    await jobsPoll.refresh();
+    showToast(response.data.reused ? 'Reused identical certified result' : 'Backtest queued', 'success');
+  }, [preflight, runMutation, requestPayload, jobsPoll, showToast]);
+
+  const cancelRun = useCallback(async (runId: string) => {
+    const response = await cancelMutation.post(`/api/v2/backtests/${encodeURIComponent(runId)}/cancel`, {});
+    if (response?.success) {
+      showToast('Cancellation requested', 'success');
+      await jobsPoll.refresh();
+    } else {
+      showToast(response?.error || 'Run cannot be cancelled', 'error');
+    }
+  }, [cancelMutation, jobsPoll, showToast]);
+
+  const retryRun = useCallback(async (run: BacktestRun) => {
+    const payload: Record<string, unknown> = {
+      engines: run.request.engines,
+      styles: run.request.styles,
+      symbols: run.request.symbols,
+      startDate: run.request.start_date,
+      endDate: run.request.end_date,
+      mode: run.request.mode,
+      costModel: run.request.cost_model,
+      validation: run.request.validation,
+      portfolio: run.request.portfolio,
+      comparisonFamily: run.request.comparison_family,
+      variantId: run.request.variant_id,
+      randomSeed: run.request.random_seed,
+      force: true,
+    };
+    const response = await runMutation.post('/api/v2/backtests', payload);
+    if (response?.data?.runId) {
+      setSelectedRunId(response.data.runId);
+      showToast('Retry queued with force=true', 'success');
+      await jobsPoll.refresh();
+    }
+  }, [runMutation, jobsPoll, showToast]);
+
+  const createComparison = useCallback(async () => {
+    if (compareRunIds.size < 2) {
+      showToast('Select at least two completed runs', 'error');
+      return;
+    }
+    const response = await compareMutation.post('/api/v2/backtest-comparisons', {
+      runIds: Array.from(compareRunIds),
+    });
+    if (!response?.success) {
+      showToast(response?.error || 'Comparison failed', 'error');
+      return;
+    }
+    setLatestComparison(response.data);
+    await comparisonsPoll.refresh();
+    showToast(response.data.compatible ? 'Comparison created' : 'Runs are contract-incompatible', response.data.compatible ? 'success' : 'error');
+  }, [compareRunIds, compareMutation, comparisonsPoll, showToast]);
+
+  const selectRun = useCallback((runId: string, destination: WorkstationTab = 'results') => {
+    setSelectedRunId(runId);
+    setTradeOffset(0);
+    setTab(destination);
+  }, []);
+
+  const activeComparison = latestComparison || comparisonsPoll.data?.data?.[0]?.result || null;
+
+  if (capabilitiesPoll.loading) {
+    return <div className="space-y-4 p-6"><Skeleton className="h-16 w-full" /><Skeleton className="h-[520px] w-full" /></div>;
+  }
+
   return (
-    <Popover open={open} onOpenChange={handleOpenChange} modal>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          className="w-[180px] h-8 text-xs justify-between font-normal"
-        >
-          <span className="truncate">{displayLabel}</span>
-          <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        className="w-[220px] p-0"
-        align="start"
-        onOpenAutoFocus={(e) => e.preventDefault()}
-        onWheel={(e) => e.stopPropagation()}
-      >
-        <div className="flex flex-col">
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search pair..."
-            className="h-8 text-xs border-0 border-b rounded-none shadow-none focus-visible:ring-0"
-          />
-          <div
-            className="max-h-[300px] overflow-y-auto overscroll-contain p-1"
-            onWheel={(e) => e.stopPropagation()}
-          >
-            {allPairs.length === 0 && (
-              <button
-                type="button"
-                className="flex w-full items-center rounded-sm px-2 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground"
-                onClick={() => {
-                  onChange('EURUSD');
-                  setOpen(false);
-                  setQuery('');
-                }}
-              >
-                <Check className={cn('mr-1 h-3 w-3', value === 'EURUSD' ? 'opacity-100' : 'opacity-0')} />
-                EURUSD
-              </button>
-            )}
-            {allPairs.length > 0 && filteredGroups.length === 0 && (
-              <p className="py-3 text-center text-xs text-muted-foreground">No pair found.</p>
-            )}
-            {filteredGroups.map(([type, items]) => (
-              <div key={type} className="mb-1">
-                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground capitalize">{type}</div>
-                {items.map((p) => {
-                  const pairValue = p.symbol || p.display || '';
-                  return (
-                    <button
-                      key={`${type}:${pairValue}`}
-                      type="button"
-                      className={cn(
-                        'flex w-full items-center rounded-sm px-2 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground',
-                        value === pairValue && 'bg-accent/50',
-                      )}
-                      onClick={() => {
-                        onChange(pairValue);
-                        setOpen(false);
-                        setQuery('');
-                      }}
-                    >
-                      <Check
-                        className={cn(
-                          'mr-1 h-3 w-3 shrink-0',
-                          value === pairValue ? 'opacity-100' : 'opacity-0',
-                        )}
-                      />
-                      <span className="truncate">{p.display || p.symbol}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
+    <div className="space-y-5 p-4 md:p-6">
+      <div className="relative overflow-hidden rounded-2xl border border-primary/20 bg-card/70 p-5 backdrop-blur-xl">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_8%_0%,hsl(var(--primary)/0.16),transparent_38%),radial-gradient(circle_at_90%_20%,hsl(var(--info)/0.10),transparent_34%)]" />
+        <div className="relative flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <FlaskConical className="h-5 w-5 text-primary" />
+              <h1 className="font-[Cinzel] text-lg font-semibold tracking-[0.08em] text-foreground">A/B RESEARCH WORKSTATION</h1>
+              <Badge variant="outline" className="border-violet-400/30 bg-violet-400/10 text-[10px] text-violet-200">V2 CANDIDATE</Badge>
+            </div>
+            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+              Immutable point-in-time replay for Engine A and Engine B. Separate ledgers, explicit costs, anchored OOS validation, and no live configuration writes.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-[10px]">
+            <Badge variant="outline" className="border-border/70 bg-black/20 font-mono">PLATFORM {capabilities?.platformVersion || '—'}</Badge>
+            <Badge variant="outline" className="border-border/70 bg-black/20 font-mono">SIM {capabilities?.simulatorVersion || '—'}</Badge>
+            <Badge variant="outline" className="border-emerald-400/30 bg-emerald-400/10 text-emerald-300">NO LEGACY RULES</Badge>
           </div>
         </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
+      </div>
 
-const MemoizedBacktestPairPicker = memo(BacktestPairPicker);
-
-export default function BacktestPanel() {
-  const { showToast } = useStore();
-  const [pair, setPair] = useState('EURUSD');
-  const [batchMode, setBatchMode] = useState(false);
-  const [batchList, setBatchList] = useState('');
-  type BatchRow = { pairKey: string; ok: boolean; error?: string; result?: BacktestResult };
-  const [batchRows, setBatchRows] = useState<BatchRow[]>([]);
-  const [engine, setEngine] = useState<EngineKey>('A');
-  const [style, setStyle] = useState('auto');
-  const [validationMode, setValidationMode] = useState('standard');
-  const [aseHorizon, setAseHorizon] = useState<ASEBacktestHorizon>('both');
-  const [aseLookbackDays, setAseLookbackDays] = useState(365);
-  const [result, setResult] = useState<BacktestResult | null>(null);
-  const [activeTab, setActiveTab] = useState<'run' | 'history' | 'best' | 'advisory'>('run');
-  const directionBreakdown = useMemo(
-    () => resolveDirectionBreakdown(result?.directionBreakdown, result?.trades),
-    [result?.directionBreakdown, result?.trades],
-  );
-
-  const { data: pairsData } = useApiPoll<PairsResponse>('/api/pairs', 0);
-  const allPairs = useMemo(() => flattenPairs(pairsData), [pairsData]);
-  const effectiveValidationMode = normalizeBacktestValidationMode(engine, validationMode);
-
-  const { post: postBacktest, loading: running, error: btError } = useApiPost<BacktestResult>();
-  const { post: postBatchB } = useApiPost<EngineBBatchResponse>();
-  const { data: history, loading: historyLoading, error: historyError, refresh: refreshHistory } =
-    useApiPoll<BacktestHistoryRow[]>('/api/backtest-history', 0);
-  const { data: bestData, loading: bestLoading, error: bestError } =
-    useApiPoll<BacktestHistoryRow[]>('/api/backtest-best', 0);
-  const { data: advisory, loading: advisoryLoading, error: advisoryError, refresh: refreshAdvisory } =
-    useApiPoll<AdvisoryResponse>('/api/advisory-thresholds', 0);
-  const { post: postApprove } = useApiPost<{ ok?: boolean; error?: string }>();
-
-  const handleRun = useCallback(async () => {
-    const singleRequest = (pairKey: string) => buildBacktestRequest({
-      engine,
-      pair: pairKey,
-      style,
-      validationMode: effectiveValidationMode,
-      aseHorizon,
-      aseLookbackDays,
-    });
-
-    if (batchMode) {
-      const tokens = batchList.split(/[,;\n\r]+/).map((x) => x.trim()).filter(Boolean);
-      if (tokens.length === 0) {
-        showToast('Batch list is empty.', 'info');
-        return;
-      }
-      if (engine === 'B') {
-        // Engine B: run all pairs server-side in parallel (process pool) instead
-        // of looping client-side one request at a time.
-        const resolved = tokens.map((t) => resolvePairKey(t, allPairs));
-        const res = await postBatchB('/api/backtest-naked-all', {
-          pairs: resolved,
-          style,
-          validation_mode: validationMode,
-        });
-        if (!res || res.error || !res.rows) {
-          showToast(`Batch failed: ${res?.error || 'unknown'}`, 'error');
-          return;
-        }
-        const rowsB: BatchRow[] = res.rows.map((r) => ({
-          pairKey: r.pairKey,
-          ok: !!r.ok,
-          error: r.error,
-          result: r.result,
-        }));
-        setBatchRows(rowsB);
-        setResult(null);
-        const okB = rowsB.filter((r) => r.ok).length;
-        showToast(`Batch: ${okB}/${rowsB.length} pairs OK`, okB === rowsB.length ? 'success' : 'info');
-        refreshHistory();
-        return;
-      }
-      const rowsOut: BatchRow[] = [];
-      for (const tok of tokens) {
-        const pk = resolvePairKey(tok, allPairs);
-        const { endpoint, payload } = singleRequest(pk);
-        const res = await postBacktest(endpoint, payload);
-        if (!res || res.error) {
-          rowsOut.push({ pairKey: pk, ok: false, error: String(res?.error || 'unknown'), result: res || undefined });
-        } else {
-          rowsOut.push({ pairKey: pk, ok: true, result: res });
-        }
-      }
-      setBatchRows(rowsOut);
-      setResult(null);
-      const okN = rowsOut.filter((r) => r.ok).length;
-      showToast(`Batch: ${okN}/${rowsOut.length} pairs OK`, okN === rowsOut.length ? 'success' : 'info');
-      refreshHistory();
-      return;
-    }
-
-    const { endpoint, payload } = singleRequest(pair);
-    const res = await postBacktest(endpoint, payload);
-    if (!res || res.error) {
-      if (res?.aseDiagnostics) {
-        setBatchRows([]);
-        setResult(res);
-      }
-      showToast(`Backtest failed: ${res?.error || 'unknown'}`, 'error');
-      return;
-    }
-    setBatchRows([]);
-    setResult(res);
-    showToast(
-      `Engine ${engine}: ${res.totalTrades ?? 0} trades · WR ${fmtNum(res.winRate, 1)}% · SQN ${fmtNum(res.sqn, 2)}`,
-      'success',
-    );
-    refreshHistory();
-  }, [
-    pair, engine, style, validationMode, effectiveValidationMode, postBacktest, postBatchB, showToast, refreshHistory,
-    batchMode, batchList, allPairs, aseHorizon, aseLookbackDays,
-  ]);
-
-  const handleApprove = useCallback(async (rec: AdvisoryRecommendation) => {
-    const id = rec.rec_id ?? rec.id;
-    if (id == null) return;
-    const r = await postApprove(`/api/advisory-thresholds/${id}/approve`, {});
-    if (!r) showToast('Approve failed: no response', 'error');
-    else if (r.error) showToast(`Approve failed: ${r.error}`, 'error');
-    else showToast('Threshold recommendation approved', 'success');
-    refreshAdvisory();
-  }, [postApprove, showToast, refreshAdvisory]);
-
-  const handleReject = useCallback(async (rec: AdvisoryRecommendation) => {
-    const id = rec.rec_id ?? rec.id;
-    if (id == null) return;
-    const r = await postApprove(`/api/advisory-thresholds/${id}/reject`, {});
-    if (!r) showToast('Reject failed: no response', 'error');
-    else if (r.error) showToast(`Reject failed: ${r.error}`, 'error');
-    else showToast('Threshold recommendation rejected', 'info');
-    refreshAdvisory();
-  }, [postApprove, showToast, refreshAdvisory]);
-
-  const insufficient = !!(result && result.totalTrades != null && result.totalTrades < 30 && !result.error);
-
-  const equityChart = useMemo(() => {
-    const ec = result?.equityCurve;
-    if (!Array.isArray(ec) || ec.length === 0) return [] as { idx: number; equity: number }[];
-    if (typeof ec[0] === 'number') return (ec as number[]).map((equity, idx) => ({ idx, equity }));
-    return (ec as { idx?: number; equity: number; date?: string }[]).map((p, idx) => ({
-      idx: typeof p.idx === 'number' ? p.idx : idx,
-      equity: Number(p.equity) || 0,
-    }));
-  }, [result?.equityCurve]);
-
-  return (
-    <div className="space-y-5">
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
-        <TabsList>
-          <TabsTrigger value="run" className="text-xs">Run Backtest</TabsTrigger>
-          <TabsTrigger value="history" className="text-xs">History</TabsTrigger>
-          <TabsTrigger value="best" className="text-xs">Best Pairs</TabsTrigger>
-          <TabsTrigger value="advisory" className="text-xs">Advisory Thresholds</TabsTrigger>
+      <Tabs value={tab} onValueChange={(value) => setTab(value as WorkstationTab)} className="space-y-4">
+        <TabsList className="grid h-auto w-full grid-cols-5 rounded-xl border border-border/60 bg-card/60 p-1">
+          <TabsTrigger value="run" className="gap-2 py-2.5"><Play className="h-3.5 w-3.5" />Run</TabsTrigger>
+          <TabsTrigger value="jobs" className="gap-2 py-2.5"><Clock3 className="h-3.5 w-3.5" />Jobs</TabsTrigger>
+          <TabsTrigger value="results" className="gap-2 py-2.5"><BarChart3 className="h-3.5 w-3.5" />Results</TabsTrigger>
+          <TabsTrigger value="compare" className="gap-2 py-2.5"><GitCompareArrows className="h-3.5 w-3.5" />Compare</TabsTrigger>
+          <TabsTrigger value="data" className="gap-2 py-2.5"><Database className="h-3.5 w-3.5" />Data</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="run" className="mt-3 space-y-4">
-          <Card className="border-border/60 bg-card/50">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
-                <FlaskConical className="w-4 h-4 text-primary" />
-                Backtest Config
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center gap-2 flex-wrap w-full">
-                {!batchMode ? (
-                  <MemoizedBacktestPairPicker value={pair} onChange={setPair} allPairs={allPairs} />
-                ) : (
-                  <Textarea
-                    value={batchList}
-                    onChange={(e) => setBatchList(e.target.value)}
-                    placeholder="One pair per line or comma-separated (e.g. EUR/USD, GBPUSD, XAU/USD)"
-                    className="min-h-[72px] flex-1 min-w-[220px] text-xs font-mono"
-                  />
-                )}
-                <Select value={engine} onValueChange={(v) => setEngine(v as EngineKey)}>
-                  <SelectTrigger className="w-[200px] h-8 text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {ENGINE_OPTIONS.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {engine !== 'D' && engine !== 'ASE' && (
-                  <Select value={style} onValueChange={setStyle}>
-                    <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {STYLE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                )}
-                {engine === 'ASE' && (
-                  <>
-                    <Select value={aseHorizon} onValueChange={(v) => setAseHorizon(v as ASEBacktestHorizon)}>
-                      <SelectTrigger className="w-[126px] h-8 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="both">Both horizons</SelectItem>
-                        <SelectItem value="intraday">Intraday H1</SelectItem>
-                        <SelectItem value="swing">Swing D1</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      type="number"
-                      min={30}
-                      step={30}
-                      className="w-[112px] h-8 text-xs"
-                      value={aseLookbackDays}
-                      onChange={(e) => setAseLookbackDays(Number(e.target.value) || 365)}
-                      aria-label="ASE lookback days"
-                    />
-                  </>
-                )}
-                <Select value={effectiveValidationMode} onValueChange={setValidationMode}>
-                  <SelectTrigger className="w-[150px] h-8 text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="standard">standard</SelectItem>
-                    <SelectItem value="walk_forward" disabled={engine === 'A'}>walk_forward</SelectItem>
-                    <SelectItem value="purged_cv" disabled={engine === 'A'}>purged_cv</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button size="sm" className="h-8 gap-1 text-xs" onClick={handleRun} disabled={running}>
-                  <Play className="w-3 h-3" />
-                  {running ? 'Backtesting…' : batchMode ? 'Run batch' : 'Run Backtest'}
-                </Button>
-              </div>
-              <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  className="rounded border-border"
-                  checked={batchMode}
-                  onChange={(e) => {
-                    setBatchMode(e.target.checked);
-                    setBatchRows([]);
-                  }}
-                />
-                Batch multiple pairs (runs sequentially — same payloads as single-pair mode)
-              </label>
-              <p className="text-[10px] text-muted-foreground">
-                {ENGINE_OPTIONS.find((o) => o.value === engine)?.help}
-              </p>
-              {engine === 'A' && (
-                <p className="text-[10px] text-muted-foreground">
-                  Walk-forward and purged-CV are not implemented for Engine A V3; standard validation is the only available mode.
-                </p>
-              )}
-              {btError && <ErrorBanner message={btError} onRetry={handleRun} />}
-            </CardContent>
-          </Card>
-
-          {batchRows.length > 0 && (
-            <Card className="border-border/60 bg-card/50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Batch summary</CardTitle>
-              </CardHeader>
-              <CardContent className="max-h-[240px] overflow-y-auto">
-                <table className="w-full text-left text-[11px]">
-                  <thead>
-                    <tr className="border-b border-border/40">
-                      <th className="py-2 text-muted-foreground">Pair</th>
-                      <th className="py-2 text-muted-foreground text-right">OK</th>
-                      <th className="py-2 text-muted-foreground text-right">Trades</th>
-                      <th className="py-2 text-muted-foreground text-right">WR%</th>
-                      <th className="py-2 text-muted-foreground text-right">SQN</th>
-                      <th className="py-2 text-muted-foreground">Error</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {batchRows.map((row, i) => (
-                      <tr key={`${row.pairKey}-${i}`} className="border-b border-border/20 hover:bg-muted/20">
-                        <td className="py-2 font-mono">{row.pairKey}</td>
-                        <td className="py-2 text-right">{row.ok ? '✓' : '—'}</td>
-                        <td className="py-2 text-right font-mono">{row.ok ? row.result?.totalTrades ?? '—' : '—'}</td>
-                        <td className="py-2 text-right font-mono">{row.ok && row.result?.winRate != null ? `${fmtNum(row.result.winRate, 1)}%` : '—'}</td>
-                        <td className="py-2 text-right font-mono">
-                          {row.ok && row.result?.sqn != null ? fmtNum(row.result.sqn, 2) : '—'}
-                          {row.ok && row.result?.wfSplit?.overfit_flag === true && (
-                            <span className="ml-1 text-short" title="Overfit: OOS SQN collapsed vs in-sample">⚠</span>
-                          )}
-                        </td>
-                        <td className="py-2 text-short text-[10px]">{row.error || ''}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </CardContent>
-            </Card>
-          )}
-
-          {batchRows.length === 0 && insufficient && (
-            <div className="flex items-center gap-2 p-3 rounded-md bg-warning/20 border border-warning/40">
-              <AlertTriangle className="w-4 h-4 text-warning" />
-              <span className="text-xs text-warning">
-                Only {result?.totalTrades} trades — results are not statistically valid (minimum 30 recommended).
-              </span>
-            </div>
-          )}
-
-          {result?.error && !running && (
-            <Card className="border-short/40 bg-short/10">
-              <CardContent className="p-3 text-xs text-short">{result.error}</CardContent>
-            </Card>
-          )}
-
-          {result?.error && result.aseDiagnostics && !running && (
-            <ASEDiagnosticsBlock diagnostics={result.aseDiagnostics} />
-          )}
-
-          {result && !result.error && (
-            <>
-              {/* KPIs */}
-              <div className="grid grid-cols-6 gap-3">
-                <Stat title="Trades" value={result.totalTrades ?? '—'} />
-                <Stat title="Win rate" value={result.winRate != null ? `${fmtNum(result.winRate, 1)}%` : '—'} />
-                <Stat
-                  title="Profit factor"
-                  value={result.profitFactor == null ? '—' : fmtNum(result.profitFactor, 2)}
-                  accent={(result.profitFactor ?? 0) >= 1.2 ? 'text-long' : 'text-warning'}
-                />
-                <Stat title="Expectancy R" value={result.expectancy == null ? '—' : fmtNum(result.expectancy, 2)} />
-                <Stat title="SQN" value={result.sqn == null ? '—' : fmtNum(result.sqn, 2)} accent={sqnAccent(result.sqn)} />
-                <Stat title="Max DD" value={result.maxDrawdownPct == null ? '—' : `${fmtNum(result.maxDrawdownPct, 1)}%`} accent="text-warning" />
-              </div>
-
-              <div className="grid grid-cols-6 gap-3">
-                <Stat title="Sharpe" value={result.sharpe == null ? '—' : fmtNum(result.sharpe, 2)} />
-                <Stat title="Sortino" value={result.sortino == null ? '—' : fmtNum(result.sortino, 2)} />
-                <Stat title="Avg win" value={result.avgWin == null ? '—' : fmtNum(result.avgWin, 2)} accent="text-long" />
-                <Stat title="Avg loss" value={result.avgLoss == null ? '—' : fmtNum(result.avgLoss, 2)} accent="text-short" />
-                <Stat
-                  title={`IS SQN${result.wfSplit?.is_trades != null ? ` (${result.wfSplit.is_trades})` : ''}`}
-                  value={result.wfSplit?.is_sqn == null ? '—' : fmtNum(result.wfSplit.is_sqn, 2)}
-                />
-                <Stat
-                  title={`OOS SQN${result.wfSplit?.oos_trades != null ? ` (${result.wfSplit.oos_trades})` : ''}`}
-                  value={result.wfSplit?.oos_sqn == null ? '—' : fmtNum(result.wfSplit.oos_sqn, 2)}
-                  accent={result.wfSplit?.overfit_flag === true ? 'text-short' : undefined}
-                />
-              </div>
-
-              {result.wfSplit?.overfit_flag === true && (
-                <div className="flex items-center gap-2 p-3 rounded-md bg-short/15 border border-short/40 text-short text-xs">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>
-                    Overfit flag: out-of-sample SQN ({result.wfSplit?.oos_sqn == null ? '—' : fmtNum(result.wfSplit.oos_sqn, 2)})
-                    collapsed vs in-sample ({result.wfSplit?.is_sqn == null ? '—' : fmtNum(result.wfSplit.is_sqn, 2)}) on the last{' '}
-                    {result.wfSplit?.oosFraction != null ? `${Math.round(result.wfSplit.oosFraction * 100)}%` : '30%'} holdout — the
-                    edge does not survive out of sample. Do not tune thresholds on the in-sample figure.
-                  </span>
-                </div>
-              )}
-
-              {result.wfSplit?.lowSampleSqnWarning === true && (
-                <div className="flex items-center gap-2 p-3 rounded-md bg-warning/15 border border-warning/40 text-warning text-xs">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>
-                    Low sample warning: fewer than {result.wfSplit?.lowSampleSqnTradeFloor ?? 30} realised trades — treat SQN /
-                    risk metrics as indicative only.
-                  </span>
-                </div>
-              )}
-
-              {Array.isArray(result.metricsInterpretationNotes) && result.metricsInterpretationNotes.length > 0 && (
-                <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground space-y-1">
-                  <p className="font-semibold text-foreground/80 uppercase tracking-wider text-[10px]">Interpretation</p>
-                  {result.metricsInterpretationNotes.map((line, i) => (
-                    <p key={`mi-${i}`}>{line}</p>
+        <TabsContent value="run" className="space-y-4">
+          <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+            <Card className="panel-glass">
+              <CardHeader><SectionTitle icon={SlidersHorizontal} title="Experiment contract" note="Every setting is frozen into the run hash. Engine outputs are never blended." /></CardHeader>
+              <CardContent className="space-y-5">
+                <div className="grid gap-3 md:grid-cols-3">
+                  {(['A', 'B', 'AB'] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setEngineMode(value)}
+                      className={cn(
+                        'rounded-xl border p-3 text-left transition',
+                        engineMode === value ? 'border-primary/55 bg-primary/12 shadow-[0_0_20px_hsl(var(--primary)/0.10)]' : 'border-border/60 bg-black/15 hover:border-primary/30',
+                      )}
+                    >
+                      <div className="text-sm font-semibold">{value === 'AB' ? 'Engine A + B' : `Engine ${value}`}</div>
+                      <div className="mt-1 text-[10px] text-muted-foreground">{value === 'AB' ? 'Two independent result sets' : value === 'A' ? 'Setup evaluator V3' : 'Structure snapshot evaluator'}</div>
+                    </button>
                   ))}
                 </div>
-              )}
 
-              {result.aseDiagnostics && (
-                <ASEDiagnosticsBlock diagnostics={result.aseDiagnostics} />
-              )}
-
-              {result.researchMetrics && (
-                <Card className="border-border/60 bg-card/50">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Research integrity (PSR / DSR / PBO)</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-2 text-[11px] text-muted-foreground">
-                    <div className="flex flex-wrap gap-2">
-                      <Badge variant="outline" className="text-[10px] font-mono">
-                        trades {result.researchMetrics.tradeCount ?? '—'}
-                      </Badge>
-                      <Badge variant="outline" className="text-[10px] font-mono">
-                        PSR {result.researchMetrics.psr?.available ? `Φ=${fmtNum(Number(result.researchMetrics.psr?.value), 3)}` : 'n/a'}
-                      </Badge>
-                      <Badge variant="outline" className="text-[10px] font-mono">
-                        DSR {result.researchMetrics.dsr?.available ? `Φ=${fmtNum(Number(result.researchMetrics.dsr?.value), 3)}` : 'n/a'}
-                      </Badge>
+                <div className="grid gap-4 md:grid-cols-2">
+                  {engines.includes('A') && (
+                    <div className="space-y-2">
+                      <Label>Engine A style</Label>
+                      <Select value={styleA} onValueChange={setStyleA}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>{['auto', 'intraday', 'swing'].map((style) => <SelectItem key={style} value={style}>{style}</SelectItem>)}</SelectContent>
+                      </Select>
                     </div>
-                    {result.researchMetrics.psr?.note && (
-                      <p><span className="text-foreground/80">PSR note:</span> {String(result.researchMetrics.psr.note)}</p>
-                    )}
-                    {result.researchMetrics.pbo?.note && (
-                      <p><span className="text-foreground/80">PBO:</span> {String(result.researchMetrics.pbo.note)} — {result.researchMetrics.pbo?.available ? fmtNum(Number(result.researchMetrics.pbo?.value), 2) : 'not computed'}</p>
-                    )}
-                    {Array.isArray(result.researchMetrics.assumptions) && result.researchMetrics.assumptions.length > 0 && (
-                      <div>
-                        <p className="text-foreground/80 text-[10px] uppercase tracking-wider mb-1">Assumptions / flags</p>
-                        <ul className="list-disc pl-4 space-y-0.5 font-mono text-[10px]">
-                          {result.researchMetrics.assumptions.slice(0, 12).map((a) => (
-                            <li key={a}>{a}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Equity curve */}
-              <Card className="border-border/60 bg-card/50">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Equity Curve</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {equityChart.length === 0 ? (
-                    <div className="text-xs text-muted-foreground py-12 text-center">No equity curve data</div>
-                  ) : (
-                    <EquityAreaChart
-                      data={equityChart}
-                      height={280}
-                      valueLabel="Equity"
-                      valueFormatter={(v) => `$${fmtNum(v, 2)}`}
-                      idSuffix="Bt"
-                    />
                   )}
+                  {engines.includes('B') && (
+                    <div className="space-y-2">
+                      <Label>Engine B style</Label>
+                      <Select value={styleB} onValueChange={setStyleB}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>{['auto', 'scalp', 'intraday', 'swing'].map((style) => <SelectItem key={style} value={style}>{style}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="space-y-2"><Label>Start date</Label><Input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></div>
+                  <div className="space-y-2"><Label>End date</Label><Input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></div>
+                  <div className="space-y-2">
+                    <Label>Assurance mode</Label>
+                    <Select value={mode} onValueChange={(value) => setMode(value as BacktestV2Mode)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent><SelectItem value="CERTIFIED">Certified</SelectItem><SelectItem value="EXPLORATORY">Exploratory</SelectItem></SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border/60 bg-black/15 p-4">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div><div className="text-sm font-medium">Explicit universe</div><div className="text-[10px] text-muted-foreground">{selectedSymbols.size} selected · empty never means all</div></div>
+                    <div className="flex gap-2"><Button variant="outline" size="sm" onClick={selectVisible}>Select visible</Button><Button variant="ghost" size="sm" onClick={() => setSelectedSymbols(new Set())}>Clear</Button></div>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-[1fr_180px]">
+                    <div className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={symbolSearch} onChange={(event) => setSymbolSearch(event.target.value)} placeholder="Search symbol or provider code" className="pl-9" /></div>
+                    <Select value={assetFilter} onValueChange={setAssetFilter}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All asset classes</SelectItem>{(capabilities?.assetTypes || []).map((asset) => <SelectItem key={asset} value={asset}>{asset}</SelectItem>)}</SelectContent></Select>
+                  </div>
+                  <ScrollArea className="mt-3 h-56 rounded-lg border border-border/50">
+                    <div className="grid gap-px bg-border/30 sm:grid-cols-2 lg:grid-cols-3">
+                      {filteredUniverse.map((item) => {
+                        const checked = selectedSymbols.has(item.symbol);
+                        return (
+                          <button key={`${item.symbol}-${item.assetType}`} type="button" onClick={() => toggleSymbol(item.symbol)} className={cn('flex items-center gap-3 bg-card/90 p-3 text-left hover:bg-accent/60', checked && 'bg-primary/10')}>
+                            <Checkbox checked={checked} aria-label={`Select ${item.symbol}`} />
+                            <span className="min-w-0"><span className="block truncate text-xs font-semibold">{item.symbol}</span><span className="block truncate text-[9px] uppercase tracking-wider text-muted-foreground">{item.assetType} · {item.providerSymbol}</span></span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </ScrollArea>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="space-y-4">
+              <Card className="panel-glass">
+                <CardHeader><SectionTitle icon={Sigma} title="Validation & cost model" note="Certified defaults are fixed; costs are visible and non-zero." /></CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center justify-between rounded-lg border border-border/50 bg-black/15 p-3"><div><div className="text-xs font-medium">Anchored walk-forward + holdout</div><div className="text-[10px] text-muted-foreground">40% train · 5 × 8% OOS · final 20% locked{mode === 'CERTIFIED' ? ' · required' : ''}</div></div><Switch checked={validationEnabled} onCheckedChange={setValidationEnabled} disabled={mode === 'CERTIFIED'} /></div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="space-y-1"><Label className="text-[10px]">Spread bps</Label><Input type="number" min="0" step="0.1" value={spreadBps} onChange={(event) => setSpreadBps(Number(event.target.value))} /></div>
+                    <div className="space-y-1"><Label className="text-[10px]">Commission / side</Label><Input type="number" min="0" step="0.1" value={commissionBps} onChange={(event) => setCommissionBps(Number(event.target.value))} /></div>
+                    <div className="space-y-1"><Label className="text-[10px]">Slippage bps</Label><Input type="number" min="0" step="0.1" value={slippageBps} onChange={(event) => setSlippageBps(Number(event.target.value))} /></div>
+                    <div className="space-y-1"><Label className="text-[10px]">Funding / day</Label><Input type="number" min="0" step="0.1" value={fundingBps} onChange={(event) => setFundingBps(Number(event.target.value))} /></div>
+                    <div className="space-y-1"><Label className="text-[10px]">Swap / day</Label><Input type="number" min="0" step="0.1" value={swapBps} onChange={(event) => setSwapBps(Number(event.target.value))} /></div>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border border-border/50 bg-black/15 p-3"><div><div className="text-xs font-medium">Portfolio simulation</div><div className="text-[10px] text-muted-foreground">100k · 1% risk · 10 positions · separate A/B ledgers</div></div><Switch checked={portfolioEnabled} onCheckedChange={setPortfolioEnabled} /></div>
+                  <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1"><Label className="text-[10px]">Comparison family</Label><Input value={comparisonFamily} onChange={(event) => setComparisonFamily(event.target.value)} placeholder="Counts every variant" /></div><div className="space-y-1"><Label className="text-[10px]">Variant ID</Label><Input value={variantId} onChange={(event) => setVariantId(event.target.value)} placeholder="e.g. baseline" /></div></div>
                 </CardContent>
               </Card>
 
-              {/* Engine-specific blocks */}
-              {engine === 'D' && result.scalp_analysis && (
-                <ScalpAnalysisBlock
-                  data={result.scalp_analysis}
-                  vol_quality_pct={result.vol_quality_pct}
-                  vol_quality_warning={result.vol_quality_warning}
-                  same_bar_both_hit={result.same_bar_both_hit}
-                  vp_lookback_bars={result.vp_lookback_bars}
-                />
-              )}
+              <Card className="panel-glass">
+                <CardHeader><SectionTitle icon={ShieldCheck} title="Contract preflight" note="Resolves provider identity, timeframe policy, universe, and estimated work before queueing." /></CardHeader>
+                <CardContent className="space-y-4">
+                  {!preflight ? (
+                    <div className="rounded-xl border border-dashed border-border p-6 text-center"><Database className="mx-auto h-7 w-7 text-muted-foreground" /><p className="mt-2 text-xs text-muted-foreground">No preflight snapshot yet.</p></div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between"><AssuranceBadge value={preflight.certification} /><span className="font-mono text-xs text-muted-foreground">{preflight.instruments.length} covered · {preflight.exclusions.length} excluded</span></div>
+                      <div className="grid grid-cols-3 gap-2"><MetricTile label="Tasks" value={String(preflight.estimatedTasks)} /><MetricTile label="Series" value={String(preflight.estimatedSeries)} /><MetricTile label="Est. bars" value={preflight.estimatedBars.toLocaleString()} /></div>
+                      <p className="text-[10px] text-muted-foreground">Historical bar coverage is certified during PREPARING DATA; any provider exclusions are retained in Results.</p>
+                      {preflight.exclusions.length > 0 && <div className="max-h-28 space-y-1 overflow-auto rounded-lg border border-amber-400/20 bg-amber-400/5 p-2">{preflight.exclusions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${index}`} className="text-[10px] text-amber-200"><AlertTriangle className="mr-1 inline h-3 w-3" />{row.symbol}{row.engine ? ` · ${row.engine}` : ''}: {row.code}</div>)}</div>}
+                    </>
+                  )}
+                  <div className="grid grid-cols-2 gap-2"><Button variant="outline" onClick={runPreflight} disabled={preflightMutation.loading || !explicitUniverseReady}>{preflightMutation.loading ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}Preflight</Button><Button onClick={submitRun} disabled={!preflight?.instruments.length || runMutation.loading}>{runMutation.loading ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}Queue run</Button></div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </TabsContent>
 
-              {result.confluenceAnalysis && Object.keys(result.confluenceAnalysis).length > 0 && (
-                <Card className="border-border/60 bg-card/50">
-                  <CardHeader className="pb-2"><CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Confluence Analysis (Engine B)</CardTitle></CardHeader>
-                  <CardContent>
-                    <pre className="text-[10px] font-mono whitespace-pre-wrap p-2 bg-muted/20 rounded border border-border/40 max-h-72 overflow-y-auto">
-                      {JSON.stringify(result.confluenceAnalysis, null, 2)}
-                    </pre>
-                  </CardContent>
-                </Card>
-              )}
+        <TabsContent value="jobs" className="space-y-4">
+          <Card className="panel-glass">
+            <CardHeader><div className="flex items-center justify-between"><SectionTitle icon={Clock3} title="Durable job queue" note="One active job; incomplete symbol tasks recover after restart." /><Button variant="outline" size="sm" onClick={jobsPoll.refresh}><RefreshCw className={cn('mr-2 h-3.5 w-3.5', jobsPoll.isRefreshing && 'animate-spin')} />Refresh</Button></div></CardHeader>
+            <CardContent className="space-y-3">
+              {!jobs.length && <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">No v2 jobs yet.</div>}
+              {jobs.map((run) => {
+                const progress = run.progress_total ? (run.progress_completed / run.progress_total) * 100 : 0;
+                const terminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.status);
+                const elapsed = jobElapsedSeconds(run);
+                const eta = terminal ? null : jobEtaSeconds(run, elapsed);
+                return (
+                  <button key={run.run_id} type="button" onClick={() => selectRun(run.run_id, terminal ? 'results' : 'jobs')} className={cn('w-full rounded-xl border bg-black/15 p-4 text-left transition hover:border-primary/35', selectedRunId === run.run_id ? 'border-primary/50' : 'border-border/60')}>
+                    <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
+                      <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline" className={statusTone(run.status)}>{run.status}</Badge><AssuranceBadge value={run.certification} />{run.recovered_count > 0 && <Badge variant="outline" className="border-sky-400/30 text-sky-300"><TimerReset className="mr-1 h-3 w-3" />RECOVERED ×{run.recovered_count}</Badge>}</div><div className="mt-2 truncate font-mono text-xs text-foreground">{run.run_id}</div><div className="mt-1 text-[10px] text-muted-foreground">{run.request.engines.map((engine) => `Engine ${engine} ${run.request.styles[engine]}`).join(' · ')} · {run.request.symbols.length} symbols · {run.request.start_date} → {run.request.end_date}</div></div>
+                      <div className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>{!terminal && <Button variant="destructive" size="sm" onClick={() => cancelRun(run.run_id)} disabled={cancelMutation.loading}><CircleStop className="mr-1 h-3.5 w-3.5" />Cancel</Button>}{run.status === 'FAILED' && <Button variant="outline" size="sm" onClick={() => retryRun(run)}><RefreshCw className="mr-1 h-3.5 w-3.5" />Retry</Button>}{terminal && <Button variant="outline" size="sm" onClick={() => selectRun(run.run_id, 'results')}>Open result</Button>}</div>
+                    </div>
+                    <div className="mt-3"><div className="mb-1 flex justify-between text-[10px] text-muted-foreground"><span>{run.phase} · elapsed {formatDuration(elapsed)}{eta != null ? ` · ETA ${formatDuration(eta)}` : ''}</span><span>{run.progress_completed}/{run.progress_total}</span></div><Progress value={progress} className="h-1.5" /></div>
+                  </button>
+                );
+              })}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-              {result.engineCFunnel && Object.keys(result.engineCFunnel).length > 0 && (
-                <Card className="border-border/60 bg-card/50">
-                  <CardHeader className="pb-2"><CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Engine C Funnel</CardTitle></CardHeader>
-                  <CardContent>
-                    <pre className="text-[10px] font-mono whitespace-pre-wrap p-2 bg-muted/20 rounded border border-border/40 max-h-72 overflow-y-auto">
-                      {JSON.stringify(result.engineCFunnel, null, 2)}
-                    </pre>
-                  </CardContent>
-                </Card>
-              )}
+        <TabsContent value="results" className="space-y-4">
+          {!selectedRun ? (
+            <Card className="panel-glass"><CardContent className="p-12 text-center text-sm text-muted-foreground">Select a job to inspect its result.</CardContent></Card>
+          ) : (
+            <>
+              <Card className="panel-glass">
+                <CardContent className="p-5">
+                  <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center"><div><div className="flex flex-wrap items-center gap-2"><Badge variant="outline" className={statusTone(selectedRun.status)}>{selectedRun.status}</Badge><AssuranceBadge value={result?.certification || selectedRun.certification} />{result?.reused && <Badge variant="outline" className="border-sky-400/30 text-sky-300">REUSED {compactHash(result.reusedFromRunId)}</Badge>}</div><div className="mt-2 font-mono text-sm">{selectedRun.run_id}</div><div className="mt-1 text-[10px] text-muted-foreground">Dataset {compactHash(result?.datasetId || selectedRun.dataset_id)} · Config {compactHash(result?.configSnapshotId || selectedRun.config_snapshot_id)}</div></div><div className="flex gap-2"><Button variant="outline" size="sm" asChild><a href={`/api/v2/backtests/${encodeURIComponent(selectedRun.run_id)}/export?format=csv`}><Download className="mr-2 h-3.5 w-3.5" />CSV</a></Button><Button variant="outline" size="sm" asChild><a href={`/api/v2/backtests/${encodeURIComponent(selectedRun.run_id)}/export?format=json`}><Archive className="mr-2 h-3.5 w-3.5" />Research bundle</a></Button></div></div>
+                </CardContent>
+              </Card>
 
-              {/* Trade table */}
-              {Array.isArray(result.trades) && result.trades.length > 0 && (
-                <TradeTable
-                  trades={result.trades}
-                  directionBreakdown={directionBreakdown}
-                />
+              {!result ? (
+                <Card className="panel-glass"><CardContent className="p-10 text-center"><Activity className="mx-auto h-7 w-7 animate-pulse text-primary" /><p className="mt-3 text-sm text-muted-foreground">{selectedRun.status === 'FAILED' ? selectedRun.error?.error || 'Run failed' : `Run is ${selectedRun.phase.toLowerCase().replaceAll('_', ' ')}.`}</p></CardContent></Card>
+              ) : (
+                <>
+                  {resultIssues.length > 0 && (
+                    <Card className={cn('panel-glass', result.failures.length ? 'border-rose-400/30' : 'border-amber-400/30')}>
+                      <CardHeader><SectionTitle icon={AlertTriangle} title="Coverage & task outcomes" note="Excluded or failed work is never presented as a strategy result." /></CardHeader>
+                      <CardContent className="space-y-2">
+                        {resultIssues.slice(0, 20).map((issue, index) => {
+                          const code = issueValue(issue.row, 'code') || 'UNSPECIFIED';
+                          const message = issueValue(issue.row, 'message') || issueValue(issue.row, 'error') || 'No additional detail was recorded.';
+                          return (
+                            <div key={`${issue.kind}-${code}-${index}`} className="rounded-lg border border-border/60 bg-black/20 p-3">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant="outline" className={issue.kind === 'FAILED' ? 'border-rose-400/30 text-rose-300' : 'border-amber-400/30 text-amber-300'}>{issue.kind}</Badge>
+                                <span className="font-mono text-[10px] text-foreground">{code}</span>
+                                <span className="text-[10px] text-muted-foreground">{issueScope(issue.row)}</span>
+                              </div>
+                              <p className="mt-1 text-xs text-muted-foreground">{message}</p>
+                            </div>
+                          );
+                        })}
+                        {resultIssues.length > 20 && <div className="text-[10px] text-muted-foreground">Showing 20 of {resultIssues.length} outcomes. Export the research bundle for the complete list.</div>}
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {!hasEvaluatedTasks ? (
+                    <Card className="panel-glass border-rose-400/30">
+                      <CardContent className="p-8 text-center">
+                        <XCircle className="mx-auto h-8 w-8 text-rose-300" />
+                        <h2 className="mt-3 text-base font-semibold text-foreground">No strategy result was produced</h2>
+                        <p className="mx-auto mt-2 max-w-2xl text-sm text-muted-foreground">No selected Engine A/B task completed point-in-time replay. There are no signals or trades to chart; the coverage and task outcomes above explain why.</p>
+                        <div className="mx-auto mt-5 grid max-w-xl grid-cols-3 gap-2"><MetricTile label="Evaluated tasks" value="0" /><MetricTile label="Outcomes" value={String(resultIssues.length)} /><MetricTile label="Data phase" value={formatDuration(result.timing.dataAcquisitionSec)} /></div>
+                        <Button variant="outline" className="mt-5" onClick={() => setTab('data')}><Database className="mr-2 h-4 w-4" />Inspect data catalog</Button>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    {Object.entries(result.engines || {}).map(([engine, row]) => <Card key={engine} className="panel-glass"><CardHeader className="pb-2"><CardTitle className="text-sm">Engine {engine}</CardTitle></CardHeader><CardContent className="grid grid-cols-2 gap-2"><MetricTile label="Mean R" value={metricValue(row.metrics.meanR, 3)} tone={row.metrics.meanR >= 0 ? 'text-emerald-300' : 'text-rose-300'} /><MetricTile label="Total R" value={metricValue(row.metrics.totalR)} /><MetricTile label="Win rate" value={`${metricValue(row.metrics.winRate, 1)}%`} /><MetricTile label="Trades" value={String(row.metrics.tradeCount)} /></CardContent></Card>)}
+                    <Card className="panel-glass"><CardHeader className="pb-2"><CardTitle className="text-sm">Run timing</CardTitle></CardHeader><CardContent className="grid grid-cols-2 gap-2"><MetricTile label="Data" value={formatDuration(result.timing.dataAcquisitionSec)} /><MetricTile label="Compute" value={formatDuration(result.timing.computeSec)} /><MetricTile label="JIT" value={formatDuration(result.timing.jitCompilationSec)} /><MetricTile label="Peak worker" value={`${(result.peakWorkerMemoryBytes / 1024 ** 2).toFixed(0)} MB`} /></CardContent></Card>
+                  </div>
+
+                  {Object.entries(result.engines || {}).map(([engine, row]) => (
+                    <div key={`curves-${engine}`} className="grid gap-4 xl:grid-cols-2">
+                      <Card className="panel-glass"><CardHeader><SectionTitle icon={BarChart3} title={`Engine ${engine} normalized R`} note="Full independent engine ledger; never blended with the other engine." /></CardHeader><CardContent><EquityAreaChart data={row.equityCurve || []} height={260} valueLabel="Cumulative R" idSuffix={`btv2-r-${engine}`} /></CardContent></Card>
+                      <Card className="panel-glass"><CardHeader><SectionTitle icon={Activity} title={`Engine ${engine} underwater`} note="Drawdown from this engine ledger's running R peak." /></CardHeader><CardContent><EquityAreaChart data={row.underwaterCurve || []} dataKey="drawdown" height={260} valueLabel="Drawdown R" baseline={0} idSuffix={`btv2-dd-${engine}`} /></CardContent></Card>
+                    </div>
+                  ))}
+
+                  <Card className="panel-glass">
+                    <CardHeader><SectionTitle icon={Sigma} title="Costs & segment analysis" note="Every cost assumption is frozen; pair, direction, and regime metrics remain engine-specific." /></CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="flex flex-wrap gap-1.5">
+                        {Object.entries(result.costModel || {}).map(([key, value]) => <Badge key={key} variant="outline" className="border-border/60 bg-black/20 text-[9px] text-muted-foreground">{key.replaceAll('_', ' ')} · {String(value)}</Badge>)}
+                      </div>
+                      {Object.entries(result.engines || {}).map(([engine, row]) => (
+                        <div key={`analysis-${engine}`} className="rounded-xl border border-border/60 bg-black/15 p-3">
+                          <div className="text-xs font-semibold">Engine {engine}</div>
+                          {(['direction', 'regime', 'symbol'] as const).map((group) => (
+                            <div key={group} className="mt-2 flex flex-wrap items-center gap-1.5"><span className="w-16 text-[9px] uppercase tracking-wider text-muted-foreground">{group}</span>{Object.entries(row.analysis?.[group] || {}).slice(0, 12).map(([label, metrics]) => <Badge key={label} variant="outline" className="text-[9px]">{label} · n={metrics.tradeCount} · {metrics.meanR.toFixed(2)}R</Badge>)}</div>
+                          ))}
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="panel-glass"><CardHeader><SectionTitle icon={Layers3} title="IS / OOS / holdout assurance" note="Confidence intervals, PSR/DSR, costs, ambiguity, and funnel diagnostics are captured in the main pass." /></CardHeader><CardContent className="space-y-3">{result.tasks.map((task) => {
+                    const ci = task.validation.confidenceIntervals?.meanR;
+                    const holdout = task.validation.metrics?.HOLDOUT;
+                    const oos = task.validation.metrics?.OOS;
+                    return <div key={`${task.task.engine}-${task.task.symbol}`} className="rounded-xl border border-border/60 bg-black/15 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><span className="font-semibold">Engine {task.task.engine} · {task.task.symbol}</span><span className="ml-2 text-[10px] uppercase text-muted-foreground">{task.task.style} · {task.funnel.executionTimeframe}</span></div><div className="flex gap-2"><Badge variant="outline">PSR {task.validation.psr == null ? '—' : `${(task.validation.psr * 100).toFixed(1)}%`}</Badge><Badge variant="outline">DSR {task.validation.dsr == null ? '—' : `${(task.validation.dsr * 100).toFixed(1)}%`}</Badge></div></div><div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6"><MetricTile label="All mean R" value={metricValue(task.metrics.meanR, 3)} /><MetricTile label="OOS mean R" value={metricValue(oos?.meanR, 3)} /><MetricTile label="Holdout R" value={metricValue(holdout?.meanR, 3)} /><MetricTile label="95% CI" value={ci ? `${ci.lower.toFixed(2)}…${ci.upper.toFixed(2)}` : '—'} /><MetricTile label="Costs R" value={metricValue(task.metrics.totalCostR)} /><MetricTile label="Ambiguity" value={`${(task.simulation.sameBarAmbiguityRate * 100).toFixed(2)}%`} /></div><div className="mt-3 flex flex-wrap gap-1.5">{Object.entries(task.funnel.rejectionFunnel || {}).slice(0, 8).map(([reason, count]) => <Badge key={reason} variant="outline" className="border-border/60 bg-black/20 text-[9px] text-muted-foreground">{reason} · {count}</Badge>)}</div></div>;
+                  })}</CardContent></Card>
+
+                  <Card className="panel-glass"><CardHeader><div className="flex items-center justify-between"><SectionTitle icon={Database} title="Trade ledger" note={`${tradePage?.total || 0} trades · adverse stop-first ambiguity policy`} /><div className="flex gap-1"><Button variant="outline" size="icon" disabled={tradeOffset === 0} onClick={() => setTradeOffset(Math.max(0, tradeOffset - 50))}><ChevronLeft className="h-4 w-4" /></Button><Button variant="outline" size="icon" disabled={!tradePage || tradeOffset + 50 >= tradePage.total} onClick={() => setTradeOffset(tradeOffset + 50)}><ChevronRight className="h-4 w-4" /></Button></div></div></CardHeader><CardContent><div className="overflow-x-auto rounded-lg border border-border/50"><Table><TableHeader><TableRow><TableHead>Engine / Symbol</TableHead><TableHead>Direction</TableHead><TableHead>Entry</TableHead><TableHead>Exit</TableHead><TableHead>Gross R</TableHead><TableHead>Cost R</TableHead><TableHead>Net R</TableHead><TableHead>Split</TableHead><TableHead>Exit</TableHead></TableRow></TableHeader><TableBody>{(tradePage?.items || []).map((trade) => <TableRow key={trade.tradeId}><TableCell><div className="font-medium">{trade.engine} · {trade.symbol}</div><div className="text-[9px] text-muted-foreground">{trade.style}</div></TableCell><TableCell><Badge variant="outline" className={trade.direction === 'LONG' ? 'border-emerald-400/30 text-emerald-300' : 'border-rose-400/30 text-rose-300'}>{trade.direction}</Badge></TableCell><TableCell className="font-mono text-xs">{fmtNum(trade.entry_price, 5)}<div className="text-[9px] text-muted-foreground">{new Date(trade.entry_time).toLocaleString()}</div></TableCell><TableCell className="font-mono text-xs">{fmtNum(trade.exit_price, 5)}<div className="text-[9px] text-muted-foreground">{new Date(trade.exit_time).toLocaleString()}</div></TableCell><TableCell className="font-mono">{trade.gross_r.toFixed(2)}</TableCell><TableCell className="font-mono text-amber-300">-{trade.cost_r.toFixed(2)}</TableCell><TableCell className={cn('font-mono font-semibold', trade.net_r >= 0 ? 'text-emerald-300' : 'text-rose-300')}>{trade.net_r.toFixed(2)}</TableCell><TableCell className="text-[10px]">{trade.split}</TableCell><TableCell className="text-[10px]">{trade.exit_reason}{trade.ambiguous_same_bar && <AlertTriangle className="ml-1 inline h-3 w-3 text-amber-300" />}</TableCell></TableRow>)}</TableBody></Table></div></CardContent></Card>
+                    </>
+                  )}
+                </>
               )}
             </>
           )}
         </TabsContent>
 
-        <TabsContent value="history" className="mt-3">
-          <Card className="border-border/60 bg-card/50">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Backtest History (last 500)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {historyError && <ErrorBanner message={historyError} />}
-              <ScrollArea className="h-[520px]">
-                {historyLoading ? (
-                  <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
-                ) : history && history.length > 0 ? (
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="border-b border-border/40">
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Pair</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Engine</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Trades</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">WR</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">PF</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">SQN</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">DD%</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Min</th>
-                        <th className="text-[10px] uppercase py-2 text-muted-foreground">Date</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {history.map((h, i) => (
-                        <tr key={`${h.id ?? i}`} className="border-b border-border/20 hover:bg-muted/30 transition-colors">
-                          <td className="py-2 text-xs font-mono">{h.pair || '—'}</td>
-                          <td className="py-2 text-[10px] text-muted-foreground">{h.engine || '—'}</td>
-                          <td className="py-2 text-xs font-mono text-right">{h.trades ?? '—'}</td>
-                          <td className="py-2 text-xs font-mono text-right">{h.win_rate != null ? `${fmtNum(h.win_rate, 1)}%` : '—'}</td>
-                          <td className="py-2 text-xs font-mono text-right">{h.profit_factor != null ? fmtNum(h.profit_factor, 2) : '—'}</td>
-                          <td className="py-2 text-right"><SqnBadge sqn={toNum(h.sqn)} /></td>
-                          <td className="py-2 text-xs font-mono text-right">{h.max_dd_pct != null ? `${fmtNum(h.max_dd_pct, 1)}` : '—'}</td>
-                          <td className="py-2 text-xs font-mono text-right">{h.bt_min != null ? fmtNum(h.bt_min, 2) : '—'}</td>
-                          <td className="py-2 text-[10px] text-muted-foreground">
-                            {h.run_date ? new Date(h.run_date).toLocaleString() : '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : (
-                  <div className="text-center text-muted-foreground py-12 text-sm">No backtest history</div>
-                )}
-              </ScrollArea>
-            </CardContent>
-          </Card>
+        <TabsContent value="compare" className="space-y-4">
+          <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+            <Card className="panel-glass"><CardHeader><SectionTitle icon={GitCompareArrows} title="Compatible run set" note="Dataset, date, cost, and assurance contracts must match." /></CardHeader><CardContent className="space-y-2">{jobs.filter((run) => run.status === 'COMPLETED' && Boolean(run.result?.tasks?.length)).map((run) => <button key={run.run_id} type="button" onClick={() => setCompareRunIds((current) => { const next = new Set(current); if (next.has(run.run_id)) next.delete(run.run_id); else next.add(run.run_id); return next; })} className={cn('flex w-full items-center gap-3 rounded-lg border p-3 text-left', compareRunIds.has(run.run_id) ? 'border-primary/45 bg-primary/10' : 'border-border/60 bg-black/15')}><Checkbox checked={compareRunIds.has(run.run_id)} /><div className="min-w-0 flex-1"><div className="truncate font-mono text-xs">{run.run_id}</div><div className="text-[9px] text-muted-foreground">{run.request.variant_id || 'unlabelled'} · {compactHash(run.dataset_id)}</div></div><AssuranceBadge value={run.certification} /></button>)}<Button className="mt-3 w-full" onClick={createComparison} disabled={compareRunIds.size < 2 || compareMutation.loading}><GitCompareArrows className="mr-2 h-4 w-4" />Compare {compareRunIds.size} runs</Button></CardContent></Card>
+            <Card className="panel-glass"><CardHeader><SectionTitle icon={Sigma} title="Selection-bias report" note="Metric deltas include all declared family trials; no auto-selection or promotion." /></CardHeader><CardContent>{!activeComparison ? <div className="rounded-xl border border-dashed border-border p-12 text-center text-sm text-muted-foreground">Create a comparison to calculate compatibility, DSR, and PBO.</div> : !activeComparison.compatible ? <div className="rounded-xl border border-rose-400/25 bg-rose-400/5 p-5"><div className="flex items-center gap-2 font-medium text-rose-300"><XCircle className="h-4 w-4" />Incompatible contracts</div><div className="mt-3 flex flex-wrap gap-2">{activeComparison.incompatibilityReasons.map((reason) => <Badge key={reason} variant="outline" className="border-rose-400/30 text-rose-200">{reason.replaceAll('_', ' ')}</Badge>)}</div></div> : <div className="space-y-4"><div className="grid grid-cols-3 gap-2"><MetricTile label="Trials" value={String(activeComparison.trialCount || 0)} /><MetricTile label="PBO" value={activeComparison.pbo ? `${(activeComparison.pbo.value * 100).toFixed(1)}%` : '—'} /><MetricTile label="PBO folds" value={String(activeComparison.pbo?.folds || 0)} /></div><div className="space-y-2">{(activeComparison.runs || []).map((row, index) => <div key={row.runId} className="rounded-xl border border-border/60 bg-black/15 p-4"><div className="flex items-center justify-between gap-2"><div><div className="font-mono text-xs">{row.runId}</div><div className="text-[9px] text-muted-foreground">{index === 0 ? 'Baseline' : row.variantId || `Variant ${index}`}</div></div><Badge variant="outline">DSR {row.dsr == null ? '—' : `${(row.dsr * 100).toFixed(1)}%`}</Badge></div><div className="mt-3 grid grid-cols-3 gap-2"><MetricTile label="Mean R" value={metricValue(row.metrics.meanR, 3)} note={`Δ ${metricValue(row.deltasFromBaseline.meanR, 3)}`} /><MetricTile label="Total R" value={metricValue(row.metrics.totalR)} note={`Δ ${metricValue(row.deltasFromBaseline.totalR)}`} /><MetricTile label="95% mean R" value={`${row.confidenceIntervals.meanR.lower.toFixed(2)}…${row.confidenceIntervals.meanR.upper.toFixed(2)}`} /></div></div>)}</div></div>}</CardContent></Card>
+          </div>
         </TabsContent>
 
-        <TabsContent value="best" className="mt-3">
-          <Card className="border-border/60 bg-card/50">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
-                <Trophy className="w-4 h-4 text-primary" />
-                Best Performing Pairs (latest run per pair, sorted by SQN)
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {bestError && <ErrorBanner message={bestError} />}
-              {bestLoading ? <Skeleton className="h-20 w-full" /> : (
-                <ScrollArea className="h-[520px]">
-                  {bestData && bestData.length > 0 ? (
-                    <div className="space-y-2">
-                      {bestData.map((bp, i) => (
-                        <div key={`${bp.pair || i}-${i}`} className="flex items-center justify-between p-2 rounded-md bg-muted/30">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="text-[10px] font-mono text-muted-foreground w-6">#{i + 1}</span>
-                            <span className="text-xs font-mono font-bold">{bp.pair || '—'}</span>
-                            <Badge variant="outline" className="text-[10px]">{bp.engine || '—'}</Badge>
-                          </div>
-                          <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-                            <span>{bp.trades ?? '—'} trades</span>
-                            <span>WR {fmtNum(bp.win_rate, 1)}%</span>
-                            <span>PF {fmtNum(bp.profit_factor, 2)}</span>
-                            <SqnBadge sqn={toNum(bp.sqn)} />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-center text-muted-foreground py-12 text-sm">No best-pair data</div>
-                  )}
-                </ScrollArea>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="advisory" className="mt-3">
-          <Card className="border-border/60 bg-card/50">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
-                <Layers className="w-4 h-4 text-primary" />
-                Advisory Thresholds
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-[11px] text-muted-foreground">
-                Recommendations are generated from `backtest_results` and closed `audit_log` trades. Approval modifies live
-                `BT_MIN`, `MIN_CONFLUENCE_CLASS`, or `NAKED_ENGINE.style_profiles.min_score` — never auto-applied.
-              </p>
-              {advisoryError && <ErrorBanner message={advisoryError} />}
-              {advisoryLoading ? <Skeleton className="h-20 w-full" /> : (
-                <>
-                  {advisory?.summary && (
-                    <div className="rounded-md bg-muted/20 border border-border/40 p-3 text-[11px] space-y-1 font-mono">
-                      <div>
-                        <span className="text-muted-foreground">Pending queued: </span>
-                        <span>{String((advisory.summary as Record<string, unknown>).pending ?? '—')}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Approved records: </span>
-                        <span>{String((advisory.summary as Record<string, unknown>).approved ?? '—')}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Rejected records: </span>
-                        <span>{String((advisory.summary as Record<string, unknown>).rejected ?? '—')}</span>
-                      </div>
-                      {(advisory.summary as Record<string, unknown>).last_recomputed != null && (
-                        <div className="text-[10px] text-muted-foreground pt-1">
-                          Last recomputed: {String((advisory.summary as Record<string, unknown>).last_recomputed)}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {advisory?.current_policies && (
-                    <details className="rounded-md bg-muted/20 border border-border/40">
-                      <summary className="cursor-pointer p-3 text-[11px] font-semibold">Current policy snapshot (read-only)</summary>
-                      <pre className="p-3 pt-0 text-[10px] font-mono overflow-x-auto max-h-[220px] overflow-y-auto whitespace-pre-wrap">
-                        {JSON.stringify(advisory.current_policies, null, 2)}
-                      </pre>
-                    </details>
-                  )}
-                  <AdvisoryGroup
-                    title="Pending"
-                    rows={(advisory?.pending || advisory?.recommendations || []) as AdvisoryRecommendation[]}
-                    onApprove={handleApprove}
-                    onReject={handleReject}
-                    showActions
-                  />
-                </>
-              )}
-              {advisory?.approved && advisory.approved.length > 0 && (
-                <AdvisoryGroup title="Approved" rows={advisory.approved} />
-              )}
-              {advisory?.rejected && advisory.rejected.length > 0 && (
-                <AdvisoryGroup title="Rejected" rows={advisory.rejected} />
-              )}
-            </CardContent>
-          </Card>
+        <TabsContent value="data" className="space-y-4">
+          <Card className="panel-glass"><CardHeader><div className="flex items-center justify-between"><SectionTitle icon={Database} title="Immutable data catalog" note="Content-addressed Parquet snapshots; simulation performs no live fetches." /><Button variant="outline" size="sm" onClick={datasetsPoll.refresh}><RefreshCw className={cn('mr-2 h-3.5 w-3.5', datasetsPoll.isRefreshing && 'animate-spin')} />Refresh</Button></div></CardHeader><CardContent className="space-y-4">{!datasets.length && <div className="rounded-xl border border-dashed border-border p-12 text-center text-sm text-muted-foreground">Datasets are prepared when a run enters PREPARING DATA.</div>}{datasets.map((dataset) => <div key={dataset.datasetId} className="rounded-xl border border-border/60 bg-black/15 p-4"><div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center"><div><div className="flex items-center gap-2"><AssuranceBadge value={dataset.certification} /><Badge variant="outline" className={dataset.status === 'READY' ? 'border-emerald-400/30 text-emerald-300' : 'border-rose-400/30 text-rose-300'}>{dataset.status}</Badge></div><div className="mt-2 font-mono text-xs">{dataset.datasetId}</div><div className="mt-1 text-[9px] text-muted-foreground">Manifest {compactHash(dataset.manifestHash)} · {dataset.startDate} → {dataset.endDate}</div></div><div className="grid grid-cols-3 gap-2"><MetricTile label="Symbols" value={String(dataset.symbols.length)} /><MetricTile label="Series" value={String(dataset.series.length)} /><MetricTile label="Excluded" value={String(dataset.exclusions.length)} /></div></div><div className="mt-4 overflow-x-auto rounded-lg border border-border/50"><Table><TableHeader><TableRow><TableHead>Provider / Symbol</TableHead><TableHead>TF</TableHead><TableHead>Coverage</TableHead><TableHead>Rows</TableHead><TableHead>Gaps</TableHead><TableHead>Hash</TableHead><TableHead>State</TableHead></TableRow></TableHeader><TableBody>{dataset.series.slice(0, 50).map((series) => <TableRow key={series.series_id}><TableCell><div className="font-medium">{series.provider} · {series.symbol}</div><div className="text-[9px] text-muted-foreground">{series.provider_symbol}</div></TableCell><TableCell className="font-mono">{series.timeframe}</TableCell><TableCell className="text-[10px]">{series.first_timestamp?.slice(0, 10) || '—'} → {series.last_timestamp?.slice(0, 10) || '—'}</TableCell><TableCell className="font-mono">{series.row_count.toLocaleString()}</TableCell><TableCell className={series.gap_count ? 'text-amber-300' : 'text-emerald-300'}>{series.gap_count}</TableCell><TableCell className="font-mono text-[10px]">{compactHash(series.series_id, 10)}</TableCell><TableCell>{series.quality_state === 'PASS' ? <CheckCircle2 className="h-4 w-4 text-emerald-300" /> : <AlertTriangle className="h-4 w-4 text-amber-300" />}</TableCell></TableRow>)}</TableBody></Table></div></div>)}</CardContent></Card>
         </TabsContent>
       </Tabs>
     </div>
   );
 }
 
-function sqnAccent(sqn?: number): string {
-  const n = toNum(sqn);
-  if (n >= 2) return 'text-long';
-  if (n >= 1) return 'text-warning';
-  return 'text-short';
-}
-
-function ScalpAnalysisBlock({
-  data, vol_quality_pct, vol_quality_warning, same_bar_both_hit, vp_lookback_bars,
-}: {
-  data: NonNullable<BacktestResult['scalp_analysis']>;
-  vol_quality_pct?: number;
-  vol_quality_warning?: boolean;
-  same_bar_both_hit?: number;
-  vp_lookback_bars?: number;
-}) {
-  const triggers: { key: 'absorption' | 'cvd_shift' | 'rejection'; label: string }[] = [
-    { key: 'absorption', label: 'Absorption' },
-    { key: 'cvd_shift', label: 'CVD Shift' },
-    { key: 'rejection', label: 'Rejection' },
-  ];
-  const setups: { key: 'mean_reversion' | 'trend'; label: string }[] = [
-    { key: 'mean_reversion', label: 'Mean Reversion' },
-    { key: 'trend', label: 'Trend' },
-  ];
-  const grades: { key: 'grade_A' | 'grade_B' | 'grade_C'; label: string }[] = [
-    { key: 'grade_A', label: 'Grade A' },
-    { key: 'grade_B', label: 'Grade B' },
-    { key: 'grade_C', label: 'Grade C' },
-  ];
-
-  return (
-    <Card className="border-border/60 bg-card/50">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Engine D — Scalp Analysis</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid grid-cols-4 gap-3">
-          <Stat title="VP volume quality" value={vol_quality_pct != null ? `${fmtNum(vol_quality_pct, 0)}%` : '—'} accent={vol_quality_warning ? 'text-warning' : 'text-foreground'} />
-          <Stat title="Same-bar both hit" value={same_bar_both_hit ?? 0} />
-          <Stat title="VP lookback" value={vp_lookback_bars ?? '—'} />
-          <Stat title="Exec proxy" value="M15" />
-        </div>
-
-        <div>
-          <p className="text-[10px] uppercase text-muted-foreground mb-1">By Trigger</p>
-          <div className="grid grid-cols-3 gap-2">
-            {triggers.map((t) => (
-              <SubsetCard key={t.key} label={t.label} count={data[t.key]?.count} wr={data[t.key]?.wr} avgR={data[t.key]?.avg_r} />
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <p className="text-[10px] uppercase text-muted-foreground mb-1">By Setup</p>
-          <div className="grid grid-cols-2 gap-2">
-            {setups.map((t) => (
-              <SubsetCard key={t.key} label={t.label} count={data[t.key]?.count} wr={data[t.key]?.wr} avgR={data[t.key]?.avg_r} />
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <p className="text-[10px] uppercase text-muted-foreground mb-1">By AI Grade</p>
-          <div className="grid grid-cols-3 gap-2">
-            {grades.map((t) => (
-              <SubsetCard key={t.key} label={t.label} count={data[t.key]?.count} wr={data[t.key]?.wr} />
-            ))}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function SubsetCard({ label, count, wr, avgR }: { label: string; count?: number; wr?: number | null; avgR?: number | null }) {
-  return (
-    <div className="p-2 rounded-md bg-muted/30">
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] uppercase text-muted-foreground">{label}</span>
-        <span className="text-[10px] font-mono">{count ?? 0}</span>
-      </div>
-      <div className="mt-1 flex items-center gap-3 text-[11px] font-mono">
-        <span>WR <span className={wrAccent(wr)}>{wr == null ? '—' : `${fmtNum(wr, 1)}%`}</span></span>
-        {avgR != null && <span>avgR {fmtNum(avgR, 2)}</span>}
-      </div>
-    </div>
-  );
-}
-
-function wrAccent(wr?: number | null): string {
-  if (wr == null) return 'text-muted-foreground';
-  if (wr >= 55) return 'text-long';
-  if (wr >= 45) return 'text-warning';
-  return 'text-short';
-}
-
-function TradeTable({
-  trades,
-  directionBreakdown,
-}: {
-  trades: Array<Record<string, unknown>>;
-  directionBreakdown: DirectionBreakdown;
-}) {
-  const [directionFilter, setDirectionFilter] = useState<'ALL' | DirectionKey>('ALL');
-  const filteredTrades = useMemo(
-    () => (
-      directionFilter === 'ALL'
-        ? trades
-        : trades.filter((trade) => normalizeBacktestDirection(trade.direction) === directionFilter)
-    ),
-    [directionFilter, trades],
-  );
-  const visibleTrades = filteredTrades.slice(0, 100);
-
-  return (
-    <Card className="border-border/60 bg-card/50">
-      <CardHeader className="pb-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
-            Trade Log {filteredTrades.length > visibleTrades.length && <span className="text-[10px] text-muted-foreground">(showing first {visibleTrades.length} of {filteredTrades.length})</span>}
-          </CardTitle>
-          <div className="ml-auto flex flex-wrap items-center gap-1 text-[10px]">
-            <span className="text-muted-foreground">Full run:</span>
-            <Button
-              type="button"
-              variant={directionFilter === 'ALL' ? 'secondary' : 'outline'}
-              size="sm"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => setDirectionFilter('ALL')}
-            >
-              ALL {trades.length}
-            </Button>
-            <Button
-              type="button"
-              variant={directionFilter === 'LONG' ? 'secondary' : 'outline'}
-              size="sm"
-              className="h-6 px-2 text-[10px] text-long"
-              onClick={() => setDirectionFilter('LONG')}
-            >
-              LONG {directionBreakdown.LONG}
-            </Button>
-            <Button
-              type="button"
-              variant={directionFilter === 'SHORT' ? 'secondary' : 'outline'}
-              size="sm"
-              className="h-6 px-2 text-[10px] text-short"
-              onClick={() => setDirectionFilter('SHORT')}
-            >
-              SHORT {directionBreakdown.SHORT}
-            </Button>
-            {directionBreakdown.UNKNOWN > 0 && (
-              <Badge variant="outline" className="text-muted-foreground">UNKNOWN {directionBreakdown.UNKNOWN}</Badge>
-            )}
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <ScrollArea className="h-[320px]">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-border/40">
-                <th className="text-[10px] uppercase py-2 text-muted-foreground">Entry</th>
-                <th className="text-[10px] uppercase py-2 text-muted-foreground">Dir</th>
-                <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">Score</th>
-                <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">SL</th>
-                <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">TP</th>
-                <th className="text-[10px] uppercase py-2 text-muted-foreground text-right">R</th>
-                <th className="text-[10px] uppercase py-2 text-muted-foreground">Exit</th>
-                <th className="text-[10px] uppercase py-2 text-muted-foreground">Style</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleTrades.map((t, i) => {
-                const r = (t.resultR ?? t.r_multiple ?? 0) as number;
-                const dir = String(t.direction || '').toUpperCase();
-                return (
-                  <tr key={i} className="border-b border-border/20 hover:bg-muted/30">
-                    <td className="py-1 text-[10px] text-muted-foreground">{String(t.entry_time || t.entryTime || t.timestamp || '—').slice(0, 16)}</td>
-                    <td className="py-1 text-[10px]">
-                      <span className={dir === 'LONG' || dir === 'BUY' ? 'text-long' : 'text-short'}>{dir || '—'}</span>
-                    </td>
-                    <td className="py-1 text-[10px] font-mono text-right">{fmtNum(t.score as number, 2)}</td>
-                    <td className="py-1 text-[10px] font-mono text-right">{fmtNum(t.sl as number, 5)}</td>
-                    <td className="py-1 text-[10px] font-mono text-right">{fmtNum((t.tp ?? t.tp1) as number, 5)}</td>
-                    <td className={`py-1 text-[10px] font-mono text-right ${r > 0 ? 'text-long' : r < 0 ? 'text-short' : ''}`}>
-                      {fmtNum(r, 2)}
-                    </td>
-                    <td className="py-1 text-[10px] text-muted-foreground">{String(t.exit_reason || t.exitReason || '—')}</td>
-                    <td className="py-1 text-[10px] text-muted-foreground">{String(t.style || t.setup_type || '—')}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </ScrollArea>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ASEDiagnosticsBlock({ diagnostics }: { diagnostics: ASEBacktestDiagnostics }) {
-  const signalCounts = diagnostics.signalCounts || {};
-  const nonTradeReasons = diagnostics.nonTradeReasons || {};
-  return (
-    <Card className="border-border/60 bg-card/50">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>ASE Diagnostics</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Stat title="Candidates" value={diagnostics.candidateCount ?? '—'} />
-          <Stat title="ASE trades" value={diagnostics.tradeCount ?? '—'} />
-          <Stat title="Lookback" value={diagnostics.lookbackDays != null ? `${diagnostics.lookbackDays}d` : '—'} />
-          <Stat title="Horizons" value={(diagnostics.horizons || []).join(' + ') || '—'} />
-        </div>
-        <div className="flex flex-wrap gap-2 text-[10px] font-mono text-muted-foreground">
-          {diagnostics.instrument && <Badge variant="outline">{diagnostics.instrument}</Badge>}
-          {diagnostics.family && <Badge variant="outline">{diagnostics.family}</Badge>}
-          {Object.entries(signalCounts).map(([status, count]) => (
-            <Badge key={status} variant="outline">{status}:{count}</Badge>
-          ))}
-        </div>
-        {Object.keys(nonTradeReasons).length > 0 && (
-          <div className="space-y-1">
-            <p className="text-[10px] uppercase text-muted-foreground">Non-trade blockers</p>
-            <div className="flex flex-wrap gap-2 text-[10px] font-mono text-muted-foreground">
-              {Object.entries(nonTradeReasons).map(([reason, count]) => (
-                <Badge key={reason} variant="outline" className="max-w-full">
-                  <span className="truncate">{reason}:{count}</span>
-                </Badge>
-              ))}
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function AdvisoryGroup({
-  title, rows, onApprove, onReject, showActions,
-}: {
-  title: string;
-  rows: AdvisoryRecommendation[];
-  onApprove?: (r: AdvisoryRecommendation) => void;
-  onReject?: (r: AdvisoryRecommendation) => void;
-  showActions?: boolean;
-}) {
-  if (!rows || rows.length === 0) {
-    return (
-      <div className="p-3 rounded-md bg-muted/20 text-[11px] text-muted-foreground">{title}: none</div>
-    );
-  }
-  return (
-    <div className="space-y-2">
-      <p className="text-[10px] uppercase text-muted-foreground">{title}</p>
-      {rows.map((rec, i) => {
-        const cur =
-          typeof rec.current_value === 'number'
-            ? rec.current_value
-            : typeof rec.current === 'number'
-              ? rec.current
-              : null;
-        const proposed =
-          typeof rec.proposed_value === 'number'
-            ? rec.proposed_value
-            : typeof rec.recommended === 'number'
-              ? rec.recommended
-              : null;
-        const headline =
-          typeof rec.title === 'string'
-            ? rec.title
-            : [rec.pair, rec.scope_key].filter(Boolean).join(' ') || 'Recommendation';
-        const reasonLines: string[] = Array.isArray(rec.reasons)
-          ? rec.reasons.map(String)
-          : rec.reason
-            ? [String(rec.reason)]
-            : [];
-        return (
-        <div key={`${rec.id ?? rec.rec_id ?? i}-${i}`} className="p-3 rounded-md bg-muted/30 flex items-center justify-between gap-3">
-          <div className="text-xs space-y-1 min-w-0">
-            <div>
-              <span className="font-semibold">{headline}</span>
-              {typeof rec.subtitle === 'string' && rec.subtitle && (
-                <span className="text-muted-foreground text-[10px] ml-2">{rec.subtitle}</span>
-              )}
-              <Badge variant="outline" className="ml-2 text-[10px]">
-                {typeof rec.engine === 'string'
-                  ? rec.engine
-                  : typeof rec.scope_type === 'string'
-                    ? rec.scope_type
-                    : '—'}
-              </Badge>
-              {typeof rec.metric === 'string' && !!rec.metric && (
-                <Badge variant="outline" className="ml-1 text-[10px]">{rec.metric}</Badge>
-              )}
-              {typeof rec.status === 'string' && !!rec.status && (
-                <Badge className="ml-1 text-[10px] badge-neutral">{rec.status}</Badge>
-              )}
-            </div>
-            <div className="text-[10px] text-muted-foreground font-mono">
-              {cur == null ? '—' : fmtNum(cur, 4)}
-              {' → '}
-              <span className="text-foreground">{proposed == null ? '—' : fmtNum(proposed, 4)}</span>
-              {reasonLines.length > 0 && (
-                <ul className="list-disc ml-4 mt-1 font-sans normal-case">
-                  {reasonLines.map((ln, j) => <li key={j}>{ln}</li>)}
-                </ul>
-              )}
-              {rec.evidence != null && rec.evidence !== '' && (
-                <span className="block mt-1">
-                  Evidence:{' '}
-                  {typeof rec.evidence === 'string'
-                    ? rec.evidence
-                    : JSON.stringify(rec.evidence)}
-                </span>
-              )}
-            </div>
-          </div>
-          {showActions && (
-            <div className="flex gap-1 shrink-0">
-              <Button size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => onApprove?.(rec)}>Approve</Button>
-              <Button size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => onReject?.(rec)}>Reject</Button>
-            </div>
-          )}
-        </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function Stat({ title, value, accent }: { title: string; value: string | number; accent?: string }) {
-  return (
-    <Card className="border-border/60 bg-card/50">
-      <CardContent className="p-3">
-        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{title}</p>
-        <p className={`text-xl font-mono font-bold mt-1 ${accent || ''}`}>{value}</p>
-      </CardContent>
-    </Card>
-  );
-}
+export default memo(BacktestPanel);

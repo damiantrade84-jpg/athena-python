@@ -18,13 +18,14 @@ from engine_a_v3.levels import (
     build_london_open_breakout_levels,
     build_mean_reversion_levels,
     build_structural_levels,
+    resolve_structural_geometry,
 )
 from engine_a_v3.promotion import PromotionRegistry, production_registry
 from engine_a_v3.quant_scorer import QuantScore, score_pair
 from engine_a_v3.profile import baseline_profile
 from engine_a_v3.routing import route_specialist
 from engine_a_v3.session_scoring import session_score_passes
-from engine_a_v3.setups import SetupCandidate, detect_setup
+from engine_a_v3.setups import SetupCandidate, SetupSeriesCache, detect_setup
 from engine_a_v3.timeframes import (
     resolve_diagnostic_v3_entry_timeframe,
     resolve_v3_entry_timeframe,
@@ -258,6 +259,12 @@ def _build_levels(
     atr_period: int = 14,
     ema_period: int = 20,
     current_price: float | None = None,
+    asset_type: str | None = None,
+    atr_candles: list[dict] | None = None,
+    swing_candles: list[dict] | None = None,
+    series_cache=None,
+    primary_timeframe: str | None = None,
+    atr_timeframe: str | None = None,
 ) -> StructuralLevels | None:
     """Route to the correct level builder by style."""
     if direction not in {"LONG", "SHORT"}:
@@ -279,6 +286,8 @@ def _build_levels(
             ema_period=ema_period,
             current_price=current_price,
             min_rr=_mr_min_rr,
+            series_cache=series_cache,
+            primary_timeframe=primary_timeframe,
         )
     if level_style == "london_open":
         return build_london_open_breakout_levels(
@@ -290,6 +299,12 @@ def _build_levels(
         atr_pct=atr_pct,
         atr_period=atr_period,
         current_price=current_price,
+        asset_type=asset_type,
+        atr_candles=atr_candles,
+        swing_candles=swing_candles,
+        series_cache=series_cache,
+        primary_timeframe=primary_timeframe,
+        atr_timeframe=atr_timeframe,
     )
 
 
@@ -307,6 +322,10 @@ def evaluate_engine_a_v3(
     policy_timeframes: Mapping[str, Any] | None = None,
     entry_candle_is_forming: bool = False,
     candle_validation_index: BacktestCandleValidationIndex | None = None,
+    setup_series_cache: SetupSeriesCache | None = None,
+    quant_feature_cache: dict | None = None,
+    setup_candidate_cache: dict | None = None,
+    compact_replay: bool = False,
 ) -> EngineASetupSignal:
     route = route_specialist(pair)
     asset_type = str(pair.get("type") or pair.get("asset_type") or "other")
@@ -441,7 +460,7 @@ def evaluate_engine_a_v3(
         }
         return EngineASetupSignal(
             contractVersion=CONTRACT_VERSION,
-            signalId=_signal_id(payload),
+            signalId="" if compact_replay else _signal_id(payload),
             engine="ENGINE_A_V3",
             pair=display,
             symbol=symbol,
@@ -497,6 +516,9 @@ def evaluate_engine_a_v3(
         "context": context,
         "profile": profile,
         "snapshot_cache": snapshot_cache,
+        "series_cache": setup_series_cache,
+        "feature_cache": quant_feature_cache,
+        "compact_result": compact_replay,
     }
     if diagnostic_override is not None:
         _score_kwargs["entry_tf_override"] = diagnostic_override
@@ -518,10 +540,32 @@ def evaluate_engine_a_v3(
         _setup_kwargs = {
             "display": display,
             "indicator_periods": dict(profile.indicator_periods),
+            "series_cache": setup_series_cache,
         }
         if policy_entry_tf or diagnostic_override:
             _setup_kwargs["entry_tf_override"] = policy_entry_tf or diagnostic_override
-        setup = detect_setup(route, normalized_horizon, candles, **_setup_kwargs)
+        setup_cache_key = (
+            route.score_group,
+            normalized_horizon,
+            primary_tf,
+            len(primary),
+            len(candles.get("D1") or []),
+            len(candles.get("H4") or []),
+            len(candles.get("H1") or []),
+        )
+        cached_setup = (
+            setup_candidate_cache.get("candidate")
+            if setup_candidate_cache is not None
+            and setup_candidate_cache.get("key") == setup_cache_key
+            else None
+        )
+        if cached_setup is not None:
+            setup = cached_setup
+        else:
+            setup = detect_setup(route, normalized_horizon, candles, **_setup_kwargs)
+            if setup_candidate_cache is not None:
+                setup_candidate_cache["key"] = setup_cache_key
+                setup_candidate_cache["candidate"] = setup
         setup_diagnostics = {
             "setupId": setup.setup_id,
             "setupDecision": setup.decision,
@@ -626,6 +670,30 @@ def evaluate_engine_a_v3(
     period_map = dict(profile.indicator_periods)
     atr_period = int(period_map.get("atr", 14) or 14)
     ema_period = int(period_map.get("ema_trend", 20) or 20)
+    atr_candles: list[dict] | None = None
+    swing_candles: list[dict] | None = None
+    levels_atr_tf: str | None = None
+    if direction is not None and level_style not in {"mean_reversion", "london_open"}:
+        geometry = resolve_structural_geometry(asset_type)
+        if geometry.get("levels_atr_tf") == "structure":
+            structure_tf = str(
+                (policy or {}).get("structure")
+                or (policy or {}).get("structureTf")
+                or ""
+            ).upper()
+            if not structure_tf:
+                # Legacy / no-policy path: structure ladder step above entry.
+                structure_tf = {
+                    "M15": "H1",
+                    "M30": "H1",
+                    "H1": "H4",
+                    "H4": "D1",
+                }.get(str(primary_tf or "").upper(), "H1")
+            structure_rows = candles.get(structure_tf) or []
+            if len(structure_rows) >= 20:
+                atr_candles = structure_rows
+                swing_candles = structure_rows
+                levels_atr_tf = structure_tf
     if direction is not None:
         levels = _build_levels(
             primary,
@@ -635,6 +703,12 @@ def evaluate_engine_a_v3(
             atr_period=atr_period,
             ema_period=ema_period,
             current_price=current_price,
+            asset_type=asset_type,
+            atr_candles=atr_candles,
+            swing_candles=swing_candles,
+            series_cache=setup_series_cache,
+            primary_timeframe=primary_tf,
+            atr_timeframe=levels_atr_tf,
         )
 
     # The quant model never emits NO_SIGNAL. Missing levels caps TRADE -> WATCH
@@ -686,9 +760,11 @@ def evaluate_engine_a_v3(
     )
     execution_scope = "DEMO_ONLY" if promotion_execution_allowed else "NONE"
 
-    predicates = _quant_predicates(quant)
-    if setup is not None:
-        predicates = predicates + setup.predicates
+    predicates: tuple[PredicateResult, ...] = ()
+    if not compact_replay:
+        predicates = _quant_predicates(quant)
+        if setup is not None:
+            predicates = predicates + setup.predicates
 
     rejection_reasons: list[str] = []
     if setup_diagnostics.get("qualityFloorBlocked"):
@@ -740,41 +816,58 @@ def evaluate_engine_a_v3(
     # Recompute after late demotions (blocked trend / equity volume / crypto deriv).
     qualified = decision == "TRADE" and promotion_execution_allowed and levels is not None
 
-    factor_diagnostics = dict(quant.factor_diagnostics or {})
-    factor_diagnostics["entryUsesActiveCandle"] = bool(entry_candle_is_forming)
-    factor_diagnostics["activeEntryGate"] = {
-        "required": active_entry_gate_required,
-        "passed": active_entry_gate_ok,
-        "timeframe": diagnostic_override,
-    }
-    factor_diagnostics["setupOverlay"] = setup_diagnostics
-    factor_diagnostics["promotion"] = {
-        "qualified": bool(promotion.qualified),
-        "demoResearchOverride": bool(demo_research_unpromoted_allowed),
-        "reasons": list(promotion.reasons),
-    }
-    if quant_session_blocked:
-        factor_diagnostics["quantSessionGateBlocked"] = True
+    if compact_replay and qualified:
+        # Full diagnostics are required only for emitted trade metadata. The
+        # compact pass above already made the strategy decision with identical
+        # components and gates; this second pass is rare and presentation-only.
+        full_score_kwargs = dict(_score_kwargs)
+        full_score_kwargs["compact_result"] = False
+        quant = score_pair(route, normalized_horizon, candles, **full_score_kwargs)
+        predicates = _quant_predicates(quant)
+        if setup is not None:
+            predicates = predicates + setup.predicates
 
-    signal_identity = {
-        "contractVersion": CONTRACT_VERSION,
-        "pair": display,
-        "symbol": symbol,
-        "family": route.family,
-        "subclass": route.subclass,
-        "horizon": normalized_horizon,
-        "setupId": setup_id,
-        "decision": decision,
-        "direction": direction,
-        "score": quant.confluence_score,
-        "lastConfirmedCandleTs": last_confirmed_ts,
-        "artifactId": promotion.artifact.artifactId if promotion.artifact else None,
-        "entry": executable_levels.price if executable_levels else None,
-    }
+    compact_unqualified = compact_replay and not qualified
+    factor_diagnostics = None
+    if not compact_unqualified:
+        factor_diagnostics = dict(quant.factor_diagnostics or {})
+        factor_diagnostics["entryUsesActiveCandle"] = bool(entry_candle_is_forming)
+        factor_diagnostics["activeEntryGate"] = {
+            "required": active_entry_gate_required,
+            "passed": active_entry_gate_ok,
+            "timeframe": diagnostic_override,
+        }
+        factor_diagnostics["setupOverlay"] = setup_diagnostics
+        factor_diagnostics["promotion"] = {
+            "qualified": bool(promotion.qualified),
+            "demoResearchOverride": bool(demo_research_unpromoted_allowed),
+            "reasons": list(promotion.reasons),
+        }
+        if quant_session_blocked:
+            factor_diagnostics["quantSessionGateBlocked"] = True
+
+    signal_id = ""
+    if not compact_unqualified:
+        signal_identity = {
+            "contractVersion": CONTRACT_VERSION,
+            "pair": display,
+            "symbol": symbol,
+            "family": route.family,
+            "subclass": route.subclass,
+            "horizon": normalized_horizon,
+            "setupId": setup_id,
+            "decision": decision,
+            "direction": direction,
+            "score": quant.confluence_score,
+            "lastConfirmedCandleTs": last_confirmed_ts,
+            "artifactId": promotion.artifact.artifactId if promotion.artifact else None,
+            "entry": executable_levels.price if executable_levels else None,
+        }
+        signal_id = _signal_id(signal_identity)
 
     return EngineASetupSignal(
         contractVersion=CONTRACT_VERSION,
-        signalId=_signal_id(signal_identity),
+        signalId=signal_id,
         engine="ENGINE_A_V3",
         pair=display,
         symbol=symbol,
@@ -800,7 +893,7 @@ def evaluate_engine_a_v3(
         tp2=targets[1].price if len(targets) > 1 else None,
         rr1=targets[0].rr if len(targets) > 0 else None,
         rr2=targets[1].rr if len(targets) > 1 else None,
-        predicates=predicates,
+        predicates=() if compact_unqualified else predicates,
         rejectionReasons=(
             tuple(rejection_reasons) + promotion.reasons
             if not promotion.qualified and not demo_research_unpromoted_allowed
@@ -821,15 +914,17 @@ def evaluate_engine_a_v3(
         validationArtifact=promotion.artifact,
         validationStatus=validation_status,
         executionScope=execution_scope,
-        scoringProfile=profile.to_dict(),
+        scoringProfile=None if compact_unqualified else profile.to_dict(),
         exitPolicy=profile.exit_policy,
-        componentScores=quant.factor_diagnostics.get("components"),
+        componentScores=(
+            None if compact_unqualified else quant.factor_diagnostics.get("components")
+        ),
         confluenceScore=quant.confluence_score,
         maxScore=quant.max_score,
         scoreNorm=quant.score_norm,
         conviction=quant.conviction,
         confluenceThreshold=quant.threshold,
-        factorScores=quant.factor_scores,
+        factorScores=None if compact_unqualified else quant.factor_scores,
         factorDiagnostics=factor_diagnostics,
         engineATradeEnabled=qualified,
     )

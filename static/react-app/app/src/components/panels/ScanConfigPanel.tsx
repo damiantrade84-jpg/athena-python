@@ -2,14 +2,12 @@ import { useEffect, useState, useCallback } from 'react';
 import { useStore } from '@/hooks/useStore';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorBanner } from '@/components/shared';
-import { Settings, Save, Check, X } from 'lucide-react';
-import { fmtNum } from '@/lib/utils';
+import { Settings, Save } from 'lucide-react';
 
 interface ScanSettingsResponse {
   settings?: Record<string, unknown>;
@@ -41,26 +39,6 @@ interface ExecutionConfig {
   riskPct?: number;
 }
 
-interface AdvisoryRecommendation {
-  id: string;
-  scope_type?: string;
-  scope_key?: string;
-  current_value?: number;
-  proposed_value?: number;
-  delta?: number;
-  rationale?: string;
-  evidence?: Record<string, unknown>;
-  generated_at?: string;
-}
-
-interface AdvisorySnapshot {
-  summary?: { pending?: number; approved?: number; rejected?: number; last_recomputed?: string };
-  current_policies?: Record<string, unknown>;
-  pending?: AdvisoryRecommendation[];
-  approved?: AdvisoryRecommendation[];
-  rejected?: AdvisoryRecommendation[];
-}
-
 const ASSET_CLASSES = ['crypto', 'forex', 'commodity', 'stock', 'index'] as const;
 
 export default function ScanConfigPanel() {
@@ -74,15 +52,12 @@ export default function ScanConfigPanel() {
     = useApiPoll<BtMinResponse>('/api/bt-min', 0);
   const { data: features, loading: featuresLoading, error: featuresError, refresh: refreshFeatures }
     = useApiPoll<FeatureToggles>('/api/feature-toggles', 0);
-  const { data: advisories, loading: advisoryLoading, error: advisoryError, refresh: refreshAdvisories }
-    = useApiPoll<AdvisorySnapshot>('/api/advisory-thresholds', 0);
   const { data: executionConfig, loading: execLoading, error: execError, refresh: refreshExec }
     = useApiPoll<ExecutionConfig>('/api/execution-config', 0);
 
   const { post: postBtMin } = useApiPost<{ live_class: Record<string, number> }>();
   const { post: postFeatures } = useApiPost<FeatureToggles>();
   const { post: postExec } = useApiPost<ExecutionConfig>();
-  const { post: postAdvisory } = useApiPost<{ saved?: boolean; error?: string }>();
 
   useEffect(() => {
     const live = btMin?.live_class;
@@ -129,25 +104,14 @@ export default function ScanConfigPanel() {
     }
   }, [localExec, postExec, showToast, refreshExec]);
 
-  const handleAdvisory = useCallback(async (id: string, action: 'approve' | 'reject') => {
-    const res = await postAdvisory(`/api/advisory-thresholds/${id}/${action}`);
-    if (res?.error) {
-      showToast(`Advisory ${action} failed: ${res.error}`, 'error');
-    } else {
-      showToast(`Advisory ${action}d`, 'success');
-    }
-    refreshAdvisories();
-    refreshBtMin();
-  }, [postAdvisory, showToast, refreshAdvisories, refreshBtMin]);
-
-  const errorMsg = [settingsError, btMinError, featuresError, advisoryError, execError].filter(Boolean).join(' | ');
+  const errorMsg = [settingsError, btMinError, featuresError, execError].filter(Boolean).join(' | ');
 
   return (
     <div className="space-y-5">
       {errorMsg && (
         <ErrorBanner
           message={errorMsg}
-          onRetry={() => { refreshSettings(); refreshBtMin(); refreshFeatures(); refreshAdvisories(); refreshExec(); }}
+          onRetry={() => { refreshSettings(); refreshBtMin(); refreshFeatures(); refreshExec(); }}
         />
       )}
 
@@ -345,60 +309,6 @@ export default function ScanConfigPanel() {
         </CardContent>
       </Card>
 
-      {/* Advisory Thresholds */}
-      <Card className="border-border/60 bg-card/50">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
-            <Settings className="w-4 h-4 text-primary" /> Advisory Threshold Recommendations
-          </CardTitle>
-          {advisories?.summary && (
-            <div className="flex gap-2 text-[10px]">
-              <Badge variant="outline">Pending {advisories.summary.pending ?? 0}</Badge>
-              <Badge variant="outline">Approved {advisories.summary.approved ?? 0}</Badge>
-              <Badge variant="outline">Rejected {advisories.summary.rejected ?? 0}</Badge>
-            </div>
-          )}
-        </CardHeader>
-        <CardContent>
-          {advisoryLoading ? (
-            <Skeleton className="h-20 w-full" />
-          ) : advisories?.pending && advisories.pending.length > 0 ? (
-            <div className="space-y-2">
-              {advisories.pending.map(adv => (
-                <div key={adv.id} className="flex items-start justify-between p-3 rounded-md bg-muted/30 gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-[10px]">{adv.scope_type}</Badge>
-                      <span className="text-xs font-mono font-bold">{adv.scope_key}</span>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground mt-1">
-                      Current: <span className="font-mono">{fmtNum(adv.current_value, 3)}</span>
-                      {' → '}
-                      Proposed: <span className="font-mono">{fmtNum(adv.proposed_value, 3)}</span>
-                      {adv.delta != null && (
-                        <span className="ml-1">(Δ {fmtNum(adv.delta, 3)})</span>
-                      )}
-                    </p>
-                    {adv.rationale && (
-                      <p className="text-[10px] text-muted-foreground mt-1">{adv.rationale}</p>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => handleAdvisory(adv.id, 'approve')}>
-                      <Check className="w-3 h-3" /> Approve
-                    </Button>
-                    <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => handleAdvisory(adv.id, 'reject')}>
-                      <X className="w-3 h-3" /> Reject
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-xs text-muted-foreground">No pending advisory recommendations</div>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }

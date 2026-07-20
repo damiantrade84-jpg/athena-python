@@ -3,23 +3,18 @@ import { describe, expect, it } from 'vitest';
 import { buildBacktestRequest } from '../backtestPayload';
 
 describe('buildBacktestRequest', () => {
-  it('routes ASE single-pair runs to the ASE endpoint with horizon and lookback', () => {
+  it('routes Engine A to the primary backtest endpoint', () => {
     const request = buildBacktestRequest({
-      engine: 'ASE',
-      pair: 'BTCUSDT',
-      style: 'auto',
-      validationMode: 'standard',
-      aseHorizon: 'swing',
-      aseLookbackDays: 90,
+      engine: 'A',
+      pair: 'EURUSD',
+      style: 'intraday',
     });
 
     expect(request).toEqual({
-      endpoint: '/api/backtest-ase',
+      endpoint: '/api/backtest',
       payload: {
-        pair: 'BTCUSDT',
-        validation_mode: 'standard',
-        horizon: 'swing',
-        lookbackDays: 90,
+        pair: 'EURUSD',
+        style: 'intraday',
       },
     });
   });
@@ -29,9 +24,6 @@ describe('buildBacktestRequest', () => {
       engine: 'B',
       pair: 'EURUSD',
       style: 'intraday',
-      validationMode: 'walk_forward',
-      aseHorizon: 'both',
-      aseLookbackDays: 365,
     });
 
     expect(request).toEqual({
@@ -39,27 +31,6 @@ describe('buildBacktestRequest', () => {
       payload: {
         pair: 'EURUSD',
         style: 'intraday',
-        validation_mode: 'walk_forward',
-      },
-    });
-  });
-
-  it('normalizes Engine A V3 validation requests to standard', () => {
-    const request = buildBacktestRequest({
-      engine: 'A',
-      pair: 'EURUSD',
-      style: 'intraday',
-      validationMode: 'walk_forward',
-      aseHorizon: 'both',
-      aseLookbackDays: 365,
-    });
-
-    expect(request).toEqual({
-      endpoint: '/api/backtest',
-      payload: {
-        pair: 'EURUSD',
-        style: 'intraday',
-        validation_mode: 'standard',
       },
     });
   });

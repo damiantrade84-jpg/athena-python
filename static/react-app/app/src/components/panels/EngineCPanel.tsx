@@ -9,7 +9,6 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Skeleton } from '@/components/ui/skeleton';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,7 +19,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { ErrorBanner, MultiPairPicker, EquityAreaChart } from '@/components/shared';
+import { ErrorBanner, MultiPairPicker } from '@/components/shared';
 import VolumeModeField from '@/components/execution/VolumeModeField';
 import {
   fetchRiskPreview,
@@ -28,7 +27,7 @@ import {
   useExecutionVolumeState,
 } from '@/hooks/useExecutionVolumeState';
 import { buildQuickExecutePayload, aiLevelOverrideFromReview, computeLevelOverrideRR } from '@/lib/manualExecuteHelpers';
-import { GitMerge, Play, BarChart3, Layers, Activity, Zap, Eye, Clock, Sun, Moon, FileText } from 'lucide-react';
+import { GitMerge, Play, Layers, Activity, Zap, Eye, Clock, Sun, Moon, FileText } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
 import { fetchVisionCandlePayload } from '@/lib/visionReview';
@@ -36,7 +35,6 @@ import { VisionReviewCard } from '@/components/athena';
 import type {
   EngineCConsensusRow,
   EngineCScanResponse,
-  EngineCBacktestResponse,
   CompareResponse,
   PairsResponse,
   PairListEntry,
@@ -200,9 +198,6 @@ export default function EngineCPanel() {
   const [comparePairBulk, setComparePairBulk] = useState('');
   const [bulkCompareResults, setBulkCompareResults] = useState<CompareResponse[]>([]);
 
-  const [btPair, setBtPair] = useState<string>('EURUSD');
-  const [btResult, setBtResult] = useState<EngineCBacktestResponse | null>(null);
-
   // Execution state
   const [confirmRow, setConfirmRow] = useState<EngineCConsensusRow | null>(null);
   const [pendingStyle, setPendingStyle] = useState<'scalp' | 'intraday' | 'swing'>('swing');
@@ -225,7 +220,6 @@ export default function EngineCPanel() {
 
   const { post: postScan, loading: scanning, error: scanError } = useApiPost<EngineCScanResponse>();
   const { post: postCompare, loading: comparing } = useApiPost<CompareResponse>();
-  const { post: postBacktest, loading: backtesting } = useApiPost<EngineCBacktestResponse>();
   const { post: postExecute, loading: executing } = useApiPost<{ success?: boolean; ticket?: string; error?: string }>();
   const { post: postVision, loading: visionLoading } = useApiPost<ChartAnalysisResponse>();
   const { post: postAiText, loading: textLoading } = useApiPost<AiTextReviewResponse>();
@@ -285,17 +279,6 @@ export default function EngineCPanel() {
     setCompareResult(result);
     showToast(`Compare ${comparePair}: ${result.summary?.verdict || 'done'}`, 'success');
   }, [comparePair, compareStyle, postCompare, showToast]);
-
-  const runBacktest = useCallback(async () => {
-    if (!btPair) return;
-    const result = await postBacktest('/api/backtest-consensus', { pair: btPair });
-    if (!result || result.error) {
-      showToast(`Backtest failed: ${result?.error || 'unknown'}`, 'error');
-      return;
-    }
-    setBtResult(result);
-    showToast(`Backtest ${btPair}: ${result.trades ?? 0} trades`, 'success');
-  }, [btPair, postBacktest, showToast]);
 
   // Reset AI review when selected row changes
   const handleSelect = useCallback((row: EngineCConsensusRow) => {
@@ -513,18 +496,6 @@ export default function EngineCPanel() {
   };
 
   const groupedRows = useMemo(() => groupRows(buckets[activeBucket]), [buckets, activeBucket]);
-
-  const equityChart = useMemo(() => {
-    const ec = btResult?.equity_curve;
-    if (!Array.isArray(ec) || ec.length === 0) return [] as { idx: number; equity: number }[];
-    if (typeof ec[0] === 'number') {
-      return (ec as number[]).map((equity, idx) => ({ idx, equity }));
-    }
-    return (ec as { idx?: number; equity: number; date?: string }[]).map((p, idx) => ({
-      idx: typeof p.idx === 'number' ? p.idx : idx,
-      equity: Number(p.equity) || 0,
-    }));
-  }, [btResult?.equity_curve]);
 
   return (
     <div className="space-y-5">
@@ -837,56 +808,6 @@ export default function EngineCPanel() {
               </ScrollArea>
             )}
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Backtest */}
-      <Card className="border-border/60 bg-card/50">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
-            <BarChart3 className="w-4 h-4 text-primary" />
-            Engine C Backtest
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Input
-              value={btPair}
-              onChange={(e) => setBtPair(e.target.value.toUpperCase())}
-              className="w-32 h-8 text-xs font-mono"
-              placeholder="Pair"
-            />
-            <Button size="sm" className="h-8 gap-1 text-xs" onClick={runBacktest} disabled={backtesting}>
-              {backtesting ? 'Backtesting…' : 'Run Backtest'}
-            </Button>
-          </div>
-          {backtesting && <Skeleton className="h-32 w-full" />}
-          {btResult && !backtesting && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-6 gap-3">
-                <KpiBox title="Trades" value={btResult.trades ?? 0} />
-                <KpiBox title="Win rate" value={btResult.win_rate != null ? `${fmtNum(btResult.win_rate, 1)}%` : '—'} />
-                <KpiBox
-                  title="Profit factor"
-                  value={btResult.profit_factor == null ? '—' : fmtNum(btResult.profit_factor, 2)}
-                  accent={(btResult.profit_factor ?? 0) >= 1.2 ? 'text-long' : 'text-warning'}
-                />
-                <KpiBox title="SQN" value={btResult.sqn == null ? '—' : fmtNum(btResult.sqn, 2)} />
-                <KpiBox title="Sharpe" value={btResult.sharpe == null ? '—' : fmtNum(btResult.sharpe, 2)} />
-                <KpiBox title="Max DD" value={btResult.max_dd_pct == null ? '—' : `${fmtNum(btResult.max_dd_pct, 1)}%`} />
-              </div>
-              {equityChart.length > 0 && (
-                <EquityAreaChart
-                  data={equityChart}
-                  height={220}
-                  valueLabel="Equity"
-                  valueFormatter={(v) => `$${fmtNum(v, 2)}`}
-                  idSuffix="Ec"
-                />
-              )}
-              {btResult.notes && <p className="text-[10px] text-muted-foreground">{btResult.notes}</p>}
-            </div>
-          )}
         </CardContent>
       </Card>
 

@@ -93,15 +93,38 @@ def _resolved_trade_threshold(score_group: str) -> float:
     return _BASELINE_THRESHOLD
 
 
+_SCORER_SHA_CACHE: tuple[tuple, str] | None = None
+
+
 def scorer_sha256() -> str:
-    digest = hashlib.sha256()
+    """Content hash of the scorer sources, memoized by file stat.
+
+    The hash is recomputed whenever any source file's (mtime_ns, size)
+    changes, so an edited scorer is picked up immediately; unchanged files
+    are not re-read/re-hashed on every call (this runs per scan/backtest bar).
+    """
+    global _SCORER_SHA_CACHE
     root = Path(__file__).parent
-    for name in ("profile.py", "indicator_adapter.py", "quant_scorer.py"):
+    names = ("profile.py", "indicator_adapter.py", "quant_scorer.py")
+    key_parts: list[tuple] = []
+    for name in names:
+        try:
+            stat = (root / name).stat()
+            key_parts.append((name, stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            key_parts.append((name, None, None))
+    key = tuple(key_parts)
+    if _SCORER_SHA_CACHE is not None and _SCORER_SHA_CACHE[0] == key:
+        return _SCORER_SHA_CACHE[1]
+    digest = hashlib.sha256()
+    for name in names:
         path = root / name
         if path.exists():
             digest.update(name.encode("utf-8"))
             digest.update(path.read_bytes())
-    return digest.hexdigest()
+    result = digest.hexdigest()
+    _SCORER_SHA_CACHE = (key, result)
+    return result
 
 
 def _canonical_hash(payload: Mapping[str, Any]) -> str:

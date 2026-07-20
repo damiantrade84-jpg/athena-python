@@ -1,13 +1,11 @@
-export type BacktestEngineKey = 'A' | 'B' | 'C' | 'D' | 'ASE';
-export type ASEBacktestHorizon = 'both' | 'intraday' | 'swing';
+// Backtesting is Engine A + Engine B only (v3 rebuild). The former C, D
+// (scalp), and ASE backtest endpoints are retired and return 410 GONE.
+export type BacktestEngineKey = 'A' | 'B';
 
 export interface BacktestRequestInput {
   engine: BacktestEngineKey;
   pair: string;
   style: string;
-  validationMode: string;
-  aseHorizon: ASEBacktestHorizon;
-  aseLookbackDays: number;
 }
 
 export interface BacktestRequest {
@@ -16,35 +14,15 @@ export interface BacktestRequest {
 }
 
 export function backtestEndpointForEngine(engine: BacktestEngineKey): string {
-  if (engine === 'B') return '/api/backtest-naked';
-  if (engine === 'C') return '/api/backtest-consensus';
-  if (engine === 'D') return '/api/backtest-scalp';
-  if (engine === 'ASE') return '/api/backtest-ase';
-  return '/api/backtest';
-}
-
-export function normalizeBacktestValidationMode(
-  engine: BacktestEngineKey,
-  validationMode: string,
-): string {
-  return engine === 'A' ? 'standard' : validationMode;
+  return engine === 'B' ? '/api/backtest-naked' : '/api/backtest';
 }
 
 export function buildBacktestRequest(input: BacktestRequestInput): BacktestRequest {
-  const endpoint = backtestEndpointForEngine(input.engine);
-  const payload: Record<string, unknown> = {
-    pair: input.pair,
-    validation_mode: normalizeBacktestValidationMode(input.engine, input.validationMode),
+  return {
+    endpoint: backtestEndpointForEngine(input.engine),
+    payload: {
+      pair: input.pair,
+      style: input.style,
+    },
   };
-
-  if (input.engine === 'ASE') {
-    payload.horizon = input.aseHorizon;
-    if (Number.isFinite(input.aseLookbackDays) && input.aseLookbackDays > 0) {
-      payload.lookbackDays = Math.trunc(input.aseLookbackDays);
-    }
-    return { endpoint, payload };
-  }
-
-  payload.style = input.style;
-  return { endpoint, payload };
 }

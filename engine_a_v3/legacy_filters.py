@@ -79,6 +79,7 @@ def apply_legacy_filters(
     coherence: Mapping[str, Any],
     mom_diag: Mapping[str, Any],
     entry_tf: str,
+    series_cache=None,
 ) -> tuple[float, str, dict[str, Any]]:
     """Return (confluence, decision, diagnostics) after optional V2 filter ports."""
     diag: dict[str, Any] = {
@@ -93,7 +94,8 @@ def apply_legacy_filters(
 
     mult = 1.0
     h4_snap = dict(snaps.get("H4") or snaps.get(entry_tf) or {})
-    h4_candles = list(candles.get("H4") or candles.get(entry_tf) or [])
+    h4_candles = candles.get("H4") or candles.get(entry_tf) or []
+    h4_tf = "H4" if candles.get("H4") else entry_tf
 
     # ── Forex EMA cluster penalty ───────────────────────────────────────────
     if family == "forex" and _flag("FOREX_EMA_CLUSTER", True) and direction in ("LONG", "SHORT"):
@@ -103,7 +105,10 @@ def apply_legacy_filters(
                 _forex_ema_cluster_diagnostics,
             )
 
-            cluster = _forex_ema_cluster_diagnostics(h4_snap, h4_candles, direction)
+            cluster = _forex_ema_cluster_diagnostics(
+                h4_snap, h4_candles, direction,
+                series_cache=series_cache, timeframe=h4_tf,
+            )
             labels = [str(v) for v in (coherence or {}).values() if v in ("UP", "DOWN", "FLAT")]
             agreement = sum(1 for v in labels if v == ("UP" if direction == "LONG" else "DOWN"))
             trend_detail = {
@@ -161,6 +166,8 @@ def apply_legacy_filters(
                 trend_detail,
                 adx_quality,
                 mom_diag.get("adxValue"),
+                series_cache=series_cache,
+                timeframe=h4_tf,
             )
             late_mult, applied, reason = _apply_crypto_late_trend_adjustment(
                 late_diag, trend_detail, direction

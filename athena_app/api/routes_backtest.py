@@ -11,18 +11,24 @@ from flask import jsonify
 _RUNTIME = SimpleNamespace()
 
 
-def api_backtest_impl(payload: dict, *, service_handle):
-    return service_handle(payload)
+# v3 rebuild: history reads come from backtest_runs_v3 (written by
+# athena_backtest.results). Legacy field aliases (run_date, pair, trades,
+# expectancy) are kept so existing panel code continues to render rows.
+_V3_HISTORY_COLUMNS = (
+    "id, created_at AS run_date, symbol AS pair, symbol, engine, style, "
+    "total_trades AS trades, win_rate, profit_factor, expectancy_r AS expectancy, "
+    "sqn, deflated_sqn, total_r, max_drawdown_r, verdict, trial_count, wall_time_sec"
+)
 
 
 def api_backtest_history():
-    """Return all stored backtest results, newest first."""
+    """Return stored v3 backtest runs, newest first."""
     try:
         with sqlite3.connect(_RUNTIME.AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
-            rows = con.execute("""
-                SELECT * FROM backtest_results
-                ORDER BY run_date DESC
+            rows = con.execute(f"""
+                SELECT {_V3_HISTORY_COLUMNS} FROM backtest_runs_v3
+                ORDER BY created_at DESC
                 LIMIT 500
             """).fetchall()
             return jsonify([dict(r) for r in rows])
@@ -31,15 +37,15 @@ def api_backtest_history():
 
 
 def api_backtest_history_pair(pair_name):
-    """Return backtest history for a specific pair."""
+    """Return v3 backtest history for a specific pair."""
     try:
         with sqlite3.connect(_RUNTIME.AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute(
-                """
-                SELECT * FROM backtest_results
-                WHERE pair = ?
-                ORDER BY run_date DESC
+                f"""
+                SELECT {_V3_HISTORY_COLUMNS} FROM backtest_runs_v3
+                WHERE symbol = ?
+                ORDER BY created_at DESC
                 LIMIT 50
             """,
                 (pair_name,),
@@ -50,19 +56,19 @@ def api_backtest_history_pair(pair_name):
 
 
 def api_backtest_best():
-    """Return best result per pair (highest SQN from most recent run)."""
+    """Return best v3 result per pair (most recent run per symbol, by SQN)."""
     try:
         with sqlite3.connect(_RUNTIME.AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
-            rows = con.execute("""
-                SELECT b.*
-                FROM backtest_results b
+            rows = con.execute(f"""
+                SELECT {_V3_HISTORY_COLUMNS}
+                FROM backtest_runs_v3 b
                 INNER JOIN (
-                    SELECT pair, MAX(run_date) as latest
-                    FROM backtest_results
-                    GROUP BY pair
-                ) latest ON b.pair = latest.pair
-                AND b.run_date = latest.latest
+                    SELECT symbol AS latest_symbol, MAX(created_at) as latest
+                    FROM backtest_runs_v3
+                    GROUP BY symbol
+                ) latest ON b.symbol = latest.latest_symbol
+                AND b.created_at = latest.latest
                 ORDER BY b.sqn DESC
             """).fetchall()
             return jsonify([dict(r) for r in rows])

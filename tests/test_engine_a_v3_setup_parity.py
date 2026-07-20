@@ -239,8 +239,11 @@ def test_levels_atr_matches_indicator_bundle():
 
     levels = build_structural_levels(rows, direction="LONG", atr_period=period)
     assert levels is not None
-    # Invalidation uses 0.8 * Wilder ATR when structural extreme is farther.
+    # Invalidation uses configured SL min ATR (default 0.8) when structure is farther.
+    from engine_a_v3.levels import resolve_structural_geometry
+
+    sl_min = float(resolve_structural_geometry(None)["sl_min_atr_mult"])
     structural = min(float(c["low"]) for c in rows[-20:])
     current = float(rows[-1]["close"])
-    expected_inv = min(structural, current - 0.8 * expected)
+    expected_inv = min(structural, current - sl_min * expected)
     assert abs(levels.invalidation - expected_inv) < 1e-9

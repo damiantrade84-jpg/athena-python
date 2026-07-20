@@ -397,7 +397,7 @@ def _get_smoothed_regime(
         return committed_map[pair_id]
 
 
-# ── Backward-compat stub (used by backtest_runner + scoring.py) ───────────────
+# ── Backward-compat stub (used by scoring.py) ─────────────────────────────────
 
 def build_oi_context_for_factor_scoring(
     oi_data: Optional[dict],
@@ -1793,15 +1793,35 @@ def _price_vs_ema_label(close: float | None, ema: float | None) -> str | None:
     return "at"
 
 
-def _ema_slope_pct_from_candles(candles: list | None, period: int) -> float | None:
+def _ema_slope_pct_from_candles(
+    candles: list | None,
+    period: int,
+    *,
+    series_cache=None,
+    timeframe: str | None = None,
+) -> float | None:
     if not isinstance(candles, list) or len(candles) < 11:
         return None
     try:
-        from indicators import calc_ema
+        ema_series = None
+        idx = None
+        if (
+            series_cache is not None
+            and timeframe is not None
+            and series_cache.matches(timeframe, candles)
+        ):
+            # Full-series precompute; calc_ema is causal so values at indices
+            # < len(candles) equal the per-prefix recompute. Index explicitly
+            # against len(candles) -- never the shared array's tail.
+            ema_series = series_cache.calc_ema_series_view(timeframe, len(candles), period)
+            if ema_series is not None:
+                idx = len(candles) - 1
+        if ema_series is None:
+            from indicators import calc_ema
 
-        closes = [float(c["close"]) for c in candles]
-        ema_series = calc_ema(closes, period)
-        idx = len(ema_series) - 1
+            closes = [float(c["close"]) for c in candles]
+            ema_series = calc_ema(closes, period)
+            idx = len(ema_series) - 1
         if idx < 10 or not ema_series[idx] or not ema_series[idx - 10]:
             return None
         return round((ema_series[idx] - ema_series[idx - 10]) / ema_series[idx - 10] * 100, 3)
@@ -1813,6 +1833,9 @@ def _forex_ema_cluster_diagnostics(
     h4_snap: dict,
     h4_candles: list | None,
     direction: str,
+    *,
+    series_cache=None,
+    timeframe: str | None = None,
 ) -> dict:
     """H4 EMA-stack location diagnostics for Engine A forex (report-only by default)."""
     close = _safe_indicator_float(h4_snap.get("close"))
@@ -1821,11 +1844,17 @@ def _forex_ema_cluster_diagnostics(
     ema50 = _safe_indicator_float(h4_snap.get("ema50"))
     ema200 = _safe_indicator_float(h4_snap.get("ema200"))
 
-    ema21_slope = _ema_slope_pct_from_candles(h4_candles, 21)
-    ema50_slope = _ema_slope_pct_from_candles(h4_candles, 50)
+    ema21_slope = _ema_slope_pct_from_candles(
+        h4_candles, 21, series_cache=series_cache, timeframe=timeframe
+    )
+    ema50_slope = _ema_slope_pct_from_candles(
+        h4_candles, 50, series_cache=series_cache, timeframe=timeframe
+    )
     ema200_slope = _safe_indicator_float(h4_snap.get("ema200Slope10"))
     if ema200_slope is None:
-        ema200_slope = _ema_slope_pct_from_candles(h4_candles, 200)
+        ema200_slope = _ema_slope_pct_from_candles(
+            h4_candles, 200, series_cache=series_cache, timeframe=timeframe
+        )
 
     out = {
         "price_vs_ema21": _price_vs_ema_label(close, ema21),
@@ -2071,20 +2100,23 @@ def _h4_volume_vs_ma(h4_candles: list | None, lookback: int) -> tuple[float | No
     if not isinstance(h4_candles, list) or not h4_candles:
         return None, None
     try:
-        from indicators import calc_sma
-
+        # Only the final SMA value is consumed. Building the complete expanding
+        # SMA array here made historical replay O(n^2) while returning exactly
+        # the same final-window mean.
+        tail = h4_candles[-max(1, int(lookback)):]
         vols = [
             float(c.get("vol", 0) or c.get("volume", 0) or 0)
-            for c in h4_candles
+            for c in tail
         ]
         if not vols or vols[-1] <= 0:
             return None, None
-        if len(vols) < lookback:
+        if len(h4_candles) < lookback:
             return vols[-1], None
-        sma = calc_sma(vols, lookback)
-        if not sma or sma[-1] is None or float(sma[-1]) <= 0:
+        valid = [value for value in vols if value is not None]
+        volume_ma = sum(valid) / len(valid) if valid else None
+        if volume_ma is None or volume_ma <= 0:
             return vols[-1], None
-        return vols[-1], float(sma[-1])
+        return vols[-1], float(volume_ma)
     except Exception:
         return None, None
 
@@ -2094,6 +2126,8 @@ def _h4_vwap_distance_metrics(
     h4_candles: list | None,
     *,
     lookback: int = 96,
+    series_cache=None,
+    timeframe: str | None = None,
 ) -> dict:
     """VWAP distance metrics for crypto late-trend diagnostics (H4)."""
     out = {
@@ -2107,14 +2141,35 @@ def _h4_vwap_distance_metrics(
     if close is None or close <= 0 or not isinstance(h4_candles, list) or len(h4_candles) < lookback:
         return out
     try:
-        from indicators import calc_vwap
-
-        vwap_candles = h4_candles[-lookback:]
-        vwap_result = calc_vwap(vwap_candles, anchor_index=0)
-        vwap_values = vwap_result.get("vwap", [])
-        if not vwap_values or vwap_values[-1] is None:
-            return out
-        vwap = float(vwap_values[-1])
+        vwap = None
+        if (
+            series_cache is not None
+            and timeframe is not None
+            and series_cache.matches(timeframe, h4_candles)
+        ):
+            vwap = series_cache.rolling_vwap_at(
+                timeframe, len(h4_candles), lookback
+            )
+        if vwap is None:
+            vwap_candles = h4_candles[-lookback:]
+            cumulative_volume = 0.0
+            cumulative_typical_volume = 0.0
+            for candle in vwap_candles:
+                candle_close = float(candle.get("close", 0))
+                typical_price = (
+                    float(candle.get("high", candle_close))
+                    + float(candle.get("low", candle_close))
+                    + candle_close
+                ) / 3.0
+                volume = float(candle.get("vol", 0) or 0.0)
+                if volume > 0:
+                    cumulative_typical_volume += typical_price * volume
+                    cumulative_volume += volume
+            if cumulative_volume <= 0:
+                return out
+            # calc_vwap rounds every emitted point to eight decimals. Only its
+            # final value was consumed here, so calculate that value directly.
+            vwap = round(cumulative_typical_volume / cumulative_volume, 8)
         if vwap <= 0:
             return out
         vwap_distance_pct = (close - vwap) / vwap
@@ -2140,6 +2195,9 @@ def _crypto_late_trend_diagnostics(
     trend_detail: dict,
     adx_quality: dict,
     adx_val: float | None,
+    *,
+    series_cache=None,
+    timeframe: str | None = None,
 ) -> dict:
     """H4 late-trend continuation risk diagnostics for Engine A crypto."""
     adx_strong = _float_cfg(CONFIG.get("ENGINE_A_CRYPTO_ADX_STRONG_THRESHOLD"), 25.0)
@@ -2164,7 +2222,11 @@ def _crypto_late_trend_diagnostics(
     )
 
     vwap_metrics = _h4_vwap_distance_metrics(
-        h4_snap, h4_candles, lookback=max(20, vwap_lookback)
+        h4_snap,
+        h4_candles,
+        lookback=max(20, vwap_lookback),
+        series_cache=series_cache,
+        timeframe=timeframe,
     )
     vwap_distance_atr = _safe_indicator_float(vwap_metrics.get("vwap_distance_atr"))
 

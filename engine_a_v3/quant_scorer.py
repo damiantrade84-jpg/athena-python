@@ -136,6 +136,24 @@ def _resolve_v3_momentum_tf(score_group: str, asset_type: str, horizon: str) -> 
     return str(profile.get("momentum_tf") or "H4").upper() or "H4"
 
 
+def _resolve_policy_momentum_tf(
+    score_group: str,
+    asset_type: str,
+    horizon: str,
+    policy_trigger_tf: str,
+) -> str:
+    """Keep the policy trigger unless the score group explicitly overrides momentum."""
+    try:
+        profile = resolve_engine_a_scoring_profile(
+            score_group=score_group, asset_type=asset_type, style=horizon
+        )
+    except Exception:
+        return policy_trigger_tf
+    if not profile.get("enabled"):
+        return policy_trigger_tf
+    return str(profile.get("group_momentum_tf") or policy_trigger_tf).upper()
+
+
 def _resolve_v3_entry_tf(score_group: str, asset_type: str, horizon: str) -> str | None:
     """Resolve primary entry TF for V3 scoring.
 
@@ -226,6 +244,7 @@ def _trend_component(
     entry_candles: list[dict] | None = None,
     indicator_periods: Mapping[str, int] | None = None,
     entry_tf: str = "H1",
+    series_cache=None,
 ) -> tuple[Component, dict[str, str]]:
     parts: dict[str, float] = {}
     coherence: dict[str, str] = {}
@@ -254,24 +273,62 @@ def _trend_component(
         coherence_q = abs(weighted)
     quality = abs(weighted) * (0.5 + 0.5 * coherence_q)
     quality *= _trend_health_mult(
-        weighted, snaps, entry_candles, indicator_periods, entry_tf=entry_tf
+        weighted, snaps, entry_candles, indicator_periods, entry_tf=entry_tf,
+        series_cache=series_cache,
     )
     return Component(_clamp(weighted, -1.0, 1.0), _clamp01(quality)), coherence
 
 
 def _trend_alignment_age(
-    candles: list[dict], *, ema_period: int = 21, max_lookback: int = 25
+    candles: list[dict],
+    *,
+    ema_period: int = 21,
+    max_lookback: int = 25,
+    series_cache=None,
+    timeframe: str | None = None,
 ) -> int:
     """Count consecutive entry-TF bars with the same close vs EMA side as the latest bar."""
     if len(candles) < ema_period + 2:
         return 0
     from engine_a_v3.setups import _ema
 
+    if (
+        series_cache is not None
+        and timeframe is not None
+        and series_cache.matches(timeframe, candles)
+    ):
+        ema = series_cache.ema_series_view(timeframe, len(candles), ema_period)
+        if ema is not None:
+            latest = len(candles) - 1
+            latest_side = float(candles[latest]["close"]) > ema[latest]
+            age = 0
+            start = latest - 1
+            stop = max(ema_period - 1, start - max_lookback)
+            for idx in range(start, stop, -1):
+                if (float(candles[idx]["close"]) > ema[idx]) == latest_side:
+                    age += 1
+                else:
+                    break
+            return age
+
     closes = [float(c["close"]) for c in candles if _f(c.get("close")) is not None]
     if len(closes) < ema_period + 2:
         return 0
-    ema = _ema(closes, ema_period)
-    latest_side = closes[-1] > ema[-1]
+    ema = None
+    if (
+        series_cache is not None
+        and timeframe is not None
+        and len(closes) == len(candles)
+        and series_cache.matches(timeframe, candles)
+    ):
+        # EMA is causal, so the full-series precompute equals the per-prefix
+        # array elementwise for every index < len(candles).
+        ema = series_cache.ema_series_view(timeframe, len(candles), ema_period)
+    if ema is None:
+        ema = _ema(closes, ema_period)
+    # Index explicitly: the cached view is the FULL-series array, valid only
+    # for indices < len(closes); ema[-1] would read beyond the prefix.
+    latest_side = closes[-1] > ema[len(closes) - 1]
     age = 0
     start = len(closes) - 2
     stop = max(ema_period - 1, start - max_lookback)
@@ -290,6 +347,7 @@ def _trend_health_mult(
     indicator_periods: Mapping[str, int] | None,
     *,
     entry_tf: str = "H1",
+    series_cache=None,
 ) -> float:
     """Penalize stale or weakening trends (config-gated, default on)."""
     enabled = True
@@ -337,7 +395,12 @@ def _trend_health_mult(
         ema_period = 21
         if indicator_periods and "ema_trend" in indicator_periods:
             ema_period = int(indicator_periods["ema_trend"])
-        age = _trend_alignment_age(entry_candles, ema_period=ema_period)
+        age = _trend_alignment_age(
+            entry_candles,
+            ema_period=ema_period,
+            series_cache=series_cache,
+            timeframe=_entry_key,
+        )
         if age > start_bars:
             mult *= max(floor, 1.0 - bar_penalty * (age - start_bars))
     return _clamp(mult, floor, 1.0)
@@ -698,6 +761,9 @@ def score_pair(
     snapshot_cache: dict | None = None,
     entry_tf_override: str | None = None,
     policy_timeframes: Mapping[str, Any] | None = None,
+    series_cache=None,
+    feature_cache: dict | None = None,
+    compact_result: bool = False,
 ) -> QuantScore:
     """Continuous quality score for one pair. `route` is a SpecialistRoute
     (.score_group, .family). `context` carries subsystem snapshots and an
@@ -744,7 +810,7 @@ def score_pair(
             profile, entry_tf=None, rejection_reason="invalid_entry_timeframe"
         )
 
-    entry_candles = list(candles.get(entry_tf) or [])
+    entry_candles = candles.get(entry_tf) or []
     if diagnostic_override is not None and not entry_candles:
         # Fail closed: never fall back to H1/H4 when diagnostic override is set.
         return _unavailable_quant(
@@ -753,25 +819,43 @@ def score_pair(
             rejection_reason="missing_entry_candles",
         )
 
-    if policy:
-        tf_weights: dict[str, float] = {}
-        for key, alias, weight in _POLICY_ROLE_TF_WEIGHTS:
-            tf = str((policy.get(key) or policy.get(alias) or "")).upper()
-            if tf:
-                tf_weights[tf] = tf_weights.get(tf, 0.0) + weight
-        momentum_tf = policy_trigger_tf
-    else:
-        tf_weights = _resolve_v3_tf_weights(group, asset_type, horizon)
-        momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
-    extra_tfs = tuple(
-        tf for tf in set((*tf_weights.keys(), entry_tf, momentum_tf))
-        if tf and tf not in ("D1", "H4", "H1")
+    plan_key = (
+        "plan",
+        group,
+        asset_type,
+        horizon,
+        entry_tf,
+        policy_setup_tf,
+        policy_trigger_tf,
+        getattr(profile, "profile_sha256", None),
     )
+    plan = feature_cache.get(plan_key) if feature_cache is not None else None
+    if plan is None:
+        if policy:
+            tf_weights: dict[str, float] = {}
+            for key, alias, weight in _POLICY_ROLE_TF_WEIGHTS:
+                tf = str((policy.get(key) or policy.get(alias) or "")).upper()
+                if tf:
+                    tf_weights[tf] = tf_weights.get(tf, 0.0) + weight
+            momentum_tf = _resolve_policy_momentum_tf(
+                group, asset_type, horizon, policy_trigger_tf
+            )
+        else:
+            tf_weights = _resolve_v3_tf_weights(group, asset_type, horizon)
+            momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
+        extra_tfs = tuple(
+            tf for tf in set((*tf_weights.keys(), entry_tf, momentum_tf))
+            if tf and tf not in ("D1", "H4", "H1")
+        )
+        plan = tf_weights, momentum_tf, extra_tfs, dict(profile.indicator_periods)
+        if feature_cache is not None:
+            feature_cache[plan_key] = plan
+    tf_weights, momentum_tf, extra_tfs, indicator_periods = plan
     if extra_tfs:
         snaps = _snapshots(
             candles,
             asset_type,
-            dict(profile.indicator_periods),
+            indicator_periods,
             snapshot_cache,
             extra_tfs=extra_tfs,
         )
@@ -779,7 +863,7 @@ def score_pair(
         snaps = _snapshots(
             candles,
             asset_type,
-            dict(profile.indicator_periods),
+            indicator_periods,
             snapshot_cache,
         )
     if diagnostic_override is not None or policy:
@@ -792,13 +876,31 @@ def score_pair(
         (snaps.get(momentum_tf) or snaps.get("H4") or entry_snap)
     )
 
-    trend, coherence = _trend_component(
-        snaps,
-        tf_weights,
-        entry_candles=entry_candles,
-        indicator_periods=dict(profile.indicator_periods),
-        entry_tf=entry_tf,
+    trend_key = (
+        "trend",
+        entry_tf,
+        tuple(
+            (tf, len(candles.get(tf) or []))
+            for tf in sorted(set((*tf_weights.keys(), entry_tf)))
+        ),
     )
+    trend_result = feature_cache.get(trend_key) if feature_cache is not None else None
+    if trend_result is None:
+        trend_result = _trend_component(
+            snaps,
+            tf_weights,
+            entry_candles=entry_candles,
+            indicator_periods=indicator_periods,
+            entry_tf=entry_tf,
+            series_cache=series_cache,
+        )
+        if feature_cache is not None:
+            previous_key = feature_cache.get("_latest_trend_key")
+            if previous_key is not None and previous_key != trend_key:
+                feature_cache.pop(previous_key, None)
+            feature_cache[trend_key] = trend_result
+            feature_cache["_latest_trend_key"] = trend_key
+    trend, coherence = trend_result
     momentum, mom_diag = _momentum_component(momentum_snap, asset_type, group)
     if mom_diag.get("adxHardAbort") and mom_diag.get("adxAbortReason") == "missing_both_abort":
         return QuantScore(
@@ -818,8 +920,25 @@ def score_pair(
             },
             components={"trend": trend, "momentum": momentum, "location": Component(0.0, 0.0), "volume": Component(0.0, 0.0)},
         )
-    location, level_style = _location_component(entry_snap, asset_type, group)
-    volume = _volume_component(entry_snap, entry_candles, context)
+    core_key = (
+        "entry_core",
+        entry_tf,
+        len(entry_candles),
+        (context or {}).get("volume_ratio"),
+    )
+    core_result = feature_cache.get(core_key) if feature_cache is not None else None
+    if core_result is None:
+        location, level_style = _location_component(entry_snap, asset_type, group)
+        volume = _volume_component(entry_snap, entry_candles, context)
+        core_result = location, level_style, volume
+        if feature_cache is not None:
+            previous_key = feature_cache.get("_latest_entry_core_key")
+            if previous_key is not None and previous_key != core_key:
+                feature_cache.pop(previous_key, None)
+            feature_cache[core_key] = core_result
+            feature_cache["_latest_entry_core_key"] = core_key
+    else:
+        location, level_style, volume = core_result
 
     components: dict[str, Component] = {
         "trend": trend,
@@ -980,16 +1099,17 @@ def score_pair(
         vol_mult = vol_mults.get(name, 1.0) if name in CORE_COMPONENTS else 1.0
         if in_direction_pool and aligned:
             score_frac += weight * comp.quality * vol_mult
-        signed = round(comp.signal * comp.quality, 4)
-        if name in ("trend", "momentum"):
-            factor_scores[name] = signed
-        elif name in CORE_COMPONENTS:
-            ortho[name] = signed
-        else:
-            ortho[name] = signed
+        if not compact_result:
+            signed = round(comp.signal * comp.quality, 4)
+            if name in ("trend", "momentum"):
+                factor_scores[name] = signed
+            elif name in CORE_COMPONENTS:
+                ortho[name] = signed
+            else:
+                ortho[name] = signed
     score_frac /= confluence_denom
 
-    vol_mult = _volatility_mult(entry_snap)
+    vol_mult = _volatility_mult(entry_snap) if not compact_result else 1.0
     confluence = _clamp(MAX_SCORE * score_frac * max(0.0, dir_ramp_mult), 0.0, MAX_SCORE)
     threshold = profile.trade_threshold
     decision = "TRADE" if direction in ("LONG", "SHORT") and confluence >= threshold else "WATCH"
@@ -1008,6 +1128,7 @@ def score_pair(
         coherence=coherence,
         mom_diag=mom_diag,
         entry_tf=entry_tf,
+        series_cache=series_cache,
     )
     confluence = _clamp(float(confluence), 0.0, MAX_SCORE)
     # After multiplier, re-tier if score fell below threshold (never upgrade).
@@ -1055,60 +1176,69 @@ def score_pair(
 
     score_norm = confluence / MAX_SCORE
 
-    factor_scores["ortho"] = ortho
-    factor_scores["ortho_term"] = round(sum(ortho.values()), 4)
-    factor_diagnostics = {
-        "entryTimeframe": entry_tf,
-        "entryTfOverride": diagnostic_override,
-        "scoringTimeframes": {
-            "policyApplied": bool(policy),
-            "trend": list(tf_weights.keys()),
-            "momentum": momentum_tf,
-            "location": entry_tf,
-            "volume": entry_tf,
-            "setup": policy_setup_tf or entry_tf,
-            "trigger": policy_trigger_tf or momentum_tf,
-        },
-        "adxValue": mom_diag.get("adxValue"),
-        "adxMultiplier": mom_diag.get("adxMultiplier"),
-        "diAlignMult": mom_diag.get("diAlignMult"),
-        "dirSum": round(dir_sum, 4),
-        "directionalRampMult": round(dir_ramp_mult, 4),
-        "minDirectionalFailed": min_directional_failed,
-        "mrOppositionBlocked": mr_opposition_blocked,
-        "mrAdxCeiling": round(_resolve_mr_adx_ceiling(asset_type, group), 4) if level_style == "mean_reversion" else None,
-        "trendCoherence": coherence or {"error": "no_ema_data"},
-        "volatilityMult": round(vol_mult, 4),
-        "componentVolMults": {k: round(v, 4) for k, v in vol_mults.items()},
-        "atrPct": _f(entry_snap.get("atr_pct")),
-        "subsystemsEnabled": subsystems_enabled(),
-        "subsystemStates": subsystem_states or None,
-        "legacyFilters": legacy_diag,
-        "trendState": legacy_diag.get("trendState"),
-        "equityVolumeBlocked": equity_volume_blocked,
-        "cryptoDerivBlocked": crypto_deriv_blocked,
-        "components": {
-            name: {
-                "signal": round(comp.signal, 4), "quality": round(comp.quality, 4),
-                "weight": round(combined_weights.get(name, 0.0), 4),
-                "contribution": round(
-                    combined_weights.get(name, 0.0) * comp.quality * vol_mults.get(name, 1.0)
-                    if (dsign and comp.signal * dsign > 0.0)
-                    else 0.0,
-                    4,
-                ),
-                "available": comp.available,
-            }
-            for name, comp in components.items()
-        },
-        "entryBarCount": len(entry_candles),
-        "entryLastClose": (
-            float(entry_candles[-1]["close"])
-            if entry_candles and isinstance(entry_candles[-1], dict)
-            and entry_candles[-1].get("close") is not None
-            else None
-        ),
-    }
+    if compact_result:
+        factor_diagnostics = {
+            "atrPct": _f(entry_snap.get("atr_pct")),
+            "minDirectionalFailed": min_directional_failed,
+            "legacyFilters": legacy_diag,
+            "equityVolumeBlocked": equity_volume_blocked,
+            "cryptoDerivBlocked": crypto_deriv_blocked,
+        }
+    else:
+        factor_scores["ortho"] = ortho
+        factor_scores["ortho_term"] = round(sum(ortho.values()), 4)
+        factor_diagnostics = {
+            "entryTimeframe": entry_tf,
+            "entryTfOverride": diagnostic_override,
+            "scoringTimeframes": {
+                "policyApplied": bool(policy),
+                "trend": list(tf_weights.keys()),
+                "momentum": momentum_tf,
+                "location": entry_tf,
+                "volume": entry_tf,
+                "setup": policy_setup_tf or entry_tf,
+                "trigger": policy_trigger_tf or momentum_tf,
+            },
+            "adxValue": mom_diag.get("adxValue"),
+            "adxMultiplier": mom_diag.get("adxMultiplier"),
+            "diAlignMult": mom_diag.get("diAlignMult"),
+            "dirSum": round(dir_sum, 4),
+            "directionalRampMult": round(dir_ramp_mult, 4),
+            "minDirectionalFailed": min_directional_failed,
+            "mrOppositionBlocked": mr_opposition_blocked,
+            "mrAdxCeiling": round(_resolve_mr_adx_ceiling(asset_type, group), 4) if level_style == "mean_reversion" else None,
+            "trendCoherence": coherence or {"error": "no_ema_data"},
+            "volatilityMult": round(vol_mult, 4),
+            "componentVolMults": {k: round(v, 4) for k, v in vol_mults.items()},
+            "atrPct": _f(entry_snap.get("atr_pct")),
+            "subsystemsEnabled": subsystems_enabled(),
+            "subsystemStates": subsystem_states or None,
+            "legacyFilters": legacy_diag,
+            "trendState": legacy_diag.get("trendState"),
+            "equityVolumeBlocked": equity_volume_blocked,
+            "cryptoDerivBlocked": crypto_deriv_blocked,
+            "components": {
+                name: {
+                    "signal": round(comp.signal, 4), "quality": round(comp.quality, 4),
+                    "weight": round(combined_weights.get(name, 0.0), 4),
+                    "contribution": round(
+                        combined_weights.get(name, 0.0) * comp.quality * vol_mults.get(name, 1.0)
+                        if (dsign and comp.signal * dsign > 0.0)
+                        else 0.0,
+                        4,
+                    ),
+                    "available": comp.available,
+                }
+                for name, comp in components.items()
+            },
+            "entryBarCount": len(entry_candles),
+            "entryLastClose": (
+                float(entry_candles[-1]["close"])
+                if entry_candles and isinstance(entry_candles[-1], dict)
+                and entry_candles[-1].get("close") is not None
+                else None
+            ),
+        }
 
     return QuantScore(
         direction=direction,

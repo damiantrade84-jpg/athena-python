@@ -18,13 +18,10 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { ErrorBanner } from '@/components/shared';
-import { Cpu, Radar, Activity, Shield, AlertTriangle, Copy, ClipboardList, FlaskConical, Play, ChevronDown, ChevronRight } from 'lucide-react';
+import { Cpu, Radar, Activity, Shield, AlertTriangle, Copy, ClipboardList, ChevronDown, ChevronRight } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { aseTradePlanText, fmtAsePrice } from '@/components/athena/ASEFillWatcher';
-import type { ASEBacktestHorizon } from '@/lib/backtestPayload';
 import type {
-  ASEBacktestResponse,
-  ASEBatchBacktestResponse,
   ASEExecutedTrade,
   ASEExecutedTradesResponse,
   ASEExecuteResponse,
@@ -291,13 +288,6 @@ export default function ASEPanel() {
   const [scanResult, setScanResult] = useState<ASEScanResponse | null>(null);
   const [confirmSignal, setConfirmSignal] = useState<ASESignalRow | null>(null);
   const [executionResults, setExecutionResults] = useState<Record<string, ASEExecuteResponse>>({});
-  const [backtestSymbol, setBacktestSymbol] = useState('BTCUSDT');
-  const [backtestHorizon, setBacktestHorizon] = useState<ASEBacktestHorizon>('both');
-  const [backtestLookbackDays, setBacktestLookbackDays] = useState(365);
-  const [backtestFamily, setBacktestFamily] = useState('all');
-  const [backtestResult, setBacktestResult] = useState<ASEBacktestResponse | null>(null);
-  const [backtestBatch, setBacktestBatch] = useState<ASEBatchBacktestResponse | null>(null);
-
   const healthUrl = `/api/ase-health?horizon=${horizon === 'both' ? 'intraday' : horizon}`;
   const { data: health } = useApiPoll<ASEHealthResponse>(healthUrl, 60000);
 
@@ -311,8 +301,6 @@ export default function ASEPanel() {
   );
   const { post: postScan, loading: scanning, error: scanError } = useApiPost<ASEScanResponse>();
   const { post: postExecute, loading: executing, error: executeError } = useApiPost<ASEExecuteResponse>();
-  const { post: postBacktest, loading: backtesting, error: backtestError } = useApiPost<ASEBacktestResponse>();
-  const { post: postBacktestAll, loading: backtestingAll, error: backtestAllError } = useApiPost<ASEBatchBacktestResponse>();
 
   const runScan = useCallback(async () => {
     const tokens = pairFilter.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
@@ -374,52 +362,6 @@ export default function ASEPanel() {
     }
   }, [showToast]);
 
-  const runSingleBacktest = useCallback(async () => {
-    const symbol = backtestSymbol.trim();
-    if (!symbol) {
-      showToast('ASE backtest requires a symbol', 'error');
-      return;
-    }
-    const result = await postBacktest('/api/backtest-ase', {
-      pair: symbol,
-      horizon: backtestHorizon,
-      lookbackDays: backtestLookbackDays,
-      validation_mode: 'standard',
-    });
-    if (!result) {
-      showToast('ASE backtest failed before a result was returned', 'error');
-      return;
-    }
-    setBacktestResult(result);
-    setBacktestBatch(null);
-    if (result.error) {
-      showToast(`ASE backtest: ${result.error}`, 'error');
-      return;
-    }
-    showToast(`ASE backtest ${symbol}: ${result.totalTrades ?? 0} trades · SQN ${fmtNum(result.sqn, 2)}`, 'success');
-  }, [backtestSymbol, backtestHorizon, backtestLookbackDays, postBacktest, showToast]);
-
-  const runFamilyBacktest = useCallback(async () => {
-    const body: Record<string, unknown> = {
-      horizon: backtestHorizon,
-      lookbackDays: backtestLookbackDays,
-      validation_mode: 'standard',
-    };
-    if (backtestFamily !== 'all') body.family = backtestFamily;
-    const result = await postBacktestAll('/api/backtest-ase-all', body);
-    if (!result) {
-      showToast('ASE universe backtest failed before a result was returned', 'error');
-      return;
-    }
-    setBacktestBatch(result);
-    setBacktestResult(null);
-    if (result.error) {
-      showToast(`ASE universe backtest: ${result.error}`, 'error');
-      return;
-    }
-    showToast(`ASE universe backtest: ${result.results?.length ?? 0}/${result.totalPairs ?? 0} pairs OK`, 'success');
-  }, [backtestFamily, backtestHorizon, backtestLookbackDays, postBacktestAll, showToast]);
-
   const signals = useMemo(() => {
     const rows = scanResult?.signals || [];
     return [...rows].sort((a, b) => toNum(b.expectedNetR) - toNum(a.expectedNetR));
@@ -463,8 +405,6 @@ export default function ASEPanel() {
 
       {scanError && <ErrorBanner message={scanError} />}
       {executeError && <ErrorBanner message={executeError} />}
-      {backtestError && <ErrorBanner message={backtestError} />}
-      {backtestAllError && <ErrorBanner message={backtestAllError} />}
 
       {provenanceRows.length > 0 && (
         <div className="shrink-0 min-w-0 w-full max-w-full overflow-hidden rounded-lg border px-3 py-2" style={{ borderColor: CYAN_DIM, background: 'hsl(200 30% 6%)' }}>
@@ -572,147 +512,6 @@ export default function ASEPanel() {
           </CardContent>
         </Card>
       </div>
-
-      <Card className="shrink-0 border-0" style={{ background: 'hsl(200 30% 7%)', border: `1px solid ${CYAN_DIM}` }}>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm flex items-center gap-2" style={{ color: CYAN }}>
-            <FlaskConical className="h-4 w-4" /> ASE Backtest
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-wrap gap-2 items-end">
-            <Input
-              className="h-8 text-xs w-[160px]"
-              value={backtestSymbol}
-              onChange={(e) => setBacktestSymbol(e.target.value)}
-              placeholder="BTCUSDT"
-            />
-            <Select value={backtestHorizon} onValueChange={(v) => setBacktestHorizon(v as ASEBacktestHorizon)}>
-              <SelectTrigger className="w-[126px] h-8 text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="both">Both horizons</SelectItem>
-                <SelectItem value="intraday">Intraday H1</SelectItem>
-                <SelectItem value="swing">Swing D1</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input
-              type="number"
-              min={30}
-              step={30}
-              className="h-8 text-xs w-[104px]"
-              value={backtestLookbackDays}
-              onChange={(e) => setBacktestLookbackDays(Number(e.target.value) || 365)}
-              aria-label="ASE backtest lookback days"
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={runSingleBacktest}
-              disabled={backtesting}
-              className="h-8 gap-1 text-xs"
-              style={{ borderColor: CYAN, color: CYAN }}
-            >
-              <Play className="h-3 w-3" />
-              {backtesting ? 'Backtesting...' : 'Run symbol'}
-            </Button>
-            <Select value={backtestFamily} onValueChange={setBacktestFamily}>
-              <SelectTrigger className="w-[140px] h-8 text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {FAMILY_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              size="sm"
-              onClick={runFamilyBacktest}
-              disabled={backtestingAll}
-              className="h-8 gap-1 text-xs"
-              style={{ background: CYAN, color: 'hsl(200 40% 6%)' }}
-            >
-              <Play className="h-3 w-3" />
-              {backtestingAll ? 'Backtesting...' : 'Run universe'}
-            </Button>
-          </div>
-
-          {backtestResult && (
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs">
-              <MiniStat label="pair" value={backtestResult.pair || backtestResult.symbol || backtestSymbol} />
-              <MiniStat label="trades" value={backtestResult.totalTrades ?? backtestResult.aseDiagnostics?.tradeCount ?? 0} />
-              <MiniStat label="WR" value={backtestResult.winRate != null ? `${fmtNum(backtestResult.winRate, 1)}%` : '—'} />
-              <MiniStat label="SQN" value={backtestResult.sqn != null ? fmtNum(backtestResult.sqn, 2) : '—'} />
-              <MiniStat label="candidates" value={backtestResult.aseDiagnostics?.candidateCount ?? '—'} />
-              <MiniStat label="lookback" value={backtestResult.aseDiagnostics?.lookbackDays != null ? `${backtestResult.aseDiagnostics.lookbackDays}d` : `${backtestLookbackDays}d`} />
-              {backtestResult.error && (
-                <div className="col-span-full text-[11px] text-amber-400">
-                  {backtestResult.error}
-                </div>
-              )}
-              {backtestResult.aseDiagnostics?.nonTradeReasons && (
-                <div className="col-span-full flex flex-wrap gap-1 text-[10px] font-mono">
-                  {Object.entries(backtestResult.aseDiagnostics.nonTradeReasons).map(([reason, count]) => (
-                    <Badge key={reason} variant="outline" className="text-amber-300">
-                      {reason}:{count}
-                    </Badge>
-                  ))}
-                </div>
-              )}
-              {(backtestResult.trades || []).some((trade) => 'swapR' in trade || 'totalCostR' in trade) && (
-                <div className="col-span-full overflow-x-auto rounded border" style={{ borderColor: CYAN_DIM }}>
-                  <table className="w-full text-[10px] font-mono">
-                    <thead className="text-muted-foreground">
-                      <tr>
-                        <th className="text-left px-2 py-1">Trade</th>
-                        <th className="text-right px-2 py-1">Gross R</th>
-                        <th className="text-right px-2 py-1">Entry cost R</th>
-                        <th className="text-right px-2 py-1">Swap R</th>
-                        <th className="text-right px-2 py-1">Total cost R</th>
-                        <th className="text-right px-2 py-1">Net R</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(backtestResult.trades || []).slice(-5).reverse().map((trade, index) => (
-                        <tr key={`${String(trade.instrument || trade.date || index)}-${index}`} className="border-t" style={{ borderColor: CYAN_DIM }}>
-                          <td className="px-2 py-1">{String(trade.instrument || trade.date || `#${index + 1}`)}</td>
-                          <td className="text-right px-2 py-1">{fmtNum(trade.grossR, 3)}</td>
-                          <td className="text-right px-2 py-1">{fmtNum(trade.costR, 3)}</td>
-                          <td className="text-right px-2 py-1">{fmtNum(trade.swapR, 3)}</td>
-                          <td className="text-right px-2 py-1">{fmtNum(trade.totalCostR, 3)}</td>
-                          <td className={`text-right px-2 py-1 ${toNum(trade.resultR) >= 0 ? 'text-long' : 'text-short'}`}>{fmtNum(trade.resultR, 3)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-
-          {backtestBatch && (
-            <div className="space-y-2 text-xs">
-              <div className="flex flex-wrap gap-2">
-                <MiniStat label="family" value={backtestBatch.family || backtestFamily} />
-                <MiniStat label="pairs" value={backtestBatch.totalPairs ?? '—'} />
-                <MiniStat label="OK" value={backtestBatch.results?.length ?? 0} />
-                <MiniStat label="errors" value={backtestBatch.errors?.length ?? 0} />
-              </div>
-              {(backtestBatch.results || []).slice(0, 5).map((row) => (
-                <div key={`${row.pair}-${row.symbol}`} className="flex items-center gap-3 text-[11px] font-mono border-t pt-1" style={{ borderColor: CYAN_DIM }}>
-                  <span className="w-24 truncate" style={{ color: CYAN }}>{row.pair || row.symbol || '—'}</span>
-                  <span>trades {row.totalTrades ?? 0}</span>
-                  <span>WR {row.winRate != null ? `${fmtNum(row.winRate, 1)}%` : '—'}</span>
-                  <span>SQN {row.sqn != null ? fmtNum(row.sqn, 2) : '—'}</span>
-                </div>
-              ))}
-              {(backtestBatch.errors || []).slice(0, 3).map((row) => (
-                <div key={`${row.pair}-${row.error}`} className="text-[10px] text-amber-400 font-mono">
-                  {row.pair}: {row.error}
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
       {trainingFamilies.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2 shrink-0">

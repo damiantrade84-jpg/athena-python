@@ -19,25 +19,31 @@ def _db_path():
 
 
 def _create_db(path):
+    # History routes read the v3 rebuild's table; create it via the writer
+    # module so the test schema can never drift from production.
+    from athena_backtest.results import save_run
+
+    for symbol, sqn in [
+        ("EURUSD", 1.1),
+        ("EURUSD", 2.2),
+        ("BTCUSDT", 3.3),
+    ]:
+        save_run(
+            {"sqn": sqn, "totalTrades": 1, "trades": []},
+            pair={"display": symbol, "symbol": symbol},
+            engine="A",
+            style="intraday",
+            db_path=str(path),
+        )
     with sqlite3.connect(path) as con:
-        con.execute(
-            """
-            CREATE TABLE backtest_results (
-                run_date TEXT NOT NULL,
-                pair TEXT NOT NULL,
-                symbol TEXT,
-                sqn REAL
+        # Pin the deterministic created_at ordering the assertions rely on.
+        rows = con.execute("SELECT id FROM backtest_runs_v3 ORDER BY id").fetchall()
+        stamps = ["2026-05-04T10:00:00Z", "2026-05-05T10:00:00Z", "2026-05-05T09:00:00Z"]
+        for (row_id,), stamp in zip(rows, stamps):
+            con.execute(
+                "UPDATE backtest_runs_v3 SET created_at = ? WHERE id = ?", (stamp, row_id)
             )
-            """
-        )
-        con.executemany(
-            "INSERT INTO backtest_results (run_date, pair, symbol, sqn) VALUES (?, ?, ?, ?)",
-            [
-                ("2026-05-04T10:00:00Z", "EURUSD", "EURUSD", 1.1),
-                ("2026-05-05T10:00:00Z", "EURUSD", "EURUSD", 2.2),
-                ("2026-05-05T09:00:00Z", "BTCUSDT", "BTCUSDT", 3.3),
-            ],
-        )
+        con.commit()
 
 
 def _client(db_path):

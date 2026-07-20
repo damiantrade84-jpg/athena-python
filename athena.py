@@ -26,6 +26,7 @@ import logging
 import logging.handlers
 import sqlite3
 import signal as _signal
+from pathlib import Path
 from typing import Any
 
 # Load .env BEFORE importing any module that reads env vars at import time
@@ -43,7 +44,6 @@ from datetime import datetime, timezone, timedelta
 
 from flask import Flask, jsonify, request
 from athena_app.api.routes_scan import api_scan_impl
-from athena_app.api.routes_backtest import api_backtest_impl
 from athena_app.api.routes_execution import (
     merge_scalp_sizing_override,
     normalize_pip_mode,
@@ -51,7 +51,6 @@ from athena_app.api.routes_execution import (
 )
 from athena_app.services.scan_backtest_service import (
     handle_scan_request,
-    handle_backtest_request,
 )
 from athena_app.services.scan_completion_hooks import (
     publish_scan_result_and_schedule_conductor,
@@ -6091,17 +6090,6 @@ def run_ai(
 
 
 
-from backtest_runner import (  # noqa: E402
-    backtest_pair,
-    backtest_pair_ase,
-    backtest_pair_consensus,
-    backtest_pair_naked,
-    backtest_pair_scalp,
-    run_full_backtest,
-    run_full_backtest_ase,
-)
-
-
 def _init_audit_db(db_path: str) -> None:
     """Create audit table if it doesn't exist, and migrate legacy schemas."""
 
@@ -7094,112 +7082,16 @@ def _naked_scan_style_profile(
     symbol: str = "",
     speed_state: Any | None = None,
 ) -> tuple[str, dict]:
-    resolved = _normalize_style(style)
-    if resolved == "auto":
-        # Preserve the pre-style-routing Engine B contract. Explicit swing and
-        # scalp remain selectable, while Auto uses the intraday timing profile.
-        resolved = "intraday"
-    # TFs come from market_structure.resolve_engine_b_tfs (single source of truth).
-    # asset_type defaults to "forex" when caller omits it; this matches legacy behaviour
-    # for tests / callers that don't supply pair context.
-    from market_structure import resolve_engine_b_tfs
-    _tf_asset = (asset_type or "forex").lower()
-    _tf_scalp = resolve_engine_b_tfs(
-        _tf_asset, "scalp", symbol=symbol, score_group=score_group, speed_state=speed_state
-    )
-    _tf_intra = resolve_engine_b_tfs(
-        _tf_asset, "intraday", symbol=symbol, score_group=score_group, speed_state=speed_state
-    )
-    _tf_swing = resolve_engine_b_tfs(
-        _tf_asset, "swing", symbol=symbol, score_group=score_group, speed_state=speed_state
-    )
-    profiles = {
-        "scalp": {
-            "min_score": 3.0,
-            "min_room_atr": 0.35,
-            "min_rr": 1.0,
-            "fallback_rr": 1.8,
-            "require_macro_align": False,
-            "zone_tf": _tf_scalp["zone"],
-            "setup_tf": _tf_scalp["setup"],
-            "entry_tf": _tf_scalp["trigger"],
-            "execution_tf": _tf_scalp["execution"],
-            "atr_tf": _tf_scalp["atr"],
-        },
-        "intraday": {
-            "min_score": 4.0,
-            "min_room_atr": 0.7,
-            "min_rr": 1.2,
-            "fallback_rr": 1.8,
-            "require_macro_align": False,
-            "zone_tf": _tf_intra["zone"],
-            "setup_tf": _tf_intra["setup"],
-            "entry_tf": _tf_intra["trigger"],
-            "execution_tf": _tf_intra["execution"],
-            "atr_tf": _tf_intra["atr"],
-        },
-        "swing": {
-            "min_score": 4.0,
-            "min_room_atr": 1.0,
-            "min_rr": 1.6,
-            "fallback_rr": 2.5,
-            "require_macro_align": False,
-            "zone_tf": _tf_swing["zone"],
-            "setup_tf": _tf_swing["setup"],
-            "entry_tf": _tf_swing["trigger"],
-            "execution_tf": _tf_swing["execution"],
-            "atr_tf": _tf_swing["atr"],
-        },
-    }
-    cfg_profiles = (CONFIG.get("NAKED_ENGINE", {}) or {}).get("style_profiles", {}) or {}
-    merged_profiles = {}
-    for profile_name, defaults in profiles.items():
-        merged_profiles[profile_name] = dict(defaults)
-        cfg_override = cfg_profiles.get(profile_name, {})
-        if isinstance(cfg_override, dict):
-            merged_profiles[profile_name].update(cfg_override)
-    resolved_profile = merged_profiles.get(resolved, merged_profiles["scalp"])
+    from engine_b_snapshot import resolve_engine_b_style_profile
 
-    # Optional subgroup-level profile overrides for Engine B strictness.
-    if score_group:
-        group_overrides = (
-            ((CONFIG.get("NAKED_ENGINE", {}) or {}).get("score_group_overrides", {}) or {})
-            .get(score_group, {})
-        )
-        if isinstance(group_overrides, dict):
-            style_override = group_overrides.get(resolved, {})
-            if isinstance(style_override, dict):
-                resolved_profile = {**resolved_profile, **style_override}
-
-    # Timeframe roles are policy-owned. Numeric strictness overrides above are
-    # preserved, but legacy config cannot replace the central role mapping.
-    _selected_tfs = {
-        "scalp": _tf_scalp,
-        "intraday": _tf_intra,
-        "swing": _tf_swing,
-    }.get(resolved, _tf_scalp)
-    resolved_profile.update(
-        {
-            "regime_tf": _selected_tfs["regime"],
-            "bias_tf": _selected_tfs["bias"],
-            "structure_tf": _selected_tfs["struct"],
-            "zone_tf": _selected_tfs["zone"],
-            "setup_tf": _selected_tfs["setup"],
-            "entry_tf": _selected_tfs["trigger"],
-            "execution_tf": _selected_tfs["execution"],
-            "atr_tf": _selected_tfs["atr"],
-            "timeframe_policy_version": _selected_tfs["policy_version"],
-            "timeframe_policy_profile": _selected_tfs["policy_profile"],
-        }
+    return resolve_engine_b_style_profile(
+        _normalize_style(style),
+        score_group,
+        asset_type,
+        symbol=symbol,
+        speed_state=speed_state,
+        config=CONFIG,
     )
-
-    resolved_profile["style"] = resolved
-    if score_group:
-        resolved_profile["score_group"] = score_group
-    # Propagate live structure gate toggle into the profile dict consumed by calculate_confidence().
-    if not CONFIG.get("ENGINE_B_STRUCTURE_GATE_ENABLED", True):
-        resolved_profile["disable_structure_gate"] = True
-    return resolved, resolved_profile
 
 
 def _engine_b_regime_label(
@@ -7213,49 +7105,9 @@ def _engine_b_regime_label(
     key in ``NAKED_ENGINE.zone_multipliers``. Map those to TRENDING/RANGING-style labels; NONE/UNKNOWN
     falls through to H4 ``detect_regime``.
     """
-    _std_regimes = frozenset(
-        {"TRENDING", "RANGING", "HIGH_VOLATILITY", "LOW_VOLATILITY"}
-    )
-    _forex_signal_to_zone_regime = {
-        "TREND_PULLBACK": "TRENDING",
-        "LONDON_BREAKOUT": "TRENDING",
-        "MOMENTUM_BURST": "TRENDING",
-        "RANGE_REVERSION": "RANGING",
-        "MEAN_REVERSION": "RANGING",
-        "CONSOLIDATION_BREAK": "HIGH_VOLATILITY",
-        "LOW_VOL_ENV": "LOW_VOLATILITY",
-    }
+    from engine_b_snapshot import resolve_engine_b_regime_label
 
-    raw = None
-    if isinstance(regime_hint, dict):
-        raw = regime_hint.get("label") or regime_hint.get("regime")
-    elif regime_hint:
-        raw = regime_hint
-
-    if raw:
-        h = str(raw).upper()
-        if h in ("NONE", "UNKNOWN", ""):
-            pass
-        elif (pair_type or "").lower() == "forex":
-            if h in _forex_signal_to_zone_regime:
-                return _forex_signal_to_zone_regime[h]
-            if h in _std_regimes:
-                return h
-        else:
-            return h
-
-    if not h4_candles or len(h4_candles) < 20:
-        return "RANGING"
-
-    try:
-        from regime import detect_regime
-
-        h4i = calc_indicators(h4_candles)
-        h4_snap = h4i.get("snap", {}) if isinstance(h4i, dict) else {}
-        regime = detect_regime(h4_snap, pair_type or "stock", bb_width_pct=None)
-        return str(regime.get("label", "RANGING")).upper()
-    except Exception:
-        return "RANGING"
+    return resolve_engine_b_regime_label(h4_candles, pair_type, regime_hint)
 
 
 def _engine_b_scan_speed_state(pair_obj: dict, h1_state: dict | None, clim: dict):
@@ -10181,332 +10033,19 @@ def _auto_toggle_pair(pair, result):
     return action
 
 
-@app.route("/api/backtest-naked", methods=["POST"])
-def api_backtest_naked():
-    """Separate endpoint for Engine B (Naked Market Structure) backtesting."""
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        pair_symbol = data.get("pair") or data.get("symbol")
-        requested_style = data.get("style", "auto")
+# Backtest routes (v3 rebuild): /api/backtest (Engine A), /api/backtest-naked
+# (Engine B), /api/backtest-all (async jobs) + 410 stubs for the retired
+# scalp/consensus/ASE/naked-all endpoints are served by the athena_backtest
+# blueprint. The legacy in-line handlers were removed with the old backtest
+# system; athena_backtesting_v2 keeps its own separate routes.
+from athena_backtest.api import create_backtest_v3_blueprint  # noqa: E402
 
-        if not pair_symbol:
-            return jsonify(
-                {
-                    "success": False,
-                    "error": "No pair selected. Engine B backtest requires a specific pair - select one from the dropdown.",
-                }
-            ), 400
-
-        pair = next(
-            (
-                p
-                for p in ALL_PAIRS
-                if p.get("display") == pair_symbol or p.get("symbol") == pair_symbol
-            ),
-            None,
-        )
-        if not pair:
-            return jsonify(
-                {
-                    "success": False,
-                    "error": f"Pair '{pair_symbol}' not found in pair list.",
-                }
-            ), 404
-
-        _vm = str(data.get("validation_mode") or "standard").strip().lower()
-        try:
-            _pg = int(data.get("purge_gap", 200))
-        except (TypeError, ValueError):
-            _pg = 200
-        try:
-            _fd = int(data.get("folds", 3))
-        except (TypeError, ValueError):
-            _fd = 3
-        result = backtest_pair_naked(
-            pair,
-            style=requested_style,
-            validation_mode=_vm,
-            purge_gap=_pg,
-            folds=max(1, _fd),
-        )
-
-        if result is None:
-            return jsonify(
-                {
-                    "success": False,
-                    "error": "Insufficient candle data to run Engine B backtest for this pair.",
-                }
-            ), 422
-
-        safe_result = (
-            _json_safe(result) if callable(globals().get("_json_safe")) else result
-        )
-        return jsonify(safe_result)
-
-    except Exception as exc:
-        log.exception("[ENGINE B BT] Unhandled error in api_backtest_naked")
-        return jsonify(
-            {"success": False, "error": f"Engine B backtest failed: {str(exc)}"}
-        ), 500
-
-
-@app.route("/api/backtest-naked-all", methods=["POST"])
-def api_backtest_naked_all():
-    """Engine B batch backtest across many pairs (parallel REST + serial MT5).
-
-    Body: {pairs?: [symbol|display, ...], style?, validation_mode?, purge_gap?, folds?}.
-    Empty/absent ``pairs`` => all non-JSE pairs. Returns {success, totalPairs, okCount, rows}.
-    """
-    try:
-        from engine_b_batch import run_engine_b_batch, resolve_engine_b_batch_pairs
-
-        data = request.get_json(force=True, silent=True) or {}
-        tokens = data.get("pairs") or data.get("symbols") or []
-        pairs = resolve_engine_b_batch_pairs(tokens, ALL_PAIRS, JSE_PAIRS)
-        if not pairs:
-            return jsonify(
-                {"success": False, "error": "No valid pairs resolved for Engine B batch."}
-            ), 400
-
-        _vm = str(data.get("validation_mode") or "standard").strip().lower()
-        try:
-            _pg = int(data.get("purge_gap", 200))
-        except (TypeError, ValueError):
-            _pg = 200
-        try:
-            _fd = int(data.get("folds", 3))
-        except (TypeError, ValueError):
-            _fd = 3
-
-        out = run_engine_b_batch(
-            pairs,
-            style=data.get("style", "auto"),
-            validation_mode=_vm,
-            purge_gap=_pg,
-            folds=max(1, _fd),
-        )
-        safe = _json_safe(out) if callable(globals().get("_json_safe")) else out
-        return jsonify(safe)
-
-    except Exception as exc:
-        log.exception("[ENGINE B BT] Unhandled error in api_backtest_naked_all")
-        return jsonify(
-            {"success": False, "error": f"Engine B batch backtest failed: {str(exc)}"}
-        ), 500
-
-
-@app.route("/api/backtest-scalp", methods=["POST"])
-def api_backtest_scalp():
-    """Engine D (Scalp - Fabio VP+OrderFlow) backtest endpoint."""
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        pair_symbol = data.get("pair") or data.get("symbol")
-
-        if not pair_symbol:
-            return jsonify({
-                "success": False,
-                "error": "No pair selected. Scalp backtest requires a specific pair.",
-            }), 400
-
-        pair = next(
-            (p for p in ALL_PAIRS
-             if p.get("display") == pair_symbol or p.get("symbol") == pair_symbol),
-            None,
-        )
-        if not pair:
-            return jsonify({
-                "success": False,
-                "error": f"Pair '{pair_symbol}' not found in pair list.",
-            }), 404
-
-        _vm = str(data.get("validation_mode") or "standard").strip().lower()
-        result = backtest_pair_scalp(pair, validation_mode=_vm)
-
-        if result is None:
-            return jsonify({
-                "success": False,
-                "error": "Insufficient candle data to run scalp backtest for this pair.",
-            }), 422
-
-        safe_result = _json_safe(result) if callable(globals().get("_json_safe")) else result
-        return jsonify(safe_result)
-
-    except Exception as exc:
-        log.exception("[SCALP-BT] Unhandled error in api_backtest_scalp")
-        return jsonify({
-            "success": False,
-            "error": f"Scalp backtest failed: {str(exc)}",
-        }), 500
-
-
-@app.route("/api/backtest-ase", methods=["POST"])
-def api_backtest_ase():
-    """Standalone ASE backtest for one pair (no Engine A/B/C routing)."""
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        pair_symbol = data.get("pair") or data.get("symbol")
-        if not pair_symbol:
-            return jsonify({
-                "success": False,
-                "error": "No pair selected. ASE backtest requires a specific pair.",
-            }), 400
-
-        from athena_ase.backtest import ase_backtest_pairs
-
-        pair = next(
-            (
-                p
-                for p in ase_backtest_pairs()
-                if p.get("display") == pair_symbol or p.get("symbol") == pair_symbol
-            ),
-            None,
-        )
-        if not pair:
-            pair = next(
-                (
-                    p
-                    for p in ALL_PAIRS
-                    if p.get("display") == pair_symbol or p.get("symbol") == pair_symbol
-                ),
-                None,
-            )
-        if not pair:
-            return jsonify({
-                "success": False,
-                "error": f"Pair '{pair_symbol}' not found in ASE universe.",
-            }), 404
-
-        _vm = str(data.get("validation_mode") or "standard").strip().lower()
-        _horizon = str(data.get("horizon") or "both").strip().lower()
-        _lookback_raw = data.get("lookbackDays", data.get("lookback_days"))
-        try:
-            _lookback_days = int(_lookback_raw) if _lookback_raw not in (None, "") else None
-        except (TypeError, ValueError):
-            _lookback_days = None
-        result = backtest_pair_ase(
-            pair,
-            horizon=_horizon,
-            validation_mode=_vm,
-            lookback_days=_lookback_days,
-        )
-        if result is None:
-            return jsonify({
-                "success": False,
-                "error": "ASE backtest returned no result.",
-            }), 422
-        if result.get("error"):
-            safe_error = _json_safe(result) if callable(globals().get("_json_safe")) else result
-            if result.get("success") is False and result.get("aseDiagnostics") is not None:
-                return jsonify(safe_error)
-            return jsonify({**safe_error, "success": False}), 422
-
-        safe_result = _json_safe(result) if callable(globals().get("_json_safe")) else result
-        return jsonify(safe_result)
-
-    except Exception as exc:
-        log.exception("[ASE-BT] Unhandled error in api_backtest_ase")
-        return jsonify({
-            "success": False,
-            "error": f"ASE backtest failed: {str(exc)}",
-        }), 500
-
-
-@app.route("/api/backtest-ase-all", methods=["POST"])
-def api_backtest_ase_all():
-    """Standalone ASE backtest across the full ASE instrument universe."""
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        _vm = str(data.get("validation_mode") or "standard").strip().lower()
-        _horizon = str(data.get("horizon") or "both").strip().lower()
-        _family = data.get("family")
-        _lookback_raw = data.get("lookbackDays", data.get("lookback_days"))
-        try:
-            _lookback_days = int(_lookback_raw) if _lookback_raw not in (None, "") else None
-        except (TypeError, ValueError):
-            _lookback_days = None
-        out = run_full_backtest_ase(
-            horizon=_horizon,
-            validation_mode=_vm,
-            family=str(_family).strip().lower() if _family else None,
-            lookback_days=_lookback_days,
-        )
-        safe = _json_safe(out) if callable(globals().get("_json_safe")) else out
-        return jsonify(safe)
-    except Exception as exc:
-        log.exception("[ASE-BT] Unhandled error in api_backtest_ase_all")
-        return jsonify({
-            "success": False,
-            "error": f"ASE batch backtest failed: {str(exc)}",
-        }), 500
-
-
-@app.route("/api/backtest-consensus", methods=["POST"])
-def api_backtest_consensus():
-    """Engine C (consensus A+B) backtest endpoint."""
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        pair_symbol = data.get("pair") or data.get("symbol")
-        if not pair_symbol:
-            return jsonify({"success": False,
-                "error": "No pair selected. Engine C backtest requires a specific pair."}), 400
-        pair = next(
-            (p for p in ALL_PAIRS if p.get("display") == pair_symbol or p.get("symbol") == pair_symbol),
-            None,
-        )
-        if not pair:
-            return jsonify({"success": False, "error": f"Pair '{pair_symbol}' not found."}), 404
-        _vm = str(data.get("validation_mode") or "standard").strip().lower()
-        try:
-            _pg = int(data.get("purge_gap", 200))
-        except (TypeError, ValueError):
-            _pg = 200
-        try:
-            _fd = int(data.get("folds", 3))
-        except (TypeError, ValueError):
-            _fd = 3
-        result = backtest_pair_consensus(pair, validation_mode=_vm, purge_gap=_pg, folds=max(1, _fd))
-        if result is None:
-            return jsonify({"success": False,
-                "error": "Insufficient candle data for Engine C backtest."}), 422
-        return jsonify(_json_safe(result))
-    except Exception as exc:
-        log.exception("[ENGINE C BT] Unhandled error in api_backtest_consensus")
-        return jsonify({"success": False, "error": f"Engine C backtest failed: {str(exc)}"}), 500
-
-
-@app.route("/api/backtest", methods=["POST"])
-def api_backtest():
-
-    try:
-        d = request.get_json(force=True, silent=True) or {}
-        out = api_backtest_impl(
-            d,
-            service_handle=lambda payload: handle_backtest_request(
-                payload,
-                normalize_style=_normalize_style,
-                all_pairs=ALL_PAIRS,
-                backtest_pair=backtest_pair,
-                run_full_backtest=run_full_backtest,
-                auto_toggle_pair=_auto_toggle_pair,
-                active_pairs=ACTIVE_PAIRS,
-                allow_auto_toggle=bool(CONFIG.get("BT_AUTO_TOGGLE", False)),
-            ),
-        )
-        if out.get("error"):
-            error_body = {
-                key: value
-                for key, value in out.items()
-                if key not in {"status", "data"}
-            }
-            return jsonify(_json_safe(error_body)), out.get("status", 400)
-        return jsonify(_json_safe(out.get("data", {}))), out.get("status", 200)
-
-    except Exception as e:
-        # S2: Sanitise exception
-
-        log.error(f"api_backtest error: {e}")
-
-        return jsonify({"error": "Backtest failed"}), 500
+app.register_blueprint(
+    create_backtest_v3_blueprint(
+        all_pairs_provider=lambda: ALL_PAIRS,
+        json_safe=_json_safe,
+    )
+)
 
 
 # N4: Kill-switch API - immediately blocks new scans/analyses
@@ -17923,6 +17462,50 @@ register_ase_routes(app)
 register_tsmom_routes(app)
 register_macro_routes(app)
 register_forex_factor_routes(app)
+
+# Engine A/B Backtesting Platform v2. Provider functions are injected so the
+# isolated package never imports this application monolith or a legacy runner.
+from athena_backtesting_v2.api import register_backtesting_v2_routes  # noqa: E402
+from athena_backtesting_v2.providers import RuntimeProviderAdapter  # noqa: E402
+from athena_backtesting_v2.retirement import install_legacy_retirement_guard  # noqa: E402
+from athena_backtesting_v2.service import BacktestingV2Service  # noqa: E402
+
+
+def _backtesting_v2_provider_for_pair(pair: dict, _engine: str) -> str:
+    if str(pair.get("type") or "").lower() == "crypto":
+        return str(_resolve_crypto_signal_feed("AB", CONFIG) or "").lower()
+    return str(pair.get("source") or "").lower()
+
+
+_backtesting_v2_providers = RuntimeProviderAdapter(
+    pairs=ALL_PAIRS,
+    provider_resolver=_backtesting_v2_provider_for_pair,
+    fetchers={
+        "mt5": fetch_mt5,
+        "bybit": lambda symbol, timeframe, limit, **kwargs: _fetch_bybit_klines_paginated(
+            symbol, timeframe, limit, workers=32, **kwargs
+        ),
+        "binance": fetch_binance_paginated,
+        "eodhd": fetch_eodhd,
+        "polygon": fetch_polygon,
+        "yfinance": fetch_yfinance,
+    },
+    symbol_resolvers={
+        "mt5": lambda pair: str(pair.get("display") or pair.get("symbol") or ""),
+        "bybit": lambda pair: str(pair.get("symbol") or ""),
+        "binance": lambda pair: str(pair.get("symbol") or ""),
+        "eodhd": lambda pair: str(_eodhd_ticker_for_pair(pair) or ""),
+        "polygon": lambda pair: str(_polygon_ticker_for_pair(pair) or ""),
+        "yfinance": lambda pair: str(_yfinance_symbol_for_pair(pair) or ""),
+    },
+)
+_backtesting_v2_service = BacktestingV2Service(
+    providers=_backtesting_v2_providers,
+    config=CONFIG,
+    repo_root=Path(__file__).resolve().parent,
+)
+register_backtesting_v2_routes(app, _backtesting_v2_service)
+install_legacy_retirement_guard(app)
 # Macro (FOMC) feed scheduler — daily calendar refresh + adaptive RSS polling.
 # Gated by ATHENA_FOMC_ENABLED/ATHENA_FOMC_SCHEDULER_ENABLED; fully fail-safe.
 try:

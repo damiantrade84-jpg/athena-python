@@ -16,6 +16,7 @@ from engine_a_v3.quant_scorer import (
     _component_vol_mults,
     _location_component,
     _momentum_component,
+    _resolve_policy_momentum_tf,
     _trend_component,
     _trend_health_mult,
     _volume_component,
@@ -49,6 +50,11 @@ def _candles() -> dict[str, list[dict]]:
         "H4": _rows(60, timedelta(hours=4)),
         "H1": _rows(60, timedelta(hours=1)),
     }
+
+
+def test_policy_momentum_honors_explicit_tlt_group_override() -> None:
+    assert _resolve_policy_momentum_tf("bond_tlt", "stock", "intraday", "M15") == "D1"
+    assert _resolve_policy_momentum_tf("us_stock_single", "stock", "intraday", "M15") == "M15"
 
 
 def _bearish_snap(*, adx: float = 28.0, close: float = 89.0) -> dict:

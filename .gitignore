@@ -65,3 +65,6 @@ tests/.tmp-*/
 tests/_basetemp*/
 tmp/pytest-*/
 devathena-python.pytest_basetemp_full/
+
+# v3 backtester local parquet store (large market data, rebuilt via ETL)
+data/backtest_store/
