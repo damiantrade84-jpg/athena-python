@@ -61,7 +61,7 @@ def compute_trades_per_year_from_span(
     first_date_iso: str | None,
     last_date_iso: str | None,
 ) -> float:
-    """Annualisation aligned with Engine A ``backtest_runner`` (365-day calendar span).
+    """Annualisation aligned with the Engine A backtester (365-day calendar span).
 
     Unusable dates fall back to ``float(n_trades)`` like Engine A's exception branch.
     """

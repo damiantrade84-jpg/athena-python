@@ -410,15 +410,17 @@ def test_required_ai_sources_missing_blocks_execution():
     assert decision["reason"] == "AI_REQUIRED_SOURCES_MISSING"
 
 
-def test_generic_mt5_backtest_branch_has_no_price_vendor_fallbacks():
-    source = (Path(__file__).resolve().parents[1] / "backtest_runner.py").read_text()
-    start = source.index('elif pair["source"] == "mt5":')
-    end = source.index('elif _ptype in ("stock", "commodity", "index"):', start)
-    mt5_branch = source[start:end]
+def test_v3_backtest_store_has_no_price_vendor_fallbacks():
+    # Replaces the legacy-runner source pin (archived): the v3 rebuild's
+    # Engine B loader reads only the parquet store — a missing timeframe
+    # stays empty and must never fall back to a live price vendor.
+    source = (
+        Path(__file__).resolve().parents[1] / "athena_backtest" / "engines" / "engine_b.py"
+    ).read_text()
 
-    assert "fetch_eodhd" not in mt5_branch
-    assert "_bt_cached_eodhd_intraday" not in mt5_branch
-    assert "fetch_yfinance" not in mt5_branch
+    assert "fetch_eodhd" not in source
+    assert "fetch_yfinance" not in source
+    assert "Fail-closed" in source
 
 
 def test_timed_exit_symbols_match_fallback_when_ticket_missing():

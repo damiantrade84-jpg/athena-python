@@ -2781,26 +2781,20 @@ def test_f3_strict_gate_skip_logs_anchor_for_debugging():
     )
 
 
-def test_f3_live_and_bt_strict_gate_share_aggtrade_check_shape():
-    """Live and BT must both block when VP/CVD are not real trade buckets."""
-    import inspect
+def test_f3_live_strict_gate_checks_aggtrade_fidelity():
+    """Live must block when VP/CVD are not real trade buckets.
 
-    import backtest_runner
-
-    bt_src = inspect.getsource(backtest_runner)
+    The BT half of this check was retired with the legacy backtester
+    (scalp backtests are gone; the v3 rebuild covers Engine A/B only).
+    """
     live_src = _scalp_engine_source()
 
     # Live side checks both VP and CVD for real-trade-bucket usage.
     assert "vp_uses_real_trade_buckets" in live_src
     assert "cvd_uses_real_trade_buckets" in live_src
 
-    # BT side checks the same provider-neutral real-trade-bucket flags.
-    assert 'not data_fidelity.get("vp_uses_real_trade_buckets")' in bt_src
-    assert 'not data_fidelity.get("cvd_uses_real_trade_buckets")' in bt_src
-
-    # Both gated behind REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT.
+    # Gated behind REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT.
     assert 'REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT' in live_src
-    assert 'REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT' in bt_src
 
 
 def test_stop_run_scales_with_atr():

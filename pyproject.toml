@@ -12,6 +12,7 @@ pythonpath = ["."]
 # Repo-local basetemp avoids Windows permission failures under %TEMP%/pytest-of-*.
 addopts = "--basetemp=.pytest_tmp"
 norecursedirs = [
+    "archive",
     "refs",
     ".git",
     ".venv",

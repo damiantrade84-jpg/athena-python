@@ -534,12 +534,9 @@ def test_auto_trade_min_score_does_not_change_trade_tier_reason(monkeypatch):
     assert reason == "Trade-ready"
 
 
-def test_engine_a_trade_gate_has_backtest_integration_points():
-    src = Path(__file__).resolve().parents[1] / "backtest_runner.py"
-    text = src.read_text(encoding="utf-8")
-
-    assert "resolve_engine_a_trade_eligibility" in text
-    assert text.count("fail_trade_enabled") >= 3
+# test_engine_a_trade_gate_has_backtest_integration_points removed with the
+# legacy backtester (archive/backtest_legacy/): the v3 rebuild resolves trade
+# eligibility inside evaluate_engine_a_v3 itself, not via backtest wiring.
 
 
 def test_scanner_persists_tier_reason_field():

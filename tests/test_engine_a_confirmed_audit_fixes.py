@@ -112,48 +112,9 @@ def test_engine_a_scoring_candles_from_state_uses_confirmed_only_for_all_assets(
     assert candles == confirmed
 
 
-def test_structure_first_entry_fails_closed_without_required_bos():
-    from backtest_runner import _engine_a_structure_first_entry_passes
-
-    ok, detail = _engine_a_structure_first_entry_passes(
-        {"bos_confirmed": False, "choch_confirmed": False, "direction": "LONG"},
-        "LONG",
-        trigger_candles=[{"close": 1.0}] * 10,
-        cfg={"enabled": True, "lookback_bars": 5, "require_bos": True, "require_choch": False},
-    )
-
-    assert ok is False
-    assert detail["reason"] == "missing_required_structure"
-
-
-def test_structure_first_entry_requires_recent_bos():
-    from backtest_runner import _engine_a_structure_first_entry_passes
-
-    stale, stale_detail = _engine_a_structure_first_entry_passes(
-        {
-            "bos_confirmed": True,
-            "direction": "LONG",
-            "bos_data": {"bos_bull_bar_index": 1},
-        },
-        "LONG",
-        trigger_candles=[{"close": 1.0}] * 10,
-        cfg={"enabled": True, "lookback_bars": 5, "require_bos": True, "require_choch": False},
-    )
-    recent, recent_detail = _engine_a_structure_first_entry_passes(
-        {
-            "bos_confirmed": True,
-            "direction": "LONG",
-            "bos_data": {"bos_bull_bar_index": 8},
-        },
-        "LONG",
-        trigger_candles=[{"close": 1.0}] * 10,
-        cfg={"enabled": True, "lookback_bars": 5, "require_bos": True, "require_choch": False},
-    )
-
-    assert stale is False
-    assert stale_detail["reason"] == "structure_not_recent"
-    assert recent is True
-    assert recent_detail["bos_recent"] is True
+# The two _engine_a_structure_first_entry_passes tests were removed with the
+# legacy backtester (archive/backtest_legacy/): that gate existed only in the
+# retired backtest loop, not in live scoring or the v3 rebuild.
 
 
 def test_calc_confluence_passes_structure_result_into_factor_scoring(monkeypatch):
@@ -230,49 +191,11 @@ def test_build_oi_context_rejects_error_and_stale_payloads(monkeypatch):
     )["oi_change_pct"] == pytest.approx(4.2)
 
 
-def test_backtest_confirmed_candles_strips_current_open_bucket():
-    import backtest_runner
-
-    now = datetime(2026, 5, 14, 12, 30, tzinfo=timezone.utc).timestamp()
-    candles = [
-        {"time": "2026-05-14T08:00:00+00:00", "close": 100.0},
-        {"time": "2026-05-14T12:00:00+00:00", "close": 999.0},
-    ]
-
-    out = backtest_runner._bt_confirmed_candles(
-        {"display": "BTC/USDT", "symbol": "BTCUSDT", "source": "binance", "type": "crypto"},
-        "H4",
-        candles,
-        time_now=now,
-    )
-
-    assert out == [candles[0]]
-
-
-def test_backtest_structure_context_helper_matches_live_adjustment(monkeypatch):
-    import backtest_runner
-
-    monkeypatch.setitem(CONFIG, "ENGINE_A_STRUCTURE_CONTEXT_ENABLED", True)
-    monkeypatch.setitem(CONFIG, "ENGINE_B_STRUCTURE_SCORE_INFLUENCE_ENABLED", True)
-    monkeypatch.setitem(CONFIG, "ENGINE_A_STRUCTURE_CONTEXT_BONUS_CAP", 0.20)
-    monkeypatch.setitem(CONFIG, "ENGINE_A_STRUCTURE_CONTEXT_MAX_MULT", 1.20)
-
-    res = {"score": 1.5, "maxScoreOverride": 3.0, "votes": {}, "factorDiagnostics": {}}
-    structure = {
-        "structural_verdict": "CLEAR",
-        "engine_b_independent_direction": "LONG",
-        "zone_touched": True,
-    }
-
-    out = backtest_runner._apply_engine_a_structure_context_to_bt_result(
-        res,
-        structure_result=structure,
-        direction="LONG",
-        max_score=3.0,
-    )
-
-    assert out["score"] > res["score"]
-    assert "explicitStructureContext" in out["factorDiagnostics"]
+# test_backtest_confirmed_candles_strips_current_open_bucket and
+# test_backtest_structure_context_helper_matches_live_adjustment removed with
+# the legacy backtester (archive/backtest_legacy/): both pinned retired
+# legacy-runner helpers. The v3 rebuild's confirmed-bar handling is covered
+# in tests/backtest_v3/ and tests/test_engine_a_v3_backtest_parity.py.
 
 
 def test_bollinger_bands_use_population_standard_deviation():

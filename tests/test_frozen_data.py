@@ -93,64 +93,8 @@ def test_frozen_candle_hash_tamper_hard_errors(monkeypatch, tmp_path):
         )
 
 
-def test_frozen_backtest_spread_floor_does_not_query_mt5(monkeypatch):
-    import backtest_runner
-
-    monkeypatch.setenv("BACKTEST_DATA_AS_OF", "2026-05-30")
-    backtest_runner._BROKER_SPREAD_CACHE.clear()
-    fake_mt5 = types.SimpleNamespace(
-        mt5_get_symbol_info=lambda _display: pytest.fail("live MT5 symbol info called")
-    )
-    monkeypatch.setitem(sys.modules, "mt5_executor", fake_mt5)
-
-    assert backtest_runner._bt_broker_spread_floor(
-        {"display": "EUR/USD", "symbol": "EURUSD", "source": "mt5", "type": "forex"}
-    ) == 0.0
-
-
-def test_frozen_engine_a_crypto_level_atr_uses_signal_atr_without_live_bybit(monkeypatch):
-    import backtest_runner
-
-    monkeypatch.setenv("BACKTEST_DATA_AS_OF", "2026-05-30")
-    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_A_CRYPTO_LEVELS_FEED", "bybit")
-    monkeypatch.setitem(
-        backtest_runner.CONFIG,
-        "ENGINE_A_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK",
-        False,
-    )
-    fake_runtime = types.SimpleNamespace(
-        bybit_atr_for_levels=lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(backtest_runner, "_rt", lambda: fake_runtime)
-
-    atr, feed = backtest_runner._engine_a_level_atr_for_bt(
-        123.45,
-        _pair(),
-        "intraday",
-        as_of="2026-05-30T00:00:00+00:00",
-    )
-
-    assert atr == 123.45
-    assert feed == "signal_frozen"
-
-
-def test_frozen_gold_dxy_macro_reads_manifest_without_yfinance(monkeypatch, tmp_path):
-    monkeypatch.setenv("ATHENA_FROZEN_DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("BACKTEST_DATA_AS_OF", "2026-05-30")
-    dxy_pair = {"display": "DX-Y.NYB", "symbol": "DX-Y.NYB", "source": "yfinance", "type": "macro"}
-    start = datetime(2026, 5, 30, 8, tzinfo=timezone.utc)
-    frozen_data.write_frozen_candles(
-        "2026-05-30",
-        dxy_pair,
-        "H4",
-        "yfinance",
-        _bars(start, 2, base=100.0),
-    )
-
-    import backtest_runner
-
-    monkeypatch.setattr(backtest_runner, "_rt", lambda: pytest.fail("live yfinance called"))
-
-    rows = backtest_runner._bt_load_dxy_h4_for_gold({"display": "XAU/USD"})
-
-    assert [r["close"] for r in rows] == [100.0, 101.0]
+# The three frozen-mode backtester integration tests were removed with the
+# legacy backtester (archive/backtest_legacy/): _bt_broker_spread_floor,
+# _engine_a_level_atr_for_bt, and _bt_load_dxy_h4_for_gold were retired
+# legacy-runner helpers. frozen_data's own read/write/hash contract stays
+# fully covered by the tests above.

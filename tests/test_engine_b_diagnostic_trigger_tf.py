@@ -117,51 +117,10 @@ def test_scanner_provenance_does_not_relabel_computed_timeframes():
     assert result["atr_tf_policy"] == "H1"
 
 
-def test_engine_b_backtest_requests_policy_atr_timeframe(monkeypatch):
-    from types import SimpleNamespace
-
-    import backtest_runner
-
-    captured = {}
-
-    def _bybit_atr_for_levels(pair, style, as_of=None, *, atr_tf=None):
-        captured["as_of"] = as_of
-        captured["atr_tf"] = atr_tf
-        return 7.25
-
-    monkeypatch.setattr(
-        backtest_runner,
-        "_rt",
-        lambda: SimpleNamespace(bybit_atr_for_levels=_bybit_atr_for_levels),
-    )
-    monkeypatch.setitem(config.CONFIG, "TF_POLICY_MODE", "enforced_demo")
-    monkeypatch.setitem(config.CONFIG, "ENGINE_B_CRYPTO_LEVELS_FEED", "bybit")
-    monkeypatch.setitem(
-        config.CONFIG,
-        "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK",
-        False,
-    )
-    monkeypatch.setitem(
-        config.CONFIG,
-        "ENGINE_B_CRYPTO_BT_LEVEL_ATR_USE_SIGNAL_FEED",
-        False,
-    )
-
-    atr, source = backtest_runner._engine_b_level_atr_for_bt(
-        3.0,
-        {
-            "display": "BTC/USDT",
-            "symbol": "BTCUSDT",
-            "type": "crypto",
-            "source": "binance",
-        },
-        "intraday",
-        as_of="2025-01-02T04:00:00+00:00",
-    )
-
-    assert atr == pytest.approx(7.25)
-    assert source == "bybit"
-    assert captured["atr_tf"] == "H1"
+# test_engine_b_backtest_requests_policy_atr_timeframe removed with the legacy
+# backtester (_engine_b_level_atr_for_bt lives in archive/backtest_legacy/);
+# the v3 rebuild derives ATR from its own per-TF series cache at the policy's
+# atr_tf (athena_backtest/engines/engine_b.py).
 
 
 def test_live_lower_trigger_freshness_honors_disabled_gate(monkeypatch):

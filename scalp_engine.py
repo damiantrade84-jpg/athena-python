@@ -5141,7 +5141,7 @@ def run_scalp_scan(
                     if cfg.get("SKIP_CRYPTO_ON_AGGTRADE_UNAVAILABLE", True):
                         # F3: live/BT parity — when real trade buckets are unavailable
                         # for VP or CVD, skip the pair entirely instead of emitting a
-                        # Not-executable card. Mirrors backtest_runner.py:5341-5347.
+                        # Not-executable card. (The retired legacy backtester mirrored this.)
                         # Strict gate semantics preserved (we are not letting candle-VP
                         # signals through, we are skipping them).
                         _skip_reason = "vp_fallback:aggtrade_unavailable"

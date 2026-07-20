@@ -1005,7 +1005,7 @@ ENGINE_B:
   - D1 conflict flag NOT in matrix records
   - sweep_direction (aligned vs counter) NOT stored
 
-  ➜ Recommend: add a 'feature_snapshot' dict to each trade row in backtest_runner.py
+  ➜ Recommend: add a 'feature_snapshot' dict to each trade row in the backtester
     capturing these fields at signal-time for the next matrix run.
 """)
 

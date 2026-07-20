@@ -8,8 +8,8 @@ Verifies that:
     rates fetch.
 
 The ``athena.py`` monolith is loaded *by file path* (it is shadowed by the
-``athena/`` package on a plain ``import athena``) — same pattern as
-``engine_b_batch._worker_init`` / ``tools/run_backtest_matrix``. The real
+``athena/`` package on a plain ``import athena``) — same pattern the
+v3 backtester's monolith loader uses. The real
 ``mt5_executor`` is stubbed so no live terminal is required.
 
 NOTE: under the repo ``tests/`` conftest, collection currently imports the ASE

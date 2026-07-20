@@ -522,18 +522,9 @@ class TestTask7_EngineBH4SnapSource:
 
 
 class TestTask8_LabelHygiene:
-    def test_backtest_engine_label_no_longer_says_forex_scoring_for_forex(self):
-        # The persisted backtest engine label for forex Engine A v2 should not
-        # claim "forex_scoring" (the legacy module). Live forex routes through
-        # factor_scoring per factor_scoring.py module docstring.
-        import backtest_runner
-
-        with open(backtest_runner.__file__, "r", encoding="utf-8") as f:
-            src = f.read()
-        # The mislabel pattern checks for the conditional that wrote
-        # "forex_scoring" for forex pairs. After the fix the inserted
-        # engine label uses "factor_scoring" (or "engine_a_v2") instead.
-        assert '"forex_scoring"\n                    if pair.get("type") == "forex"' not in src
+    # test_backtest_engine_label_no_longer_says_forex_scoring_for_forex removed:
+    # it grepped the retired legacy backtester's source, which now lives in
+    # archive/backtest_legacy/ (the v3 rebuild has no forex_scoring label path).
 
     def test_legacy_votes_label_d1_adx_trend_renamed_or_removed(self):
         with open(scoring.__file__, "r", encoding="utf-8") as f:

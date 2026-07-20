@@ -4,7 +4,7 @@ CRIT-001: /api/quick-execute must enforce EXECUTION_ENABLED and kill_switch
           guards with the same behavior as /api/execute.
 
 CRIT-002: Forex intermarket max_score cap must be the same (3.0) across
-          live (athena.py) and backtest (backtest_runner.py) paths.
+          live (athena.py) and backtest paths.
 """
 import importlib
 from datetime import datetime, timezone
@@ -655,51 +655,11 @@ class TestForexIntermarketCapParity:
             "FOREX_ENGINE_A_MAX_SCORE must not be 1.0 — that was the pre-fix backtest bug"
         )
 
-    def test_backtest_imports_shared_constant(self):
-        """backtest_runner must import FOREX_ENGINE_A_MAX_SCORE from intermarket."""
-        import importlib.util, pathlib, ast
-
-        bt_path = pathlib.Path(__file__).resolve().parents[1] / "backtest_runner.py"
-        tree = ast.parse(bt_path.read_text(encoding="utf-8"))
-
-        found = False
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                if node.module == "intermarket":
-                    names = [alias.name for alias in node.names]
-                    if "FOREX_ENGINE_A_MAX_SCORE" in names:
-                        found = True
-        assert found, "backtest_runner.py must import FOREX_ENGINE_A_MAX_SCORE from intermarket"
-
-    def test_backtest_no_hardcoded_forex_1_0_cap(self):
-        """backtest_runner.py must not contain max_score=1.0 in forex intermarket calls."""
-        import pathlib
-
-        bt_path = pathlib.Path(__file__).resolve().parents[1] / "backtest_runner.py"
-        src = bt_path.read_text(encoding="utf-8")
-
-        # All occurrences of max_score= in apply_confirmation_to_score calls should use
-        # the constant, not the literal 1.0.
-        # Use AST to only target apply_confirmation_to_score keyword arguments.
-        import ast
-        bt_path_ast = pathlib.Path(__file__).resolve().parents[1] / "backtest_runner.py"
-        tree = ast.parse(bt_path_ast.read_text(encoding="utf-8"))
-        violations = []
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            fname = func.id if isinstance(func, ast.Name) else (func.attr if isinstance(func, ast.Attribute) else "")
-            if fname != "apply_confirmation_to_score":
-                continue
-            for kw in node.keywords:
-                if kw.arg == "max_score" and isinstance(kw.value, ast.Constant) and kw.value.value == 1.0:
-                    violations.append(getattr(node, "lineno", "?"))
-        assert not violations, (
-            f"apply_confirmation_to_score called with max_score=1.0 at lines {violations} — "
-            "use FOREX_ENGINE_A_MAX_SCORE instead."
-        )
-
+    # test_backtest_imports_shared_constant and
+    # test_backtest_no_hardcoded_forex_1_0_cap removed with the legacy
+    # backtester (archive/backtest_legacy/): the v3 rebuild calls the live
+    # scorer directly, so there is no separate backtest max_score wiring
+    # to pin. The shared-constant checks above still cover intermarket.
 
     def test_parity_equivalent_inputs_live_and_backtest_style(self):
         """Live-style (max_score=3.0) and backtest-style (FOREX_ENGINE_A_MAX_SCORE)

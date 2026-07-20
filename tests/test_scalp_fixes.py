@@ -1,15 +1,9 @@
 import pytest
-import types
-import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 # Modules under test
 import timed_exit_monitor
-import backtest_runner
-import indicators
-import volume_profile
-import mt5_executor
 import scalp_engine
 import bybit_executor
 from risk_engine import RiskApproval
@@ -184,99 +178,9 @@ def test_equal_close_and_be_window_closes_before_breakeven(monkeypatch):
     assert be_calls == []
 
 # --- 3. Backtest TP1+TP2 Tests ---
-
-def _mock_scalp_setup(monkeypatch, candles, tp1, tp2):
-    monkeypatch.setitem(backtest_runner.CONFIG, "SCALP_ENGINE", {
-        "BT_ENABLED": True,
-        "BT_SESSION_MODE": "all",
-        "MIN_RR": 0.5,
-        "TP2_ENABLED": (tp2 is not None),
-        "BT_SCRATCH_ENABLED": False,
-        "SCALP_VP_LOOKBACK_BARS": 20,
-        "BIAS_TIMEFRAME": "M15",
-        "MIN_GRADE_AUTO_EXECUTE": "C",
-        # Terminal TP1 exit for assertions (default partial+runner yields BE/TIMEOUT after TP1 touch).
-        "ENGINE_D_PARTIAL_EXIT_ENABLED": False,
-    })
-
-    monkeypatch.setattr(mt5_executor, "mt5_map_symbol", lambda x: "EURUSD")
-    monkeypatch.setattr(scalp_engine, "mt5_fetch_scalp_candles", lambda *args, **kwargs: candles)
-    
-    monkeypatch.setattr(backtest_runner, "calc_atr", lambda *args: [1.0]*len(candles))
-    monkeypatch.setattr(volume_profile, "compute_fixed_range_volume_profile", lambda *args, **kwargs: {
-        "profile_valid": True, "poc": tp1, "vah": 105.0, "val": 100.0, "balance_ratio": 0.5
-    })
-    monkeypatch.setattr(indicators, "detect_absorption", lambda c, *args, **kwargs: [{"absorbed": i >= len(c) - 5, "direction": "bullish"} for i in range(len(c))])
-    monkeypatch.setattr(indicators, "calc_cvd", lambda c, *args, **kwargs: {"smoothed_delta": list(range(len(c))), "cvd": list(range(len(c)))})
-    monkeypatch.setattr(scalp_engine, "scalp_session_window", lambda *args, **kwargs: (True, "mock"))
-    monkeypatch.setattr(scalp_engine, "_classify_market_state", lambda *args: "balance")
-    monkeypatch.setattr(scalp_engine, "_locate_price_vs_vp", lambda price, vp, atr_m15=0: {"location": "at_val", "nearest_level": vp.get("val", 100.0), "distance_pct": 0.0})
-    monkeypatch.setattr(scalp_engine, "_check_aaa_sequence", lambda candles, absorption, cvd, asset_type=None: {"complete": False, "phase": "absorption_only"})
-    monkeypatch.setattr(backtest_runner, "_format_backtest_results", lambda trades, *args, **kwargs: {"trades": trades, "summary": {}})
-    monkeypatch.setattr(backtest_runner, "_rt", lambda: types.SimpleNamespace(AUDIT_DB=":memory:"))
-
-def test_scalp_backtest_exits_at_tp1_without_runner_averaging(monkeypatch):
-    """Engine D backtest TP1 exits are profitable and don't chain to TP2.
-
-    partial_taken_1r is True whenever price passes +1R (tp_partial) before TP1 —
-    that's expected behaviour (50% partial at +1R, remaining 50% exits at TP1 or BE).
-    The assertion here is that a TP1 exit is recorded with a positive R, not that
-    the partial model is absent.
-    """
-    candles = [{"time": time.time(), "open": 100.0, "high": 100.1, "low": 99.99, "close": 100.0, "vol": 1000} for i in range(300)]
-
-    # Entry bar i=101. Price approx 100.
-    # Bar 110: Hit TP1 (110)
-    candles[110]["open"] = 111.0
-    candles[110]["high"] = 111.0
-
-    # Bar 115: Hit TP2 (120) should not matter in TP1-only backtest management.
-    candles[115]["open"] = 121.0
-    candles[115]["high"] = 121.0
-
-    _mock_scalp_setup(monkeypatch, candles, tp1=110.0, tp2=120.0)
-
-    result = backtest_runner.backtest_pair_scalp({"display": "EUR/USD", "type": "forex"})
-
-    assert "trades" in result and len(result["trades"]) > 0
-    trade = next(t for t in result["trades"] if t["exit_reason"] == "TP1")
-    assert trade["exit_reason"] == "TP1"
-    assert trade["resultR"] > 0.0
-    # partial_taken_1r may be True (price passed +1R on the way to TP1) — that's fine
-    assert trade.get("tp1_hit") is True
-
-def test_scalp_backtest_tp1_only(monkeypatch):
-    candles = [{"time": time.time(), "open": 100.0, "high": 100.1, "low": 99.99, "close": 100.0, "vol": 1000} for i in range(300)]
-    candles[110]["open"] = 111.0
-    candles[110]["high"] = 111.0
-    
-    _mock_scalp_setup(monkeypatch, candles, tp1=110.0, tp2=None)
-    
-    result = backtest_runner.backtest_pair_scalp({"display": "EUR/USD", "type": "forex"})
-
-    assert "trades" in result and len(result["trades"]) > 0
-    trade = next(t for t in result["trades"] if t["exit_reason"] == "TP1")
-    assert trade["exit_reason"] == "TP1"
-    assert trade.get("tp1_hit") is True
-
-
-def test_scalp_backtest_never_records_negative_tp1_for_long(monkeypatch):
-    candles = [{"time": time.time(), "open": 100.0, "high": 100.1, "low": 99.99, "close": 100.0, "vol": 1000} for i in range(300)]
-    candles[110]["open"] = 111.0
-    candles[110]["high"] = 111.0
-
-    _mock_scalp_setup(monkeypatch, candles, tp1=98.0, tp2=None)
-    monkeypatch.setitem(
-        backtest_runner.CONFIG,
-        "SCALP_ENGINE",
-        {**backtest_runner.CONFIG.get("SCALP_ENGINE", {}), "MIN_RR": 1.0},
-    )
-
-    result = backtest_runner.backtest_pair_scalp({"display": "EUR/USD", "type": "forex"})
-
-    for trade in result.get("trades", []):
-        assert trade["tp1"] > trade["entry"]
-        assert not (trade["exit_reason"] == "TP1" and trade["resultR"] <= 0)
+# The three backtest_pair_scalp tests were removed with the legacy backtester
+# (archive/backtest_legacy/): scalp backtesting is retired — the v3 rebuild
+# covers Engine A/B only and /api/backtest-scalp returns 410 GONE.
 
 # --- 4. Precision & Level Collapse Regression Tests ---
 

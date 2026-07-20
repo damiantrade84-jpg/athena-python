@@ -3,7 +3,10 @@ import math
 import pandas as pd
 import pytest
 
-from backtest_exits import calculate_backtest_exit, normalized_backtest_exit_config
+from athena_research.backtest_exits import (
+    calculate_backtest_exit,
+    normalized_backtest_exit_config,
+)
 
 
 def _candles(*bars):

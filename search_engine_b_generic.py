@@ -1,6 +1,6 @@
 """Dev helper: grep static/index.html for "engine b" text — not the Engine B scan pipeline.
 
-Production Engine B: scanner.py, athena.py, execution.py, backtest_runner.py.
+Production Engine B: scanner.py, athena.py, execution.py.
 """
 import sys
 with open('static/index.html', 'r', encoding='utf-8') as f:

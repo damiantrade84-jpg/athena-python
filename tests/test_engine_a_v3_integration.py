@@ -250,20 +250,16 @@ def test_active_scanner_has_no_legacy_analyze_fallback():
 
 
 def test_active_backtest_routes_to_v3_evaluator():
-    source = (ROOT / "backtest_runner.py").read_text(encoding="utf-8")
-    assert "run_v3_backtest(" in source
-    backtest_start = source.index("def backtest_pair(")
-    v3_return = source.index("return run_v3_backtest(", backtest_start)
-    active_prefix = source[backtest_start:v3_return]
-    assert "min_bars=230" not in active_prefix
-    assert "min_bars=500" not in active_prefix
-    assert "need 250+" not in active_prefix
-    assert "need 260+" not in active_prefix
-    consensus_start = source.index("def backtest_pair_consensus(")
-    consensus_end = source.index("def backtest_pair_scalp(", consensus_start)
-    consensus_source = source[consensus_start:consensus_end]
-    assert "evaluate_engine_a_v3(" in consensus_source
-    assert "res_a = calc_confluence(" not in consensus_source
+    # The legacy backtester is retired (archive/backtest_legacy/). The v3
+    # rebuild's Engine A adapter must route through the live v3 evaluator.
+    source = (ROOT / "engine_a_v3" / "backtest.py").read_text(encoding="utf-8")
+    assert "evaluate_engine_a_v3(" in source
+    adapter_source = (ROOT / "athena_backtest" / "engines" / "engine_a.py").read_text(
+        encoding="utf-8"
+    )
+    assert "run_engine_a_backtest" in adapter_source
+    runner_source = (ROOT / "athena_backtest" / "runner.py").read_text(encoding="utf-8")
+    assert "run_engine_a_backtest" in runner_source
 
 
 def test_active_analyze_pair_returns_v3_as_sole_engine_path():

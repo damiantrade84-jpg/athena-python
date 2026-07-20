@@ -99,18 +99,7 @@ def test_live_execution_sources_do_not_reference_research_vol_targeting():
     assert all("RESEARCH_VOL_TARGET" not in source for source in live_sources)
 
 
-def test_backtest_research_vol_target_metadata_does_not_change_equity_input(monkeypatch):
-    import backtest_runner
-
-    monkeypatch.setitem(CONFIG, "RESEARCH_VOL_TARGETING_ENABLED", True)
-    out = backtest_runner._research_vol_target_bt_metadata(
-        original_size=0.01,
-        returns=[0.01, -0.005, 0.002, 0.004],
-        atr=2.0,
-        close=100.0,
-    )
-
-    assert out["vol_targeting_applied"] is True
-    assert out["original_size"] == 0.01
-    assert out["vol_target_adjusted_size"] != 0.01
-    assert math.isfinite(out["multiplier"])
+# test_backtest_research_vol_target_metadata_does_not_change_equity_input removed:
+# it exercised the retired legacy backtester's _research_vol_target_bt_metadata
+# helper (now in archive/backtest_legacy/); the pure sizing math above still has
+# full coverage via research_metrics.

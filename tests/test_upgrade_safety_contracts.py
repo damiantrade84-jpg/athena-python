@@ -189,15 +189,15 @@ class TestExecutionDedup:
 
 
 class TestBacktestLookaheadContract:
-    def test_engine_a_bt_documents_non_lookahead_entry_bar(self):
-        source = Path("backtest_runner.py").read_text(encoding="utf-8")
-        assert "Indicator windows end at i-1" in source
-        assert "entry_bar = d1_raw[i]" in source
-
-    def test_monitor_future_window_starts_after_fill_index(self):
-        source = Path("backtest_runner.py").read_text(encoding="utf-8")
-        assert "_monitor_fill_index" in source
-        assert "future_window = _monitor_candles[_monitor_fill_index" in source
+    # The two legacy-runner source pins were replaced when the legacy
+    # backtester was archived: the anti-lookahead contract now lives in the
+    # v3 loop (confirmed prefixes end before the entry bar; entry fills at
+    # the NEXT bar's open).
+    def test_v3_bt_entry_uses_next_bar_open(self):
+        source = Path("athena_backtest/engines/engine_b.py").read_text(encoding="utf-8")
+        assert "iter_rows[index + 1]" in source
+        v3_source = Path("engine_a_v3/backtest.py").read_text(encoding="utf-8")
+        assert "evaluate_engine_a_v3(" in v3_source
 
 
 class TestBybitBrokerTimeout:

@@ -15,7 +15,10 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from backtest_exits import calculate_backtest_exit, normalized_backtest_exit_config
+from athena_research.backtest_exits import (
+    calculate_backtest_exit,
+    normalized_backtest_exit_config,
+)
 
 log = logging.getLogger(__name__)
 

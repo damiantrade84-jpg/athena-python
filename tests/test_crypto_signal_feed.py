@@ -200,51 +200,41 @@ def test_bybit_klines_paginated_walks_back_from_earliest_open_time(monkeypatch):
     ]
 
 
-def test_backtest_crypto_signal_fetch_uses_configured_bybit_feed(monkeypatch):
-    import backtest_runner
-    from types import SimpleNamespace
+def test_bybit_klines_paginated_parallel_pages_are_complete_and_ordered(monkeypatch):
+    import data_feeds
 
-    pair = {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto", "source": "binance"}
-    calls = {"cached": [], "binance": [], "bybit_paginated": []}
+    interval_ms = 3_600_000
+    latest = 10_000 * interval_ms
+    calls = []
 
-    runtime = SimpleNamespace(
-        fetch_binance=lambda symbol, interval, limit: calls["binance"].append(
-            (symbol, interval, limit)
-        )
-        or _bars("binance", limit),
-        fetch_binance_paginated=lambda symbol, interval, limit: calls["binance"].append(
-            (symbol, interval, limit)
-        )
-        or _bars("binance", limit),
-        fetch_bybit_klines=lambda symbol, tf, limit: _bars("bybit", limit),
-        fetch_bybit_klines_paginated=lambda symbol, tf, limit: calls["bybit_paginated"].append(
-            (symbol, tf, limit)
-        )
-        or _bars("bybit_paginated", limit),
+    def fake_fetch(symbol, tf, limit, *, end_ms=None):
+        calls.append((limit, end_ms))
+        page_end = latest if end_ms is None else int(end_ms) // interval_ms * interval_ms
+        return [
+            {"open_time": page_end - interval_ms * offset, "time": "t", "close": 1.0}
+            for offset in range(limit - 1, -1, -1)
+        ]
+
+    monkeypatch.setattr(data_feeds, "_fetch_bybit_klines", fake_fetch)
+
+    candles = data_feeds._fetch_bybit_klines_paginated(
+        "BTCUSDT",
+        "H1",
+        2_500,
+        end_ms=latest,
+        start_ms=latest - 2_499 * interval_ms,
+        workers=4,
     )
 
-    monkeypatch.setattr(backtest_runner, "_rt", lambda: runtime)
-    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_AB_CRYPTO_SIGNAL_FEED", "bybit")
-    monkeypatch.setitem(backtest_runner.CONFIG, "ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK", False)
-    monkeypatch.setattr(
-        backtest_runner,
-        "_bt_cached_fetch",
-        lambda pair_arg, tf_arg, limit_arg, fetcher, provider, min_bars=None: calls[
-            "cached"
-        ].append((tf_arg, limit_arg, provider, min_bars))
-        or fetcher(limit_arg),
-    )
+    opens = [int(candle["open_time"]) for candle in candles]
+    assert len(opens) == 2_500
+    assert opens == sorted(opens)
+    assert opens[0] == latest - 2_499 * interval_ms
+    assert opens[-1] == latest
+    assert len(calls) == 3
 
-    candles = backtest_runner._crypto_bt_signal_candles(
-        pair,
-        engine="A",
-        tf="H1",
-        limit=1200,
-        min_bars=500,
-    )
 
-    assert candles is not None
-    assert candles[-1]["source_tag"] == "bybit_paginated"
-    assert calls["bybit_paginated"] == [("BTCUSDT", "H1", 1200)]
-    assert calls["binance"] == []
-    assert calls["cached"] == [("H1", 1200, "bybit_linear_kline", 500)]
+# test_backtest_crypto_signal_fetch_uses_configured_bybit_feed removed: it
+# exercised the retired legacy backtester's _crypto_bt_signal_candles fetch
+# path (now in archive/backtest_legacy/); the v3 rebuild reads its own parquet
+# store and never routes through the live crypto signal feed selector.

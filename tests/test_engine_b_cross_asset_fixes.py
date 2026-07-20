@@ -7,7 +7,6 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import backtest_runner
 import config
 import execution
 import scanner
@@ -558,83 +557,9 @@ def test_choch_dual_bos_keeps_only_more_recent_direction():
     assert out["choch_events"] == [{"type": "bearish", "level": 102.0}]
 
 
-def test_engine_b_backtest_mt5_does_not_call_eodhd_or_yfinance_fallback(monkeypatch):
-    calls = {"fetch_candles": [], "fetch_eodhd": 0, "fetch_yfinance": 0}
-
-    def _fetch_candles(pair, tf, limit):
-        calls["fetch_candles"].append((pair["source"], tf, limit))
-        return []
-
-    def _unexpected_eodhd(*_args, **_kwargs):
-        calls["fetch_eodhd"] += 1
-        raise AssertionError("Engine B MT5 backtest must not call EODHD price fallback")
-
-    def _unexpected_yfinance(*_args, **_kwargs):
-        calls["fetch_yfinance"] += 1
-        raise AssertionError("Engine B MT5 backtest must not call yfinance price fallback")
-
-    monkeypatch.setattr(
-        backtest_runner,
-        "_rt",
-        lambda: SimpleNamespace(
-            fetch_candles=_fetch_candles,
-            fetch_eodhd=_unexpected_eodhd,
-            fetch_yfinance=_unexpected_yfinance,
-            extract_candles=lambda raw: raw,
-            yfinance_symbol_for_pair=lambda _pair: "EURUSD=X",
-        ),
-    )
-    monkeypatch.setattr(
-        backtest_runner,
-        "fetch_backtest_candles",
-        lambda pair, tf, limit, fetcher, **_kwargs: fetcher(limit),
-    )
-
-    result = backtest_runner.backtest_pair_naked(
-        {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex", "source": "mt5"},
-        style="intraday",
-    )
-
-    assert result["success"] is False
-    assert calls["fetch_eodhd"] == 0
-    assert calls["fetch_yfinance"] == 0
-    assert [tf for _, tf, _ in calls["fetch_candles"]] == ["D1", "H4", "H1"]
-
-
-def test_engine_b_backtest_non_mt5_uses_source_router_not_eodhd_primary(monkeypatch):
-    calls = {"fetch_candles": [], "fetch_eodhd": 0}
-
-    def _fetch_candles(pair, tf, limit):
-        calls["fetch_candles"].append((pair["source"], tf, limit))
-        return []
-
-    def _unexpected_eodhd(*_args, **_kwargs):
-        calls["fetch_eodhd"] += 1
-        raise AssertionError("Engine B source-routed backtest must not force EODHD")
-
-    monkeypatch.setattr(
-        backtest_runner,
-        "_rt",
-        lambda: SimpleNamespace(
-            fetch_candles=_fetch_candles,
-            fetch_eodhd=_unexpected_eodhd,
-            extract_candles=lambda raw: raw,
-        ),
-    )
-    monkeypatch.setattr(
-        backtest_runner,
-        "fetch_backtest_candles",
-        lambda pair, tf, limit, fetcher, **_kwargs: fetcher(limit),
-    )
-
-    result = backtest_runner.backtest_pair_naked(
-        {"display": "TEST", "symbol": "TEST", "type": "stock", "source": "polygon"},
-        style="intraday",
-    )
-
-    assert result["success"] is False
-    assert calls["fetch_eodhd"] == 0
-    assert [tf for _, tf, _ in calls["fetch_candles"]] == ["D1", "H4", "H1"]
+# The two backtest_pair_naked feed-routing tests were removed with the legacy
+# backtester (archive/backtest_legacy/): the v3 rebuild reads its parquet store
+# and performs no live provider fallbacks at all (tests/backtest_v3/).
 
 
 def test_engine_c_live_atr_ignores_engine_a_h4_atr_for_d1_style(monkeypatch):
@@ -653,34 +578,8 @@ def test_engine_c_live_atr_ignores_engine_a_h4_atr_for_d1_style(monkeypatch):
     assert source == "D1"
 
 
-def test_engine_c_backtest_atr_uses_matching_timeframe_index():
-    atr_map = {
-        "D1": [10.0, 11.0],
-        "H4": [100.0 + i for i in range(12)],
-        "H1": [200.0 + i for i in range(60)],
-    }
-
-    d1_atr, _, d1_idx = backtest_runner._engine_b_indexed_atr(
-        atr_map,
-        "D1",
-        d1_idx=2,
-        h4_idx=12,
-        h1_idx=48,
-        current_price=1000.0,
-    )
-    h1_atr, _, h1_idx = backtest_runner._engine_b_indexed_atr(
-        atr_map,
-        "H1",
-        d1_idx=2,
-        h4_idx=12,
-        h1_idx=48,
-        current_price=1000.0,
-    )
-
-    assert d1_idx == 2
-    assert d1_atr == pytest.approx(11.0)
-    assert h1_idx == 48
-    assert h1_atr == pytest.approx(247.0)
+# test_engine_c_backtest_atr_uses_matching_timeframe_index removed with the
+# legacy backtester (_engine_b_indexed_atr lives in archive/backtest_legacy/).
 
 
 def test_crypto_bos_volume_average_excludes_zero_volume(monkeypatch):

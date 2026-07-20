@@ -76,20 +76,26 @@ def _check_direction_from_weighted_score() -> tuple[bool, str]:
     return True, "Direction derived from weighted score"
 
 
-def _check_no_tp_first_dead_code() -> tuple[bool, str]:
-    """BUG[5] guard: no TP-first same-bar policy in backtest loops."""
-    src = _read_file("backtest_runner.py")
-    if "__READ_ERROR__" in src:
-        return False, f"Cannot read backtest_runner.py: {src}"
-    if "TP checked first" in src:
-        # Find the line number
-        for i, line in enumerate(src.split("\n")):
-            if "TP checked first" in line:
-                return False, (
-                    f"backtest_runner.py line {i + 1}: dead TP-first code block still present. "
-                    f"Remove to prevent future confusion with _resolve_barrier_exit conservative policy."
-                )
-    return True, "No TP-first dead code"
+def _check_legacy_backtester_retired() -> tuple[bool, str]:
+    """Tripwire: the legacy backtester must stay retired (archive/ only).
+
+    The v3 rebuild (athena_backtest/) replaced it; a reappearing module at
+    repo root would mean an accidental restore or bad merge.
+    """
+    import os
+
+    root = os.path.dirname(os.path.abspath(__file__))
+    stray = [
+        name
+        for name in ("backtest_runner.py", "backtest_exits.py", "engine_b_batch.py")
+        if os.path.exists(os.path.join(root, name))
+    ]
+    if stray:
+        return False, (
+            f"Legacy backtest module(s) present at repo root: {', '.join(stray)}. "
+            f"They are retired to archive/backtest_legacy/ — remove the stray copy."
+        )
+    return True, "Legacy backtester retired (v3 rebuild active)"
 
 
 def _check_positions_fail_closed() -> tuple[bool, str]:
@@ -160,46 +166,6 @@ def _check_single_crypto_cap_application() -> tuple[bool, str]:
     if count:
         return False, f"CRYPTO_FACTOR_WEIGHT_CAPS referenced {count} times; removed config should stay unused"
     return True, "CRYPTO_FACTOR_WEIGHT_CAPS removed from factor scoring"
-
-
-def _check_forex_bt_routing() -> tuple[bool, str]:
-    """Guard: Engine A v2 — forex routes through calc_confluence in all BT loops.
-    compute_forex_score must NOT be present (retired). Verify calc_confluence is used."""
-    src = _read_file("backtest_runner.py")
-    if "__READ_ERROR__" in src:
-        return False, f"Cannot read backtest_runner.py: {src}"
-    stale_count = src.count("compute_forex_score")
-    if stale_count > 0:
-        return False, (
-            f"backtest_runner.py still imports compute_forex_score ({stale_count} times). "
-            f"Engine A v2 routes ALL asset classes through calc_confluence — remove the stale import."
-        )
-    unified_count = src.count("calc_confluence")
-    if unified_count < 3:
-        return False, (
-            f"backtest_runner.py has only {unified_count} calc_confluence calls (expected >= 3). "
-            f"Engine A v2 should use calc_confluence for all asset classes in all BT loops."
-        )
-    return True, f"Engine A v2 routing OK: calc_confluence x{unified_count}, compute_forex_score x0"
-
-
-def _check_regime_state_not_hardcoded() -> tuple[bool, str]:
-    """Guard: forex BT res dicts should not hardcode regime state to 1."""
-    src = _read_file("backtest_runner.py")
-    if "__READ_ERROR__" in src:
-        return False, f"Cannot read backtest_runner.py: {src}"
-    lines = src.split("\n")
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped == '"state": 1,' and i > 0:
-            # Check context: is this inside a forex res dict?
-            context = "\n".join(lines[max(0, i - 5):i + 3])
-            if "final_score" in context and "forex" in context.lower():
-                return False, (
-                    f"backtest_runner.py line {i + 1}: regime state hardcoded to 1 (RANGING) "
-                    f"in forex backtest result dict"
-                )
-    return True, "No hardcoded regime state in forex BT dicts"
 
 
 def _check_risk_check_before_executors() -> tuple[bool, str]:
@@ -307,12 +273,10 @@ def _check_meta_adaptation_safety_boundary() -> tuple[bool, str]:
 
 _BOOT_CHECKS = [
     ("direction_weighted", _check_direction_from_weighted_score),
-    ("no_tp_first", _check_no_tp_first_dead_code),
+    ("legacy_backtester_retired", _check_legacy_backtester_retired),
     ("positions_fail_closed", _check_positions_fail_closed),
     ("usdjpy_cluster", _check_usdjpy_in_cluster),
     ("single_crypto_cap", _check_single_crypto_cap_application),
-    ("forex_bt_routing", _check_forex_bt_routing),
-    ("regime_not_hardcoded", _check_regime_state_not_hardcoded),
     ("risk_check_before_exec", _check_risk_check_before_executors),
     ("executors_approval_vol", _check_executors_use_approval_volume),
     ("audit_log_decay_schema", _check_audit_log_schema_decay_aware),
