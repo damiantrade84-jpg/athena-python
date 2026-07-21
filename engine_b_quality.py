@@ -92,7 +92,10 @@ def compute_structure_alignment_score(res: dict[str, Any], direction: str) -> fl
     )
     bos = bool(res.get("bos_confirmed", False))
     sweep = bool(res.get("liquidity_sweep", False))
-    bos_mtf = bool(res.get("bos_mtf_confirmed", False))
+    # bos_mtf_confirmed is direction-blind; only credit the multi-TF break when
+    # it is in the trade direction (bos_confirmed is direction-aware), so an
+    # opposing MTF BOS cannot inflate a counter-trend candidate's alignment.
+    bos_mtf = bool(res.get("bos_mtf_confirmed", False)) and bos
 
     if micro_aligned and macro_aligned:
         score = 1.0

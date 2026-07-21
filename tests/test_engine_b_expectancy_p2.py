@@ -68,6 +68,25 @@ def test_structure_ok_requires_bos_mtf_when_both_oppose(monkeypatch):
     assert allowed["structure_ok"] is True
 
 
+def test_opposing_mtf_bos_does_not_satisfy_structure_ok(monkeypatch):
+    """An MTF BOS in the opposite direction must not pass the structure gate.
+
+    bos_mtf_confirmed is direction-blind (an MTF break exists). For a LONG whose
+    H1 BOS is bearish (bos_confirmed=False) but with bos_mtf_confirmed=True, the
+    break opposes the trade and must not rescue structure_ok when both swing
+    sequences already oppose. Regression for the counter-trend direction swap.
+    """
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_WEIGHTED_SCORING", {"ENABLED": False})
+    out = NakedEngine().calculate_confidence(
+        _base_res(bos_confirmed=False, bos_mtf_confirmed=True, liquidity_sweep=False),
+        100.0,
+        "LONG",
+        style_profile=_style(),
+    )
+    assert out["structure_ok"] is False
+
+
 def test_structure_ok_legacy_allows_sweep_when_gate_off(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF", False)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_WEIGHTED_SCORING", {"ENABLED": False})

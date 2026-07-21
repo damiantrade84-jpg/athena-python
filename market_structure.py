@@ -5592,6 +5592,13 @@ class NakedEngine:
             _hard_counter_penalty_cfg = 1.0
         _hard_counter_veto = hard_counter and _hard_counter_mode == "veto"
         bos_mtf = bool(res.get("bos_mtf_confirmed", False))
+        # bos_mtf_confirmed is direction-blind (an MTF BOS exists in *some*
+        # direction). It must only satisfy the structure gate / earn bonus when
+        # the break is in the trade direction, otherwise a bullish multi-TF
+        # break can pass a SHORT (and vice versa). bos_confirmed is already
+        # direction-aware, so (mtf-exists AND direction-aligned H1 BOS) == the
+        # H1 and D1 BOS both breaking in the trade direction.
+        bos_mtf_aligned = bos_mtf and bool(res.get("bos_confirmed", False))
         # When both micro and macro oppose, a lone BOS/sweep is not enough unless
         # MTF BOS confirms (config-gated; default ON).
         _require_align_or_mtf = bool(
@@ -5604,7 +5611,7 @@ class NakedEngine:
             _sweep_dir is None or _sweep_dir == direction
         )
         if _require_align_or_mtf and _both_oppose:
-            structure_ok = (not _hard_counter_veto) and bos_mtf
+            structure_ok = (not _hard_counter_veto) and bos_mtf_aligned
         else:
             structure_ok = (not _hard_counter_veto) and (
                 micro_aligned
@@ -6196,7 +6203,7 @@ class NakedEngine:
 
         if not _use_weighted_scoring:
             # Legacy binary bonus confirmations — add to score but don't block if missing.
-            if bos_mtf:
+            if bos_mtf_aligned:
                 bonus_points += 1.0
             if volume_ok:
                 bonus_points += 1.0
@@ -6284,7 +6291,7 @@ class NakedEngine:
                 log.debug("[ENGINE_B] weighted scoring fallback to legacy bonuses: %s", exc)
                 _use_weighted_scoring = False
                 bonus_points = 0.0
-                if bos_mtf:
+                if bos_mtf_aligned:
                     bonus_points += 1.0
                 if volume_ok:
                     bonus_points += 1.0
