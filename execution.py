@@ -402,6 +402,7 @@ def _quick_audit_context(sig: dict, engine_b: dict | None) -> dict:
         "factors": factors,
         "max_score": max_score,
         "score_pct": score_pct,
+        "asset_class": sig.get("type") or sig.get("asset_class"),
     }
 
 
@@ -2491,6 +2492,7 @@ def api_quick_execute():
                         _leg.get("tp") or sig.get("tp1"),
                         _leg.get("volume"),
                         _audit["regime"],
+                        _audit["asset_class"],
                         _leg.get("riskAmount"),
                         _leg.get("riskPct"),
                         str(_leg.get("ticket", "")),
@@ -2508,9 +2510,9 @@ def api_quick_execute():
                     timed_sqlite_executemany_write(
                         con,
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
-                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
+                        "entry_price,sl,tp,volume,regime,asset_class,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
                         "max_score,score_pct,exit_mode,ai_review_grade,ai_review_id) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         _audit_rows,
                         label="quick_execute.audit_success.insert",
                     )
@@ -3740,6 +3742,7 @@ def api_execute():
                             _leg.get("tp") or sig.get("tp1"),
                             _leg.get("volume"),
                             sig.get("trendState"),
+                            sig.get("type") or sig.get("asset_class"),
                             _leg.get("riskAmount"),
                             _leg.get("riskPct"),
                             str(_leg.get("ticket", "")),
@@ -3756,9 +3759,9 @@ def api_execute():
                     timed_sqlite_executemany_write(
                         con,
                         "INSERT INTO audit_log(ts,pair,score,engine,direction,trend,grade,edge_prob,risk,style,"
-                        "entry_price,sl,tp,volume,regime,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
+                        "entry_price,sl,tp,volume,regime,asset_class,risk_amount,risk_pct,ticket,fee_cost,factors_json,"
                         "signal_price_ref,slippage_bps,max_score,score_pct,exit_mode,ai_review_grade,ai_review_id) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         _audit_rows,
                         label="execute.audit_success.insert",
                     )
@@ -4348,8 +4351,8 @@ def api_scalp_execute():
                 ) as con:
                     timed_sqlite_execute_write(
                         con,
-                        "INSERT INTO audit_log(ts,pair,score,engine,direction,grade,risk,style,entry_price,sl,tp,volume,ticket,risk_amount,risk_pct) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO audit_log(ts,pair,score,engine,direction,grade,risk,style,entry_price,sl,tp,volume,ticket,risk_amount,risk_pct,asset_class) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             sig["pair"],
@@ -4365,7 +4368,8 @@ def api_scalp_execute():
                             result.get("volume"),
                             str(result.get("ticket", "")),
                             approval.risk_amount,
-                            approval.risk_pct
+                            approval.risk_pct,
+                            sig.get("type") or sig.get("asset_class"),
                         ),
                         label="scalp_execute.audit_success.insert",
                     )

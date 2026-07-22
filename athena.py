@@ -7173,6 +7173,7 @@ def _compute_naked_analysis(
     force_ai: bool = False,
     execution_mode: bool = False,
     overlay_only: bool = False,
+    resolve_independent_direction: bool = False,
 ):
     if not isinstance(sig, dict):
         return None, None, "Invalid signal"
@@ -7562,35 +7563,55 @@ def _compute_naked_analysis(
         _direction_source = "caller"
         _probe_res = None
         _probe_conf = None
+        _independent_direction = direction
+        _direction_probe_kwargs = {
+            "pair": pair_obj,
+            "engine": engine,
+            "d1_candles": d1,
+            "h4_candles": h4,
+            "h1_candles": h1,
+            "entry_candles": structure_entry_candles,
+            "current_price": current_price,
+            "atr": atr,
+            "regime_label": regime_label,
+            "style_profile": style_profile,
+            "resolved_style": resolved_style,
+            "asset_type": pair_obj.get("type", ""),
+            "d1_snap": _na_d1_snap,
+            "h4_snap": _na_h4_snap,
+            "dxy_h4_closes": _dxy_h4_closes_b,
+            # Detect triggers on the policy-owned Engine B trigger TF so
+            # execute-time/naked re-scan matches discovery.
+            "role_candles": _trigger_tf_map,
+        }
         if direction is None:
             direction, _probe_res, _probe_conf, _direction_source, _dir_resolve_err = (
                 resolve_analysis_direction(
                     direction=direction,
                     probe_fn=_engine_b_independent_direction_probe,
-                    probe_kwargs={
-                        "pair": pair_obj,
-                        "engine": engine,
-                        "d1_candles": d1,
-                        "h4_candles": h4,
-                        "h1_candles": h1,
-                        "entry_candles": structure_entry_candles,
-                        "current_price": current_price,
-                        "atr": atr,
-                        "regime_label": regime_label,
-                        "style_profile": style_profile,
-                        "resolved_style": resolved_style,
-                        "asset_type": pair_obj.get("type", ""),
-                        "d1_snap": _na_d1_snap,
-                        "h4_snap": _na_h4_snap,
-                        "dxy_h4_closes": _dxy_h4_closes_b,
-                        # Detect triggers on the policy-owned Engine B trigger TF so
-                        # execute-time/naked re-scan matches discovery.
-                        "role_candles": _trigger_tf_map,
-                    },
+                    probe_kwargs=_direction_probe_kwargs,
                 )
             )
             if _dir_resolve_err:
                 return None, pair_obj, _dir_resolve_err
+            _independent_direction = direction
+        elif resolve_independent_direction:
+            (
+                _resolved_independent_direction,
+                _independent_probe_res,
+                _independent_probe_conf,
+                _,
+                _independent_direction_err,
+            ) = resolve_analysis_direction(
+                direction=None,
+                probe_fn=_engine_b_independent_direction_probe,
+                probe_kwargs=_direction_probe_kwargs,
+            )
+            if not _independent_direction_err and _resolved_independent_direction:
+                _independent_direction = _resolved_independent_direction
+                if _resolved_independent_direction == direction:
+                    _probe_res = _independent_probe_res
+                    _probe_conf = _independent_probe_conf
 
         if _probe_res is not None:
             res = _probe_res
@@ -7663,6 +7684,7 @@ def _compute_naked_analysis(
         res["quoteTimestamp"] = _naked_quote_diag["timestamp"]
         res["priceSource"] = "fresh_live_quote"
         res["direction"] = direction
+        res["independent_direction"] = _independent_direction
         res["direction_source"] = _direction_source
         res["style"] = resolved_style
         res["regime_tf"] = style_profile.get("regime_tf")
@@ -9540,6 +9562,8 @@ def api_webhook():
                             result.get("entryPrice"),
                             sig.get("sl"),
                             sig.get("tp1"),
+                            sig.get("tp_partial"),
+                            sig.get("tp2"),
                             result.get("volume"),
                             sig.get("trendState"),
                             approval.risk_amount,
@@ -15582,12 +15606,15 @@ _score_decay_counter = 0
 _score_decay_lock = threading.Lock()
 _score_decay_last_run = 0.0
 _SCORE_DECAY_MIN_INTERVAL = 240.0  # 4 min - prevent back-to-back runs
+_calibration_decay_lock = threading.Lock()
+_calibration_decay_last_run = 0.0
+_CALIBRATION_DECAY_MIN_INTERVAL = 1800.0
 
 
 def _outcome_monitor_loop() -> None:
     """Background loop: every 60s reconcile closed MT5/CCXT trades against audit_log."""
 
-    global _score_decay_counter, _score_decay_last_run
+    global _score_decay_counter, _score_decay_last_run, _calibration_decay_last_run
 
     while True:
         try:
@@ -15611,6 +15638,14 @@ def _outcome_monitor_loop() -> None:
                         finally:
                             _score_decay_last_run = time.time()
                             _score_decay_lock.release()
+
+            if time.time() - _calibration_decay_last_run >= _CALIBRATION_DECAY_MIN_INTERVAL:
+                if _calibration_decay_lock.acquire(blocking=False):
+                    try:
+                        _check_calibration_decay()
+                    finally:
+                        _calibration_decay_last_run = time.time()
+                        _calibration_decay_lock.release()
 
         except Exception as e:
             log.debug(f"[MONITOR] loop error: {e}")
@@ -16116,38 +16151,75 @@ def _start_outcome_monitor() -> None:
 
 _score_decay_results: dict = {}  # pair -> {"score": float, "entryScore": float, "ts": str}
 _regime_shift_results: dict = {}  # pair -> regime classification dict from regime_shift_monitor
-_decay_ai_cache: dict = {}  # pair -> {"decay_at_call": float, "ts": str, "result": dict}
+_decay_ai_cache: dict = {}  # position -> {"decay_at_call": float, "ts": str, "result": dict}
+_score_decay_results_lock = threading.RLock()
+_decay_ai_cache_lock = threading.Lock()
+_score_decay_health: dict = {
+    "available": False,
+    "status": "STARTING",
+    "checkedAt": None,
+    "errors": {},
+}
+_calibration_decay_results: dict = {
+    "status": "STARTING",
+    "global_healthy": None,
+    "checked_at": None,
+}
 
 
-def _verified_open_decay_pairs() -> set[str]:
-    """Return pairs currently open at broker level for decay alert filtering."""
-    open_pairs: set[str] = set()
+def _verified_open_decay_snapshot() -> dict:
+    """Return broker-live positions plus explicit verification health."""
+    positions: list[dict] = []
+    errors: dict[str, str] = {}
 
     try:
         from mt5_executor import mt5_get_positions
 
         mt5_res = mt5_get_positions()
-        if not (isinstance(mt5_res, dict) and mt5_res.get("error")):
+        if not isinstance(mt5_res, dict) or mt5_res.get("error") or str(
+            mt5_res.get("detail") or ""
+        ) in {
+            "MT5 unavailable",
+            "not_connected",
+        }:
+            mt5_detail = str(mt5_res.get("detail") or "") if isinstance(mt5_res, dict) else ""
+            errors["mt5"] = mt5_detail or "MT5 position verification failed"
+        else:
             for pos in (mt5_res or {}).get("positions", []) or []:
-                pair = str(pos.get("pair") or "").strip()
-                if pair:
-                    open_pairs.add(pair)
+                normalized = dict(pos)
+                normalized["venue"] = "mt5"
+                positions.append(normalized)
     except Exception as exc:
+        errors["mt5"] = str(exc)
         log.debug(f"[DECAY] MT5 open-position verification failed: {exc}")
 
     try:
         from bybit_executor import bybit_get_positions
 
         bybit_res = bybit_get_positions()
-        if not (isinstance(bybit_res, dict) and bybit_res.get("error")):
+        if not isinstance(bybit_res, dict) or bybit_res.get("error"):
+            errors["bybit"] = str((bybit_res or {}).get("detail") or "Bybit position verification failed")
+        else:
             for pos in (bybit_res or {}).get("positions", []) or []:
-                pair = str(pos.get("pair") or "").strip()
-                if pair:
-                    open_pairs.add(pair)
+                normalized = dict(pos)
+                normalized["venue"] = "bybit"
+                positions.append(normalized)
     except Exception as exc:
+        errors["bybit"] = str(exc)
         log.debug(f"[DECAY] Bybit open-position verification failed: {exc}")
 
-    return open_pairs
+    return {
+        "positions": positions,
+        "pairs": {str(pos.get("pair") or "").strip() for pos in positions if pos.get("pair")},
+        "errors": errors,
+        "available": not errors,
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _verified_open_decay_pairs() -> set[str]:
+    """Compatibility wrapper for pair-only consumers."""
+    return set(_verified_open_decay_snapshot()["pairs"])
 
 
 def _get_decay_ai_verdict(
@@ -16158,12 +16230,19 @@ def _get_decay_ai_verdict(
     decay: float,
     direction_flip: bool,
     signal_context: dict,
+    *,
+    cache_key: str | None = None,
+    engine: str = "engine_a",
+    entry_pct: float | None = None,
+    cur_pct: float | None = None,
+    decay_pct: float | None = None,
 ) -> dict:
     """Ask the configured AI provider whether a decaying position should be EXIT / HOLD / WATCH.
 
     Returns {"verdict": "EXIT"|"HOLD"|"WATCH", "urgency": "HIGH"|"MEDIUM"|"LOW", "reasoning": str}
     Skips gracefully if no AI API key is configured.
-    Results are cached 30 min per pair unless decay worsens by >= 0.5.
+    Results are cached 30 min per broker position unless relative decay worsens
+    by at least five percentage points.
     """
     _ai_runtime = resolve_ai_review_runtime(CONFIG)
     _active_provider = str(_ai_runtime.get("provider") or _ai_runtime.get("selectedProvider") or "grok")
@@ -16172,14 +16251,21 @@ def _get_decay_ai_verdict(
         return {}
 
     # Cache check - skip re-call if recent and decay hasn't worsened significantly
-    cached = _decay_ai_cache.get(pair_name)
+    _cache_key = cache_key or pair_name
+    with _decay_ai_cache_lock:
+        cached = _decay_ai_cache.get(_cache_key)
     if cached:
         try:
             age_secs = (
                 datetime.now(timezone.utc)
                 - datetime.fromisoformat(cached["ts"])
             ).total_seconds()
-            if age_secs < 1800 and (decay - cached["decay_at_call"]) < 0.5:
+            current_decay_metric = float(decay_pct if decay_pct is not None else decay)
+            worsening_threshold = 5.0 if decay_pct is not None else 0.5
+            if (
+                age_secs < 1800
+                and current_decay_metric - cached["decay_at_call"] < worsening_threshold
+            ):
                 return cached["result"]
         except Exception:
             pass
@@ -16193,10 +16279,21 @@ def _get_decay_ai_verdict(
         else ""
     )
 
+    if str(engine).lower() == "engine_b" and entry_pct is not None and cur_pct is not None:
+        score_path = (
+            f"Entry confidence: {entry_pct:.1f}% -> Current confidence: {cur_pct:.1f}% | "
+            f"Relative decay: {float(decay_pct or 0.0):.1f}%"
+        )
+    else:
+        score_path = (
+            f"Entry score: {entry_score:.2f} -> Current score: {cur_score:.2f} | "
+            f"Relative decay: {float(decay_pct or 0.0):.1f}%"
+        )
+
     prompt = (
         f"You are a risk management advisor reviewing an OPEN TRADE showing score decay.\n\n"
-        f"Trade: {pair_name} | Entry Direction: {direction} | Market Regime: {trend}\n"
-        f"Entry Score: {entry_score:.2f} → Current Score: {cur_score:.2f} | Decay: Δ{decay:.2f}\n"
+        f"Trade: {pair_name} | Engine: {engine} | Entry Direction: {direction} | Market Regime: {trend}\n"
+        f"{score_path}\n"
         f"Vol Ratio: {vol_ratio} | R:R at entry: 1:{rr}\n"
         f"{flip_note}\n\n"
         f"Assess whether the trader should EXIT now, continue HOLDING, or place on WATCH (monitor closely).\n"
@@ -16256,14 +16353,17 @@ def _get_decay_ai_verdict(
                         (signal_context.get("dataFreshness") or {}).get("reason")
                         or "unknown"
                     ),
-                    engine_a_state=cur_score,
-                    engine_b_state=None,
+                    engine_a_state=cur_score if engine == "engine_a" else None,
+                    engine_b_state=cur_pct if engine == "engine_b" else None,
                     engine_c_state=None,
                     engine_d_state=None,
                     risk_state={
                         "entry_score": entry_score,
                         "current_score": cur_score,
                         "decay": decay,
+                        "entry_pct": entry_pct,
+                        "current_pct": cur_pct,
+                        "decay_pct": decay_pct,
                         "direction_flip": direction_flip,
                     },
                     ai_review_state=AI_STATE_REVIEW_INCOMPLETE,
@@ -16322,14 +16422,17 @@ def _get_decay_ai_verdict(
                     (signal_context.get("dataFreshness") or {}).get("reason")
                     or "unknown"
                 ),
-                engine_a_state=cur_score,
-                engine_b_state=None,
+                engine_a_state=cur_score if engine == "engine_a" else None,
+                engine_b_state=cur_pct if engine == "engine_b" else None,
                 engine_c_state=None,
                 engine_d_state=None,
                 risk_state={
                     "entry_score": entry_score,
                     "current_score": cur_score,
                     "decay": decay,
+                    "entry_pct": entry_pct,
+                    "current_pct": cur_pct,
+                    "decay_pct": decay_pct,
                     "direction_flip": direction_flip,
                 },
                 ai_review_state=_state,
@@ -16345,11 +16448,12 @@ def _get_decay_ai_verdict(
         except Exception as _log_exc:
             log.debug("[DECAY-AI] audit log failed for %s: %s", pair_name, _log_exc)
 
-        _decay_ai_cache[pair_name] = {
-            "decay_at_call": decay,
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "result": result,
-        }
+        with _decay_ai_cache_lock:
+            _decay_ai_cache[_cache_key] = {
+                "decay_at_call": float(decay_pct if decay_pct is not None else decay),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "result": result,
+            }
 
         log.info(
             f"[DECAY-AI] {pair_name}: verdict={verdict} urgency={result.get('urgency')} | "
@@ -16365,11 +16469,14 @@ def _get_decay_ai_verdict(
 def _refresh_trade_score(pair_obj, engine, style, direction):
     """
     Refresh score context for an open trade based on its originating engine.
-    Returns (score, max_possible, pct, result_dict)
+    Returns (score, max_possible, pct, result_dict, error).
     """
     _engine = str(engine or "engine_a").lower()
     _style = str(style or "swing").lower()
     _direction = str(direction or "LONG").upper()
+
+    if _engine not in ("engine_a", "engine_b"):
+        return 0.0, 0.0, 0.0, None, f"unsupported_decay_engine:{_engine}"
 
     # Engine B (Naked Market Structure) re-evaluation path
     if _engine == "engine_b":
@@ -16383,18 +16490,26 @@ def _refresh_trade_score(pair_obj, engine, style, direction):
                 "price": None # Let engine fetch latest
             }
             # force_ai=False to avoid expensive LLM calls during monitor loop
-            res, _, err = _compute_naked_analysis(sig, force_ai=False)
+            res, _, err = _compute_naked_analysis(
+                sig,
+                force_ai=False,
+                overlay_only=True,
+                resolve_independent_direction=True,
+            )
             if res and not err:
                 return (
-                    res.get("score", 0),
-                    res.get("max_possible", 1.0),
-                    res.get("pct", 0.0),
-                    res
+                    float(res.get("score") or 0.0),
+                    float(res.get("max_possible") or 0.0),
+                    float(res.get("pct") or 0.0),
+                    res,
+                    None,
                 )
+            return 0.0, 0.0, 0.0, None, str(err or "engine_b_refresh_empty")
         except Exception as e:
             log.debug(f"[DECAY-REFRESH] {pair_obj.get('display')} engine_b refresh failed: {e}")
+            return 0.0, 0.0, 0.0, None, f"engine_b_refresh_failed:{e}"
 
-    # Default/Engine A (Confluence) re-evaluation path
+    # Engine A (Confluence) re-evaluation path
     try:
         btc_bias = "neutral"
         if pair_obj.get("type") == "crypto":
@@ -16402,178 +16517,384 @@ def _refresh_trade_score(pair_obj, engine, style, direction):
 
         res = analyze_pair(pair_obj, btc_bias, style=_style)
         if res:
-            cur_score = res.get("confluenceScore", 0)
-            max_score = res.get("maxScore", 3.0)
+            freshness = res.get("dataFreshness") or {}
+            if isinstance(freshness, dict) and freshness.get("allowed") is False:
+                return (
+                    0.0,
+                    0.0,
+                    0.0,
+                    None,
+                    f"engine_a_refresh_blocked:{freshness.get('reason') or 'freshness'}",
+                )
+            cur_score = float(res.get("confluenceScore"))
+            max_score = float(res.get("maxScore"))
             pct = (cur_score / max_score * 100) if max_score > 0 else 0
-            return (cur_score, max_score, pct, res)
+            return (cur_score, max_score, pct, res, None)
     except Exception as e:
         log.debug(f"[DECAY-REFRESH] {pair_obj.get('display')} engine_a refresh failed: {e}")
+        return 0.0, 0.0, 0.0, None, f"engine_a_refresh_failed:{e}"
 
-    return 0.0, 1.0, 0.0, None
+    return 0.0, 0.0, 0.0, None, "engine_a_refresh_empty"
 
 
 def _check_score_decay() -> None:
-    """Re-evaluate confluence for open positions; log warnings if score has decayed."""
+    """Re-evaluate supported broker-open positions against their entry score."""
+    global _score_decay_health
 
     try:
-        live_open_pairs = _verified_open_decay_pairs()
-        for k in [p for p in _score_decay_results if p not in live_open_pairs]:
-            del _score_decay_results[k]
+        from score_decay_monitor import normalize_decay_pair, select_decay_audit_rows
 
-        if not live_open_pairs:
+        broker_snapshot = _verified_open_decay_snapshot()
+        broker_positions = list(broker_snapshot.get("positions") or [])
+        broker_errors = dict(broker_snapshot.get("errors") or {})
+        _score_decay_health = {
+            "available": not broker_errors,
+            "status": "OK" if not broker_errors else "BROKER_VERIFICATION_PARTIAL",
+            "checkedAt": broker_snapshot.get("checkedAt"),
+            "errors": broker_errors,
+            "positionCount": len(broker_positions),
+        }
+
+        if not broker_positions:
+            if not broker_errors:
+                with _score_decay_results_lock:
+                    _score_decay_results.clear()
+                    _regime_shift_results.clear()
             return
 
         with sqlite3.connect(_AUDIT_DB, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
-            # engine_b trades context: engine, max_score, score_pct
             open_trades = con.execute(
-                "SELECT pair, score, direction, ticket, engine, max_score, score_pct, style FROM audit_log "
+                "SELECT id, ts, pair, score, direction, ticket, engine, max_score, score_pct, "
+                "style, entry_price, volume FROM audit_log "
                 "WHERE exit_price IS NULL AND ticket IS NOT NULL AND ticket != '' "
                 "AND (error_tag IS NULL OR error_tag = '')"
             ).fetchall()
 
-        # Remove closed trades from decay results before early-exit check
-        open_pairs = {row["pair"] for row in open_trades if row["pair"] in live_open_pairs}
-        stale_keys = [k for k in _score_decay_results if k not in open_pairs]
-        for k in stale_keys:
-            del _score_decay_results[k]
+        selections = select_decay_audit_rows(
+            [dict(row) for row in open_trades],
+            broker_positions,
+        )
+        live_pair_keys = {
+            normalize_decay_pair(pos.get("pair")) for pos in broker_positions
+        }
+        if not broker_errors:
+            with _score_decay_results_lock:
+                for key in [
+                    name
+                    for name in _score_decay_results
+                    if normalize_decay_pair(name) not in live_pair_keys
+                ]:
+                    del _score_decay_results[key]
+                for key in [
+                    name
+                    for name in _regime_shift_results
+                    if normalize_decay_pair(name) not in live_pair_keys
+                ]:
+                    del _regime_shift_results[key]
 
-        if not open_trades:
-            return
+        all_pairs = {
+            normalize_decay_pair(pair.get("display") or pair.get("symbol")): pair
+            for pair in ALL_PAIRS
+        }
+        active_position_keys: set[str] = set()
 
-        all_pairs = {p["display"]: p for p in ALL_PAIRS}
-
-        for row in open_trades:
-            pair_name = row["pair"]
-            if pair_name not in live_open_pairs:
+        for pair_name, selection in selections.items():
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if selection.get("status") != "MATCHED":
+                unavailable = {
+                    key: value
+                    for key, value in selection.items()
+                    if key not in {"row", "position"}
+                }
+                unavailable["ts"] = now_iso
+                with _score_decay_results_lock:
+                    previous = _score_decay_results.get(pair_name) or {}
+                    if previous.get("status") == "OK":
+                        unavailable["lastGoodTs"] = previous.get("ts")
+                    _score_decay_results[pair_name] = unavailable
                 continue
 
-            entry_score = row["score"] or 0
-            entry_max = row["max_score"]
-            entry_pct = row["score_pct"]
-            engine = row["engine"] or "engine_a"
-            style = row["style"] or "swing"
-
-            pair = all_pairs.get(pair_name)
+            row = dict(selection["row"])
+            position_key = str(selection.get("positionKey") or pair_name)
+            active_position_keys.add(position_key)
+            engine = str(row.get("engine") or "").lower()
+            style = str(row.get("style") or "swing").lower()
+            pair = all_pairs.get(normalize_decay_pair(pair_name))
             if not pair:
+                with _score_decay_results_lock:
+                    _score_decay_results[pair_name] = {
+                        "status": "UNAVAILABLE",
+                        "reason": "pair_not_in_runtime_registry",
+                        "pair": pair_name,
+                        "engine": engine,
+                        "positionKey": position_key,
+                        "ts": now_iso,
+                    }
                 continue
 
             try:
-                cur_score, cur_max, cur_pct, result = _refresh_trade_score(
-                    pair, engine, style, row["direction"]
+                entry_score = (
+                    float(row.get("score")) if row.get("score") is not None else None
                 )
+                entry_max = (
+                    float(row.get("max_score"))
+                    if row.get("max_score") is not None
+                    else None
+                )
+                entry_pct = (
+                    float(row.get("score_pct"))
+                    if row.get("score_pct") is not None
+                    else None
+                )
+            except (TypeError, ValueError):
+                entry_score = entry_max = entry_pct = None
 
-                if not result:
+            if (
+                engine == "engine_b"
+                and entry_pct is None
+                and entry_score is not None
+                and entry_max
+            ):
+                entry_pct = entry_score / entry_max * 100.0
+            baseline_invalid = (
+                engine == "engine_b" and (entry_pct is None or entry_pct <= 0)
+            ) or (
+                engine == "engine_a" and (entry_score is None or entry_score <= 0)
+            )
+            if baseline_invalid:
+                with _score_decay_results_lock:
+                    _score_decay_results[pair_name] = {
+                        "status": "UNAVAILABLE",
+                        "reason": "missing_or_invalid_entry_score_baseline",
+                        "pair": pair_name,
+                        "engine": engine,
+                        "positionKey": position_key,
+                        "ts": now_iso,
+                    }
+                continue
+
+            try:
+                cur_score, cur_max, cur_pct, result, refresh_error = (
+                    _refresh_trade_score(
+                        pair,
+                        engine,
+                        style,
+                        row.get("direction"),
+                    )
+                )
+                if not result or refresh_error:
+                    unavailable = {
+                        "status": "UNAVAILABLE",
+                        "reason": str(refresh_error or "score_refresh_empty"),
+                        "pair": pair_name,
+                        "engine": engine,
+                        "positionKey": position_key,
+                        "ts": now_iso,
+                    }
+                    with _score_decay_results_lock:
+                        previous = _score_decay_results.get(pair_name) or {}
+                        if previous.get("status") == "OK":
+                            unavailable["lastGoodTs"] = previous.get("ts")
+                        _score_decay_results[pair_name] = unavailable
                     continue
 
-                # Decay calculation is engine-specific
-                if engine == "engine_b" and entry_pct is not None:
-                    # Engine B uses percentage-of-max (e.g. 85% -> 40%)
+                if engine == "engine_b":
+                    assert entry_pct is not None
                     decay = entry_pct - cur_pct
-                    decay_pct = (decay / entry_pct * 100) if entry_pct > 0 else 0
-                    score_note = f"pct {entry_pct:.0f}% → {cur_pct:.0f}%"
+                    decay_pct = decay / entry_pct * 100.0
+                    score_note = f"pct {entry_pct:.0f}% -> {cur_pct:.0f}%"
                 else:
-                    # Engine A / Legacy uses raw score scale (e.g. 2.15 -> 0.80)
+                    assert entry_score is not None
                     decay = entry_score - cur_score
-                    decay_pct = (decay / entry_score * 100) if entry_score > 0 else 0
-                    score_note = f"score {entry_score:.2f} → {cur_score:.2f}"
+                    decay_pct = decay / entry_score * 100.0
+                    score_note = f"score {entry_score:.2f} -> {cur_score:.2f}"
 
+                current_direction = (
+                    result.get("independent_direction") or result.get("direction")
+                )
                 direction_flip = bool(
-                    row["direction"] and result.get("direction")
-                    and row["direction"] != result.get("direction")
+                    row.get("direction")
+                    and current_direction
+                    and str(row.get("direction")).upper()
+                    != str(current_direction).upper()
                 )
 
-                _score_decay_results[pair_name] = {
-                    "engine": engine,
-                    "currentScore": cur_score,
-                    "entryScore": entry_score,
-                    "currentPct": cur_pct,
-                    "entryPct": entry_pct,
-                    "decay": round(decay, 4),
-                    "decayPct": round(decay_pct, 1),
-                    "direction": row["direction"],
-                    "currentDirection": result.get("direction"),
-                    "directionFlip": direction_flip,
-                    "scoreNote": score_note,
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                }
+                with _score_decay_results_lock:
+                    _score_decay_results[pair_name] = {
+                        "status": "OK",
+                        "engine": engine,
+                        "currentScore": cur_score,
+                        "entryScore": entry_score,
+                        "currentMax": cur_max,
+                        "entryMax": entry_max,
+                        "currentPct": cur_pct,
+                        "entryPct": entry_pct,
+                        "decay": round(decay, 4),
+                        "decayPct": round(decay_pct, 1),
+                        "direction": row.get("direction"),
+                        "currentDirection": current_direction,
+                        "directionFlip": direction_flip,
+                        "scoreNote": score_note,
+                        "positionKey": position_key,
+                        "ticket": row.get("ticket"),
+                        "entryTs": row.get("ts"),
+                        "ts": now_iso,
+                    }
 
-                # Regime shift classifier (advisory only - never closes trades)
                 try:
                     def _fetch_for_classifier(_tf, _lim, _pair=pair):
                         try:
                             return fetch_candles(_pair, _tf, _lim)
-                        except Exception as _fe:
-                            log.debug(f"[REGIME-SHIFT] fetch wrapper error: {_fe}")
+                        except Exception as fetch_error:
+                            log.debug(
+                                "[REGIME-SHIFT] fetch wrapper error: %s",
+                                fetch_error,
+                            )
                             return None
 
-                    _regime_result = _regime_classify(
+                    regime_result = _regime_classify(
                         pair_display=pair_name,
-                        direction=row["direction"] or "LONG",
+                        direction=row.get("direction") or "LONG",
                         engine=engine,
                         style=style,
                         fetch_candles_fn=_fetch_for_classifier,
                         config=CONFIG,
                     )
-                    _regime_result["ts"] = datetime.now(timezone.utc).isoformat()
-                    _regime_shift_results[pair_name] = _regime_result
-                except Exception as _rse:
-                    log.debug(f"[REGIME-SHIFT] {pair_name} classify failed: {_rse}")
-
-                # Warn at 40%+ drop from entry score (works for both forex 0-2 and factor 0-3 scales)
-                if decay_pct >= 40 or direction_flip:
-                    _msg = f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop) - consider exit"
-                    if direction_flip:
-                        _msg += f" | DIRECTION FLIP: {row['direction']} → {result.get('direction')}"
-
-                    # Diagnostic: Check for major component shifts (Engine A)
-                    if engine == "engine_a" and result and "components" in result:
-                        comps = result["components"]
-                        _dr = []
-                        if comps.get("trend_gate") is False:
-                            _dr.append(f"trend_gate_blocked (adx={comps.get('trend_gate_adx')})")
-                        if comps.get("regime_blocked") is True:
-                            _dr.append(f"regime_blocked ({comps.get('regime_label')})")
-                        if _dr:
-                            _msg += f" | VETO: {', '.join(_dr)}"
-
-                    log.warning(_msg)
-                    try:
-                        pass  # decay telegram notifications disabled
-                    except Exception:
-                        pass
-                elif decay_pct >= 25:
-                    log.info(
-                        f"[DECAY] {pair_name} ({engine}): {score_note} ({decay_pct:.0f}% drop)"
+                    regime_result["ts"] = datetime.now(timezone.utc).isoformat()
+                    with _score_decay_results_lock:
+                        _regime_shift_results[pair_name] = regime_result
+                except Exception as regime_error:
+                    log.debug(
+                        "[REGIME-SHIFT] %s classify failed: %s",
+                        pair_name,
+                        regime_error,
                     )
 
-                # AI assessment - only for meaningful decay, runs in background to avoid blocking
+                if decay_pct >= 40 or direction_flip:
+                    message = (
+                        f"[DECAY] {pair_name} ({engine}): {score_note} "
+                        f"({decay_pct:.0f}% drop) - consider exit"
+                    )
+                    if direction_flip:
+                        message += (
+                            f" | DIRECTION FLIP: {row.get('direction')} "
+                            f"-> {current_direction}"
+                        )
+                    log.warning(message)
+                elif decay_pct >= 25:
+                    log.info(
+                        "[DECAY] %s (%s): %s (%.0f%% drop)",
+                        pair_name,
+                        engine,
+                        score_note,
+                        decay_pct,
+                    )
+
                 if decay_pct >= 25:
-                    def _run_ai_verdict(_pn=pair_name, _dir=row["direction"] or "",
-                                        _es=entry_score, _cs=cur_score, _d=decay,
-                                        _dpct=decay_pct, _flip=direction_flip,
-                                        _engine=engine, _epct=entry_pct, _cpct=cur_pct, _ctx=result):
-                        ai_v = _get_decay_ai_verdict(_pn, _dir, _es, _cs, _d, _flip, _ctx)
-                        if ai_v:
-                            _score_decay_results.get(_pn, {}).update({
-                                "aiVerdict": ai_v.get("verdict"),
-                                "aiUrgency": ai_v.get("urgency"),
-                                "aiReasoning": ai_v.get("reasoning"),
-                                "aiTs": datetime.now(timezone.utc).isoformat(),
-                            })
-                            if _dpct >= 40:
-                                try:
-                                    pass  # decay telegram notifications disabled
-                                except Exception:
-                                    pass
+                    def _run_ai_verdict(
+                        _pair_name=pair_name,
+                        _direction=row.get("direction") or "",
+                        _entry_score=float(entry_score or 0.0),
+                        _cur_score=cur_score,
+                        _decay=decay,
+                        _decay_pct=decay_pct,
+                        _flip=direction_flip,
+                        _engine=engine,
+                        _entry_pct=entry_pct,
+                        _cur_pct=cur_pct,
+                        _context=result,
+                        _position_key=position_key,
+                    ):
+                        ai_verdict = _get_decay_ai_verdict(
+                            _pair_name,
+                            _direction,
+                            _entry_score,
+                            _cur_score,
+                            _decay,
+                            _flip,
+                            _context,
+                            cache_key=_position_key,
+                            engine=_engine,
+                            entry_pct=_entry_pct,
+                            cur_pct=_cur_pct,
+                            decay_pct=_decay_pct,
+                        )
+                        if not ai_verdict:
+                            return
+                        with _score_decay_results_lock:
+                            current = _score_decay_results.get(_pair_name) or {}
+                            if (
+                                current.get("positionKey") == _position_key
+                                and current.get("status") == "OK"
+                            ):
+                                current.update(
+                                    {
+                                        "aiVerdict": ai_verdict.get("verdict"),
+                                        "aiUrgency": ai_verdict.get("urgency"),
+                                        "aiReasoning": ai_verdict.get("reasoning"),
+                                        "aiTs": datetime.now(timezone.utc).isoformat(),
+                                    }
+                                )
+
                     threading.Thread(target=_run_ai_verdict, daemon=True).start()
 
-            except Exception as e:
-                log.debug(f"[DECAY] {pair_name} re-eval failed: {e}")
+            except Exception as error:
+                with _score_decay_results_lock:
+                    _score_decay_results[pair_name] = {
+                        "status": "UNAVAILABLE",
+                        "reason": f"score_decay_evaluation_failed:{error}",
+                        "pair": pair_name,
+                        "engine": engine,
+                        "positionKey": position_key,
+                        "ts": now_iso,
+                    }
+                log.debug("[DECAY] %s re-eval failed: %s", pair_name, error)
 
-    except Exception as e:
-        log.debug(f"[DECAY] score decay check failed: {e}")
+        if not broker_errors:
+            with _decay_ai_cache_lock:
+                for cache_key in [
+                    key for key in _decay_ai_cache if key not in active_position_keys
+                ]:
+                    del _decay_ai_cache[cache_key]
 
+    except Exception as error:
+        _score_decay_health = {
+            "available": False,
+            "status": "MONITOR_ERROR",
+            "checkedAt": datetime.now(timezone.utc).isoformat(),
+            "errors": {"monitor": str(error)},
+        }
+        log.debug("[DECAY] score decay check failed: %s", error)
+
+
+def _check_calibration_decay() -> None:
+    """Refresh advisory model-calibration decay health."""
+    global _calibration_decay_results
+
+    try:
+        from calibration import global_calibration_health
+
+        result = global_calibration_health(_AUDIT_DB)
+        _calibration_decay_results = result
+        if result.get("status") == "unhealthy":
+            log.warning(
+                "[CALIBRATION-DECAY] unhealthy scopes=%s",
+                len(result.get("decayed_scopes") or []),
+            )
+        elif result.get("status") == "insufficient_data":
+            log.info(
+                "[CALIBRATION-DECAY] insufficient scopes=%s",
+                result.get("insufficient_data"),
+            )
+    except Exception as error:
+        _calibration_decay_results = {
+            "status": "error",
+            "global_healthy": None,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "error": str(error),
+        }
+        log.warning("[CALIBRATION-DECAY] check failed: %s", error)
 
 @app.route("/api/score-decay")
 def api_score_decay():
@@ -16582,31 +16903,87 @@ def api_score_decay():
     Consumed by telegram_bot.py for operator alerts — not used by the React UI.
     """
 
-    live_open_pairs = _verified_open_decay_pairs()
-    for k in [p for p in _score_decay_results if p not in live_open_pairs]:
-        del _score_decay_results[k]
-    for k in [p for p in _regime_shift_results if p not in live_open_pairs]:
-        del _regime_shift_results[k]
+    from score_decay_monitor import normalize_decay_pair
 
-    merged = {}
-    for p, d in _score_decay_results.items():
-        if p not in live_open_pairs:
-            continue
-        row = dict(d)
-        if p in _regime_shift_results:
-            row["regimeShift"] = _regime_shift_results[p]
-        merged[p] = row
+    broker_snapshot = _verified_open_decay_snapshot()
+    live_pairs = {
+        normalize_decay_pair(position.get("pair"))
+        for position in broker_snapshot.get("positions") or []
+    }
+    broker_errors = broker_snapshot.get("errors") or {}
+    merged = {"__meta__": dict(_score_decay_health)}
+    merged["__meta__"]["available"] = not broker_errors
+    merged["__meta__"]["status"] = (
+        _score_decay_health.get("status")
+        if not broker_errors
+        else "BROKER_VERIFICATION_PARTIAL"
+    )
+    merged["__meta__"]["checkedAt"] = broker_snapshot.get("checkedAt")
+    merged["__meta__"]["brokerErrors"] = broker_errors
+    with _score_decay_results_lock:
+        if not broker_errors:
+            for key in [
+                name
+                for name in _score_decay_results
+                if normalize_decay_pair(name) not in live_pairs
+            ]:
+                del _score_decay_results[key]
+            for key in [
+                name
+                for name in _regime_shift_results
+                if normalize_decay_pair(name) not in live_pairs
+            ]:
+                del _regime_shift_results[key]
+
+        for pair_name, decay_row in _score_decay_results.items():
+            if not broker_errors and normalize_decay_pair(pair_name) not in live_pairs:
+                continue
+            row = dict(decay_row)
+            if pair_name in _regime_shift_results:
+                row["regimeShift"] = _regime_shift_results[pair_name]
+            merged[pair_name] = row
     return jsonify(merged)
+
+
+@app.route("/api/calibration-decay")
+def api_calibration_decay():
+    """Return temporal calibration health for advisory monitoring."""
+    if _calibration_decay_results.get("status") == "STARTING":
+        _check_calibration_decay()
+    return jsonify(_json_safe(_calibration_decay_results))
 
 
 @app.route("/api/regime-shift")
 def api_regime_shift():
     """Standalone endpoint for regime shift classifier results (open positions only)."""
 
-    live_open_pairs = _verified_open_decay_pairs()
-    for k in [p for p in _regime_shift_results if p not in live_open_pairs]:
-        del _regime_shift_results[k]
-    return jsonify({p: d for p, d in _regime_shift_results.items() if p in live_open_pairs})
+    from score_decay_monitor import normalize_decay_pair
+
+    broker_snapshot = _verified_open_decay_snapshot()
+    live_pairs = {
+        normalize_decay_pair(position.get("pair"))
+        for position in broker_snapshot.get("positions") or []
+    }
+    broker_errors = broker_snapshot.get("errors") or {}
+    with _score_decay_results_lock:
+        if not broker_errors:
+            for key in [
+                name
+                for name in _regime_shift_results
+                if normalize_decay_pair(name) not in live_pairs
+            ]:
+                del _regime_shift_results[key]
+        response = {
+            pair_name: result
+            for pair_name, result in _regime_shift_results.items()
+            if broker_errors or normalize_decay_pair(pair_name) in live_pairs
+        }
+    response["__meta__"] = {
+        "available": not broker_errors,
+        "brokerErrors": broker_errors,
+        "checkedAt": broker_snapshot.get("checkedAt"),
+    }
+    return jsonify(response)
 
 
 # ── Task 2: Performance Dashboard Endpoint ─────────────────────────────────────────

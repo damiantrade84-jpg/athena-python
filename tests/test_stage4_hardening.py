@@ -6,6 +6,8 @@ Covers:
   4.3: Score-to-probability calibration decay monitor
 """
 
+import sqlite3
+
 import pytest
 from config import CONFIG, _fatal_config_validation, ConfigValidationError
 from scoring import _TIER_VOLATILE, _TIER_STABLE, get_score_threshold
@@ -133,38 +135,33 @@ class TestCalibrationDecayMonitor:
         assert report["available"] is False
         assert report["reason"] == "insufficient_data"
 
-    def test_decay_report_detects_decayed_bucket(self):
-        """Synthetic records where a high-score bucket underperforms.
+    def test_decay_loader_preserves_explicit_engine(self, tmp_path):
+        from calibration import _load_decay_records_from_audit_db
 
-        We create an overall 70% win rate (prior ~0.7) but the [0.8,1.0]
-        bucket only wins 10% — a clear decay signal.
-        """
+        db_path = tmp_path / "audit.db"
+        with sqlite3.connect(db_path) as con:
+            con.execute(
+                "CREATE TABLE audit_log ("
+                "id INTEGER, ts TEXT, pair TEXT, engine TEXT, score REAL, "
+                "max_score REAL, score_pct REAL, asset_class TEXT, style TEXT, "
+                "grade TEXT, pnl REAL, r_multiple REAL, exit_price REAL, error_tag TEXT)"
+            )
+            con.execute(
+                "INSERT INTO audit_log VALUES (1, '2026-07-22T00:00:00+00:00', "
+                "'APT/USDT', 'engine_b', 8, 10, 80, 'crypto', 'intraday', "
+                "'EXECUTED', 1, 1, 6, NULL)"
+            )
+
+        records = _load_decay_records_from_audit_db(str(db_path))
+
+        assert records[0]["engine"] == "engine_b"
+        assert records[0]["score_pct"] == 80
+
+    def test_decay_report_detects_decayed_bucket(self):
+        """A recent high-score cohort materially underperforms its history."""
         records = []
-        # Low-score buckets: 70% win rate (calibrated)
-        for _ in range(70):
-            records.append(
-                {
-                    "engine": "engine_a",
-                    "asset_class": "forex",
-                    "style": "intraday",
-                    "raw_score": 0.3,
-                    "max_score": 1.0,
-                    "won": True,
-                }
-            )
-        for _ in range(30):
-            records.append(
-                {
-                    "engine": "engine_a",
-                    "asset_class": "forex",
-                    "style": "intraday",
-                    "raw_score": 0.3,
-                    "max_score": 1.0,
-                    "won": False,
-                }
-            )
-        # High-score bucket [0.8, 1.0]: only 10% win (should be ~70%+)
-        for i in range(20):
+        # Chronological reference cohort: 75% wins in the high-score bucket.
+        for i in range(84):
             records.append(
                 {
                     "engine": "engine_a",
@@ -172,7 +169,19 @@ class TestCalibrationDecayMonitor:
                     "style": "intraday",
                     "raw_score": 0.9,
                     "max_score": 1.0,
-                    "won": i < 2,
+                    "won": i < 63,
+                }
+            )
+        # Recent cohort: only 11% wins in the same bucket.
+        for i in range(36):
+            records.append(
+                {
+                    "engine": "engine_a",
+                    "asset_class": "forex",
+                    "style": "intraday",
+                    "raw_score": 0.9,
+                    "max_score": 1.0,
+                    "won": i < 4,
                 }
             )
         report = calibration_decay_report(
@@ -187,24 +196,25 @@ class TestCalibrationDecayMonitor:
         assert report["healthy"] is False
         assert report["decayed_buckets"] >= 1
         assert report["max_miscalibration"] > 0.08
+        assert report["reference_records"] == 84
+        assert report["recent_records"] == 36
         assert report["recommendation"] in ("recalibrate_model", "review_recent_regime")
 
     def test_decay_report_healthy_when_calibrated(self):
         """Synthetic records where all buckets are well-calibrated."""
         records = []
-        # Mix of scores with ~50% win rate everywhere
-        for score in (0.2, 0.4, 0.6, 0.8, 0.95):
-            for i in range(20):
-                records.append(
-                    {
-                        "engine": "engine_a",
-                        "asset_class": "forex",
-                        "style": "intraday",
-                        "raw_score": score,
-                        "max_score": 1.0,
-                        "won": i < 10,
-                    }
-                )
+        # Chronological reference and recent cohorts both alternate wins/losses.
+        for i in range(100):
+            records.append(
+                {
+                    "engine": "engine_a",
+                    "asset_class": "forex",
+                    "style": "intraday",
+                    "raw_score": 0.8,
+                    "max_score": 1.0,
+                    "won": i % 2 == 0,
+                }
+            )
         report = calibration_decay_report(
             records=records,
             engine="engine_a",
@@ -222,9 +232,11 @@ class TestCalibrationDecayMonitor:
         report2 = cached_calibration_decay_report(records=[])
         assert report1 == report2
 
-    def test_global_health_runs_without_error(self):
-        summary = global_calibration_health()
+    def test_global_health_is_not_healthy_when_data_is_missing(self):
+        summary = global_calibration_health("/nonexistent/path/audit.db")
         assert "checked" in summary
         assert "healthy" in summary
         assert "decayed_scopes" in summary
         assert "global_healthy" in summary
+        assert summary["global_healthy"] is None
+        assert summary["status"] == "insufficient_data"

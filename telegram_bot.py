@@ -1408,18 +1408,30 @@ def _build_and_run(token: str, chat_ids: list[str]):
             return
         try:
             resp = await _run_in_thread(lambda: _safe_json(req.get(f"{_BASE}/api/score-decay", timeout=_TIMEOUT_FAST)))
-            relevant = {k: v for k, v in resp.items() if isinstance(v, dict) and v.get("decay", 0) > 0.3}
+            meta = resp.get("__meta__") or {}
+            if meta.get("available") is False:
+                await update.message.reply_text("⚠️ Score decay unavailable — broker position verification is incomplete")
+                return
+            relevant = {
+                key: value
+                for key, value in resp.items()
+                if key != "__meta__"
+                and isinstance(value, dict)
+                and value.get("status") == "OK"
+                and (value.get("decayPct", 0) >= 25 or value.get("directionFlip"))
+            }
             if not relevant:
                 await update.message.reply_text("✅ No significant score decay on open positions")
                 return
 
             lines = ["📉 *Score Decay — Open Positions*\n"]
-            for pair_name, d in sorted(relevant.items(), key=lambda x: x[1].get("decay", 0), reverse=True):
+            for pair_name, d in sorted(relevant.items(), key=lambda x: x[1].get("decayPct", 0), reverse=True):
                 entry_dir = d.get("direction", "?")
                 cur_dir = d.get("currentDirection", "?")
-                flip = " ⚠️ DIRECTION FLIP" if entry_dir != cur_dir else ""
+                flip = " ⚠️ DIRECTION FLIP" if d.get("directionFlip") else ""
                 decay_val = d.get("decay", 0)
-                emoji = "🔴" if decay_val >= 1.5 else "🟡"
+                decay_pct = d.get("decayPct", 0)
+                emoji = "🔴" if decay_pct >= 40 or d.get("directionFlip") else "🟡"
                 
                 engine = d.get("engine", "engine_a")
                 engine_label = " [Eng B]" if engine == "engine_b" else ""
@@ -1427,7 +1439,7 @@ def _build_and_run(token: str, chat_ids: list[str]):
                 
                 lines.append(
                     f"{emoji} *{pair_name}*{engine_label}: `{score_path}` "
-                    f"(Δ{decay_val:.1f}){flip}"
+                    f"(Δ{decay_val:.1f}, {decay_pct:.0f}%){flip}"
                 )
                 ai_verdict = d.get("aiVerdict")
                 if ai_verdict:
@@ -1682,14 +1694,21 @@ def _build_and_run(token: str, chat_ids: list[str]):
                 if not d:
                     await query.message.reply_text(f"✅ No decay data for *{pair_name}*", parse_mode="Markdown")
                     return
+                if d.get("status") != "OK":
+                    await query.message.reply_text(
+                        f"⚠️ Score decay unavailable for *{pair_name}*: `{d.get('reason', 'unknown')}`",
+                        parse_mode="Markdown",
+                    )
+                    return
                 decay_val = d.get("decay", 0)
+                decay_pct = d.get("decayPct", 0)
                 entry_dir = d.get("direction", "?")
                 cur_dir = d.get("currentDirection", "?")
-                flip = "\n⚠️ *DIRECTION FLIP — consider exiting*" if entry_dir != cur_dir else ""
-                emoji = "🔴" if decay_val >= 1.5 else "🟡"
+                flip = "\n⚠️ *DIRECTION FLIP — consider exiting*" if d.get("directionFlip") else ""
+                emoji = "🔴" if decay_pct >= 40 or d.get("directionFlip") else "🟡"
                 await query.message.reply_text(
                     f"{emoji} *{pair_name} Score Decay*\n"
-                    f"Entry: `{d.get('entryScore', 0):.2f}` → Now: `{d.get('currentScore', 0):.2f}` (Δ{decay_val:.2f})\n"
+                    f"{d.get('scoreNote', 'score unavailable')} (Δ{decay_val:.2f}, {decay_pct:.0f}%)\n"
                     f"Entry dir: `{entry_dir}` | Current: `{cur_dir}`{flip}",
                     parse_mode="Markdown"
                 )

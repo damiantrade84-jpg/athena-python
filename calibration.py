@@ -661,7 +661,8 @@ def calibration_quality_summary(prediction: dict | None) -> dict[str, Any]:
 # diverges beyond tolerance — a leading indicator of regime shift or
 # model degradation.
 
-_CALIBRATION_DECAY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_CALIBRATION_DECAY_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_CALIBRATION_DECAY_CACHE_LOCK = threading.Lock()
 _CALIBRATION_DECAY_TTL_SEC = 300.0
 
 _DEFAULT_DECAY_BUCKET_EDGES = (0.0, 0.35, 0.50, 0.65, 0.80, 1.000001)
@@ -670,6 +671,60 @@ _DEFAULT_DECAY_MIN_TOTAL = 40
 # Maximum allowed Brier-score-equivalent miscalibration per bucket.
 # 0.15 means a bucket predicted 70% but realized 55% (or 85%) triggers alert.
 _DEFAULT_DECAY_TOLERANCE = 0.15
+_DEFAULT_DECAY_RECENT_FRACTION = 0.30
+
+
+def _load_decay_records_from_audit_db(db_path: str | None = None) -> list[dict[str, Any]]:
+    """Load chronological, explicitly attributed records for decay monitoring.
+
+    The general probability calibrator retains its legacy inference behavior so
+    this monitoring repair cannot silently change live calibrated probabilities.
+    Decay monitoring instead consumes the authoritative audit ``engine`` field.
+    """
+    path = db_path or _default_db_path()
+    if not os.path.exists(path):
+        return []
+
+    try:
+        with sqlite3.connect(path, timeout=15.0) as con:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                """
+                SELECT id, ts, pair, engine, score, max_score, score_pct,
+                       asset_class, style, grade, pnl, r_multiple
+                FROM audit_log
+                WHERE exit_price IS NOT NULL
+                  AND pnl IS NOT NULL
+                  AND (error_tag IS NULL OR error_tag = '')
+                ORDER BY ts ASC, id ASC
+                """
+            ).fetchall()
+    except Exception:
+        return []
+
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        engine = _norm_text(row["engine"])
+        if not engine:
+            engine = _infer_engine_from_audit_row(row)
+        if not engine:
+            continue
+        records.append(
+            {
+                "ts": row["ts"],
+                "pair": row["pair"],
+                "engine": engine,
+                "asset_class": row["asset_class"],
+                "style": row["style"],
+                "raw_score": row["score"],
+                "max_score": row["max_score"],
+                "score_pct": row["score_pct"],
+                "won": bool(row["pnl"] > 0) if row["pnl"] is not None else None,
+                "pnl": row["pnl"],
+                "r_multiple": row["r_multiple"],
+            }
+        )
+    return records
 
 
 def _brier_miscalibration(predicted_prob: float, empirical_rate: float) -> float:
@@ -690,32 +745,57 @@ def calibration_decay_report(
     decay_tolerance: float = _DEFAULT_DECAY_TOLERANCE,
     prior_weight: float = _DEFAULT_PRIOR_WEIGHT,
     default_max_score: float | None = None,
+    recent_fraction: float = _DEFAULT_DECAY_RECENT_FRACTION,
 ) -> dict[str, Any]:
-    """Compare smoothed predicted probabilities against empirical win rates.
+    """Compare a historical calibration reference with recent outcomes.
 
-    Returns a decay report with per-bucket miscalibration and an overall
-    health flag.  If any bucket diverges by > decay_tolerance, the model
-    is flagged as potentially decayed.
+    Records must be chronological. Database records are ordered by audit
+    timestamp; explicitly supplied records retain caller order. The older
+    segment fits the expected per-score-bucket probability and the recent
+    segment supplies independent realized outcomes. This separation is what
+    makes the report a decay detector rather than an in-sample fit check.
     """
     edges = tuple(bucket_edges or _DEFAULT_DECAY_BUCKET_EDGES)
-    calibrator = fit_calibrator(
-        records or _load_records_from_audit_db(db_path),
-        engine=engine,
-        asset_class=asset_class,
-        style=style,
-        bucket_edges=edges,
-        min_bucket_samples=min_bucket_samples,
-        min_total_samples=min_total_samples,
-        prior_weight=prior_weight,
-        default_max_score=default_max_score,
+    source_records = (
+        list(records)
+        if records is not None
+        else _load_decay_records_from_audit_db(db_path)
     )
+    scoped = [
+        record
+        for record in source_records
+        if _record_scope_match(record, engine, asset_class, style)
+    ]
+    usable: list[dict[str, Any]] = []
+    for record in scoped:
+        score_norm = _normalize_score(
+            record.get("raw_score", record.get("score")),
+            max_score=record.get("max_score"),
+            score_pct=record.get("score_pct"),
+            default_max_score=default_max_score,
+        )
+        won = _normalize_won(record)
+        if score_norm is None or won is None:
+            continue
+        usable.append(
+            {
+                "score_norm": score_norm,
+                "won": won,
+                "ts": record.get("ts"),
+            }
+        )
 
-    if not calibrator.get("available"):
+    usable_count = len(usable)
+    if usable_count < min_total_samples:
         return {
             "available": False,
             "healthy": None,
-            "scope": calibrator.get("scope"),
-            "usable_records": calibrator.get("usable_records", 0),
+            "scope": {
+                "engine": _norm_text(engine),
+                "asset_class": _norm_text(asset_class),
+                "style": _norm_text(style),
+            },
+            "usable_records": usable_count,
             "reason": "insufficient_data",
             "buckets": [],
             "max_miscalibration": None,
@@ -723,52 +803,153 @@ def calibration_decay_report(
             "recommendation": "collect_more_trades",
         }
 
-    buckets = calibrator.get("buckets", [])
+    fraction = max(0.10, min(0.50, float(recent_fraction)))
+    recent_count = max(min_bucket_samples, int(round(usable_count * fraction)))
+    recent_count = min(recent_count, usable_count - min_bucket_samples)
+    reference = usable[:-recent_count]
+    recent = usable[-recent_count:]
+    if len(reference) < min_bucket_samples or len(recent) < min_bucket_samples:
+        return {
+            "available": False,
+            "healthy": None,
+            "scope": {
+                "engine": _norm_text(engine),
+                "asset_class": _norm_text(asset_class),
+                "style": _norm_text(style),
+            },
+            "usable_records": usable_count,
+            "reason": "insufficient_reference_or_recent_data",
+            "buckets": [],
+            "max_miscalibration": None,
+            "decayed_buckets": 0,
+            "recommendation": "collect_more_trades",
+        }
+
+    reference_calibrator = fit_calibrator(
+        [
+            {
+                "raw_score": item["score_norm"],
+                "max_score": 1.0,
+                "won": item["won"],
+            }
+            for item in reference
+        ],
+        bucket_edges=edges,
+        min_bucket_samples=min_bucket_samples,
+        min_total_samples=min_total_samples,
+        prior_weight=prior_weight,
+        default_max_score=1.0,
+    )
+    reference_buckets = {
+        int(bucket["index"]): bucket
+        for bucket in reference_calibrator.get("buckets", [])
+    }
+
+    buckets: list[dict[str, Any]] = []
     decayed = []
     max_misc = 0.0
-    for b in buckets:
-        n = int(b.get("sample_count", 0))
-        if n < min_bucket_samples:
+    comparable_buckets = 0
+    for idx in range(len(edges) - 1):
+        reference_bucket = reference_buckets.get(idx) or {}
+        reference_n = int(reference_bucket.get("sample_count", 0) or 0)
+        recent_rows = [
+            item for item in recent if _bucket_index(item["score_norm"], edges) == idx
+        ]
+        recent_n = len(recent_rows)
+        recent_wins = sum(item["won"] for item in recent_rows)
+        empirical = (recent_wins / recent_n) if recent_n else None
+        predicted = (
+            float(reference_bucket.get("smoothed_prob"))
+            if reference_bucket.get("smoothed_prob") is not None
+            else None
+        )
+        bucket_row = {
+            "index": idx,
+            "low": round(edges[idx], 6),
+            "high": round(min(edges[idx + 1], 1.0), 6),
+            "reference_samples": reference_n,
+            "recent_samples": recent_n,
+            "reference_predicted": round(predicted, 6) if predicted is not None else None,
+            "recent_empirical": round(empirical, 6) if empirical is not None else None,
+            "status": "comparable"
+            if reference_n >= min_bucket_samples and recent_n >= min_bucket_samples
+            else "insufficient_overlap",
+        }
+        buckets.append(bucket_row)
+        if reference_n < min_bucket_samples or recent_n < min_bucket_samples:
             continue
-        predicted = float(b.get("smoothed_prob", 0.0))
-        empirical = float(b.get("empirical_prob", 0.0)) if b.get("empirical_prob") is not None else predicted
+        comparable_buckets += 1
+        assert predicted is not None and empirical is not None
         misc = _brier_miscalibration(predicted, empirical)
         max_misc = max(max_misc, misc)
+        bucket_row["miscalibration"] = round(misc, 4)
         if misc > decay_tolerance:
             decayed.append(
                 {
-                    "bucket_index": b["index"],
-                    "range": [b["low"], b["high"]],
+                    "bucket_index": idx,
+                    "range": [bucket_row["low"], bucket_row["high"]],
                     "predicted": round(predicted, 4),
                     "empirical": round(empirical, 4),
                     "miscalibration": round(misc, 4),
-                    "samples": n,
+                    "reference_samples": reference_n,
+                    "recent_samples": recent_n,
                 }
             )
 
-    healthy = len(decayed) == 0 and calibrator.get("usable_records", 0) >= min_total_samples
+    if comparable_buckets == 0:
+        return {
+            "available": False,
+            "healthy": None,
+            "scope": {
+                "engine": _norm_text(engine),
+                "asset_class": _norm_text(asset_class),
+                "style": _norm_text(style),
+            },
+            "usable_records": usable_count,
+            "reference_records": len(reference),
+            "recent_records": len(recent),
+            "reason": "insufficient_bucket_overlap",
+            "buckets": buckets,
+            "max_miscalibration": None,
+            "decayed_buckets": 0,
+            "recommendation": "collect_more_trades",
+        }
+
+    healthy = len(decayed) == 0
     recommendation = "ok"
     if not healthy:
         if len(decayed) >= 2:
             recommendation = "recalibrate_model"
-        elif calibrator.get("usable_records", 0) < min_total_samples:
-            recommendation = "collect_more_trades"
         else:
             recommendation = "review_recent_regime"
 
     return {
         "available": True,
         "healthy": healthy,
-        "scope": calibrator.get("scope"),
-        "usable_records": calibrator.get("usable_records", 0),
-        "overall_win_rate": calibrator.get("overall_win_rate"),
+        "scope": {
+            "engine": _norm_text(engine),
+            "asset_class": _norm_text(asset_class),
+            "style": _norm_text(style),
+        },
+        "usable_records": usable_count,
+        "reference_records": len(reference),
+        "recent_records": len(recent),
+        "reference_win_rate": round(
+            sum(item["won"] for item in reference) / len(reference), 6
+        ),
+        "recent_win_rate": round(
+            sum(item["won"] for item in recent) / len(recent), 6
+        ),
+        "split_method": "chronological_tail",
+        "recent_fraction": fraction,
+        "recent_start_ts": recent[0].get("ts"),
         "max_miscalibration": round(max_misc, 4) if max_misc > 0 else None,
         "decayed_buckets": len(decayed),
         "decayed_bucket_details": decayed,
         "decay_tolerance": decay_tolerance,
         "buckets": buckets,
         "recommendation": recommendation,
-        "warnings": calibrator.get("warnings", []),
+        "warnings": reference_calibrator.get("warnings", []),
     }
 
 
@@ -781,12 +962,27 @@ def cached_calibration_decay_report(
     **kwargs: Any,
 ) -> dict[str, Any]:
     """TTL-cached wrapper for calibration_decay_report."""
+    if kwargs.get("records") is not None:
+        return calibration_decay_report(
+            engine=engine,
+            asset_class=asset_class,
+            style=style,
+            db_path=db_path,
+            **kwargs,
+        )
     path = db_path or _default_db_path()
-    cache_key = f"{path}::{engine}:{asset_class}:{style}"
+    cache_key = (
+        path,
+        _norm_text(engine),
+        _norm_text(asset_class),
+        _norm_text(style),
+        tuple(sorted((key, repr(value)) for key, value in kwargs.items())),
+    )
     now = time.time()
-    cached = _CALIBRATION_DECAY_CACHE.get(cache_key)
-    if cached and (now - cached[0]) < _CALIBRATION_DECAY_TTL_SEC:
-        return cached[1]
+    with _CALIBRATION_DECAY_CACHE_LOCK:
+        cached = _CALIBRATION_DECAY_CACHE.get(cache_key)
+        if cached and (now - cached[0]) < _CALIBRATION_DECAY_TTL_SEC:
+            return cached[1]
     report = calibration_decay_report(
         engine=engine,
         asset_class=asset_class,
@@ -794,7 +990,8 @@ def cached_calibration_decay_report(
         db_path=path,
         **kwargs,
     )
-    _CALIBRATION_DECAY_CACHE[cache_key] = (now, report)
+    with _CALIBRATION_DECAY_CACHE_LOCK:
+        _CALIBRATION_DECAY_CACHE[cache_key] = (now, report)
     return report
 
 
@@ -804,17 +1001,30 @@ def global_calibration_health(db_path: str | None = None) -> dict[str, Any]:
     Returns a summary with any decayed scopes so operators can spot
     model degradation at a glance.
     """
-    engines = ("engine_a", "engine_b", "engine_c", "scalp")
-    asset_classes = ("crypto", "forex", "commodity", "stock", "index")
+    engines = ("engine_a", "engine_b")
+    records = _load_decay_records_from_audit_db(db_path)
     decayed_scopes = []
     healthy_count = 0
     unhealthy_count = 0
     insufficient_count = 0
+    checked_count = 0
 
     for engine in engines:
-        for asset in asset_classes:
-            report = cached_calibration_decay_report(
-                engine=engine, asset_class=asset, db_path=db_path
+        observed_assets = sorted(
+            {
+                _norm_text(record.get("asset_class"))
+                for record in records
+                if _norm_text(record.get("engine")) == engine
+                and _norm_text(record.get("asset_class"))
+            }
+        )
+        for asset in (None, *observed_assets):
+            checked_count += 1
+            report = calibration_decay_report(
+                records=records,
+                engine=engine,
+                asset_class=asset,
+                db_path=db_path,
             )
             if not report.get("available"):
                 insufficient_count += 1
@@ -833,12 +1043,23 @@ def global_calibration_health(db_path: str | None = None) -> dict[str, Any]:
                     }
                 )
 
+    if unhealthy_count:
+        status = "unhealthy"
+        global_healthy: bool | None = False
+    elif insufficient_count:
+        status = "insufficient_data"
+        global_healthy = None
+    else:
+        status = "healthy"
+        global_healthy = True
+
     return {
-        "checked": len(engines) * len(asset_classes),
+        "checked": checked_count,
         "healthy": healthy_count,
         "unhealthy": unhealthy_count,
         "insufficient_data": insufficient_count,
         "decayed_scopes": decayed_scopes,
-        "global_healthy": unhealthy_count == 0,
+        "status": status,
+        "global_healthy": global_healthy,
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
