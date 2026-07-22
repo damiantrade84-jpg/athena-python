@@ -80,9 +80,10 @@ def test_new_us_symbols_have_supporting_tool_config_mappings():
     assert "SQQQ: etf" in config_text
 
 
-def test_mt5_symbol_map_knows_requested_tool_additions():
+def test_mt5_symbol_map_knows_requested_tool_additions(monkeypatch):
     import mt5_executor
 
+    monkeypatch.setitem(mt5_executor.CONFIG, "MT5_SYMBOL_OVERRIDES", {})
     assert mt5_executor.mt5_map_symbol("US2000") == "US2000"
     assert mt5_executor.mt5_map_symbol("GOOGL") == "GOOGL.US"
     assert mt5_executor.mt5_map_symbol("AVGO") == "AVGO.US"

@@ -603,10 +603,24 @@ _last_connect_attempt = 0
 _RECONNECT_COOLDOWN = 30  # seconds between reconnect attempts
 
 
+def _effective_mt5_symbol_map() -> dict[str, str]:
+    """Return static mappings overlaid with machine-local broker symbols."""
+
+    effective = dict(_MT5_SYMBOL_MAP)
+    overrides = CONFIG.get("MT5_SYMBOL_OVERRIDES")
+    if isinstance(overrides, dict):
+        for display, broker_symbol in overrides.items():
+            if isinstance(display, str) and isinstance(broker_symbol, str):
+                broker_symbol = broker_symbol.strip()
+                if display and broker_symbol:
+                    effective[display] = broker_symbol
+    return effective
+
+
 def mt5_map_symbol(athena_display: str) -> str | None:
     """Map Athena display name to MT5 symbol. Returns None if no mapping exists."""
 
-    mt5_sym = _MT5_SYMBOL_MAP.get(athena_display)
+    mt5_sym = _effective_mt5_symbol_map().get(athena_display)
 
     if mt5_sym:
         return mt5_sym
@@ -624,6 +638,27 @@ def mt5_map_symbol(athena_display: str) -> str | None:
         return stripped
 
     return None
+
+
+def _resolve_mt5_terminal_path() -> str:
+    """Resolve MT5 terminal64.exe from env, then CONFIG.
+
+    MetaTrader5 IPC is more reliable with forward-slash paths. A directory
+    path is accepted and expanded to terminal64.exe when present.
+    """
+    path = os.environ.get("MT5_PATH", "").strip()
+    if not path:
+        path = str(CONFIG.get("MT5_PATH") or "").strip()
+    if not path:
+        return ""
+
+    # Keep a native path for existence checks; expose IPC path with '/'.
+    native = os.path.normpath(path)
+    if os.path.isdir(native):
+        candidate = os.path.join(native, "terminal64.exe")
+        if os.path.isfile(candidate):
+            native = candidate
+    return native.replace("\\", "/")
 
 
 def mt5_connect() -> bool:
@@ -651,16 +686,37 @@ def mt5_connect() -> bool:
 
     _last_connect_attempt = now
 
-    terminal_path = os.environ.get("MT5_PATH", "").strip()
+    terminal_path = _resolve_mt5_terminal_path()
+    native_path = terminal_path.replace("/", os.sep) if terminal_path else ""
 
-    if terminal_path and not os.path.exists(terminal_path):
+    if terminal_path and not os.path.exists(native_path):
         log.error(f"[MT5] MT5_PATH does not exist: {terminal_path}")
 
         _connected = False
 
         return False
 
-    init_kwargs = {"path": terminal_path} if terminal_path else {}
+    login = os.environ.get("MT5_LOGIN", "").strip()
+    password = os.environ.get("MT5_PASSWORD", "")
+    server = os.environ.get("MT5_SERVER", "").strip()
+
+    init_kwargs: dict = {
+        "timeout": int(CONFIG.get("MT5_INIT_TIMEOUT_MS", 60_000) or 60_000),
+    }
+    if terminal_path:
+        init_kwargs["path"] = terminal_path
+
+    login_int = None
+    if login and password and server:
+        try:
+            login_int = int(login)
+        except ValueError:
+            log.error(f"[MT5] MT5_LOGIN must be a number, got: {login}")
+            _connected = False
+            return False
+        init_kwargs["login"] = login_int
+        init_kwargs["password"] = password
+        init_kwargs["server"] = server
 
     if not mt5.initialize(**init_kwargs):
         target = terminal_path or "default active terminal"
@@ -673,34 +729,15 @@ def mt5_connect() -> bool:
     if terminal_path:
         log.info(f"[MT5] Connected via pinned terminal: {terminal_path}")
 
-    # Login if credentials provided
-
-    login = os.environ.get("MT5_LOGIN", "")
-
-    password = os.environ.get("MT5_PASSWORD", "")
-
-    server = os.environ.get("MT5_SERVER", "")
-
-    if login and password and server:
-        try:
-            login_int = int(login)
-
-        except ValueError:
-            log.error(f"[MT5] MT5_LOGIN must be a number, got: {login}")
-
-            _connected = False
-
-            return False
-
-        if not mt5.login(login=login_int, password=password, server=server):
-            log.error(f"[MT5] login failed: {mt5.last_error()}")
-
-            _connected = False
-
-            return False
-
+    if login_int is not None:
+        # initialize() already requested login; confirm account is the expected one.
+        info = mt5.account_info()
+        if info is None or int(info.login) != login_int:
+            if not mt5.login(login=login_int, password=password, server=server):
+                log.error(f"[MT5] login failed: {mt5.last_error()}")
+                _connected = False
+                return False
         log.info(f"[MT5] Logged in to {server} (account {login_int})")
-
     else:
         log.info(
             "[MT5] Connected to terminal (no explicit login — using terminal's active account)"
@@ -841,7 +878,7 @@ def mt5_get_positions(*, attempt_connect: bool = True) -> dict:
 
     # Reverse map: MT5 symbol → Athena display name
 
-    reverse_map = {v: k for k, v in _MT5_SYMBOL_MAP.items()}
+    reverse_map = {v: k for k, v in _effective_mt5_symbol_map().items()}
 
     # C4: an SL-less position would otherwise contribute 0 to portfolio heat,
     # allowing unlimited stacking. Assume the worst-case configured cap distance.

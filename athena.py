@@ -1281,6 +1281,46 @@ ALL_PAIRS = (
     + CRYPTO_PAIRS
 )
 
+
+def _apply_mt5_pair_availability(pairs: list[dict], config: dict) -> list[str]:
+    """Disable MT5 pairs that the configured local broker cannot provide."""
+
+    raw_disabled = config.get("MT5_DISABLED_PAIRS") or []
+    disabled = (
+        {str(display).strip() for display in raw_disabled if str(display).strip()}
+        if isinstance(raw_disabled, (list, tuple, set))
+        else set()
+    )
+    raw_enabled = config.get("MT5_ENABLED_PAIRS") or []
+    enabled = (
+        {str(display).strip() for display in raw_enabled if str(display).strip()}
+        if isinstance(raw_enabled, (list, tuple, set))
+        else set()
+    )
+    disable_commodities = config.get("MT5_DISABLE_COMMODITIES") is True
+    applied: list[str] = []
+    for pair in pairs:
+        if pair.get("source") != "mt5":
+            continue
+        display = str(pair.get("display") or "").strip()
+        if (disable_commodities and pair.get("type") == "commodity") or display in disabled:
+            pair["enabled"] = False
+            pair["auto_enable"] = False
+            applied.append(display)
+        elif display in enabled:
+            pair["enabled"] = True
+            pair.pop("auto_enable", None)
+    return applied
+
+
+_MT5_AVAILABILITY_DISABLED = _apply_mt5_pair_availability(ALL_PAIRS, CONFIG)
+if _MT5_AVAILABILITY_DISABLED:
+    log.info(
+        "[MT5] Broker availability disabled %d pair(s): %s",
+        len(_MT5_AVAILABILITY_DISABLED),
+        ", ".join(_MT5_AVAILABILITY_DISABLED),
+    )
+
 # Pairs that opted out of WS - polled via REST every 60s
 _NON_WS_EODHD = [
     p for p in ALL_PAIRS if not p.get("ws", True) and p.get("source") == "eodhd"

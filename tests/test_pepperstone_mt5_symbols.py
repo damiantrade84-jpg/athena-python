@@ -57,7 +57,7 @@ _EXPECTED_NEW_SYMBOLS = {
 }
 
 
-def test_new_pepperstone_symbols_are_in_mt5_universe():
+def test_new_pepperstone_symbols_are_retained_in_mt5_universe():
     by_display = {pair["display"]: pair for pair in ALL_PAIRS}
 
     for display, expected in _EXPECTED_NEW_SYMBOLS.items():
@@ -66,14 +66,19 @@ def test_new_pepperstone_symbols_are_in_mt5_universe():
         assert pair["symbol"] == expected["symbol"]
         assert pair["type"] == expected["type"]
         assert pair["source"] == "mt5"
-        assert pair["enabled"] is True
+        assert "enabled" in pair
 
 
 @pytest.mark.parametrize(
     ("display", "mt5_symbol"),
     [(display, values["mt5"]) for display, values in _EXPECTED_NEW_SYMBOLS.items()],
 )
-def test_mt5_map_symbol_knows_new_pepperstone_symbols(display: str, mt5_symbol: str):
+def test_mt5_map_symbol_knows_new_pepperstone_symbols(
+    display: str, mt5_symbol: str, monkeypatch
+):
+    import mt5_executor
+
+    monkeypatch.setitem(mt5_executor.CONFIG, "MT5_SYMBOL_OVERRIDES", {})
     assert mt5_map_symbol(display) == mt5_symbol
 
 
