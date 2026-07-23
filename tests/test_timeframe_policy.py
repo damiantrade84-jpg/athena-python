@@ -536,6 +536,56 @@ def test_shared_trigger_execution_tf_uses_current_forming_direction() -> None:
     assert signal["direction"] == "LONG"
 
 
+def test_mt5_execution_timing_uses_bid_candle_close_not_quote_midpoint() -> None:
+    signal = {
+        "direction": "SHORT",
+        "trigger_ok": True,
+        # ATFX-style 20-point spread: midpoint is above the M15 open even
+        # though the broker's bid candle has moved lower.
+        "current_price": 0.81615,
+    }
+    states = {
+        tf: {
+            "confirmed": [
+                {
+                    "time": "2026-07-23T10:00:00Z",
+                    "open": 0.81610,
+                    "high": 0.81630,
+                    "low": 0.81600,
+                    "close": 0.81613,
+                }
+            ],
+            "stale": False,
+        }
+        for tf in ("D1", "H4", "H1", "M30", "M15")
+    }
+    states["M15"]["forming"] = {
+        "time": "2026-07-23T10:15:00Z",
+        "open": 0.81613,
+        "high": 0.81618,
+        "low": 0.81604,
+        "close": 0.81605,
+    }
+
+    attach_timeframe_policy_payload(
+        signal,
+        {
+            "display": "USD/CHF",
+            "type": "forex",
+            "source": "mt5",
+            "score_group": "forex_majors",
+        },
+        "intraday",
+        engine="engine_b",
+        market_states=states,
+    )
+
+    assert signal["executionTimingStatus"] == "ALIGNED"
+    assert signal["executionTimingDirection"] == "SHORT"
+    assert signal["executionTimingSource"] == "forming_candle_mt5_bid_close"
+    assert signal["entryReadiness"] == "READY"
+
+
 def test_distinct_execution_tf_holds_entry_without_rescoring_engine_a_or_b() -> None:
     required_states = {
         tf: {

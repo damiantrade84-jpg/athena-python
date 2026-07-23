@@ -228,6 +228,18 @@ def api_prices():
             decorated[_k] = _v
             continue
         entry = dict(_v)
+        if str(entry.get("source") or "").strip().lower() == "mt5":
+            try:
+                bid = float(entry.get("bid"))
+                ask = float(entry.get("ask"))
+            except (TypeError, ValueError):
+                bid = ask = 0.0
+            if bid > 0 and ask >= bid:
+                # MT5 charts and OHLC bars are bid-based. Keep the midpoint for
+                # drift diagnostics, but show the same price basis as the chart.
+                entry["mid"] = (bid + ask) / 2.0
+                entry["price"] = bid
+                entry["price_basis"] = "bid"
         entry["ageSec"] = _age_seconds(entry.get("ts"))
         entry["ws_age_sec"] = _age_seconds(entry.get("last_ws_ts"))
         entry["rest_age_sec"] = _age_seconds(entry.get("last_rest_ts"))

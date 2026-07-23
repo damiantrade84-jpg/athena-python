@@ -138,6 +138,31 @@ def test_prices_exposes_live_price_source_priority_diagnostics(monkeypatch):
     assert entry["rest_age_sec"] == pytest.approx(2.0)
 
 
+def test_prices_exposes_mt5_bid_as_chart_price_and_preserves_midpoint(monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    client = _client(
+        _runtime(
+            live_prices={
+                "USD/CHF": {
+                    "price": 0.81635,
+                    "bid": 0.81625,
+                    "ask": 0.81645,
+                    "ts": 999.0,
+                    "source": "mt5",
+                }
+            }
+        )
+    )
+
+    resp = client.get("/api/prices")
+
+    assert resp.status_code == 200
+    entry = resp.get_json()["prices"]["USD/CHF"]
+    assert entry["price"] == pytest.approx(0.81625)
+    assert entry["mid"] == pytest.approx(0.81635)
+    assert entry["price_basis"] == "bid"
+
+
 def test_yield_curve_and_candles_use_runtime_fetchers():
     client = _client(_runtime(CONFIG={"CRYPTO_EXECUTION_PROVIDER": "binance"}))
 

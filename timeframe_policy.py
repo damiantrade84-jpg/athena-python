@@ -1561,6 +1561,7 @@ def evaluate_execution_timeframe(
     market_states: Mapping[str, Mapping[str, Any]] | None,
     *,
     trigger_confirmed: bool,
+    use_mt5_bid_candle_close: bool = False,
 ) -> dict[str, Any]:
     """Evaluate entry timing on the policy execution TF without changing the thesis.
 
@@ -1625,6 +1626,10 @@ def evaluate_execution_timeframe(
             live_price = None
     except (TypeError, ValueError):
         live_price = None
+    if use_mt5_bid_candle_close:
+        # MT5 OHLC is bid-based, so a bid/ask midpoint is not a compatible
+        # substitute when the provider did not supply a forming bid candle.
+        live_price = None
 
     reference_candle = forming or (confirmed[-1] if confirmed else None)
     if not isinstance(reference_candle, Mapping):
@@ -1639,9 +1644,16 @@ def evaluate_execution_timeframe(
         }
 
     if forming is not None:
-        source = "forming_candle_live_price" if live_price is not None else "forming_candle"
         reference_value = reference_candle.get("open")
-        current_value = live_price if live_price is not None else reference_candle.get("close")
+        if use_mt5_bid_candle_close:
+            # MT5 OHLC is bid-based. Substituting a bid/ask midpoint here adds
+            # half the spread to the forming candle and can flip lower-TF
+            # direction on wide-spread brokers.
+            source = "forming_candle_mt5_bid_close"
+            current_value = reference_candle.get("close")
+        else:
+            source = "forming_candle_live_price" if live_price is not None else "forming_candle"
+            current_value = live_price if live_price is not None else reference_candle.get("close")
     elif live_price is not None:
         source = "live_price_vs_confirmed_close"
         reference_value = reference_candle.get("close")
@@ -1841,6 +1853,9 @@ def attach_timeframe_policy_payload(
     """Attach policy/readiness fields and promote the current policy result."""
     symbol = str(pair.get("display") or pair.get("symbol") or signal.get("display") or "")
     asset_type = str(pair.get("type") or pair.get("asset_type") or signal.get("type") or "")
+    provider = str(
+        pair.get("source") or pair.get("provider") or signal.get("source") or ""
+    ).strip().lower()
     score_group = pair.get("score_group") or signal.get("scoreGroup") or signal.get("score_group")
     engine_key, style_key = _normalize_policy_identity(engine, str(style or "intraday"))
     mode, demo_autotrade_enabled, real_autotrade_enabled = _policy_runtime_settings(
@@ -1989,6 +2004,7 @@ def attach_timeframe_policy_payload(
         signal,
         states,
         trigger_confirmed=trigger_confirmed,
+        use_mt5_bid_candle_close=provider == "mt5",
     )
     signal.update(execution_timing)
     execution_status = str(execution_timing.get("executionTimingStatus") or "UNAVAILABLE")
