@@ -2250,6 +2250,7 @@ MAX_EXECUTION_SPREAD_PCT:
 MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL:
   XPTUSD: 0.0030      # platinum, resting ~0.21%
   XPDUSD: 0.0050      # palladium, resting ~0.36%
+  NATGAS: 0.0120      # ATFX NATGAS.s resting ~0.85% (2026-07-23); ~1.4x cap
   SUGAR: 0.0037       # resting ~0.26%
   LEAD: 0.0034        # resting ~0.24%
   COTTON: 0.0026      # resting ~0.18%
