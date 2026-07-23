@@ -439,6 +439,58 @@ def test_confirmed_engine_b_trigger_sets_ready_without_changing_structure_result
     assert signal["triggerConfirmed"] is True
 
 
+def test_engine_b_entry_ok_catalyst_sets_ready_when_raw_trigger_ok_false() -> None:
+    """Flexible Engine B can pass via sweep/CHoCH/breakout with trigger_ok=False."""
+    signal = {
+        "trigger_ok": False,
+        "entry_ok": True,
+        "structural_verdict": "CLEAR",
+        "direction": "LONG",
+        "current_price": 1.10,
+    }
+    states = {
+        tf: {"confirmed": [{"time": "2026-07-13T10:00:00Z"}], "stale": False}
+        for tf in ("D1", "H4", "H1", "M30", "M15")
+    }
+    # Shared trigger/execution TF (M15): forming must align with direction.
+    states["M15"]["forming"] = {
+        "time": "2026-07-13T10:15:00Z",
+        "open": 1.095,
+        "high": 1.102,
+        "low": 1.094,
+        "close": 1.101,
+    }
+    attach_timeframe_policy_payload(
+        signal,
+        {"display": "EUR/USD", "type": "forex", "score_group": "forex_majors"},
+        "intraday",
+        engine="engine_b",
+        market_states=states,
+    )
+
+    assert signal["entryReadiness"] == "READY"
+    assert signal["triggerConfirmed"] is True
+
+
+def test_engine_b_trigger_false_without_entry_ok_stays_pending() -> None:
+    signal = {"trigger_ok": False, "entry_ok": False, "structural_verdict": "CLEAR"}
+    states = {
+        tf: {"confirmed": [{"time": "2026-07-13T10:00:00Z"}], "stale": False}
+        for tf in ("D1", "H4", "H1", "M30", "M15")
+    }
+    attach_timeframe_policy_payload(
+        signal,
+        {"display": "EUR/USD", "type": "forex", "score_group": "forex_majors"},
+        "intraday",
+        engine="engine_b",
+        market_states=states,
+    )
+
+    assert signal["entryReadiness"] == "PENDING"
+    assert signal["entryReadinessReason"] == "confirmed trigger condition not met"
+    assert signal["triggerConfirmed"] is False
+
+
 def test_shared_trigger_execution_tf_uses_current_forming_direction() -> None:
     signal = {
         "score": 2.7,

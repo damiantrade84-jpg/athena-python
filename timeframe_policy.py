@@ -1967,17 +1967,23 @@ def attach_timeframe_policy_payload(
     signal["formingBarTime"] = forming_times or None
     trigger_state = states.get(policy.trigger_tf.value) or {}
     trigger_closed = bool(trigger_state.get("confirmed"))
-    explicit_trigger = signal.get("triggerConfirmed")
-    if explicit_trigger is None:
-        explicit_trigger = next(
-            (
-                signal.get(key)
-                for key in ("trigger_confirmed", "trigger_ok", "trigger_passed")
-                if signal.get(key) is not None
-            ),
-            None,
-        )
-    trigger_confirmed = bool(explicit_trigger) if explicit_trigger is not None else False
+    # Engine B entry confirmation is entry_ok (candle trigger OR structural
+    # catalysts: breakout+volume, sweep@zone, CHoCH@zone). Checking only
+    # trigger_ok rejects valid catalyst passes and blocks execute refresh with
+    # ENGINE_B_ENTRY_NOT_READY: PENDING: confirmed trigger condition not supplied.
+    _trigger_aliases = (
+        "triggerConfirmed",
+        "trigger_confirmed",
+        "entry_ok",
+        "canonical_trigger_ok",
+        "trigger_ok",
+        "trigger_passed",
+    )
+    _present_triggers = [
+        signal.get(key) for key in _trigger_aliases if signal.get(key) is not None
+    ]
+    trigger_supplied = bool(_present_triggers)
+    trigger_confirmed = any(bool(value) for value in _present_triggers)
     execution_timing = evaluate_execution_timeframe(
         policy,
         signal,
@@ -1997,7 +2003,11 @@ def attach_timeframe_policy_payload(
         reason = "stale_required_closed_timeframes:" + ",".join(stale)
     elif not trigger_confirmed:
         readiness = "PENDING"
-        reason = "confirmed trigger condition not supplied"
+        reason = (
+            "confirmed trigger condition not met"
+            if trigger_supplied
+            else "confirmed trigger condition not supplied"
+        )
     elif execution_status in {"UNAVAILABLE", "STALE"}:
         readiness = "UNAVAILABLE"
         reason = (
