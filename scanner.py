@@ -105,7 +105,11 @@ def _scan_speed_state(
     except (TypeError, ValueError):
         spread = None
     try:
-        quote_ts = float(quote.get("ts"))
+        quote_ts_raw = quote.get("broker_ts")
+        quote_source = str(quote.get("source") or "").strip().lower()
+        if quote_ts_raw is None and quote_source != "mt5":
+            quote_ts_raw = quote.get("ts")
+        quote_ts = float(quote_ts_raw)
         if quote_ts > 1e12:
             quote_ts /= 1000.0
         quote_age = max(0.0, datetime.now(timezone.utc).timestamp() - quote_ts) if quote_ts > 0 else None

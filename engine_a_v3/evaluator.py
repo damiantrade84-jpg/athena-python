@@ -250,6 +250,73 @@ def _quant_predicates(quant: QuantScore) -> tuple[PredicateResult, ...]:
     return tuple(out)
 
 
+def _evaluate_trigger_confirmation(
+    factor_diagnostics: Mapping[str, Any] | None,
+    direction: str | None,
+    trigger_timeframe: str | None,
+) -> tuple[bool | None, dict[str, Any]]:
+    """Confirm policy trigger evidence against the evaluator's final direction."""
+    expected_tf = str(trigger_timeframe or "").strip().upper()
+    resolved_direction = str(direction or "").strip().upper()
+    evidence = (
+        factor_diagnostics.get("triggerEvidence")
+        if isinstance(factor_diagnostics, Mapping)
+        else None
+    )
+    diagnostic: dict[str, Any] = {
+        "timeframe": expected_tf or None,
+        "direction": resolved_direction or None,
+        "passed": False,
+    }
+    if not expected_tf:
+        diagnostic["reason"] = "policy_trigger_timeframe_not_supplied"
+        return None, diagnostic
+    if resolved_direction not in {"LONG", "SHORT"}:
+        diagnostic["reason"] = "signal_direction_unavailable"
+        return False, diagnostic
+    if not isinstance(evidence, Mapping):
+        diagnostic["reason"] = "trigger_evidence_missing"
+        return False, diagnostic
+
+    diagnostic["source"] = evidence.get("source")
+    evidence_tf = str(evidence.get("timeframe") or "").strip().upper()
+    if evidence_tf != expected_tf:
+        diagnostic["reason"] = "trigger_timeframe_mismatch"
+        return False, diagnostic
+    if evidence.get("available") is not True:
+        diagnostic["reason"] = "trigger_evidence_unavailable"
+        return False, diagnostic
+    try:
+        trigger_signal = float(evidence.get("signal"))
+        trigger_quality = float(evidence.get("quality"))
+    except (TypeError, ValueError):
+        diagnostic["reason"] = "trigger_evidence_invalid"
+        return False, diagnostic
+    diagnostic["signal"] = round(trigger_signal, 4)
+    diagnostic["quality"] = round(trigger_quality, 4)
+    if not math.isfinite(trigger_signal) or not math.isfinite(trigger_quality):
+        diagnostic["reason"] = "trigger_evidence_invalid"
+        return False, diagnostic
+    if trigger_quality <= 0.1:
+        diagnostic["reason"] = "trigger_quality_below_floor"
+        return False, diagnostic
+    if trigger_signal == 0.0:
+        diagnostic["reason"] = "trigger_direction_neutral"
+        return False, diagnostic
+    aligned = (
+        trigger_signal > 0.0
+        if resolved_direction == "LONG"
+        else trigger_signal < 0.0
+    )
+    diagnostic["passed"] = aligned
+    diagnostic["reason"] = (
+        "trigger_direction_aligned"
+        if aligned
+        else "trigger_direction_opposed"
+    )
+    return aligned, diagnostic
+
+
 def _build_levels(
     primary: list[dict],
     *,
@@ -828,6 +895,11 @@ def evaluate_engine_a_v3(
             predicates = predicates + setup.predicates
 
     compact_unqualified = compact_replay and not qualified
+    trigger_confirmed, trigger_confirmation = _evaluate_trigger_confirmation(
+        quant.factor_diagnostics,
+        direction,
+        policy_trigger_tf,
+    )
     factor_diagnostics = None
     if not compact_unqualified:
         factor_diagnostics = dict(quant.factor_diagnostics or {})
@@ -845,6 +917,8 @@ def evaluate_engine_a_v3(
         }
         if quant_session_blocked:
             factor_diagnostics["quantSessionGateBlocked"] = True
+        if policy_trigger_tf:
+            factor_diagnostics["triggerConfirmation"] = trigger_confirmation
 
     signal_id = ""
     if not compact_unqualified:
@@ -927,4 +1001,5 @@ def evaluate_engine_a_v3(
         factorScores=None if compact_unqualified else quant.factor_scores,
         factorDiagnostics=factor_diagnostics,
         engineATradeEnabled=qualified,
+        triggerConfirmed=trigger_confirmed,
     )

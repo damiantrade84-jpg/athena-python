@@ -72,6 +72,29 @@ def _is_mt5_routed_display(display: str, pairs: list | None = None) -> bool:
     return _pair_source_by_display(display, pairs) == "mt5"
 
 
+_MT5_MARKET_STATES = frozenset(
+    {"open", "closed", "halted", "suspended", "unavailable"}
+)
+
+
+def _mt5_symbol_market_state(mt5, mt5_symbol: str) -> str:
+    """Map MT5 symbol availability to the policy liquidity state."""
+    try:
+        info = mt5.symbol_info(mt5_symbol)
+    except Exception:
+        return "unavailable"
+    if info is None:
+        return "unavailable"
+    trade_mode = getattr(info, "trade_mode", None)
+    if trade_mode is None:
+        return "unavailable"
+    closed_modes = {
+        getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", 0),
+        getattr(mt5, "SYMBOL_TRADE_MODE_CLOSEONLY", 3),
+    }
+    return "closed" if trade_mode in closed_modes else "open"
+
+
 def _record_mt5_live_price(
     display: str,
     price: float,
@@ -80,6 +103,7 @@ def _record_mt5_live_price(
     *,
     now_ts: float | None = None,
     broker_ts: float | None = None,
+    market_state: str | None = None,
 ) -> None:
     """Authoritative live quote for MT5-routed pairs (broker tick mid)."""
     now_ts = time.time() if now_ts is None else now_ts
@@ -92,7 +116,21 @@ def _record_mt5_live_price(
     }
     if broker_ts is not None:
         entry["broker_ts"] = broker_ts
+    normalized_market_state = None
+    if market_state is not None:
+        candidate = str(market_state).strip().lower()
+        normalized_market_state = (
+            candidate if candidate in _MT5_MARKET_STATES else "unavailable"
+        )
     with _live_prices_lock:
+        if normalized_market_state is None:
+            previous = _live_prices.get(display)
+            if isinstance(previous, dict) and previous.get("source") == "mt5":
+                previous_state = str(previous.get("market_state") or "").lower()
+                if previous_state in _MT5_MARKET_STATES:
+                    normalized_market_state = previous_state
+        if normalized_market_state is not None:
+            entry["market_state"] = normalized_market_state
         _live_prices[display] = entry
 
 
@@ -1222,6 +1260,7 @@ def _run_mt5_tick_poller(poll_interval: float = 1.5):
                         bid=bid,
                         ask=ask,
                         broker_ts=_broker_ts,
+                        market_state=_mt5_symbol_market_state(mt5, mt5_symbol),
                     )
                     updated += 1
                 except Exception as e:

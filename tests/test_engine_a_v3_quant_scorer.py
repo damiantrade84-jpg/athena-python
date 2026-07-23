@@ -6,13 +6,17 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from engine_a_v3.evaluator import evaluate_engine_a_v3
+from engine_a_v3.evaluator import (
+    _evaluate_trigger_confirmation,
+    evaluate_engine_a_v3,
+)
 from engine_a_v3.levels import build_mean_reversion_levels, build_structural_levels
 from engine_a_v3.profile import EngineAV3Profile, baseline_profile
 from engine_a_v3.promotion import PromotionDecision
 from engine_a_v3.contract import ValidationArtifact
 from engine_a_v3.quant_scorer import (
     Component,
+    QuantScore,
     _component_vol_mults,
     _location_component,
     _momentum_component,
@@ -55,6 +59,167 @@ def _candles() -> dict[str, list[dict]]:
 def test_policy_momentum_honors_explicit_tlt_group_override() -> None:
     assert _resolve_policy_momentum_tf("bond_tlt", "stock", "intraday", "M15") == "D1"
     assert _resolve_policy_momentum_tf("us_stock_single", "stock", "intraday", "M15") == "M15"
+
+
+def _bullish_snap() -> dict:
+    return {
+        "close": 110.0,
+        "ema21": 108.0,
+        "ema50": 105.0,
+        "ema200": 100.0,
+        "ema200Slope10": 0.5,
+        "atr": 2.0,
+        "atr_pct": 1.8,
+        "adx": 30.0,
+        "rsi": 65.0,
+        "macdHist": 0.5,
+        "macdHistPrev": 0.4,
+        "plusDI": 25.0,
+        "minusDI": 10.0,
+        "bbUpper": 114.0,
+        "bbLower": 102.0,
+    }
+
+
+def test_policy_trigger_evidence_uses_actual_trigger_timeframe(monkeypatch):
+    import engine_a_v3.quant_scorer as scorer_module
+
+    captured: dict[str, tuple[str, ...]] = {}
+
+    def _fake_snapshots(
+        candle_map,
+        asset_type,
+        periods,
+        snapshot_cache=None,
+        *,
+        extra_tfs=(),
+    ):
+        captured["extra_tfs"] = extra_tfs
+        return {
+            "D1": _bearish_snap(),
+            "H4": _bullish_snap(),
+            "H1": _bullish_snap(),
+            "M30": _bullish_snap(),
+            "M15": _bullish_snap(),
+        }
+
+    monkeypatch.setattr(scorer_module, "_snapshots", _fake_snapshots)
+    candles = _candles()
+    candles["M30"] = _rows(80, timedelta(minutes=30))
+    candles["M15"] = _rows(80, timedelta(minutes=15))
+    route = route_specialist(
+        {
+            "display": "TLT",
+            "symbol": "TLT.US",
+            "type": "stock",
+            "score_group": "bond_tlt",
+        }
+    )
+    quant = score_pair(
+        route,
+        "intraday",
+        candles,
+        policy_timeframes={
+            "regime": "D1",
+            "bias": "H4",
+            "structure": "H1",
+            "setup": "M30",
+            "trigger": "M15",
+            "execution": "M15",
+        },
+    )
+
+    evidence = quant.factor_diagnostics["triggerEvidence"]
+    assert quant.factor_diagnostics["scoringTimeframes"]["momentum"] == "D1"
+    assert "M15" in captured["extra_tfs"]
+    assert evidence["timeframe"] == "M15"
+    assert evidence["source"] == "trigger_timeframe_momentum"
+    assert evidence["available"] is True
+    assert evidence["signal"] > 0
+    assert evidence["quality"] > 0.1
+
+
+def test_trigger_confirmation_fails_closed_without_aligned_evidence():
+    missing, missing_diag = _evaluate_trigger_confirmation({}, "LONG", "M15")
+    opposed, opposed_diag = _evaluate_trigger_confirmation(
+        {
+            "triggerEvidence": {
+                "timeframe": "M15",
+                "source": "trigger_timeframe_momentum",
+                "available": True,
+                "signal": -0.8,
+                "quality": 0.7,
+            }
+        },
+        "LONG",
+        "M15",
+    )
+
+    assert missing is False
+    assert missing_diag["reason"] == "trigger_evidence_missing"
+    assert opposed is False
+    assert opposed_diag["reason"] == "trigger_direction_opposed"
+
+
+def test_evaluator_emits_explicit_policy_trigger_confirmation(monkeypatch):
+    import engine_a_v3.evaluator as evaluator_module
+
+    def _fake_score_pair(*args, **kwargs):
+        return QuantScore(
+            direction="LONG",
+            confluence_score=1.0,
+            max_score=3.0,
+            score_norm=0.3333,
+            conviction=0.3333,
+            decision="WATCH",
+            threshold=1.5,
+            level_style="trend",
+            factor_scores={},
+            factor_diagnostics={
+                "atrPct": 1.0,
+                "triggerEvidence": {
+                    "timeframe": "M15",
+                    "source": "trigger_timeframe_momentum",
+                    "available": True,
+                    "signal": 0.8,
+                    "quality": 0.7,
+                },
+            },
+            components={},
+        )
+
+    monkeypatch.setattr(evaluator_module, "score_pair", _fake_score_pair)
+    monkeypatch.setattr(
+        evaluator_module,
+        "detect_setup",
+        lambda *args, **kwargs: None,
+    )
+    candles = _candles()
+    candles["M30"] = _rows(400, timedelta(minutes=30))
+    candles["M15"] = _rows(400, timedelta(minutes=15))
+    signal = evaluate_engine_a_v3(
+        {
+            "display": "XAU/USD",
+            "symbol": "XAUUSD",
+            "type": "commodity",
+            "score_group": "precious_trackers",
+        },
+        candles,
+        horizon="intraday",
+        policy_timeframes={
+            "regime": "D1",
+            "bias": "H4",
+            "structure": "H1",
+            "setup": "M30",
+            "trigger": "M15",
+            "execution": "M15",
+        },
+    )
+
+    assert signal.decision != "NO_SIGNAL", signal.rejectionReasons
+    assert signal.triggerConfirmed is True
+    assert signal.factorDiagnostics["triggerConfirmation"]["passed"] is True
+    assert signal.to_dict()["triggerConfirmed"] is True
 
 
 def _bearish_snap(*, adx: float = 28.0, close: float = 89.0) -> dict:

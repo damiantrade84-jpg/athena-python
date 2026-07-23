@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import types
 
 import pytest
@@ -122,3 +123,101 @@ def test_record_mt5_live_price_sets_source_and_display_key():
     assert entry["source"] == "mt5"
     assert entry["price"] == 1.08543
     assert entry["ts"] == 3000.0
+
+
+@pytest.mark.parametrize(
+    ("trade_mode", "expected"),
+    ((4, "open"), (1, "open"), (0, "closed"), (3, "closed")),
+)
+def test_mt5_symbol_market_state_uses_trade_mode(trade_mode, expected):
+    class _FakeMT5:
+        SYMBOL_TRADE_MODE_DISABLED = 0
+        SYMBOL_TRADE_MODE_CLOSEONLY = 3
+
+        @staticmethod
+        def symbol_info(symbol):
+            return types.SimpleNamespace(trade_mode=trade_mode)
+
+    assert candle_feeds._mt5_symbol_market_state(_FakeMT5(), "USDCHF") == expected
+
+
+def test_mt5_symbol_market_state_fails_closed_without_symbol_info():
+    mt5 = types.SimpleNamespace(
+        SYMBOL_TRADE_MODE_DISABLED=0,
+        SYMBOL_TRADE_MODE_CLOSEONLY=3,
+        symbol_info=lambda symbol: None,
+    )
+
+    assert candle_feeds._mt5_symbol_market_state(mt5, "USDCHF") == "unavailable"
+
+
+def test_record_mt5_live_price_preserves_verified_market_state():
+    candle_feeds._record_mt5_live_price(
+        "USD/CHF",
+        0.81625,
+        bid=0.81620,
+        ask=0.81630,
+        now_ts=4000.0,
+        broker_ts=3999.5,
+        market_state="open",
+    )
+    candle_feeds._record_mt5_live_price(
+        "USD/CHF",
+        0.81626,
+        bid=0.81621,
+        ask=0.81631,
+        now_ts=4001.0,
+        broker_ts=4000.5,
+    )
+
+    assert _entry("USD/CHF")["market_state"] == "open"
+
+    candle_feeds._record_mt5_live_price(
+        "USD/CHF",
+        0.81626,
+        now_ts=4002.0,
+        market_state="unexpected",
+    )
+    assert _entry("USD/CHF")["market_state"] == "unavailable"
+
+
+def test_scan_speed_state_uses_mt5_broker_timestamp(monkeypatch):
+    import scanner
+    import timeframe_policy
+
+    captured: list[dict] = []
+
+    def _capture_speed_state(*args, **kwargs):
+        captured.append(kwargs)
+        return types.SimpleNamespace(live_speed_class="NORMAL")
+
+    monkeypatch.setattr(
+        timeframe_policy,
+        "calculate_speed_state",
+        _capture_speed_state,
+    )
+    now = time.time()
+    pair = {
+        "display": "USD/CHF",
+        "symbol": "USDCHF",
+        "type": "forex",
+        "source": "mt5",
+    }
+    quote = {
+        "USD/CHF": {
+            "price": 0.81625,
+            "bid": 0.81620,
+            "ask": 0.81630,
+            "ts": now,
+            "broker_ts": now - 10.0,
+            "source": "mt5",
+            "market_state": "open",
+        }
+    }
+
+    scanner._scan_speed_state(pair, {}, quote)
+    assert 9.0 <= captured[-1]["quote_age_sec"] <= 12.0
+
+    quote["USD/CHF"].pop("broker_ts")
+    scanner._scan_speed_state(pair, {}, quote)
+    assert captured[-1]["quote_age_sec"] is None

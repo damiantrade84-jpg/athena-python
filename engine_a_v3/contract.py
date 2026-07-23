@@ -97,6 +97,7 @@ class EngineASetupSignal:
     componentScores: dict[str, Any] | None = None
     engineATradeEnabled: bool = False
     entryTimeframe: str | None = None
+    triggerConfirmed: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

@@ -844,7 +844,10 @@ def score_pair(
             tf_weights = _resolve_v3_tf_weights(group, asset_type, horizon)
             momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
         extra_tfs = tuple(
-            tf for tf in set((*tf_weights.keys(), entry_tf, momentum_tf))
+            tf
+            for tf in set(
+                (*tf_weights.keys(), entry_tf, momentum_tf, policy_trigger_tf)
+            )
             if tf and tf not in ("D1", "H4", "H1")
         )
         plan = tf_weights, momentum_tf, extra_tfs, dict(profile.indicator_periods)
@@ -902,6 +905,32 @@ def score_pair(
             feature_cache["_latest_trend_key"] = trend_key
     trend, coherence = trend_result
     momentum, mom_diag = _momentum_component(momentum_snap, asset_type, group)
+    trigger_evidence = None
+    if policy_trigger_tf:
+        trigger_snap = snaps.get(policy_trigger_tf) or {}
+        if policy_trigger_tf == momentum_tf:
+            trigger_momentum, trigger_mom_diag = momentum, mom_diag
+        else:
+            trigger_momentum, trigger_mom_diag = _momentum_component(
+                trigger_snap,
+                asset_type,
+                group,
+            )
+        trigger_inputs_available = any(
+            trigger_mom_diag.get(key) is not None
+            for key in ("rsiTerm", "diTerm", "macdSlopeTerm")
+        )
+        trigger_evidence = {
+            "timeframe": policy_trigger_tf,
+            "source": "trigger_timeframe_momentum",
+            "available": bool(
+                trigger_snap
+                and trigger_momentum.available
+                and trigger_inputs_available
+            ),
+            "signal": round(trigger_momentum.signal, 4),
+            "quality": round(trigger_momentum.quality, 4),
+        }
     if mom_diag.get("adxHardAbort") and mom_diag.get("adxAbortReason") == "missing_both_abort":
         return QuantScore(
             direction="FLAT",
@@ -917,6 +946,11 @@ def score_pair(
                 **mom_diag,
                 "adxGateRejected": True,
                 "entryTimeframe": entry_tf,
+                **(
+                    {"triggerEvidence": trigger_evidence}
+                    if trigger_evidence is not None
+                    else {}
+                ),
             },
             components={"trend": trend, "momentum": momentum, "location": Component(0.0, 0.0), "volume": Component(0.0, 0.0)},
         )
@@ -1183,6 +1217,11 @@ def score_pair(
             "legacyFilters": legacy_diag,
             "equityVolumeBlocked": equity_volume_blocked,
             "cryptoDerivBlocked": crypto_deriv_blocked,
+            **(
+                {"triggerEvidence": trigger_evidence}
+                if trigger_evidence is not None
+                else {}
+            ),
         }
     else:
         factor_scores["ortho"] = ortho
@@ -1217,6 +1256,11 @@ def score_pair(
             "trendState": legacy_diag.get("trendState"),
             "equityVolumeBlocked": equity_volume_blocked,
             "cryptoDerivBlocked": crypto_deriv_blocked,
+            **(
+                {"triggerEvidence": trigger_evidence}
+                if trigger_evidence is not None
+                else {}
+            ),
             "components": {
                 name: {
                     "signal": round(comp.signal, 4), "quality": round(comp.quality, 4),
