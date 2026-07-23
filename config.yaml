@@ -2281,8 +2281,28 @@ MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL:
   UBER: 0.0030
   PLTR: 0.0030
   # Forex exotics / crosses — resting spread above the 0.05% forex class cap.
+  # ATFX demo (.s symbols) resting spreads measured 2026-07-23 ~11:00 UTC run
+  # ~10x Pepperstone on majors (EURUSD 0.0158%, USDJPY 0.0141%, AUDUSD 0.0357%)
+  # but still under the class cap; no per-symbol override needed for majors.
+  # USDSGD.s rests at ~0.42% (8x class cap) — intentionally left on the class
+  # cap so it stays blocked; an override would invite entries that open ~40bps
+  # in the red.
   USDINR: 0.0015      # USD/INR, measured 0.1037% on 2026-07-14; cap ~1.45x resting
   AUDCHF: 0.0008      # AUD/CHF, measured 0.0526% on 2026-07-23 (new broker); cap ~1.5x
+  USDZAR: 0.0008      # USD/ZAR, measured 0.0548% on 2026-07-23 (ATFX); cap ~1.45x resting
+
+# ── Spread-to-stop-distance gate ─────────────────────────────────────────────
+# Block MT5 market entries when the ask-bid spread exceeds this fraction of the
+# SL distance. A market fill pays the full spread against the bid-based trigger
+# close, so a tight low-TF stop on a wide-spread broker (ATFX resting quotes)
+# starts a large fraction of its risk already in the red. Ratio-based, so it
+# self-scales across asset classes and timeframes: wide-stop/higher-TF trades
+# pass, tight-stop trades on wide-spread symbols are rejected
+# (SPREAD_TOO_WIDE_FOR_SL). Set to 0 or null to disable.
+# Added 2026-07-23 after the Pepperstone→ATFX switch: ATFX resting spreads are
+# ~10x Pepperstone (EURUSD 0.0158%); all 4 post-switch entries paid 5.4-18 bps
+# vs the prior M1 close.
+MAX_EXECUTION_SPREAD_TO_SL_RATIO: 0.15
 
 # ── Signal-to-execution drift cap (GAP-7) ───────────────────────────────────
 # Per-asset-type ceiling on |broker_price - signal_price| / signal_price.

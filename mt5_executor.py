@@ -123,6 +123,42 @@ def _mt5_max_spread_pct(signal: dict) -> float | None:
     return None
 
 
+def _mt5_max_spread_to_sl_ratio() -> float | None:
+    """Return the spread-to-stop-distance ceiling (fraction of SL distance); None disables."""
+    raw = CONFIG.get("MAX_EXECUTION_SPREAD_TO_SL_RATIO")
+    if isinstance(raw, (int, float)) and raw > 0:
+        return float(raw)
+    return None
+
+
+def _mt5_spread_to_sl_exceeded(
+    tick, price: float, sl: float, ratio_cap: float
+) -> tuple[bool, float | None]:
+    """Return (exceeded, spread_to_sl_ratio) for the absolute spread vs SL distance.
+
+    A market fill pays the full ask-bid spread against the candle-close basis
+    the trigger confirmed on; when the stop is tight relative to that spread the
+    entry starts a large fraction of its risk in the red. Returns (False, None)
+    when the tick or SL cannot support the computation — the plain spread cap
+    and SL validation gates remain the backstop for malformed inputs.
+    """
+    try:
+        ask = float(getattr(tick, "ask", 0) or 0)
+        bid = float(getattr(tick, "bid", 0) or 0)
+        px = float(price or 0)
+        stop = float(sl or 0)
+        cap = float(ratio_cap)
+    except (TypeError, ValueError):
+        return False, None
+    if ask <= 0 or bid <= 0 or ask < bid or px <= 0 or stop <= 0 or cap <= 0:
+        return False, None
+    sl_dist = abs(px - stop)
+    if sl_dist <= 0:
+        return False, None
+    ratio = (ask - bid) / sl_dist
+    return ratio > cap, ratio
+
+
 def _mt5_tick_age_seconds(tick) -> float | None:
     """Compute now − tick.time in seconds. Returns None when tick time is missing/zero."""
     try:
@@ -1829,6 +1865,31 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             return {
                 "success": False,
                 "error": f"SL_TOO_CLOSE: distance {abs(price - sl):.{digits}f} < broker min {min_stop_price:.{digits}f}",
+            }
+
+    # ── Spread-to-stop-distance gate ────────────────────────────────────────
+    # Wide-spread brokers (ATFX resting quotes) make a market fill start a large
+    # fraction of the stop distance in the red even when the absolute spread cap
+    # passes. Ratio-based, so it self-scales across asset classes and TFs.
+    _spread_sl_cap = _mt5_max_spread_to_sl_ratio()
+    if _spread_sl_cap is not None:
+        _sl_exceeded, _spread_sl_ratio = _mt5_spread_to_sl_exceeded(
+            tick, price, sl, _spread_sl_cap
+        )
+        if _sl_exceeded:
+            log.warning(
+                f"[MT5] {mt5_symbol}: spread {tick.ask - tick.bid:.{digits}f} is "
+                f"{_spread_sl_ratio:.1%} of SL distance {abs(price - sl):.{digits}f} "
+                f"(cap {_spread_sl_cap:.0%}) — rejecting"
+            )
+            return {
+                "success": False,
+                "error": (
+                    f"SPREAD_TOO_WIDE_FOR_SL: spread is {_spread_sl_ratio:.1%} of "
+                    f"SL distance (max {_spread_sl_cap:.0%})"
+                ),
+                "spreadToSlRatio": round(_spread_sl_ratio, 4),
+                "spreadToSlRatioCap": _spread_sl_cap,
             }
 
     # ── Multi-Target Volume Splitting ──────────────────────────────────────
