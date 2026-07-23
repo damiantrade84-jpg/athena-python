@@ -2279,8 +2279,9 @@ MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL:
   INTC: 0.0030
   UBER: 0.0030
   PLTR: 0.0030
-  # Forex exotics — resting spread above the 0.05% forex class cap.
+  # Forex exotics / crosses — resting spread above the 0.05% forex class cap.
   USDINR: 0.0015      # USD/INR, measured 0.1037% on 2026-07-14; cap ~1.45x resting
+  AUDCHF: 0.0008      # AUD/CHF, measured 0.0526% on 2026-07-23 (new broker); cap ~1.5x
 
 # ── Signal-to-execution drift cap (GAP-7) ───────────────────────────────────
 # Per-asset-type ceiling on |broker_price - signal_price| / signal_price.
