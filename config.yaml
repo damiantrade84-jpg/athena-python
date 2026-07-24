@@ -181,6 +181,15 @@ ENGINE_A_V3_MR_OPPOSITION_GUARD:
   MIN_OPPOSE_QUALITY: 0.55
 # Structural SL must be at least this many ATRs from entry (noise-stop floor).
 ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT: 0.35
+# Structural trend geometry (Engine A V3). Global defaults = historical contract
+# (0.8×ATR min stop, TP1=1.0R, ATR from entry TF). Set BY_ASSET.forex to try
+# wider stops / higher TP1 / structure-TF ATR without touching other classes.
+ENGINE_A_V3_STRUCTURAL_GEOMETRY:
+  ENABLED: true
+  SL_MIN_ATR_MULT: 0.8
+  TP1_RR: 1.0
+  LEVELS_ATR_TF: entry
+  BY_ASSET: {}
 # Port selected V2 expectancy filters into V3 (multipliers / WATCH demotion).
 # BLOCKED_TREND_STATES only demotes when ENGINE_A_BLOCKED_TREND_STATES explicitly
 # configures a "live" scope. A flat list stays backtest-only (research contract in
@@ -2257,6 +2266,7 @@ MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL:
   CORN: 0.0025        # resting ~0.18%
   ALUMINIUM: 0.0023   # resting ~0.17%
   ZINC: 0.0021        # resting ~0.15%
+  COFFEE: 0.0030      # resting ~0.21% (measured 2026-07-21: 0.2100-0.2106%)
   # US CFD stocks (Pepperstone MT5). Global stock cap 0.20% rejects normal resting spreads.
   # AMD measured 0.2365% on 2026-07-14; cap 0.0030 (~1.27x measured).
   AAPL: 0.0030
@@ -2301,8 +2311,10 @@ MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL:
 # (SPREAD_TOO_WIDE_FOR_SL). Set to 0 or null to disable.
 # Added 2026-07-23 after the Pepperstone→ATFX switch: ATFX resting spreads are
 # ~10x Pepperstone (EURUSD 0.0158%); all 4 post-switch entries paid 5.4-18 bps
-# vs the prior M1 close.
-MAX_EXECUTION_SPREAD_TO_SL_RATIO: 0.15
+# vs the prior M1 close. Tightened 0.15 -> 0.10 same day: several ATFX pairs
+# rest near their spread caps (NZDUSD 0.87x, XAGUSD 0.75x, NATGAS ~0.85%
+# absolute), so a 15% allowance still opened trades materially in the red.
+MAX_EXECUTION_SPREAD_TO_SL_RATIO: 0.10
 
 # ── Signal-to-execution drift cap (GAP-7) ───────────────────────────────────
 # Per-asset-type ceiling on |broker_price - signal_price| / signal_price.
@@ -2856,9 +2868,10 @@ ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE: true
 
 
 
-# ── AI Learning ───────────────────────────────────────────
+# ── AI Learning (observation-only; not autonomous self-learning) ─
 
-LEARNING_ENABLED: true             # Enable AI self-learning (outcome extraction + prompt injection)
+LEARNING_ENABLED: true             # Outcome extraction + optional prompt context injection
+LEARNING_MODE: observation_only    # none | observation_only | calibrated (calibrated reserved)
 
 LEARNING_LOOKBACK_DAYS: 90         # How many days of trade history to use for learning context
 

@@ -183,8 +183,9 @@ def test_bybit_broker_tick_age_limit_reads_paper_default(monkeypatch):
 def test_mt5_stale_tick_age_exceeds_limit(monkeypatch):
     import mt5_executor
 
+    monkeypatch.setitem(mt5_executor.CONFIG, "MT5_BROKER_UTC_OFFSET", 3)
     monkeypatch.setattr(mt5_executor.time, "time", lambda: 1_716_200_020.0)
-    tick = SimpleNamespace(time=1_716_200_000.0)
+    tick = SimpleNamespace(time=1_716_200_020.0 + 3 * 3600 - 20)
     age = mt5_executor._mt5_tick_age_seconds(tick)
     assert age == 20.0
     monkeypatch.setitem(mt5_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"mt5": 5})

@@ -20,6 +20,8 @@ import time
 from config import CONFIG
 import telegram_notify
 
+from athena_app.services.mt5_time_alignment import normalize_mt5_tick_epoch_utc
+
 
 log = logging.getLogger("athena")
 
@@ -160,14 +162,26 @@ def _mt5_spread_to_sl_exceeded(
 
 
 def _mt5_tick_age_seconds(tick) -> float | None:
-    """Compute now − tick.time in seconds. Returns None when tick time is missing/zero."""
+    """Compute now − tick.time in seconds. Returns None when tick time is missing/zero.
+
+    MT5 tick stamps share the broker server clock (e.g. UTC+3 at ATFX), so a
+    naive ``now − tick.time`` is negative and clamps to 0 — the age gate never
+    fires. Normalize the stamp to UTC first (configured broker offset, ±1h DST
+    band) so stale/frozen ticks are actually rejected.
+    """
     try:
         tick_time = float(getattr(tick, "time", 0) or 0)
     except (TypeError, ValueError):
         return None
     if tick_time <= 0:
         return None
-    return max(0.0, time.time() - tick_time)
+    now = time.time()
+    tick_utc = normalize_mt5_tick_epoch_utc(
+        tick_time, now, CONFIG.get("MT5_BROKER_UTC_OFFSET", 0) or 0
+    )
+    if tick_utc is None:
+        return None
+    return max(0.0, now - tick_utc)
 
 
 def _mt5_spread_pct(tick) -> float | None:

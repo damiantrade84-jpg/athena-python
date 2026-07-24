@@ -1326,6 +1326,11 @@ CONFIG: dict = {
     "SCAN_MAX_WORKERS": 3,
     "SCAN_DEBUG_CANDLE_META": False,
     "MT5_BROKER_UTC_OFFSET": 3,
+    # Optional local terminal pin when MT5_PATH is not set in the environment.
+    # Prefer env for secrets/login; path itself is non-secret and may live here
+    # or in config.local.yaml (e.g. ATFX broker terminal64.exe).
+    "MT5_PATH": "",
+    "MT5_INIT_TIMEOUT_MS": 60000,
     "FOREX_H4_RESAMPLE_OFFSET_HOURS": 1.0,
     "MT5_CANDLE_FALLBACK_ENABLED": False,
     "ENGINE_A_CRYPTO_LEVELS_FEED": "bybit",
@@ -1942,6 +1947,16 @@ CONFIG: dict = {
         "MIN_OPPOSE_QUALITY": 0.55,
     },
     "ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT": 0.35,
+    # Structural trend geometry. Defaults preserve the historical 0.8×ATR min
+    # stop and 1.0R TP1 on the entry series. Per-asset overrides (e.g. forex
+    # wider stop / higher TP1 / structure-TF ATR) live under BY_ASSET.
+    "ENGINE_A_V3_STRUCTURAL_GEOMETRY": {
+        "ENABLED": True,
+        "SL_MIN_ATR_MULT": 0.8,
+        "TP1_RR": 1.0,
+        "LEVELS_ATR_TF": "entry",
+        "BY_ASSET": {},
+    },
     "ENGINE_A_V3_LEGACY_FILTERS": {
         "ENABLED": True,
         "FOREX_EMA_CLUSTER": True,
@@ -2326,7 +2341,7 @@ CONFIG: dict = {
         "crypto": 0.002,
     },
     # Block MT5 entries when spread > this fraction of SL distance (0/None off).
-    "MAX_EXECUTION_SPREAD_TO_SL_RATIO": 0.15,
+    "MAX_EXECUTION_SPREAD_TO_SL_RATIO": 0.10,
     "MAX_SIGNAL_DRIFT_PCT": {
         "forex": 0.0015,
         "commodity": 0.003,
@@ -2477,8 +2492,10 @@ CONFIG: dict = {
     "AUTO_SCALP_ENABLED": False,
     "AUTO_SCALP_REQUIRE_FRESH_AI_ENTRY_NOW": True,
     "AUTO_SCALP_MAX_DAILY": 1,
-    # ── AI Self-Learning ──────────────────────────────────────────────────────
-    "LEARNING_ENABLED": True,  # Extract learning data after each trade closes
+    # ── AI outcome tracking (observation-only; not autonomous self-learning) ─
+    "LEARNING_ENABLED": True,  # Extract outcomes after closes; may inject prompt context
+    # none | observation_only | calibrated (calibrated downgrades until OOS promotion exists)
+    "LEARNING_MODE": "observation_only",
     "LEARNING_MIN_TRADES": 5,  # Min trades before context injected into AI
     "LEARNING_LOOKBACK_DAYS": 90,  # Days of history to query for context
     "META_ANALYSIS_ENABLED": True,  # Weekly meta-analysis via configured AI provider

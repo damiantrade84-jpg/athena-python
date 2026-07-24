@@ -112,12 +112,26 @@ def test_mt5_max_tick_age_returns_configured_value(monkeypatch):
     assert mt5_executor._mt5_max_tick_age_sec() == 8.5
 
 
-def test_mt5_tick_age_seconds_uses_now_minus_tick_time(monkeypatch):
+def test_mt5_tick_age_seconds_normalizes_broker_clock(monkeypatch):
     import mt5_executor
 
+    # Broker-stamped tick (UTC+3 server clock): stamp is now + 3h - 10s, so the
+    # true age is 10s — a naive now - tick.time would clamp to 0 and never fire.
+    monkeypatch.setitem(mt5_executor.CONFIG, "MT5_BROKER_UTC_OFFSET", 3)
     monkeypatch.setattr(mt5_executor.time, "time", lambda: 1_716_200_010.0)
-    tick = SimpleNamespace(time=1_716_200_000.0)
+    tick = SimpleNamespace(time=1_716_200_010.0 + 3 * 3600 - 10)
     assert mt5_executor._mt5_tick_age_seconds(tick) == 10.0
+
+
+def test_mt5_tick_age_seconds_flags_frozen_broker_tick(monkeypatch):
+    import mt5_executor
+
+    # Frozen feed: broker stamp is 2h old — outside the ±1h DST band, so the
+    # configured offset applies and the honest ~2h age is returned.
+    monkeypatch.setitem(mt5_executor.CONFIG, "MT5_BROKER_UTC_OFFSET", 3)
+    monkeypatch.setattr(mt5_executor.time, "time", lambda: 1_716_200_010.0)
+    tick = SimpleNamespace(time=1_716_200_010.0 + 3 * 3600 - 2 * 3600)
+    assert mt5_executor._mt5_tick_age_seconds(tick) == 2 * 3600.0
 
 
 def test_mt5_tick_age_seconds_returns_none_when_tick_time_missing():
