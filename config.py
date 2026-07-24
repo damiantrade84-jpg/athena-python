@@ -2524,15 +2524,37 @@ CONFIG: dict = {
     "ENGINE_B_RR_GATE_ENABLED": True,
     "ENGINE_A_RR_GATE_ENABLED": True,
     # Diagnostic-only: when true, live scan may retarget Engine B trigger detection
-    # onto style_profile.entry_tf (H1/M15/M30) via role_candles. Default false —
+    # onto style_profile.entry_tf (H1/M30/M15/M5) via role_candles. Default false —
     # production trigger remains matrix H1. Experiment harness calls override
     # kwargs directly and does not require this flag.
     "ENGINE_B_DIAGNOSTIC_TRIGGER_TF_ENABLED": False,
+    # Conditional M5 (timeframe_policy M5Policy.CONDITIONAL) requires the setup
+    # rung to have armed a direction-aligned trigger before the M5 entry event
+    # counts. Setting this false grants bare M5 trigger authority, which the
+    # policy contract does not permit — leave true unless deliberately testing.
+    "ENGINE_B_M5_REQUIRE_SETUP_ARMED": True,
+    # VOLATILITY_SCALER_BANDS is calibrated on H4 ATR%. Engine B reads structural
+    # ATR from the policy structure rung (H1 or H4) and D1 ATR for the MTF
+    # branch, so ATR% is rescaled to the H4 reference before banding. Set false
+    # to restore the raw (timeframe-blind) comparison.
+    "ENGINE_B_VOLATILITY_BAND_TF_NORMALIZATION": True,
     # Diagnostic-only: when true, live scan may retarget Engine A V3 entry TF
     # onto H1/M15/M30 via entry_tf_override. Default false — production entry
     # remains VALID_V3_ENTRY_TIMEFRAMES (H1/H4/D1). Experiment harness calls
     # override kwargs directly and does not require this flag.
     "ENGINE_A_DIAGNOSTIC_ENTRY_TF_ENABLED": False,
+    # Under an authoritative timeframe policy, take Engine A's trend-layer
+    # weights from ENGINE_A_SCORING_PROFILE (per-group/per-style, D1-led) and
+    # let the policy decide only which timeframe fills each role slot. false
+    # restores the flat policy-role table (regime .18 / bias .37 / structure
+    # .45), which inverts every configured stack and discards per-group weights.
+    "ENGINE_A_POLICY_TREND_WEIGHTS_FROM_PROFILE": True,
+    # Momentum anchor under an authoritative policy: "profile" keeps the
+    # configured ENGINE_A_SCORING_PROFILE.momentum_tf (H4, D1 for bond_tlt);
+    # "policy_trigger" anchors momentum + the ADX gate on the policy trigger
+    # rung (M5/M15/M30). The trigger rung's momentum is reported either way as
+    # factorDiagnostics.triggerEvidence.
+    "ENGINE_A_MOMENTUM_ANCHOR": "profile",
     "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED": False,
     # Scan-only: Engine B selects its direction from its own structure evidence;
     # Engine A direction is consulted only after scoring for alignment.
@@ -2838,8 +2860,12 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_B_RR_GATE_ENABLED",
     "ENGINE_A_RR_GATE_ENABLED",
     "ENGINE_B_DIAGNOSTIC_TRIGGER_TF_ENABLED",
+    "ENGINE_B_M5_REQUIRE_SETUP_ARMED",
+    "ENGINE_B_VOLATILITY_BAND_TF_NORMALIZATION",
     "ENGINE_B_TRIGGER_TF_CALIBRATION",
     "ENGINE_A_DIAGNOSTIC_ENTRY_TF_ENABLED",
+    "ENGINE_A_POLICY_TREND_WEIGHTS_FROM_PROFILE",
+    "ENGINE_A_MOMENTUM_ANCHOR",
     "ENGINE_A_BACKTEST_ENTRY_TF",
     "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS",
     "ENGINE_C_AI_WEIGHT_ADJUST_ENABLED",

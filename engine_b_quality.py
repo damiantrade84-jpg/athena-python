@@ -80,6 +80,22 @@ def _component_weight_map(cfg: dict[str, Any]) -> dict[str, float]:
     return out
 
 
+def macro_sequence_is_independent(res: dict[str, Any]) -> bool:
+    """Whether the macro sequence is a genuinely separate timeframe read.
+
+    Several policy profiles (broad crosses, exotics, thin metals/base/softs,
+    thin crypto) resolve bias TF == structure TF, so ``macro_swing_sequence``
+    is computed from the same series as ``current_swing_sequence``. Crediting
+    both as independent confluence would score one timeframe twice. Unknown
+    timeframes are treated as independent (historic behaviour).
+    """
+    structure_tf = str(res.get("structure_tf") or "").strip().upper()
+    macro_tf = str(res.get("macro_sequence_tf") or "").strip().upper()
+    if not structure_tf or not macro_tf:
+        return True
+    return structure_tf != macro_tf
+
+
 def compute_structure_alignment_score(res: dict[str, Any], direction: str) -> float:
     h1_seq = str(res.get("current_swing_sequence") or "")
     h4_seq = str(res.get("macro_swing_sequence") or "")
@@ -90,6 +106,10 @@ def compute_structure_alignment_score(res: dict[str, Any], direction: str) -> fl
     macro_aligned = (dir_u == "LONG" and h4_seq == "HH_HL") or (
         dir_u == "SHORT" and h4_seq == "LH_LL"
     )
+    if not macro_sequence_is_independent(res):
+        # Same series on both rungs: keep the micro read, drop the duplicate
+        # macro read so the "both timeframes agree" tier stays unreachable.
+        macro_aligned = False
     bos = bool(res.get("bos_confirmed", False))
     sweep = bool(res.get("liquidity_sweep", False))
     # bos_mtf_confirmed is direction-blind; only credit the multi-TF break when

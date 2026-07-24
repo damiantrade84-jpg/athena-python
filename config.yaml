@@ -3940,6 +3940,15 @@ ENGINE_B_USE_FORMING_FOR_TRIGGER: true
 # Trigger/setup TF only (M5/M15/M30): faster ATR/ADX periods + candle thresholds.
 # H1 structure ATR(14), H4 bias ATR, and D1/H4 regime ADX(14) are unchanged.
 # Missing score_group → hardcoded fallback (ATR 14, ADX 14, wick 1.2, engulf 0.2, close 0.70).
+# Applied only when the resolved trigger/setup TF is M5/M15/M30. A group's
+# trigger TF is NOT constant: symbol overrides and SLOW speed adaptation move it
+# between M5/M15/M30 inside the same group (e.g. forex_majors covers EUR/USD at
+# M15 and GBP/USD at M5), so a row calibrated at one rung is currently reused at
+# the others. Optional per-TF sub-rows override the flat values when present:
+#   forex_majors:
+#     trigger_atr: 10          # flat defaults, still used for unlisted TFs
+#     M5:  { trigger_atr: 12 } # merged over the flat values when trigger TF = M5
+# No sub-rows are configured yet — that needs calibration evidence, not a guess.
 ENGINE_B_TRIGGER_TF_CALIBRATION:
   forex_majors:      { trigger_atr: 10, rejection_wick_body: 1.5, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
   forex_crosses:     { trigger_atr: 11, rejection_wick_body: 1.4, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }
@@ -4152,12 +4161,30 @@ ENGINE_B_RR_GATE_ENABLED: true
 # false = risk_engine skips RR_BELOW_MINIMUM for non-Engine-B (Engine A) signals.
 ENGINE_A_RR_GATE_ENABLED: false
 # Diagnostic-only: retarget Engine B trigger detection onto style_profile.entry_tf
-# (H1/M15/M30) when true. Default false — production trigger stays matrix H1.
+# (H1/M30/M15/M5) when true. Default false — production trigger stays matrix H1.
 # Does not change struct/zone TFs. Experiment harness bypasses this flag.
 ENGINE_B_DIAGNOSTIC_TRIGGER_TF_ENABLED: false
+# Conditional M5 (timeframe_policy M5Policy.CONDITIONAL) requires the setup rung
+# to have armed a direction-aligned trigger before the M5 entry event counts.
+# false grants bare M5 authority, which the policy contract does not permit.
+ENGINE_B_M5_REQUIRE_SETUP_ARMED: true
+# VOLATILITY_SCALER_BANDS is calibrated on H4 ATR%; rescale structural (H1/H4)
+# and D1 ATR% to that reference before banding. false = raw comparison (legacy).
+ENGINE_B_VOLATILITY_BAND_TF_NORMALIZATION: true
 # Diagnostic-only: retarget Engine A V3 entry TF onto H1/M15/M30 when true.
 # Default false — production entry stays H1/H4/D1. Experiment harness bypasses.
 ENGINE_A_DIAGNOSTIC_ENTRY_TF_ENABLED: false
+# Under an authoritative timeframe policy, Engine A's trend-layer weights come
+# from ENGINE_A_SCORING_PROFILE (per-group/per-style, D1-led) while the policy
+# decides only which timeframe fills each role slot. false restores the flat
+# policy-role table (regime .18 / bias .37 / structure .45), which inverts every
+# configured stack and discards per-group weighting.
+ENGINE_A_POLICY_TREND_WEIGHTS_FROM_PROFILE: true
+# Momentum anchor under an authoritative policy. "profile" keeps the configured
+# momentum_tf (H4; D1 for bond_tlt). "policy_trigger" anchors momentum and the
+# ADX hard-abort gate on the policy trigger rung (M5/M15/M30). Either way the
+# trigger rung's momentum is reported as factorDiagnostics.triggerEvidence.
+ENGINE_A_MOMENTUM_ANCHOR: profile
 # When true, Engine A full-scan *trade* tier requires Engine B confirmation (enginesAligned).
 # Default false: Engine A and B are independent on scan; use Engine C for combined verdict.
 ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED: false

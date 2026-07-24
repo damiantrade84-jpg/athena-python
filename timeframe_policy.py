@@ -1017,6 +1017,18 @@ def _clamp_adaptive_roles(
     return clamped[0], clamped[1]
 
 
+def _is_thin_swing_base(base: _Template) -> bool:
+    """Return whether the resolved instrument template is a thin/slow one.
+
+    The intraday matrix already encodes thin-ness: broad crosses, exotics, thin
+    metals/base/softs and thin crypto carry an H4 structure rung, and the
+    fail-closed templates carry a SLOW baseline.  Engine B swing reuses that
+    classification instead of duplicating a second group list that could drift
+    away from ``_GROUP_OVERRIDES``/``_SYMBOL_OVERRIDES``.
+    """
+    return base.structure is Timeframe.H4 or base.baseline_speed is SpeedClass.SLOW
+
+
 def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
     if engine_id == "engine_d":
         # Engine D native scalp contract: H1 context/regime, M15 confirmed
@@ -1037,14 +1049,20 @@ def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
             m15_confirmation_required_for_m5=True,
         )
     if engine_id == "engine_b" and style == "swing":
+        # Swing is a slow overlay, but it is no longer uniform across groups:
+        # liquid instruments keep the H4 structural horizon with an H1 trigger,
+        # thin/slow instruments step the whole chain one rung slower (D1
+        # structure, H4 trigger) so the group matrix is not inert on the style
+        # that Auto selects for commodities, indices, stocks and ETFs.
+        thin = _is_thin_swing_base(base)
         return _Template(
             profile=f"ENGINE_B_SWING_{base.profile}",
             regime=Timeframe.D1,
             bias=Timeframe.D1,
-            structure=Timeframe.H4,
+            structure=Timeframe.D1 if thin else Timeframe.H4,
             setup=Timeframe.H4,
-            trigger=Timeframe.H1,
-            execution=Timeframe.H1,
+            trigger=Timeframe.H4 if thin else Timeframe.H1,
+            execution=Timeframe.H4 if thin else Timeframe.H1,
             m5_role=M5Role.DISABLED,
             m5_policy=M5Policy.DISABLED,
             execution_mode=ExecutionMode.LIVE_QUOTE,

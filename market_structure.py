@@ -484,11 +484,20 @@ _DEFAULT_TRIGGER_TF_CALIBRATION = {
 def resolve_engine_b_trigger_tf_calibration(
     score_group: str | None = None,
     asset_type: str | None = None,
+    tf: str | None = None,
 ) -> dict[str, float | int]:
     """Per-score-group trigger/setup TF calibration; missing → hardcoded defaults.
 
     Does not inherit a generic ``default`` row — absent groups keep ATR 14 and
     the historical wick/engulfing/close thresholds.
+
+    A group row may additionally carry per-timeframe sub-rows keyed by the
+    trigger TF (``M5``/``M15``/``M30``) which are merged over the flat group
+    values when ``tf`` matches.  A group's trigger TF is not constant — symbol
+    overrides and SLOW speed adaptation move it between M5/M15/M30 inside the
+    same group — so candle geometry calibrated at one rung must not be assumed
+    valid at another.  Absent sub-rows keep the flat values (no behaviour
+    change until a TF row is configured).
     """
     out = dict(_DEFAULT_TRIGGER_TF_CALIBRATION)
     keyed = config.CONFIG.get("ENGINE_B_TRIGGER_TF_CALIBRATION") or {}
@@ -504,21 +513,25 @@ def resolve_engine_b_trigger_tf_calibration(
             row = keyed[a]
     if not isinstance(row, dict):
         return out
-    for key in (
-        "trigger_atr",
-        "rejection_wick_body",
-        "engulfing_body_atr",
-        "strong_close_pct",
-    ):
-        if key not in row:
-            continue
-        try:
-            if key == "trigger_atr":
-                out[key] = int(row[key])
-            else:
-                out[key] = float(row[key])
-        except (TypeError, ValueError):
-            pass
+    tf_u = str(tf or "").strip().upper()
+    tf_row = row.get(tf_u) if tf_u else None
+    layers = [row] if not isinstance(tf_row, dict) else [row, tf_row]
+    for layer in layers:
+        for key in (
+            "trigger_atr",
+            "rejection_wick_body",
+            "engulfing_body_atr",
+            "strong_close_pct",
+        ):
+            if key not in layer:
+                continue
+            try:
+                if key == "trigger_atr":
+                    out[key] = int(layer[key])
+                else:
+                    out[key] = float(layer[key])
+            except (TypeError, ValueError):
+                pass
     return out
 
 
@@ -534,7 +547,7 @@ def engine_b_trigger_atr_period(
     """ATR period for trigger/setup TF candles; structural TFs always stay 14."""
     if not engine_b_trigger_tf_uses_calibration(tf):
         return 14
-    cal = resolve_engine_b_trigger_tf_calibration(score_group, asset_type)
+    cal = resolve_engine_b_trigger_tf_calibration(score_group, asset_type, tf)
     try:
         period = int(cal.get("trigger_atr", 14))
     except (TypeError, ValueError):
@@ -597,6 +610,8 @@ def resolve_engine_b_tfs(
             "trigger": trigger_tf,
             "execution": trigger_tf,
             "atr": atr_tf,
+            "m5_policy": "disabled",
+            "execution_prerequisite": None,
             "policy_version": policy.policy_version,
             "policy_profile": policy.profile,
             "policy_mode": str(config.CONFIG.get("TF_POLICY_MODE", "off")).lower(),
@@ -617,6 +632,15 @@ def resolve_engine_b_tfs(
         "trigger": policy.trigger_tf.value,
         "execution": policy.execution_tf.value,
         "atr": policy.structure_tf.value,
+        # Conditional M5 is not an unconditional trigger promotion: the setup
+        # rung must arm before M5 may fire. Both fields are carried so the
+        # scoring layer can enforce that without re-resolving the policy.
+        "m5_policy": policy.m5_policy.value,
+        "execution_prerequisite": (
+            policy.execution_prerequisite_tf.value
+            if policy.execution_prerequisite_tf
+            else None
+        ),
         "policy_version": policy.policy_version,
         "policy_profile": policy.profile,
     }
@@ -688,7 +712,13 @@ def engine_b_low_volatility_gate(
     }
 
 
-_DIAGNOSTIC_TRIGGER_TFS = frozenset({"H1", "M15", "M30"})
+# Trigger timeframes the live/diagnostic override may target. M5 is included
+# because policy v4 resolves M5 as the trigger rung for the fast/conditional
+# profiles (fast majors, GBP/JPY, XAU, oil, fast indices, crypto majors, single
+# stocks). Omitting it did not disable M5 — it made those symbols fail closed on
+# ``missing_required_trigger_timeframe:M5`` on every scan. M5 authority is
+# constrained by the conditional-M5 setup-armed prerequisite, not by this set.
+_DIAGNOSTIC_TRIGGER_TFS = frozenset({"H1", "M30", "M15", "M5"})
 
 
 def engine_b_diagnostic_trigger_kwargs(
@@ -700,7 +730,7 @@ def engine_b_diagnostic_trigger_kwargs(
     """Build analyze_structure kwargs for diagnostic trigger-TF override.
 
     Default-off via ``ENGINE_B_DIAGNOSTIC_TRIGGER_TF_ENABLED``. When enabled and
-    ``style_profile.entry_tf`` is H1/M15/M30, returns ``role_candles`` +
+    ``style_profile.entry_tf`` is H1/M30/M15/M5, returns ``role_candles`` +
     ``trigger_tf_override`` so trigger detection runs on that series.
     """
     if enabled is None:
@@ -779,7 +809,48 @@ def _float_cfg(key: str, default: float) -> float:
         return float(default)
 
 
-def _crypto_structure_adjustment(asset_type: str, candles: list, atr: float) -> dict:
+# ``VOLATILITY_SCALER_BANDS`` is calibrated on H4 ATR% (see the per-row comments
+# in config.yaml). Engine B reads structural ATR from the policy structure rung
+# — H1 for the fast groups, H4 only for the thin ones — and separately banded D1
+# ATR for the multi-timeframe branch. Comparing a raw H1 ATR% against H4 bands
+# makes the elevated/high branch unreachable, and a raw D1 ATR% pins it at
+# high_volatility. Normalise to the H4 reference first (ATR scales ~sqrt(time)).
+_TF_SECONDS_FOR_VOL_BANDS = {
+    "M1": 60,
+    "M5": 300,
+    "M15": 900,
+    "M30": 1800,
+    "H1": 3600,
+    "H4": 14400,
+    "D1": 86400,
+}
+_VOL_BAND_REFERENCE_TF_SECONDS = 14400.0
+
+
+def _volatility_band_atr_pct(
+    atr_pct: float | None,
+    timeframe: str | None,
+) -> tuple[float | None, float]:
+    """Rescale an ATR% to the H4 reference the volatility bands assume."""
+    if atr_pct is None:
+        return None, 1.0
+    if not bool(
+        config.CONFIG.get("ENGINE_B_VOLATILITY_BAND_TF_NORMALIZATION", True)
+    ):
+        return atr_pct, 1.0
+    seconds = _TF_SECONDS_FOR_VOL_BANDS.get(str(timeframe or "").strip().upper())
+    if not seconds or seconds <= 0:
+        return atr_pct, 1.0
+    scale = math.sqrt(_VOL_BAND_REFERENCE_TF_SECONDS / float(seconds))
+    return atr_pct * scale, scale
+
+
+def _crypto_structure_adjustment(
+    asset_type: str,
+    candles: list,
+    atr: float,
+    timeframe: str | None = None,
+) -> dict:
     """Return default-off crypto structure tuning and diagnostics.
 
     Crypto spends more time in wick-heavy, high-ATR regimes than forex. When the
@@ -794,6 +865,9 @@ def _crypto_structure_adjustment(asset_type: str, candles: list, atr: float) -> 
         "applied": False,
         "volatility_regime": "not_crypto" if not is_crypto else "unknown",
         "atr_pct": None,
+        "band_timeframe": str(timeframe or "").strip().upper() or None,
+        "band_atr_pct": None,
+        "band_tf_scale": 1.0,
         "wick_dominance": None,
         "structure_mult": 1.0,
         "swing_prominence_mult": 1.0,
@@ -812,6 +886,8 @@ def _crypto_structure_adjustment(asset_type: str, candles: list, atr: float) -> 
         atr_val = 0.0
     atr_pct = (atr_val / abs(close)) if close else None
 
+    band_atr_pct, band_scale = _volatility_band_atr_pct(atr_pct, timeframe)
+
     bands = (config.CONFIG.get("VOLATILITY_SCALER_BANDS", {}) or {}).get("crypto", {}) or {}
     try:
         low_band = float(bands.get("low", 0.010))
@@ -824,11 +900,11 @@ def _crypto_structure_adjustment(asset_type: str, candles: list, atr: float) -> 
     if high_band < low_band:
         low_band, high_band = high_band, low_band
 
-    if atr_pct is None:
+    if band_atr_pct is None:
         regime = "unknown"
-    elif atr_pct >= high_band:
+    elif band_atr_pct >= high_band:
         regime = "high_volatility"
-    elif atr_pct >= low_band:
+    elif band_atr_pct >= low_band:
         regime = "elevated_volatility"
     else:
         regime = "normal"
@@ -862,6 +938,8 @@ def _crypto_structure_adjustment(asset_type: str, candles: list, atr: float) -> 
     detail.update({
         "volatility_regime": regime,
         "atr_pct": round(atr_pct, 6) if atr_pct is not None else None,
+        "band_atr_pct": round(band_atr_pct, 6) if band_atr_pct is not None else None,
+        "band_tf_scale": round(band_scale, 4),
         "wick_dominance": wick_dominance,
         "structure_mult": round(applied_mult, 4),
         "swing_prominence_mult": round(applied_mult, 4),
@@ -876,6 +954,7 @@ def _asset_class_structure_adjustment(
     score_group: str | None,
     candles: list,
     atr: float,
+    timeframe: str | None = None,
 ) -> dict:
     """Default-off non-forex/non-crypto structure tuning.
 
@@ -897,6 +976,9 @@ def _asset_class_structure_adjustment(
         "applied": False,
         "volatility_regime": "not_applicable" if not applicable else "unknown",
         "atr_pct": None,
+        "band_timeframe": str(timeframe or "").strip().upper() or None,
+        "band_atr_pct": None,
+        "band_tf_scale": 1.0,
         "structure_mult": 1.0,
         "swing_prominence_mult": 1.0,
         "bos_min_break_atr": 0.0,
@@ -914,6 +996,8 @@ def _asset_class_structure_adjustment(
         atr_val = 0.0
     atr_pct = (atr_val / abs(close)) if close else None
 
+    band_atr_pct, band_scale = _volatility_band_atr_pct(atr_pct, timeframe)
+
     bands_all = config.CONFIG.get("VOLATILITY_SCALER_BANDS", {}) or {}
     bands = bands_all.get(str(score_group or "").lower()) or bands_all.get(asset_class) or {}
     try:
@@ -927,11 +1011,11 @@ def _asset_class_structure_adjustment(
     if high_band < low_band:
         low_band, high_band = high_band, low_band
 
-    if atr_pct is None:
+    if band_atr_pct is None:
         regime = "unknown"
-    elif atr_pct >= high_band:
+    elif band_atr_pct >= high_band:
         regime = "high_volatility"
-    elif atr_pct >= low_band:
+    elif band_atr_pct >= low_band:
         regime = "elevated_volatility"
     else:
         regime = "normal"
@@ -968,6 +1052,8 @@ def _asset_class_structure_adjustment(
     detail.update({
         "volatility_regime": regime,
         "atr_pct": round(atr_pct, 6) if atr_pct is not None else None,
+        "band_atr_pct": round(band_atr_pct, 6) if band_atr_pct is not None else None,
+        "band_tf_scale": round(band_scale, 4),
         "structure_mult": round(applied_mult, 4),
         "swing_prominence_mult": round(applied_mult, 4),
         "bos_min_break_atr": round(min_break, 4),
@@ -4603,13 +4689,24 @@ class NakedEngine:
                 score_group=str(_pair_score_group) if _pair_score_group else None,
             )
         )
-        structure_tf = _tfs["struct"]
-        if structure_tf == "D1":
-            struct_candles = d1_candles
-        elif structure_tf == "H4":
-            struct_candles = h4_candles
-        else:
-            struct_candles = h1_candles
+        _override_tf = str(trigger_tf_override or "").strip().upper() or None
+        _extras = role_candles if isinstance(role_candles, dict) else None
+        structure_tf = str(_tfs["struct"]).upper()
+        # Structure must come from the rung the policy names. The previous
+        # ``else: h1_candles`` fallback silently served H1 for any non-canonical
+        # structure TF (Engine B scalp resolves M15), which is the one
+        # substitution the fail-closed contract forbids.
+        struct_candles = engine_b_candles_for_tf(
+            structure_tf,
+            d1_candles,
+            h4_candles,
+            h1_candles,
+            extra_by_tf=_extras if _extras is not None else {},
+        )
+        if not struct_candles:
+            return {
+                "_error": f"missing_required_structure_timeframe:{structure_tf}",
+            }
         forming_strip_diag: dict = {}
         if struct_candles_confirmed:
             if not bool(config.CONFIG.get("ENGINE_B_STRIP_FORMING_STRUCT", True)):
@@ -4669,8 +4766,6 @@ class NakedEngine:
                 "forming_strip_diagnostics": forming_strip_diag,
             }
 
-        _override_tf = str(trigger_tf_override or "").strip().upper() or None
-        _extras = role_candles if isinstance(role_candles, dict) else None
         if _override_tf:
             # Fail closed: never silently substitute H1 for a requested lower TF.
             if _override_tf in ("D1", "H4", "H1"):
@@ -4704,6 +4799,49 @@ class NakedEngine:
                 "_error": f"missing_required_trigger_timeframe:{_tfs['trigger']}",
                 "forming_strip_diagnostics": forming_strip_diag,
             }
+
+        # Conditional M5 (policy v4 M5Policy.CONDITIONAL) is not an
+        # unconditional trigger promotion: M5 supplies the entry event only
+        # after the prerequisite setup rung (M15) has armed. Resolve that
+        # series here so the direction pass can evaluate it; missing data fails
+        # closed rather than granting bare M5 authority.
+        _effective_trigger_tf = str(_tfs.get("trigger") or "").upper()
+        _m5_prereq_tf = str(
+            _tfs.get("execution_prerequisite") or _tfs.get("setup") or ""
+        ).upper()
+        _m5_conditional_required = bool(
+            _effective_trigger_tf == "M5"
+            and str(_tfs.get("m5_policy") or "").lower() == "conditional"
+            and bool(config.CONFIG.get("ENGINE_B_M5_REQUIRE_SETUP_ARMED", True))
+        )
+        _m5_prereq_candles: list = []
+        _m5_prereq_atr = 0.0
+        if _m5_conditional_required:
+            if not _m5_prereq_tf or _m5_prereq_tf == "M5":
+                return {
+                    "_error": "missing_m5_prerequisite_timeframe:UNRESOLVED",
+                    "forming_strip_diagnostics": forming_strip_diag,
+                }
+            _m5_prereq_candles = engine_b_candles_for_tf(
+                _m5_prereq_tf,
+                d1_candles,
+                h4_candles,
+                h1_candles,
+                extra_by_tf=_extras if _extras is not None else {},
+            )
+            if not _m5_prereq_candles:
+                return {
+                    "_error": f"missing_m5_prerequisite_timeframe:{_m5_prereq_tf}",
+                    "forming_strip_diagnostics": forming_strip_diag,
+                }
+            _m5_prereq_atr = self._compute_atr_from_candles(
+                _m5_prereq_candles,
+                period=engine_b_trigger_atr_period(
+                    _pair_score_group, asset_type, _m5_prereq_tf
+                ),
+                fallback=atr,
+            )
+
         _zone_tf = str(_tfs.get("zone") or structure_tf or "H4").upper()
         _zone_fvg_candles = engine_b_candles_for_tf(
             _zone_tf, d1_candles, h4_candles, h1_candles, extra_by_tf=_extras
@@ -4738,15 +4876,21 @@ class NakedEngine:
             or _pair_score_group
         )
         _trigger_tf_key = str(_tfs.get("trigger") or "").upper()
-        _trigger_cal = resolve_engine_b_trigger_tf_calibration(_score_group, asset_type)
+        _trigger_cal = resolve_engine_b_trigger_tf_calibration(
+            _score_group, asset_type, _trigger_tf_key
+        )
         _trigger_atr_period = engine_b_trigger_atr_period(
             _score_group, asset_type, _trigger_tf_key
         )
         trigger_atr = self._compute_atr_from_candles(
             trigger_candles, period=_trigger_atr_period, fallback=atr
         )
-        asset_struct_diag = _asset_class_structure_adjustment(asset_type, _score_group, struct_candles, struct_atr)
-        crypto_struct_diag = _crypto_structure_adjustment(asset_type, struct_candles, struct_atr)
+        asset_struct_diag = _asset_class_structure_adjustment(
+            asset_type, _score_group, struct_candles, struct_atr, timeframe=structure_tf
+        )
+        crypto_struct_diag = _crypto_structure_adjustment(
+            asset_type, struct_candles, struct_atr, timeframe=structure_tf
+        )
         structure_prominence_mult = max(
             float(crypto_struct_diag.get("swing_prominence_mult", 1.0) or 1.0),
             float(asset_struct_diag.get("swing_prominence_mult", 1.0) or 1.0),
@@ -4813,8 +4957,12 @@ class NakedEngine:
         d1_lows = np.array([float(c["low"]) for c in d1_candles])
         d1_closes = np.array([float(c["close"]) for c in d1_candles])
         d1_atr = self._compute_atr_from_candles(d1_candles, fallback=atr)
-        d1_crypto_diag = _crypto_structure_adjustment(asset_type, d1_candles, d1_atr)
-        d1_asset_diag = _asset_class_structure_adjustment(asset_type, _score_group, d1_candles, d1_atr)
+        d1_crypto_diag = _crypto_structure_adjustment(
+            asset_type, d1_candles, d1_atr, timeframe="D1"
+        )
+        d1_asset_diag = _asset_class_structure_adjustment(
+            asset_type, _score_group, d1_candles, d1_atr, timeframe="D1"
+        )
         d1_prominence_mult = max(float(d1_crypto_diag.get("swing_prominence_mult", 1.0) or 1.0), float(d1_asset_diag.get("swing_prominence_mult", 1.0) or 1.0))
         d1_min_break_atr = max(float(d1_crypto_diag.get("bos_min_break_atr", 0.0) or 0.0), float(d1_asset_diag.get("bos_min_break_atr", 0.0) or 0.0))
         d1_swings = self._swing_cache(d1_highs, d1_lows, d1_atr, prominence_mult=d1_prominence_mult)
@@ -5005,6 +5153,11 @@ class NakedEngine:
             "_structure_tf": structure_tf,
             "_trigger_candles": trigger_candles,
             "_trigger_tf_override": _override_tf,
+            "_m5_prereq_candles": _m5_prereq_candles,
+            "m5_prereq_atr": _m5_prereq_atr,
+            "m5_prereq_tf": _m5_prereq_tf if _m5_conditional_required else None,
+            "m5_conditional_required": _m5_conditional_required,
+            "m5_policy": str(_tfs.get("m5_policy") or "disabled"),
             "_struct_candles": struct_candles,
             "_score_group": _score_group,
             "asset_type": asset_type,
@@ -5329,6 +5482,45 @@ class NakedEngine:
             trigger_tf=str(tfs.get("trigger") or ""),
         )
 
+        # Conditional-M5 prerequisite: the setup rung must have armed a
+        # direction-aligned trigger before the M5 entry event counts. This is
+        # the deterministic half of M5Policy.CONDITIONAL — the advisory
+        # m5Eligibility stamp never gated anything.
+        _m5_conditional_required = bool(precompute.get("m5_conditional_required"))
+        _m5_prereq_tf = precompute.get("m5_prereq_tf")
+        _m5_prereq_candles = precompute.get("_m5_prereq_candles") or []
+        m5_setup_armed = None
+        m5_setup_armed_pattern = None
+        if _m5_conditional_required:
+            _prereq_ctx = self._price_action_trigger(
+                _m5_prereq_candles,
+                direction,
+                float(precompute.get("m5_prereq_atr") or trigger_atr or atr),
+                zone_ctx["zone_touched"] or zone_ctx["near_zone"],
+                bos_confirmed,
+                is_trending=(
+                    (direction == "LONG" and sequence_data["state"] == "HH_HL" and macro_seq_data["state"] == "HH_HL")
+                    or (direction == "SHORT" and sequence_data["state"] == "LH_LL" and macro_seq_data["state"] == "LH_LL")
+                ),
+                asset_type=asset_type,
+                score_group=_zone_score_group,
+                trigger_tf=str(_m5_prereq_tf or ""),
+            )
+            m5_setup_armed = bool(_prereq_ctx.get("trigger_ok"))
+            m5_setup_armed_pattern = _prereq_ctx.get("pattern")
+            if not m5_setup_armed:
+                trigger_ctx = dict(trigger_ctx)
+                trigger_ctx.update(
+                    {
+                        "pattern": "NONE",
+                        "trigger_ok": False,
+                        "rejection": False,
+                        "engulfing": False,
+                        "inside_break": False,
+                        "strong_close": False,
+                    }
+                )
+
         latest_trigger_candle_time = None
         if trigger_candles:
             _last_tc = trigger_candles[-1]
@@ -5450,8 +5642,18 @@ class NakedEngine:
             "trigger_atr_period": precompute.get("trigger_atr_period"),
             "trigger_tf_calibration": precompute.get("trigger_tf_calibration"),
             "bos_confirmed": bos_confirmed,
+            # bos_mtf_confirmed stays direction-blind (an MTF break exists in
+            # *some* direction) for backward compatibility; bos_mtf_aligned is
+            # the direction-aware value scoring already uses, exported so UI and
+            # AI consumers stop reading an opposing break as confirmation.
             "bos_mtf_confirmed": bos_mtf_confirmed,
+            "bos_mtf_aligned": bool(bos_mtf_confirmed and bos_confirmed),
             "bos_volume_confirmed": bos_data.get("bos_volume_confirmed", False),
+            "m5_policy": precompute.get("m5_policy"),
+            "m5_conditional_required": _m5_conditional_required,
+            "m5_prereq_tf": _m5_prereq_tf,
+            "m5_setup_armed": m5_setup_armed,
+            "m5_setup_armed_pattern": m5_setup_armed_pattern,
             "bos_data": bos_data,
             "d1_bos_data": d1_bos,
             "sweep_data": sweep_data,
@@ -5676,11 +5878,20 @@ class NakedEngine:
         )
         expected_trigger_tf = str(profile.get("entry_tf") or "").upper()
         actual_trigger_tf = str(res.get("trigger_timeframe") or "").upper()
-        trigger_timeframe_gate_required = expected_trigger_tf in {"M15", "M30"}
+        # M5 belongs in this set: it is a policy trigger rung for the
+        # fast/conditional profiles, so a structure pass that ran on a
+        # different series must not satisfy the entry gate.
+        trigger_timeframe_gate_required = expected_trigger_tf in {"M5", "M15", "M30"}
         trigger_timeframe_gate_ok = (
             not trigger_timeframe_gate_required
             or actual_trigger_tf == expected_trigger_tf
         )
+        # Conditional M5 additionally requires the setup rung to have armed.
+        # ``m5_setup_armed`` is None when the prerequisite does not apply.
+        m5_conditional_required = bool(res.get("m5_conditional_required"))
+        m5_setup_armed = res.get("m5_setup_armed")
+        if m5_conditional_required and not bool(m5_setup_armed):
+            trigger_timeframe_gate_ok = False
 
         micro_aligned = (direction == "LONG" and h1_seq == "HH_HL") or (
             direction == "SHORT" and h1_seq == "LH_LL"
@@ -6846,6 +7057,10 @@ class NakedEngine:
             "trigger_timeframe": res.get("trigger_timeframe"),
             "trigger_timeframe_gate_required": trigger_timeframe_gate_required,
             "trigger_timeframe_gate_ok": trigger_timeframe_gate_ok,
+            "m5_policy": res.get("m5_policy"),
+            "m5_conditional_required": m5_conditional_required,
+            "m5_prereq_tf": res.get("m5_prereq_tf"),
+            "m5_setup_armed": m5_setup_armed,
             "trigger_timeframe_expected": expected_trigger_tf or None,
             "trigger_timeframe_actual": actual_trigger_tf or None,
             "trigger_type": res.get("trigger_pattern", "NONE"),

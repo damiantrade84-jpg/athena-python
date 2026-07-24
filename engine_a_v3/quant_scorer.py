@@ -73,14 +73,87 @@ def _fallback_tf_weights(horizon: str) -> dict[str, float]:
     )
 
 
-# Policy-role trend weights used when an authoritative timeframe policy drives
-# scoring: structure carries the most weight, regime the least. Single source
-# for the policy path in score_pair.
+# Legacy policy-role trend weights (structure heaviest, regime lightest).
+# Retained only for ENGINE_A_POLICY_TREND_WEIGHTS_FROM_PROFILE=false rollback:
+# this table inverts every configured stack (all of which are D1-led — see
+# ENGINE_A_SCORING_PROFILE trend_weights) and discards per-group weighting
+# entirely, so the profile-derived path below is the default.
 _POLICY_ROLE_TF_WEIGHTS: tuple[tuple[str, str, float], ...] = (
     ("regime", "regimeTf", 0.18),
     ("bias", "biasTf", 0.37),
     ("structure", "structureTf", 0.45),
 )
+
+# Slow-to-fast trend roles. The policy owns which timeframe fills each slot;
+# ENGINE_A_SCORING_PROFILE owns how heavily each slot is weighted.
+_POLICY_TREND_ROLES: tuple[tuple[str, str], ...] = (
+    ("regime", "regimeTf"),
+    ("bias", "biasTf"),
+    ("structure", "structureTf"),
+)
+
+
+def _policy_trend_weights_from_profile(
+    policy: Mapping[str, Any],
+    score_group: str,
+    asset_type: str,
+    horizon: str,
+) -> tuple[dict[str, float], dict[str, Any]]:
+    """Map the policy's trend-role timeframes onto the configured trend weights.
+
+    ``ENGINE_A_SCORING_PROFILE.trend_layers`` is an ordered slow-to-fast stack
+    (D1/H4/H1 by default) with a ``weight_key`` per layer; ``trend_weights``
+    carries the per-group/per-style weight for each key. The policy replaces the
+    *timeframe* in each slot (e.g. a broad cross reads H4 where a major reads
+    H1) without replacing the calibrated *weight* of that slot.
+
+    Roles that resolve to the same timeframe have their weights summed, so a
+    profile whose bias and structure rungs coincide reads that timeframe once
+    with the combined weight. The collapse is reported in the returned
+    diagnostics rather than being silent.
+    """
+    layers = []
+    weights: Mapping[str, Any] = {}
+    try:
+        profile_cfg = resolve_engine_a_scoring_profile(
+            score_group=score_group, asset_type=asset_type, style=horizon
+        )
+        if profile_cfg.get("enabled"):
+            layers = list(profile_cfg.get("trend_layers") or [])
+            weights = profile_cfg.get("trend_weights") or {}
+    except Exception:
+        layers = []
+    ordered_weights: list[float] = []
+    for layer in layers:
+        wkey = str(layer.get("weight_key", "")).strip()
+        if not wkey or wkey not in weights:
+            continue
+        try:
+            ordered_weights.append(float(weights[wkey]))
+        except (TypeError, ValueError):
+            continue
+    if len(ordered_weights) != len(_POLICY_TREND_ROLES):
+        # Profile disabled/incomplete: fall back to the style defaults, which
+        # are the same source `_fallback_tf_weights` uses. Never fall through
+        # to the legacy inverted role table.
+        fallback = _fallback_tf_weights(horizon)
+        ordered_weights = [
+            float(fallback.get(tf, 0.0)) for tf in ("D1", "H4", "H1")
+        ]
+    tf_weights: dict[str, float] = {}
+    role_map: dict[str, str] = {}
+    for (key, alias), weight in zip(_POLICY_TREND_ROLES, ordered_weights):
+        tf = str(policy.get(key) or policy.get(alias) or "").upper()
+        if not tf:
+            continue
+        role_map[key] = tf
+        tf_weights[tf] = tf_weights.get(tf, 0.0) + weight
+    diagnostics = {
+        "trendWeightSource": "policy_roles_profile_weights",
+        "trendRoleTimeframes": dict(role_map),
+        "trendLayersCollapsed": len(role_map) - len(tf_weights),
+    }
+    return tf_weights, diagnostics
 
 
 def _resolve_v3_tf_weights(score_group: str, asset_type: str, horizon: str) -> dict[str, float]:
@@ -136,13 +209,45 @@ def _resolve_v3_momentum_tf(score_group: str, asset_type: str, horizon: str) -> 
     return str(profile.get("momentum_tf") or "H4").upper() or "H4"
 
 
+def _policy_trend_weights_from_profile_enabled() -> bool:
+    try:
+        from config import CONFIG
+
+        return bool(
+            CONFIG.get("ENGINE_A_POLICY_TREND_WEIGHTS_FROM_PROFILE", True)
+        )
+    except Exception:
+        return True
+
+
+def _policy_momentum_anchor_mode() -> str:
+    """``profile`` (default) or ``policy_trigger`` (legacy v4 behaviour)."""
+    try:
+        from config import CONFIG
+
+        mode = str(CONFIG.get("ENGINE_A_MOMENTUM_ANCHOR", "profile") or "profile")
+    except Exception:
+        mode = "profile"
+    mode = mode.strip().lower()
+    return mode if mode in {"profile", "policy_trigger"} else "profile"
+
+
 def _resolve_policy_momentum_tf(
     score_group: str,
     asset_type: str,
     horizon: str,
     policy_trigger_tf: str,
 ) -> str:
-    """Keep the policy trigger unless the score group explicitly overrides momentum."""
+    """Resolve the momentum anchor timeframe under an authoritative policy.
+
+    Default (``ENGINE_A_MOMENTUM_ANCHOR=profile``) keeps the configured
+    ``ENGINE_A_SCORING_PROFILE.momentum_tf`` anchor — H4 for most groups, D1 for
+    bond_tlt. Anchoring momentum on the policy *trigger* rung instead pushed
+    RSI/MACD/DI and the ADX hard-abort gate onto M5/M15 for a large slice of the
+    universe, which contradicts the profile's documented per-group tuning; the
+    trigger rung's momentum is still reported separately as ``triggerEvidence``.
+    ``policy_trigger`` restores the previous behaviour.
+    """
     try:
         profile = resolve_engine_a_scoring_profile(
             score_group=score_group, asset_type=asset_type, style=horizon
@@ -151,7 +256,12 @@ def _resolve_policy_momentum_tf(
         return policy_trigger_tf
     if not profile.get("enabled"):
         return policy_trigger_tf
-    return str(profile.get("group_momentum_tf") or policy_trigger_tf).upper()
+    if _policy_momentum_anchor_mode() == "policy_trigger":
+        return str(profile.get("group_momentum_tf") or policy_trigger_tf).upper()
+    anchor = str(
+        profile.get("group_momentum_tf") or profile.get("momentum_tf") or ""
+    ).upper()
+    return anchor or policy_trigger_tf
 
 
 def _resolve_v3_entry_tf(score_group: str, asset_type: str, horizon: str) -> str | None:
@@ -693,42 +803,68 @@ def _snapshots(
     extra_tfs: tuple[str, ...] = (),
     entry_tf: str | None = None,
     entry_periods: Mapping[str, int] | None = None,
+    score_group: str | None = None,
 ) -> dict[str, Mapping[str, Any]]:
     from engine_a_v3.indicator_adapter import indicator_snapshot
-    from factor_scoring import ENTRY_TF_PERIOD_OVERRIDE_TFS
+    from factor_scoring import (
+        ENTRY_TF_PERIOD_OVERRIDE_TFS,
+        _resolved_indicator_periods_for_tf,
+    )
 
     snaps: dict[str, Mapping[str, Any]] = {}
     tfs = ("D1", "H4", "H1") + tuple(
         tf for tf in extra_tfs if tf and tf not in ("D1", "H4", "H1")
     )
 
+    # Intraday periods are a property of the timeframe, not of which rung
+    # happened to be the entry. Resolving per TF stops a group whose setup rung
+    # is H1 from scoring its M30 trigger with H4-scale periods while a group
+    # with an M30 setup scores the same timeframe with intraday periods.
+    _per_tf_periods: dict[str, Mapping[str, int]] = {}
+
     def _periods_for(tf: str) -> Mapping[str, int]:
         tf_key = str(tf or "").upper()
-        if (
-            entry_periods
-            and tf_key in ENTRY_TF_PERIOD_OVERRIDE_TFS
-        ):
+        if tf_key not in ENTRY_TF_PERIOD_OVERRIDE_TFS:
+            return periods
+        if entry_periods and tf_key == str(entry_tf or "").upper():
             return entry_periods
-        return periods
+        if score_group is None:
+            return entry_periods or periods
+        if tf_key not in _per_tf_periods:
+            try:
+                _per_tf_periods[tf_key] = _resolved_indicator_periods_for_tf(
+                    score_group, asset_type, tf_key
+                )
+            except Exception:
+                _per_tf_periods[tf_key] = entry_periods or periods
+        return _per_tf_periods[tf_key]
+
+    def _tf_uses_override(tf: str) -> bool:
+        return str(tf or "").upper() in ENTRY_TF_PERIOD_OVERRIDE_TFS
 
     for tf in tfs:
         rows = candles.get(tf) or []
         tf_periods = _periods_for(tf)
+        # The shared (tf, len) cache is only keyed by bar count, so it may only
+        # hold snapshots built with the group-default periods. Any rung using
+        # intraday override periods computes fresh and is never written back.
+        cacheable = not _tf_uses_override(tf)
         if snapshot_cache is not None:
             key = (tf, len(rows))
             cached = snapshot_cache.get(key)
-            if cached is not None and entry_periods is None:
+            if cached is not None and cacheable:
                 snaps[tf] = cached
                 continue
             snapshot_at = getattr(snapshot_cache, "snapshot_at", None)
             if callable(snapshot_at):
                 cached = snapshot_at(tf, len(rows), tf_periods, asset_type)
                 if cached is not None:
-                    snapshot_cache[key] = cached
+                    if cacheable:
+                        snapshot_cache[key] = cached
                     snaps[tf] = cached
                     continue
         snap = indicator_snapshot(rows, tf_periods, asset_type)
-        if snapshot_cache is not None and entry_periods is None:
+        if snapshot_cache is not None and cacheable:
             snapshot_cache[(tf, len(rows))] = snap
         snaps[tf] = snap
     return snaps
@@ -825,8 +961,12 @@ def score_pair(
         )
 
     entry_candles = candles.get(entry_tf) or []
-    if diagnostic_override is not None and not entry_candles:
-        # Fail closed: never fall back to H1/H4 when diagnostic override is set.
+    if not entry_candles and (diagnostic_override is not None or policy):
+        # Fail closed: never fall back to H1/H4 when the entry timeframe was
+        # named explicitly. The live evaluator validates the policy setup and
+        # trigger rungs before calling here, but direct callers (backtest
+        # replay, ablation harnesses) reach this path unvalidated and must not
+        # score an empty entry series as a merely low-quality signal.
         return _unavailable_quant(
             profile,
             entry_tf=entry_tf,
@@ -845,18 +985,26 @@ def score_pair(
     )
     plan = feature_cache.get(plan_key) if feature_cache is not None else None
     if plan is None:
+        tf_diagnostics: dict[str, Any] = {}
         if policy:
-            tf_weights: dict[str, float] = {}
-            for key, alias, weight in _POLICY_ROLE_TF_WEIGHTS:
-                tf = str((policy.get(key) or policy.get(alias) or "")).upper()
-                if tf:
-                    tf_weights[tf] = tf_weights.get(tf, 0.0) + weight
+            if _policy_trend_weights_from_profile_enabled():
+                tf_weights, tf_diagnostics = _policy_trend_weights_from_profile(
+                    policy, group, asset_type, horizon
+                )
+            else:
+                tf_weights = {}
+                for key, alias, weight in _POLICY_ROLE_TF_WEIGHTS:
+                    tf = str((policy.get(key) or policy.get(alias) or "")).upper()
+                    if tf:
+                        tf_weights[tf] = tf_weights.get(tf, 0.0) + weight
+                tf_diagnostics = {"trendWeightSource": "policy_role_table_legacy"}
             momentum_tf = _resolve_policy_momentum_tf(
                 group, asset_type, horizon, policy_trigger_tf
             )
         else:
             tf_weights = _resolve_v3_tf_weights(group, asset_type, horizon)
             momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
+            tf_diagnostics = {"trendWeightSource": "profile_static"}
         extra_tfs = tuple(
             tf
             for tf in set(
@@ -864,10 +1012,16 @@ def score_pair(
             )
             if tf and tf not in ("D1", "H4", "H1")
         )
-        plan = tf_weights, momentum_tf, extra_tfs, dict(profile.indicator_periods)
+        plan = (
+            tf_weights,
+            momentum_tf,
+            extra_tfs,
+            dict(profile.indicator_periods),
+            tf_diagnostics,
+        )
         if feature_cache is not None:
             feature_cache[plan_key] = plan
-    tf_weights, momentum_tf, extra_tfs, indicator_periods = plan
+    tf_weights, momentum_tf, extra_tfs, indicator_periods, tf_diagnostics = plan
     from factor_scoring import (
         ENTRY_TF_PERIOD_OVERRIDE_TFS,
         _resolved_indicator_periods_for_tf,
@@ -884,6 +1038,7 @@ def score_pair(
     snap_kwargs = {
         "entry_tf": entry_tf,
         "entry_periods": entry_periods,
+        "score_group": group,
     }
     if extra_tfs:
         snaps = _snapshots(
@@ -1265,11 +1420,19 @@ def score_pair(
             "scoringTimeframes": {
                 "policyApplied": bool(policy),
                 "trend": list(tf_weights.keys()),
+                "trendWeights": {tf: round(w, 4) for tf, w in tf_weights.items()},
                 "momentum": momentum_tf,
                 "location": entry_tf,
                 "volume": entry_tf,
                 "setup": policy_setup_tf or entry_tf,
                 "trigger": policy_trigger_tf or momentum_tf,
+                # ADX reaches the score from two snapshots: the momentum anchor
+                # (gate + multiplier) and the entry rung (trend-health slope /
+                # plateau). Both are reported so a divergence is visible; the
+                # thresholds themselves remain asset-class keyed, not TF-aware.
+                "momentumAdx": momentum_tf,
+                "trendHealthAdx": entry_tf,
+                **tf_diagnostics,
             },
             "adxValue": mom_diag.get("adxValue"),
             "adxMultiplier": mom_diag.get("adxMultiplier"),

@@ -128,15 +128,22 @@ class EngineBHistoricalFeatureCache:
                 self._h4_snapshot = resolve_engine_b_h4_snap(h4, asset_type)
             except Exception:
                 self._h4_snapshot = {}
-            self._regime_label = str(resolve_engine_b_regime_label(h4, asset_type)).upper()
             self._h4_snapshot_key = h4_key
 
+        # ``atr_tf`` is the policy structure rung (resolve_engine_b_tfs maps
+        # both to structure_tf), which is the series the live scan derives the
+        # regime label from. Deriving it from H4 here made historical replays
+        # build different zone multipliers and min-score thresholds than
+        # production on every H1-structure profile.
         atr_key = (str(atr_tf).upper(), self._role_identity(atr_rows))
         if atr_key != self._atr_key:
             try:
                 self._atr = float(_atr_from_candles(atr_rows))
             except (TypeError, ValueError):
                 self._atr = 0.0
+            self._regime_label = str(
+                resolve_engine_b_regime_label(atr_rows or h4, asset_type)
+            ).upper()
             self._atr_key = atr_key
 
         return {
@@ -296,6 +303,8 @@ def resolve_engine_b_style_profile(
             "entry_tf": selected_tfs["trigger"],
             "execution_tf": selected_tfs["execution"],
             "atr_tf": selected_tfs["atr"],
+            "m5_policy": selected_tfs.get("m5_policy", "disabled"),
+            "execution_prerequisite_tf": selected_tfs.get("execution_prerequisite"),
             "timeframe_policy_version": selected_tfs["policy_version"],
             "timeframe_policy_profile": selected_tfs["policy_profile"],
             "style": resolved,
@@ -481,10 +490,19 @@ def evaluate_engine_b_snapshot(
             resolved_profile,
             str(regime_label or "RANGING"),
         )
+    # Live scan paths derive the regime label from the policy structure/zone
+    # series (H1 intraday), so the historical path must read the same rung —
+    # regime selects NAKED_ENGINE.zone_multipliers (zone thickness) and the
+    # Engine B min-score multiplier, and an H4 fallback silently built
+    # different zones and thresholds than production for the same bar.
+    _regime_tf = str(
+        resolved_profile.get("structure_tf") or resolved_profile.get("zone_tf") or "H4"
+    ).upper()
+    _regime_candles = list(role_candles.get(_regime_tf) or []) or h4
     regime = str(
         regime_label
         or (cached_inputs or {}).get("regime")
-        or resolve_engine_b_regime_label(h4, asset_type)
+        or resolve_engine_b_regime_label(_regime_candles, asset_type)
     ).upper()
     naked = engine or NakedEngine()
     if not historical:

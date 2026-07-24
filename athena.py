@@ -7456,13 +7456,29 @@ def _compute_naked_analysis(
         # intraday calendar gap, weekend D1 grace, crypto D1 25h wall-clock).
         # B3: also threads (score_group, style) so D1 staleness only blocks when
         # the group's trend/momentum scoring actually consumes D1.
+        _active_lower_tfs: dict[str, list] = {}
+        if _entry_tf not in {"D1", "H4", "H1"}:
+            _active_lower_tfs[_entry_tf] = _lower_trigger
+        # Conditional M5 consumes the setup rung as its arming prerequisite.
+        _m5_prereq_tf = str(
+            style_profile.get("execution_prerequisite_tf")
+            or style_profile.get("setup_tf")
+            or ""
+        ).upper()
+        if (
+            _entry_tf == "M5"
+            and str(style_profile.get("m5_policy") or "").lower() == "conditional"
+            and _m5_prereq_tf
+            and _m5_prereq_tf not in {"D1", "H4", "H1"}
+        ):
+            _active_lower_tfs[_m5_prereq_tf] = _market_state_series(
+                _role_market_states.get(_m5_prereq_tf), include_forming=False
+            )
         _stale_tfs, _fresh_diag = _engine_b_scan_freshness_stale_tfs(
             pair_obj, d1, h4, h1,
             score_group=_pair_score_group,
             style=resolved_style,
-            active_entry_tfs={_entry_tf: _lower_trigger}
-            if _entry_tf not in {"D1", "H4", "H1"}
-            else None,
+            active_entry_tfs=_active_lower_tfs or None,
         )
         if _stale_tfs:
             _fresh_reason = "STALE_DATA_ENGINE_B:" + ",".join(_stale_tfs)
@@ -7610,7 +7626,14 @@ def _compute_naked_analysis(
             "d1_candles": d1,
             "h4_candles": h4,
             "h1_candles": h1,
-            "entry_candles": structure_entry_candles,
+            # Must be the same series the non-probe branch scores with
+            # (``trigger_candles``, forming-inclusive per
+            # ENGINE_B_USE_FORMING_FOR_TRIGGER). The probe overwrites
+            # role_candles[entry_tf] with this list, so passing the
+            # confirmed-only series made the probe detect triggers on a
+            # different bar set than the direct path — and the probe result is
+            # reused as the final result whenever the direction matches.
+            "entry_candles": trigger_candles,
             "current_price": current_price,
             "atr": atr,
             "regime_label": regime_label,
@@ -8491,6 +8514,26 @@ def api_scan_naked():
                 for tf in (_zone_tf, _entry_tf, _atr_tf, "D1")
             )
 
+            # Conditional M5 consumes the setup rung as its arming
+            # prerequisite, so it must clear the same freshness bar.
+            _naked_active_lower_tfs: dict[str, list] = {}
+            if str(_entry_tf).upper() not in {"D1", "H4", "H1"}:
+                _naked_active_lower_tfs[str(_entry_tf).upper()] = entry_candles
+            _naked_m5_prereq_tf = str(
+                style_profile.get("execution_prerequisite_tf")
+                or style_profile.get("setup_tf")
+                or ""
+            ).upper()
+            if (
+                str(_entry_tf).upper() == "M5"
+                and str(style_profile.get("m5_policy") or "").lower() == "conditional"
+                and _naked_m5_prereq_tf
+                and _naked_m5_prereq_tf not in {"D1", "H4", "H1"}
+            ):
+                _naked_active_lower_tfs[_naked_m5_prereq_tf] = _tf_map.get(
+                    _naked_m5_prereq_tf, []
+                )
+
             debug_row["zone_count"] = len(zone_candles)
             debug_row["entry_count"] = len(entry_candles)
             debug_row["d1_count"] = len(d1_candles)
@@ -8515,9 +8558,7 @@ def api_scan_naked():
                 _tf_map.get("H1", []),
                 score_group=_pair_score_group,
                 style=resolved_style,
-                active_entry_tfs={_entry_tf: entry_candles}
-                if str(_entry_tf).upper() not in {"D1", "H4", "H1"}
-                else None,
+                active_entry_tfs=_naked_active_lower_tfs or None,
             )
             if _stale_tfs_b:
                 debug_row["final_reject_reason"] = "freshness_gate"
@@ -14647,6 +14688,20 @@ def analyze_pair(
         style,
         source=pair.get("source"),
     )
+    if _policy_timeframes and _v3_live_entry_tf:
+        # ENGINE_A_SCORING_PROFILE.LIVE_ENTRY_TF_BY_STYLE predates the policy
+        # layer and is superseded by it for scoring (quant_scorer takes the
+        # policy setup rung). Leaving it live still made analyze_pair abort on,
+        # freshness-gate, and stamp ATR provenance for a timeframe the score
+        # never reads — e.g. requiring M30 for a pair whose setup rung is M15.
+        if str(_v3_live_entry_tf).upper() != str(_policy_timeframes["setup"]).upper():
+            log.debug(
+                "[ANALYZE] %s legacy live entry TF %s superseded by policy setup %s",
+                pair.get("display", "?"),
+                _v3_live_entry_tf,
+                _policy_timeframes["setup"],
+            )
+        _v3_live_entry_tf = None
     _pair_ctx = dict(pair or {})
     _pair_ctx["score_group"] = _score_group
 
@@ -15307,8 +15362,17 @@ def analyze_pair(
         d1,
         h4,
         h1,
-        entry_tf=_v3_live_entry_tf,
-        entry_candles=_v3_entry_candles,
+        # ATR provenance must name the rung the score actually consumed: the
+        # policy setup TF when a policy is authoritative, else the legacy live
+        # entry TF.
+        entry_tf=(
+            _policy_timeframes["setup"] if _policy_timeframes else _v3_live_entry_tf
+        ),
+        entry_candles=(
+            _v3_candles.get(_policy_timeframes["setup"], [])
+            if _policy_timeframes
+            else _v3_entry_candles
+        ),
     )
     from timeframe_policy import attach_timeframe_policy_payload
 

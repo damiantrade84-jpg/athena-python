@@ -60,6 +60,36 @@ def _frame_to_confirmed_candles(frame) -> list[dict[str, Any]]:
     return rows
 
 
+def _policy_validation_timeframes(pair: dict[str, Any], horizon: str) -> list[str]:
+    """Core D1/H4/H1 stack plus any lower policy rungs Engine A scores with.
+
+    The lane historically loaded D1/H4/H1 only, so every promoted profile was
+    validated on a timeframe stack the live scorer no longer uses in full — the
+    setup rung (and the trigger rung behind ``triggerEvidence``) can resolve to
+    M30/M15/M5. Lower rungs are additive: they are loaded when the required
+    provider has them and recorded in provenance, and their absence does not
+    fail a lane, because trend and momentum remain on the D1/H4/H1 core.
+    """
+    timeframes = ["H1", "H4", "D1"]
+    try:
+        from engine_a_v3.routing import route_specialist
+        from timeframe_policy import resolve_timeframe_policy
+
+        policy = resolve_timeframe_policy(
+            str(pair.get("display") or pair.get("symbol") or ""),
+            str(pair.get("type") or pair.get("asset_type") or ""),
+            route_specialist(pair).score_group,
+            horizon,
+            engine_id="engine_a",
+        )
+    except Exception:
+        return timeframes
+    for tf in (policy.setup_tf.value, policy.trigger_tf.value):
+        if tf and tf not in timeframes:
+            timeframes.append(tf)
+    return timeframes
+
+
 def _dataset_id(provenance: dict[str, Any]) -> str:
     digest = hashlib.sha256(
         json.dumps(provenance, sort_keys=True, separators=(",", ":"), default=str).encode(
@@ -131,23 +161,36 @@ def validate_manifest_group(
         candles: dict[str, list[dict[str, Any]]] = {}
         pair_provenance: dict[str, Any] = {}
         expected_provider = "bybit_rest" if group["requiredProvider"] == "bybit" else "mt5"
-        for timeframe in ("H1", "H4", "D1"):
+        _lane_timeframes = _policy_validation_timeframes(pair, horizon)
+        _core_timeframes = {"H1", "H4", "D1"}
+        for timeframe in _lane_timeframes:
+            _optional = timeframe not in _core_timeframes
             if data_as_of:
                 from frozen_data import read_frozen_candles
 
-                rows = read_frozen_candles(
-                    data_as_of,
-                    {"display": data_symbol},
-                    timeframe,
-                    expected_provider,
-                    limit=int(limits.get(timeframe, 1000)),
-                    min_bars=2,
-                )
+                try:
+                    rows = read_frozen_candles(
+                        data_as_of,
+                        {"display": data_symbol},
+                        timeframe,
+                        expected_provider,
+                        limit=int(limits.get(timeframe, 1000)),
+                        min_bars=2,
+                    )
+                except Exception:
+                    if not _optional:
+                        raise
+                    pair_provenance[timeframe] = {"data_source": "UNAVAILABLE"}
+                    continue
                 # Frozen rows are cutoff-filtered but the final bar may have
                 # been forming at freeze time; drop it for confirmed-only
                 # parity with the live path.
                 candles[timeframe] = rows[:-1]
                 if len(candles[timeframe]) < 1:
+                    if _optional:
+                        candles.pop(timeframe, None)
+                        pair_provenance[timeframe] = {"data_source": "UNAVAILABLE"}
+                        continue
                     raise ValueError(
                         f"validation_data_insufficient:{data_symbol}:{timeframe}"
                     )
@@ -164,12 +207,23 @@ def validate_manifest_group(
                 allow_yfinance=False,
                 required_source=("bybit_rest" if group["requiredProvider"] == "bybit" else "mt5"),
             )
-            if frame is None or provenance.data_source == "DATA_UNAVAILABLE":
-                raise ValueError(
-                    f"validation_data_unavailable:{data_symbol}:{timeframe}"
-                )
             expected_source = "bybit_rest" if group["requiredProvider"] == "bybit" else "mt5"
-            if provenance.data_source != expected_source:
+            _unavailable = frame is None or provenance.data_source == "DATA_UNAVAILABLE"
+            _mismatched = not _unavailable and provenance.data_source != expected_source
+            if _unavailable or _mismatched:
+                # Lower policy rungs are additive context: record that they were
+                # unavailable rather than failing a lane whose scored core
+                # (D1/H4/H1) is fully present.
+                if _optional:
+                    pair_provenance[timeframe] = {
+                        "data_source": provenance.data_source if not _unavailable else "UNAVAILABLE",
+                        "policyRungSkipped": True,
+                    }
+                    continue
+                if _unavailable:
+                    raise ValueError(
+                        f"validation_data_unavailable:{data_symbol}:{timeframe}"
+                    )
                 raise ValueError(
                     f"validation_provider_mismatch:{data_symbol}:{timeframe}:"
                     f"expected={expected_source}:actual={provenance.data_source}"

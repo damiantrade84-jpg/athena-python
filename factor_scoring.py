@@ -324,7 +324,13 @@ def _resolve_macd_params(score_group: str | None, asset_type: str) -> dict:
     return params
 
 
-ENTRY_TF_PERIOD_OVERRIDE_TFS = frozenset({"M15", "M30"})
+# Intraday rungs that take ENGINE_A_ENTRY_TF_PERIODS instead of the H4/D1-scale
+# ENGINE_A_*_BY_CLASS periods. M5 is included: leaving it out did not disable M5
+# scoring, it silently computed M5 snapshots with H4 periods (RSI 18, MACD
+# 12/26, EMA 26 on five-minute bars). The configured rows are calibrated for
+# M15/M30 and are merely the closest available for M5 — a dedicated M5 row is
+# still a calibration task, not an assumption this constant should make.
+ENTRY_TF_PERIOD_OVERRIDE_TFS = frozenset({"M30", "M15", "M5"})
 
 
 def _base_indicator_periods(score_group: str | None, asset_type: str) -> dict[str, int]:

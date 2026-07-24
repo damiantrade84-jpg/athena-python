@@ -112,7 +112,20 @@ def test_all_known_groups_have_explicit_entry_row():
 
 
 def test_entry_tf_override_tfs_frozen():
-    assert ENTRY_TF_PERIOD_OVERRIDE_TFS == frozenset({"M15", "M30"})
+    # M5 is in the set: policy v4 resolves M5 as the trigger rung for the fast
+    # profiles, and excluding it silently scored M5 snapshots with H4-scale
+    # periods (RSI 18 / MACD 12-26 / EMA 26 on five-minute bars).
+    assert ENTRY_TF_PERIOD_OVERRIDE_TFS == frozenset({"M30", "M15", "M5"})
+
+
+def test_m5_uses_intraday_periods_not_h4_scale():
+    group, asset = "forex_majors", "forex"
+    base = _base_indicator_periods(group, asset)
+    m5 = _resolved_indicator_periods_for_tf(group, asset, "M5")
+    assert m5 != base
+    assert m5 == _resolved_indicator_periods_for_tf(group, asset, "M15")
+    assert m5["rsi"] < base["rsi"]
+    assert m5["ema_trend"] < base["ema_trend"]
 
 
 def test_run_v3_backtest_m30_override_reports_entry_periods(monkeypatch):

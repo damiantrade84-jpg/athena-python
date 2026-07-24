@@ -280,7 +280,8 @@ def _resolve_setup_candle_frames(
 ) -> tuple[list[dict], list[dict], str, str]:
     """Primary/context frames aligned with the selected style's quant entry TF."""
     from engine_a_v3.timeframes import (
-        resolve_diagnostic_v3_entry_timeframe,
+        resolve_setup_context_timeframe,
+        resolve_setup_primary_timeframe,
         resolve_v3_entry_timeframe,
     )
 
@@ -297,14 +298,15 @@ def _resolve_setup_candle_frames(
         if route.family == "equity_etf"
         else "other"
     )
-    diagnostic_override = resolve_diagnostic_v3_entry_timeframe(entry_tf_override)
-    if entry_tf_override is not None and diagnostic_override is None:
+    requested_tf = resolve_setup_primary_timeframe(entry_tf_override)
+    if entry_tf_override is not None and requested_tf is None:
         return [], [], "", ""
-    if diagnostic_override is not None:
-        primary_tf = diagnostic_override
-        # Entry timing is lower-TF, while structural context stays aligned to
-        # the requested horizon: H4 for intraday and D1 for swing.
-        context_tf = "D1" if str(horizon).lower() == "swing" else "H4"
+    if requested_tf is not None:
+        primary_tf = requested_tf
+        # Entry timing may be lower-TF, while structural context stays one rung
+        # slower: H4 for intraday/lower primaries, D1 for swing and for an H4
+        # primary (which SLOW speed adaptation can produce).
+        context_tf = resolve_setup_context_timeframe(primary_tf, horizon)
         primary = candles.get(primary_tf) or []
         context = candles.get(context_tf) or candles.get("D1") or []
         return primary, context, primary_tf, context_tf

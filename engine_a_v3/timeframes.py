@@ -10,6 +10,36 @@ from style_resolver import resolve_auto_style
 VALID_V3_ENTRY_TIMEFRAMES = frozenset({"H1", "H4", "D1"})
 # Diagnostic-only allowlist for entry_tf_override experiments (not production).
 DIAGNOSTIC_V3_ENTRY_TIMEFRAMES = frozenset({"H1", "M15", "M30"})
+# Every timeframe the setup specialists may run their primary frame on. This is
+# the union of the production entry contract and the diagnostic allowlist: an
+# authoritative policy can resolve the setup rung to H4 (SLOW speed adaptation
+# on any H1-setup group, which includes all of Engine A swing), and rejecting it
+# because it is absent from the *diagnostic* set silently disabled the whole
+# setup-overlay path with no rejection reason.
+SETUP_PRIMARY_TIMEFRAMES = VALID_V3_ENTRY_TIMEFRAMES | DIAGNOSTIC_V3_ENTRY_TIMEFRAMES
+
+# Structural context rung for a given setup primary rung (one step slower).
+_SETUP_CONTEXT_TF: dict[str, str] = {
+    "M15": "H4",
+    "M30": "H4",
+    "H1": "H4",
+    "H4": "D1",
+    "D1": "D1",
+}
+
+
+def resolve_setup_primary_timeframe(tf: str | None) -> str | None:
+    """Return ``tf`` when the setup specialists can run on it, else ``None``."""
+    key = str(tf or "").strip().upper()
+    return key if key in SETUP_PRIMARY_TIMEFRAMES else None
+
+
+def resolve_setup_context_timeframe(primary_tf: str | None, horizon: str) -> str:
+    """Structural context rung paired with a setup primary rung."""
+    key = str(primary_tf or "").strip().upper()
+    if key in {"H4", "D1"}:
+        return _SETUP_CONTEXT_TF[key]
+    return "D1" if str(horizon or "").lower() == "swing" else _SETUP_CONTEXT_TF.get(key, "H4")
 
 
 def resolve_live_v3_entry_timeframe(

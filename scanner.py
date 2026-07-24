@@ -2238,9 +2238,19 @@ def run_full_scan(
                 )
                 from engine_a_v3.timeframes import resolve_live_v3_entry_timeframe
                 from engine_a_groups import resolve_score_group_by_type
+                from engine_a_v3.routing import route_specialist
                 from timeframe_policy import resolve_timeframe_policy
 
-                _policy_score_group = resolve_score_group_by_type(pair)
+                # analyze_pair resolves the Engine A policy from
+                # route_specialist(), which honours an explicit pair
+                # score_group / PAIR_PROFILES override before falling back to
+                # type dispatch. Prefetching under the type-dispatch group alone
+                # meant an overridden pair had a different policy's rungs
+                # preloaded than the one it scores with.
+                _policy_score_group = (
+                    route_specialist(pair).score_group
+                    or resolve_score_group_by_type(pair)
+                )
                 _policy_a = resolve_timeframe_policy(
                     pair.get("display") or pair.get("symbol") or "",
                     pair.get("type", ""),
@@ -2776,16 +2786,33 @@ def run_full_scan(
                         zone_candles_b and entry_candles_b and atr_candles_b
                     )
 
+                    # Conditional M5 consumes the setup rung as its arming
+                    # prerequisite, so that series is now scoring input and has
+                    # to clear the same freshness bar as the trigger.
+                    _active_lower_tfs_b: dict[str, list] = {}
+                    if _entry_tf_b not in {"D1", "H4", "H1"}:
+                        _active_lower_tfs_b[_entry_tf_b] = entry_candles_b
+                    _m5_prereq_tf_b = str(
+                        style_profile_b.get("execution_prerequisite_tf")
+                        or style_profile_b.get("setup_tf")
+                        or ""
+                    ).upper()
+                    if (
+                        _entry_tf_b == "M5"
+                        and str(style_profile_b.get("m5_policy") or "").lower() == "conditional"
+                        and _m5_prereq_tf_b
+                        and _m5_prereq_tf_b not in {"D1", "H4", "H1"}
+                    ):
+                        _active_lower_tfs_b[_m5_prereq_tf_b] = _select_engine_b_tf_candles(
+                            _m5_prereq_tf_b, _tf_map_b
+                        )
+
                     if zone_candles_b and entry_candles_b and atr_candles_b:
                         _stale_b_tfs, _fresh_diag_b = _engine_b_scan_freshness_stale_tfs(
                             pair, d1, h4, h1,
                             score_group=_pair_score_group,
                             style=resolved_style_b,
-                            active_entry_tfs={
-                                _entry_tf_b: entry_candles_b
-                            }
-                            if _entry_tf_b not in {"D1", "H4", "H1"}
-                            else None,
+                            active_entry_tfs=_active_lower_tfs_b or None,
                         )
                         if _stale_b_tfs:
                             _fresh_reason = "STALE_DATA_ENGINE_B:" + ",".join(_stale_b_tfs)
@@ -3138,16 +3165,19 @@ def run_full_scan(
                                     market_states=preloaded_market_state,
                                     speed_state=_speed_state,
                                 )
-                                from timeframe_policy import policy_mode_is_authoritative
-
-                                if policy_mode_is_authoritative(None, CONFIG):
-                                    _attach_engine_b_timeframe_provenance(
-                                        res_b,
-                                        _engine_b_policy,
-                                        actual_structure_tf=_zone_tf_b,
-                                        actual_trigger_tf=_entry_tf_b,
-                                        actual_atr_tf=_atr_tf_b,
-                                    )
+                                # Record consumed-vs-policy timeframes in every
+                                # mode. attach_timeframe_policy_payload stamps
+                                # the policy TF fields unconditionally, so
+                                # skipping this in non-authoritative modes left
+                                # signals labelled with timeframes Engine B did
+                                # not read (the legacy H1 matrix).
+                                _attach_engine_b_timeframe_provenance(
+                                    res_b,
+                                    _engine_b_policy,
+                                    actual_structure_tf=_zone_tf_b,
+                                    actual_trigger_tf=_entry_tf_b,
+                                    actual_atr_tf=_atr_tf_b,
+                                )
                                 res_b["signal_price_rr"] = res_b.get("structural_rr")
                                 res_b["live_price_rr"] = (
                                     res_b.get("execution_rr2")
