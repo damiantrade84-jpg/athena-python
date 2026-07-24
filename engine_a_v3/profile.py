@@ -238,17 +238,17 @@ def _family_for(group: str) -> str:
 
 
 def _resolved_periods(group: str, family: str) -> dict[str, int]:
-    from factor_scoring import _resolve_atr_adx_periods, _resolve_ema_periods, _resolve_macd_params, _resolve_rsi_period
+    from factor_scoring import _base_indicator_periods
+
     asset = "stock" if family == "equity_etf" else family
-    ema = _resolve_ema_periods(group, asset)
-    macd = _resolve_macd_params(group, asset)
-    aa = _resolve_atr_adx_periods(group, asset)
-    return {
-        "ema_trend": int(ema["trend"]), "ema_momentum": int(ema["momentum"]), "ema_long": int(ema["long"]),
-        "rsi": int(_resolve_rsi_period(group, asset)), "macd_fast": int(macd["fast"]),
-        "macd_slow": int(macd["slow"]), "macd_signal": int(macd["signal"]),
-        "atr": int(aa["atr"]), "adx": int(aa["adx"]),
-    }
+    return _base_indicator_periods(group, asset)
+
+
+def resolved_periods_for_tf(group: str, family: str, tf: str) -> dict[str, int]:
+    from factor_scoring import _resolved_indicator_periods_for_tf
+
+    asset = "stock" if family == "equity_etf" else family
+    return _resolved_indicator_periods_for_tf(group, asset, tf)
 
 
 def baseline_profile(score_group: str, horizon: str) -> EngineAV3Profile:

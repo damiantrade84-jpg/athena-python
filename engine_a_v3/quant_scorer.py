@@ -691,30 +691,44 @@ def _snapshots(
     snapshot_cache: dict | None = None,
     *,
     extra_tfs: tuple[str, ...] = (),
+    entry_tf: str | None = None,
+    entry_periods: Mapping[str, int] | None = None,
 ) -> dict[str, Mapping[str, Any]]:
     from engine_a_v3.indicator_adapter import indicator_snapshot
+    from factor_scoring import ENTRY_TF_PERIOD_OVERRIDE_TFS
 
     snaps: dict[str, Mapping[str, Any]] = {}
     tfs = ("D1", "H4", "H1") + tuple(
         tf for tf in extra_tfs if tf and tf not in ("D1", "H4", "H1")
     )
+
+    def _periods_for(tf: str) -> Mapping[str, int]:
+        tf_key = str(tf or "").upper()
+        if (
+            entry_periods
+            and tf_key in ENTRY_TF_PERIOD_OVERRIDE_TFS
+        ):
+            return entry_periods
+        return periods
+
     for tf in tfs:
         rows = candles.get(tf) or []
+        tf_periods = _periods_for(tf)
         if snapshot_cache is not None:
             key = (tf, len(rows))
             cached = snapshot_cache.get(key)
-            if cached is not None:
+            if cached is not None and entry_periods is None:
                 snaps[tf] = cached
                 continue
             snapshot_at = getattr(snapshot_cache, "snapshot_at", None)
             if callable(snapshot_at):
-                cached = snapshot_at(tf, len(rows), periods, asset_type)
+                cached = snapshot_at(tf, len(rows), tf_periods, asset_type)
                 if cached is not None:
                     snapshot_cache[key] = cached
                     snaps[tf] = cached
                     continue
-        snap = indicator_snapshot(rows, periods, asset_type)
-        if snapshot_cache is not None:
+        snap = indicator_snapshot(rows, tf_periods, asset_type)
+        if snapshot_cache is not None and entry_periods is None:
             snapshot_cache[(tf, len(rows))] = snap
         snaps[tf] = snap
     return snaps
@@ -854,6 +868,23 @@ def score_pair(
         if feature_cache is not None:
             feature_cache[plan_key] = plan
     tf_weights, momentum_tf, extra_tfs, indicator_periods = plan
+    from factor_scoring import (
+        ENTRY_TF_PERIOD_OVERRIDE_TFS,
+        _resolved_indicator_periods_for_tf,
+    )
+
+    entry_tf_key = str(entry_tf or "").upper()
+    entry_periods: dict[str, int] | None = None
+    trend_indicator_periods = indicator_periods
+    if entry_tf_key in ENTRY_TF_PERIOD_OVERRIDE_TFS:
+        entry_periods = _resolved_indicator_periods_for_tf(
+            group, asset_type, entry_tf_key
+        )
+        trend_indicator_periods = entry_periods
+    snap_kwargs = {
+        "entry_tf": entry_tf,
+        "entry_periods": entry_periods,
+    }
     if extra_tfs:
         snaps = _snapshots(
             candles,
@@ -861,6 +892,7 @@ def score_pair(
             indicator_periods,
             snapshot_cache,
             extra_tfs=extra_tfs,
+            **snap_kwargs,
         )
     else:
         snaps = _snapshots(
@@ -868,6 +900,7 @@ def score_pair(
             asset_type,
             indicator_periods,
             snapshot_cache,
+            **snap_kwargs,
         )
     if diagnostic_override is not None or policy:
         entry_snap = snaps.get(entry_tf) or {}
@@ -893,7 +926,7 @@ def score_pair(
             snaps,
             tf_weights,
             entry_candles=entry_candles,
-            indicator_periods=indicator_periods,
+            indicator_periods=trend_indicator_periods,
             entry_tf=entry_tf,
             series_cache=series_cache,
         )

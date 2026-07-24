@@ -15,7 +15,10 @@ from engine_a_v3.evaluator import evaluate_engine_a_v3
 from engine_a_v3.promotion import PromotionRegistry
 from engine_a_v3.routing import route_specialist
 from engine_a_v3.setups import _efficiency_ratio
-from engine_a_v3.timeframes import resolve_v3_entry_timeframe
+from engine_a_v3.timeframes import (
+    resolve_diagnostic_v3_entry_timeframe,
+    resolve_v3_entry_timeframe,
+)
 
 _TF_SECONDS = {
     "M1": 60,
@@ -338,6 +341,7 @@ def run_v3_backtest(
     collect_funnel: bool = False,
     intermarket_context_provider: Callable[[Any], dict | None] | None = None,
     policy_timeframes: Mapping[str, Any] | None = None,
+    entry_tf_override: str | None = None,
 ) -> dict:
     route = route_specialist(pair)
     policy = policy_timeframes if isinstance(policy_timeframes, Mapping) else None
@@ -352,11 +356,26 @@ def run_v3_backtest(
             "entryTimeframe": None,
             "comparability": _v3_backtest_comparability(),
         }
-    primary_tf = policy_setup_tf or resolve_v3_entry_timeframe(
-        route.score_group,
-        str(pair.get("type") or pair.get("asset_type") or "other"),
-        horizon,
-    )
+    resolved_override = resolve_diagnostic_v3_entry_timeframe(entry_tf_override)
+    if resolved_override is None and entry_tf_override is None:
+        try:
+            from config import CONFIG
+
+            resolved_override = resolve_diagnostic_v3_entry_timeframe(
+                CONFIG.get("ENGINE_A_BACKTEST_ENTRY_TF")
+            )
+        except Exception:
+            resolved_override = None
+    if policy_setup_tf:
+        primary_tf = policy_setup_tf
+    elif resolved_override is not None:
+        primary_tf = resolved_override
+    else:
+        primary_tf = resolve_v3_entry_timeframe(
+            route.score_group,
+            str(pair.get("type") or pair.get("asset_type") or "other"),
+            horizon,
+        )
     comparability = _v3_backtest_comparability()
     if primary_tf is None:
         return {
@@ -367,6 +386,15 @@ def run_v3_backtest(
             "comparability": comparability,
         }
     primary = list(candles.get(primary_tf) or [])
+    if resolved_override is not None and not primary:
+        return {
+            "error": "ENGINE_A_V3_MISSING_ENTRY_OVERRIDE_CANDLES",
+            "engine": "ENGINE_A_V3",
+            "contractVersion": CONTRACT_VERSION,
+            "entryTimeframe": primary_tf,
+            "entryTfOverride": resolved_override,
+            "comparability": comparability,
+        }
     if policy is not None:
         policy_trigger_tf = str(
             policy.get("trigger") or policy.get("triggerTf") or ""
@@ -521,6 +549,7 @@ def run_v3_backtest(
             policy_timeframes=policy,
             candle_validation_index=candle_validation_index,
             setup_series_cache=setup_series_cache,
+            entry_tf_override=resolved_override,
         )
         _classified: tuple[str, str] | None = None
         if collect_funnel:
@@ -674,6 +703,14 @@ def run_v3_backtest(
 
     result = _summarize(pair, horizon, trades, same_bar, oos_frac=_oos_frac)
     result["entryTimeframe"] = primary_tf
+    result["entryTfOverride"] = resolved_override
+    asset_type = str(pair.get("type") or pair.get("asset_type") or "other")
+    from factor_scoring import _resolved_indicator_periods_for_tf
+
+    result["indicatorPeriodsByTf"] = {
+        tf: _resolved_indicator_periods_for_tf(route.score_group, asset_type, tf)
+        for tf in ("D1", "H4", "H1", "M30", "M15")
+    }
     result["policyTimeframesApplied"] = dict(policy) if policy else None
     result["comparability"] = comparability
     if collect_funnel:

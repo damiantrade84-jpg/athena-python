@@ -470,6 +470,78 @@ def resolve_engine_b_asset_class(asset_type: str, score_group: str | None = None
     return a or "forex"
 
 
+# TFs that may use ENGINE_B_TRIGGER_TF_CALIBRATION (setup/trigger/execution only).
+ENGINE_B_TRIGGER_TF_CALIBRATION_TFS = frozenset({"M5", "M15", "M30"})
+
+_DEFAULT_TRIGGER_TF_CALIBRATION = {
+    "trigger_atr": 14,
+    "rejection_wick_body": 1.2,
+    "engulfing_body_atr": 0.2,
+    "strong_close_pct": 0.70,
+}
+
+
+def resolve_engine_b_trigger_tf_calibration(
+    score_group: str | None = None,
+    asset_type: str | None = None,
+) -> dict[str, float | int]:
+    """Per-score-group trigger/setup TF calibration; missing → hardcoded defaults.
+
+    Does not inherit a generic ``default`` row — absent groups keep ATR 14 and
+    the historical wick/engulfing/close thresholds.
+    """
+    out = dict(_DEFAULT_TRIGGER_TF_CALIBRATION)
+    keyed = config.CONFIG.get("ENGINE_B_TRIGGER_TF_CALIBRATION") or {}
+    if not isinstance(keyed, dict):
+        return out
+    row = None
+    g = str(score_group or "").strip().lower()
+    if g and g in keyed and isinstance(keyed[g], dict):
+        row = keyed[g]
+    if row is None:
+        a = str(asset_type or "").strip().lower()
+        if a and a in keyed and isinstance(keyed[a], dict):
+            row = keyed[a]
+    if not isinstance(row, dict):
+        return out
+    for key in (
+        "trigger_atr",
+        "rejection_wick_body",
+        "engulfing_body_atr",
+        "strong_close_pct",
+    ):
+        if key not in row:
+            continue
+        try:
+            if key == "trigger_atr":
+                out[key] = int(row[key])
+            else:
+                out[key] = float(row[key])
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def engine_b_trigger_tf_uses_calibration(tf: str | None) -> bool:
+    return str(tf or "").strip().upper() in ENGINE_B_TRIGGER_TF_CALIBRATION_TFS
+
+
+def engine_b_trigger_atr_period(
+    score_group: str | None,
+    asset_type: str | None,
+    tf: str | None,
+) -> int:
+    """ATR period for trigger/setup TF candles; structural TFs always stay 14."""
+    if not engine_b_trigger_tf_uses_calibration(tf):
+        return 14
+    cal = resolve_engine_b_trigger_tf_calibration(score_group, asset_type)
+    try:
+        period = int(cal.get("trigger_atr", 14))
+    except (TypeError, ValueError):
+        period = 14
+    return period if period > 0 else 14
+
+
 _ENGINE_B_LEGACY_TF_MATRIX = {
     asset: {
         # (struct, zone, trigger, atr) — zone tracks structure (intraday H1 / swing H4)
@@ -491,7 +563,7 @@ def resolve_engine_b_tfs(
 ) -> dict:
     """Resolve struct/zone/trigger/atr timeframes for an (asset_type, style) pair.
 
-    Single source of truth used by athena, execution, scanner, and backtest_runner.
+    Single source of truth used by athena, execution, scanner, and the v3 backtester.
     Replaces the legacy ``ENGINE_B_FOREX_STRUCTURE_TF`` flag and the per-style
     hardcoded TFs in ``_naked_scan_style_profile``.
     """
@@ -4144,6 +4216,8 @@ class NakedEngine:
         bos_confirmed: bool,
         is_trending: bool = False,
         asset_type: str | None = "",
+        score_group: str | None = None,
+        trigger_tf: str | None = None,
     ) -> dict:
         if len(candles) < 3:
             return {
@@ -4179,9 +4253,34 @@ class NakedEngine:
         upper_wick = high - max(open_, close)
         lower_wick = min(open_, close) - low
 
-        rejection_ratio = _engine_b_rejection_wick_body_ratio()
+        # Class thresholds only on M5/M15/M30 — same gate as trigger ATR period.
+        # H1/H4/D1 keep legacy NAKED_ENGINE / hardcoded thresholds.
+        use_cal = engine_b_trigger_tf_uses_calibration(trigger_tf)
+        if use_cal:
+            cal = resolve_engine_b_trigger_tf_calibration(score_group, asset_type)
+            keyed = config.CONFIG.get("ENGINE_B_TRIGGER_TF_CALIBRATION") or {}
+            g = str(score_group or "").strip().lower()
+            a = str(asset_type or "").strip().lower()
+            has_cal_row = isinstance(keyed, dict) and (
+                (g and isinstance(keyed.get(g), dict))
+                or (a and isinstance(keyed.get(a), dict))
+            )
+        else:
+            cal = None
+            has_cal_row = False
+        if has_cal_row and isinstance(cal, dict):
+            rejection_ratio = float(cal.get("rejection_wick_body", 1.2))
+            engulf_mult = float(cal.get("engulfing_body_atr", 0.2))
+            strong_close_pct = float(cal.get("strong_close_pct", 0.70))
+        else:
+            rejection_ratio = _engine_b_rejection_wick_body_ratio()
+            engulf_mult = _naked_engine_atr_mult(
+                "engulfing_min_body_atr_mult", 0.2, asset_type
+            )
+            strong_close_pct = 0.70
         # In trending regimes, candles have larger bodies and smaller wicks —
         # reduce the wick/body requirement so rejection patterns still fire.
+        # Cap applies AFTER the per-class base value is resolved.
         if is_trending:
             rejection_ratio = min(rejection_ratio, 1.0)
         bull_rejection = lower_wick >= max(body * rejection_ratio, atr * 0.08) and close >= low + (range_ * 0.6)
@@ -4190,11 +4289,9 @@ class NakedEngine:
         # Engulfing displacement floor: a real engulfing trigger needs a body
         # that means something at this timeframe's volatility. Without it,
         # doji-engulfs-doji noise in quiet regimes fires the entry gate.
-        # NAKED_ENGINE.engulfing_min_body_atr_mult (scalar or per-asset dict);
-        # set 0.0 to restore legacy body-agnostic behaviour. Inert when atr<=0.
-        _engulf_min_body = atr * _naked_engine_atr_mult(
-            "engulfing_min_body_atr_mult", 0.2, asset_type
-        ) if atr and atr > 0 else 0.0
+        # Per-class ENGINE_B_TRIGGER_TF_CALIBRATION overrides NAKED_ENGINE when
+        # present AND trigger TF is M5/M15/M30.
+        _engulf_min_body = atr * engulf_mult if atr and atr > 0 else 0.0
         bull_engulf = (
             close > open_
             and prev_close < prev_open
@@ -4214,8 +4311,8 @@ class NakedEngine:
         bull_inside_break = inside_bar and close > prev_high
         bear_inside_break = inside_bar and close < prev_low
 
-        bull_strong_close = close > open_ and close >= low + (range_ * 0.7)
-        bear_strong_close = close < open_ and close <= high - (range_ * 0.7)
+        bull_strong_close = close > open_ and close >= low + (range_ * strong_close_pct)
+        bear_strong_close = close < open_ and close <= high - (range_ * strong_close_pct)
 
         if direction == "LONG":
             trigger_ok = bull_rejection or bull_engulf or bull_inside_break or (
@@ -4634,11 +4731,19 @@ class NakedEngine:
         # Trigger-local ATR scales candle-body/wick and follow-through checks on
         # the same lower timeframe. It never replaces the style ATR used for
         # structural zones, SL/TP, RR, or room gates.
-        trigger_atr = self._compute_atr_from_candles(trigger_candles, fallback=atr)
         _score_group = (
             (pair or {}).get("score_group")
             or (pair or {}).get("group")
             or (pair or {}).get("asset_group")
+            or _pair_score_group
+        )
+        _trigger_tf_key = str(_tfs.get("trigger") or "").upper()
+        _trigger_cal = resolve_engine_b_trigger_tf_calibration(_score_group, asset_type)
+        _trigger_atr_period = engine_b_trigger_atr_period(
+            _score_group, asset_type, _trigger_tf_key
+        )
+        trigger_atr = self._compute_atr_from_candles(
+            trigger_candles, period=_trigger_atr_period, fallback=atr
         )
         asset_struct_diag = _asset_class_structure_adjustment(asset_type, _score_group, struct_candles, struct_atr)
         crypto_struct_diag = _crypto_structure_adjustment(asset_type, struct_candles, struct_atr)
@@ -4909,6 +5014,8 @@ class NakedEngine:
             "zone_atr": zone_atr,
             "h4_atr": h4_atr,
             "trigger_atr": trigger_atr,
+            "trigger_atr_period": _trigger_atr_period,
+            "trigger_tf_calibration": dict(_trigger_cal),
             "struct_highs": struct_highs,
             "struct_lows": struct_lows,
             "struct_closes": struct_closes,
@@ -5218,6 +5325,8 @@ class NakedEngine:
                 or (direction == "SHORT" and sequence_data["state"] == "LH_LL" and macro_seq_data["state"] == "LH_LL")
             ),
             asset_type=asset_type,
+            score_group=_zone_score_group,
+            trigger_tf=str(tfs.get("trigger") or ""),
         )
 
         latest_trigger_candle_time = None
@@ -5338,6 +5447,8 @@ class NakedEngine:
             "h4_atr": h4_atr,
             "trigger_atr": trigger_atr,
             "trigger_atr_tf": tfs["trigger"],
+            "trigger_atr_period": precompute.get("trigger_atr_period"),
+            "trigger_tf_calibration": precompute.get("trigger_tf_calibration"),
             "bos_confirmed": bos_confirmed,
             "bos_mtf_confirmed": bos_mtf_confirmed,
             "bos_volume_confirmed": bos_data.get("bos_volume_confirmed", False),

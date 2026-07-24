@@ -25,7 +25,7 @@ import threading
 import time
 import warnings
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from config import CONFIG
 from engine_a_scoring_profile import (
@@ -322,6 +322,107 @@ def _resolve_macd_params(score_group: str | None, asset_type: str) -> dict:
                 except (TypeError, ValueError):
                     pass
     return params
+
+
+ENTRY_TF_PERIOD_OVERRIDE_TFS = frozenset({"M15", "M30"})
+
+
+def _base_indicator_periods(score_group: str | None, asset_type: str) -> dict[str, int]:
+    """Bundle resolved group periods into the _calc_indicator_bundle key shape."""
+    ema = _resolve_ema_periods(score_group, asset_type)
+    macd = _resolve_macd_params(score_group, asset_type)
+    aa = _resolve_atr_adx_periods(score_group, asset_type)
+    return {
+        "ema_trend": int(ema.get("trend", 21)),
+        "ema_momentum": int(ema.get("momentum", 50)),
+        "ema_long": int(ema.get("long", 200)),
+        "rsi": int(_resolve_rsi_period(score_group, asset_type)),
+        "macd_fast": int(macd.get("fast", 12)),
+        "macd_slow": int(macd.get("slow", 26)),
+        "macd_signal": int(macd.get("signal", 9)),
+        "atr": int(aa.get("atr", 14)),
+        "adx": int(aa.get("adx", 14)),
+    }
+
+
+def _resolve_entry_tf_period_override(
+    score_group: str | None, asset_type: str
+) -> dict | None:
+    """Raw ENGINE_A_ENTRY_TF_PERIODS row for score_group, or None.
+
+    Unlike other class maps, missing score_group does not inherit the ``default``
+    entry row — callers fall back to base ENGINE_A_*_BY_CLASS periods.
+    """
+    del asset_type  # entry map is score-group keyed only
+    if not _engine_a_group_adjustments_enabled():
+        return None
+    keyed = CONFIG.get("ENGINE_A_ENTRY_TF_PERIODS") or {}
+    if not score_group or score_group not in keyed:
+        return None
+    row = keyed.get(score_group)
+    return row if isinstance(row, dict) and row else None
+
+
+def _merge_entry_tf_periods(
+    base: Mapping[str, int], override: Mapping[str, Any]
+) -> dict[str, int]:
+    """Apply entry-TF override onto base periods; ema_long stays from base."""
+    out = dict(base)
+    if "ema_trend" in override:
+        try:
+            out["ema_trend"] = int(override["ema_trend"])
+        except (TypeError, ValueError):
+            pass
+    if "ema_mom" in override:
+        try:
+            out["ema_momentum"] = int(override["ema_mom"])
+        except (TypeError, ValueError):
+            pass
+    if "rsi" in override:
+        try:
+            out["rsi"] = int(override["rsi"])
+        except (TypeError, ValueError):
+            pass
+    macd_raw = override.get("macd")
+    if isinstance(macd_raw, (list, tuple)) and len(macd_raw) >= 3:
+        try:
+            out["macd_fast"] = int(macd_raw[0])
+            out["macd_slow"] = int(macd_raw[1])
+            out["macd_signal"] = int(macd_raw[2])
+        except (TypeError, ValueError):
+            pass
+    elif isinstance(macd_raw, dict):
+        for src, dst in (("fast", "macd_fast"), ("slow", "macd_slow"), ("signal", "macd_signal")):
+            if src in macd_raw:
+                try:
+                    out[dst] = int(macd_raw[src])
+                except (TypeError, ValueError):
+                    pass
+    if "atr" in override:
+        try:
+            out["atr"] = int(override["atr"])
+        except (TypeError, ValueError):
+            pass
+    if "adx" in override:
+        try:
+            out["adx"] = int(override["adx"])
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _resolved_indicator_periods_for_tf(
+    score_group: str | None, asset_type: str, tf: str
+) -> dict[str, int]:
+    """Period dict for one TF: entry overrides on M15/M30 only when configured."""
+    base = _base_indicator_periods(score_group, asset_type)
+    tf_key = str(tf or "").upper()
+    if tf_key not in ENTRY_TF_PERIOD_OVERRIDE_TFS:
+        return base
+    override = _resolve_entry_tf_period_override(score_group, asset_type)
+    if not override:
+        return base
+    return _merge_entry_tf_periods(base, override)
 
 
 # ADX gate thresholds (Wilder 1978 standard) — tunable via config.yaml FACTOR_ADX_*

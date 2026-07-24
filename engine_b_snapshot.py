@@ -188,7 +188,22 @@ class EngineBHistoricalFeatureCache:
             else None
         )
         if trigger_atr is None:
-            trigger_atr = naked._compute_atr_from_candles(trigger_rows, fallback=float(atr))
+            period = 14
+            try:
+                period = int(refreshed.get("trigger_atr_period") or 14)
+            except (TypeError, ValueError):
+                period = 14
+            score_group = refreshed.get("_score_group")
+            asset = str(refreshed.get("asset_type") or "")
+            if period == 14:
+                from market_structure import engine_b_trigger_atr_period
+
+                period = engine_b_trigger_atr_period(
+                    score_group, asset, trigger_tf
+                )
+            trigger_atr = naked._compute_atr_from_candles(
+                trigger_rows, period=period, fallback=float(atr)
+            )
         refreshed["trigger_atr"] = trigger_atr
         refreshed["_trigger_tf_override"] = trigger_tf
         refreshed_tfs = dict(refreshed.get("_tfs") or {})
@@ -336,15 +351,15 @@ def resolve_engine_b_regime_label(
         return "RANGING"
 
 
-def _atr_from_candles(candles: list[dict[str, Any]]) -> float:
-    if len(candles) < 15:
+def _atr_from_candles(candles: list[dict[str, Any]], period: int = 14) -> float:
+    if len(candles) < max(15, int(period) + 1):
         return 0.0
     try:
         series = calc_atr(
             [float(row["high"]) for row in candles],
             [float(row["low"]) for row in candles],
             [float(row["close"]) for row in candles],
-            14,
+            int(period),
         )
         valid = [float(value) for value in series if value is not None and float(value) > 0]
         return valid[-1] if valid else 0.0

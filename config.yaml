@@ -1028,6 +1028,38 @@ ENGINE_A_ATR_ADX_PERIODS_BY_CLASS:
   stock_other:           { atr: 14, adx: 14 }
   unknown:               { atr: 14, adx: 14 }
 
+# Entry-TF-only indicator periods (M15/M30). D1/H4/H1 keep ENGINE_A_*_BY_CLASS above.
+# Missing score_group → fall back to base group periods (never crash).
+# RSI period/EMA/MACD/ADX/ATR only — no entry RSI bounds (V3 uses continuous RSI).
+ENGINE_A_ENTRY_TF_PERIODS:
+  default:               { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  unknown:               { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  us_stock_single:       { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  stock_other:           { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  smallcap_em_etf:       { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  us_indices_trackers:   { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  eu_indices:            { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  asian_indices:         { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  index_other:           { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  softs:                 { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  base_metals:           { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  commodity_other:       { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  forex_majors:          { ema_trend: 8, ema_mom: 21, rsi: 7, macd: [5, 15, 9], adx: 10, atr: 14 }
+  forex_crosses:         { ema_trend: 9, ema_mom: 21, rsi: 8, macd: [8, 17, 9], adx: 10, atr: 14 }
+  forex_other:           { ema_trend: 9, ema_mom: 21, rsi: 8, macd: [8, 17, 9], adx: 10, atr: 14 }
+  forex_exotics:         { ema_trend: 12, ema_mom: 26, rsi: 10, macd: [8, 21, 9], adx: 12, atr: 14 }
+  crypto_btc:            { ema_trend: 9, ema_mom: 20, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  crypto_eth:            { ema_trend: 9, ema_mom: 20, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  crypto_doge:           { ema_trend: 9, ema_mom: 20, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  crypto_alt_majors:     { ema_trend: 10, ema_mom: 22, rsi: 10, macd: [8, 19, 9], adx: 12, atr: 14 }
+  crypto_other:          { ema_trend: 10, ema_mom: 22, rsi: 10, macd: [8, 19, 9], adx: 12, atr: 14 }
+  precious_trackers:     { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  copper:                { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  pgm_metals:            { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
+  energy_oil:            { ema_trend: 10, ema_mom: 22, rsi: 10, macd: [8, 19, 9], adx: 12, atr: 14 }
+  nat_gas:               { ema_trend: 10, ema_mom: 22, rsi: 10, macd: [8, 19, 9], adx: 12, atr: 14 }
+  bond_tlt:              { ema_trend: 12, ema_mom: 26, rsi: 12, macd: [10, 22, 9], adx: 12, atr: 14 }
+
 # Engine A scoring profile: trend TF stack, style weights, momentum/regime anchors.
 # D1/H4/H1 layers are unchanged by default; style adjusts trend weights only.
 ENGINE_A_DIRECTION_MIN_MARGIN: 0.05
@@ -3904,6 +3936,36 @@ ENGINE_B_USE_FORMING_FOR_STRUCTURE: false
 # where ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY strips the forming bar again)
 # and as a current-price fallback. Live and backtest trigger evaluation agree.
 ENGINE_B_USE_FORMING_FOR_TRIGGER: true
+
+# Trigger/setup TF only (M5/M15/M30): faster ATR/ADX periods + candle thresholds.
+# H1 structure ATR(14), H4 bias ATR, and D1/H4 regime ADX(14) are unchanged.
+# Missing score_group → hardcoded fallback (ATR 14, ADX 14, wick 1.2, engulf 0.2, close 0.70).
+ENGINE_B_TRIGGER_TF_CALIBRATION:
+  forex_majors:      { trigger_atr: 10, rejection_wick_body: 1.5, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
+  forex_crosses:     { trigger_atr: 11, rejection_wick_body: 1.4, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }
+  forex_other:       { trigger_atr: 11, rejection_wick_body: 1.3, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }
+  forex_exotics:     { trigger_atr: 12, rejection_wick_body: 1.2, engulfing_body_atr: 0.20, strong_close_pct: 0.65 }
+  crypto_btc:        { trigger_atr: 10, rejection_wick_body: 1.0, engulfing_body_atr: 0.30, strong_close_pct: 0.75 }
+  crypto_eth:        { trigger_atr: 10, rejection_wick_body: 1.0, engulfing_body_atr: 0.30, strong_close_pct: 0.75 }
+  crypto_doge:       { trigger_atr: 11, rejection_wick_body: 1.0, engulfing_body_atr: 0.35, strong_close_pct: 0.75 }
+  crypto_alt_majors: { trigger_atr: 11, rejection_wick_body: 1.0, engulfing_body_atr: 0.35, strong_close_pct: 0.75 }
+  crypto_other:      { trigger_atr: 11, rejection_wick_body: 1.0, engulfing_body_atr: 0.35, strong_close_pct: 0.75 }
+  precious_trackers: { trigger_atr: 10, rejection_wick_body: 1.3, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
+  copper:            { trigger_atr: 10, rejection_wick_body: 1.3, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
+  pgm_metals:        { trigger_atr: 10, rejection_wick_body: 1.3, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
+  energy_oil:        { trigger_atr: 12, rejection_wick_body: 1.2, engulfing_body_atr: 0.30, strong_close_pct: 0.70 }
+  nat_gas:           { trigger_atr: 12, rejection_wick_body: 1.2, engulfing_body_atr: 0.30, strong_close_pct: 0.70 }
+  us_stock_single:   { trigger_atr: 10, rejection_wick_body: 1.4, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }
+  stock_other:       { trigger_atr: 10, rejection_wick_body: 1.4, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }
+  smallcap_em_etf:   { trigger_atr: 10, rejection_wick_body: 1.4, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }
+  us_indices_trackers: { trigger_atr: 10, rejection_wick_body: 1.4, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }
+  eu_indices:        { trigger_atr: 10, rejection_wick_body: 1.4, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }
+  asian_indices:     { trigger_atr: 10, rejection_wick_body: 1.4, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }
+  index_other:       { trigger_atr: 10, rejection_wick_body: 1.4, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }
+  bond_tlt:          { trigger_atr: 10, rejection_wick_body: 1.4, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }
+  softs:             { trigger_atr: 10, rejection_wick_body: 1.3, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
+  base_metals:       { trigger_atr: 10, rejection_wick_body: 1.3, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
+  commodity_other:   { trigger_atr: 10, rejection_wick_body: 1.3, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
 
 # When true, apply NAKED_ENGINE.bos_volume_multiplier to BOS volume confirmation using
 # MT5 tick_volume (forex, stocks, indices, commodities). Default false: only crypto
