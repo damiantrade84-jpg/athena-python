@@ -440,3 +440,26 @@ def test_engine_d_playbook_adjudication_sections() -> None:
     ):
         assert key in pb
         assert len(pb[key]) >= 2
+
+
+def test_engine_a_b_playbooks_document_policy_provenance_fields():
+    expected = {
+        "resolved_profile",
+        "profile_source",
+        "symbol_override_applied",
+        "score_group",
+        "engine_overlay",
+        "execution_mode",
+        "m5_policy",
+    }
+    for getter in (get_engine_a_playbook, get_engine_b_playbook):
+        contract = getter()["timeframeContract"]
+        assert expected <= set(contract)
+        # Existing keys are retained.
+        assert contract
+    a_contract = get_engine_a_playbook()["timeframeContract"]
+    b_contract = get_engine_b_playbook()["timeframeContract"]
+    assert "roleMapping" in a_contract
+    assert "authoritativeFields" in a_contract
+    assert "macroSwing" in b_contract
+    assert "authority" in b_contract

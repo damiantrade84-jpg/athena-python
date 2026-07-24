@@ -592,6 +592,48 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
             "quoteAgeSec",
         )
     }
+    policy_diagnostics = (
+        signal.get("timeframePolicyDiagnostics")
+        if isinstance(signal.get("timeframePolicyDiagnostics"), dict)
+        else {}
+    )
+    timeframe_policy.update({
+        "resolvedProfile": signal.get("timeframeProfile"),
+        "profileSource": signal.get("policySource"),
+        "symbolOverrideApplied": _first_not_none(
+            signal.get("symbolOverrideApplied"),
+            policy_diagnostics.get("symbolOverrideApplied"),
+        ),
+        "scoreGroup": _first_not_none(
+            signal.get("scoreGroup"),
+            signal.get("score_group"),
+            policy_diagnostics.get("scoreGroup"),
+        ),
+        # Asset default is only derivable when the profile came from the
+        # asset/style default layer (not a symbol/group override).
+        "assetDefault": (
+            signal.get("timeframeProfile")
+            if str(signal.get("policySource") or "").upper() == "ASSET_STYLE_DEFAULT"
+            else None
+        ),
+        "engineOverlay": {
+            "engineId": signal.get("engineId"),
+            "style": signal.get("style"),
+        },
+        "executionMode": signal.get("executionMode"),
+        "m5Policy": signal.get("m5Policy"),
+        "m5Eligible": signal.get("m5Eligible"),
+        "m5EligibilityReasons": signal.get("m5EligibilityReasons"),
+        "triggerState": signal.get("triggerState"),
+        "triggerAge": signal.get("triggerAge"),
+        "triggerExpiry": signal.get("triggerExpiry"),
+        "fillSource": signal.get("fillSource"),
+        "fillPrice": signal.get("fillPrice"),
+        "currentSpread": signal.get("currentSpread"),
+        "distanceFromSetup": signal.get("distanceFromSetup"),
+        "distanceFromTrigger": signal.get("distanceFromTrigger"),
+        "actualRrAtFill": signal.get("actualRrAtFill"),
+    })
     
     return {
         "identity": identity,

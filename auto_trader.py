@@ -2348,6 +2348,56 @@ class AutoTrader:
             # no-op for non-Engine-B signals.
             apply_engine_b_exit_strategy(signal, _signal_engine(signal), cfg)
 
+            # F2: parity with the manual paths (api_execute /
+            # api_quick_execute). Route the auto path through the same
+            # pre-risk broker-price refresh (+ Engine B RR reconcile after
+            # rebase) and the shared displacement guard, with identical
+            # block-reason vocabulary. Fail-closed: any block aborts before
+            # risk_check and is audit-logged like the other pre-risk gates.
+            from execution import (
+                _displacement_guard_block_reason,
+                _engine_b_pre_risk_broker_price,
+                _reconcile_engine_b_rr_after_broker_entry,
+            )
+
+            _drift_error, _drift_diag = _engine_b_pre_risk_broker_price(
+                signal, _exec_venue, cfg
+            )
+            if _drift_error:
+                log.warning(f"[AUTO] {pair} BROKER PRE-RISK BLOCKED: {_drift_error}")
+                signal["brokerPrecheck"] = {
+                    "allowed": False,
+                    "stage": "pre_risk_broker_price",
+                    "venue": _exec_venue,
+                    "reason": _drift_error,
+                }
+                _finalize_trace(
+                    signal, cfg, action="block", stage="preRiskBrokerPrice", reason=_drift_error
+                )
+                self._write_error(signal, _drift_error)
+                return False
+            if _drift_diag:
+                signal["brokerDriftPreRisk"] = _drift_diag
+
+            _rr_reconcile_error = _reconcile_engine_b_rr_after_broker_entry(signal, cfg)
+            if _rr_reconcile_error:
+                log.warning(f"[AUTO] {pair} RR RECONCILE BLOCKED: {_rr_reconcile_error}")
+                _finalize_trace(
+                    signal, cfg, action="block", stage="rrReconcile", reason=_rr_reconcile_error
+                )
+                self._write_error(signal, _rr_reconcile_error)
+                return False
+
+            _chase_error, _chase_diag = _displacement_guard_block_reason(signal, cfg)
+            signal["displacementGuard"] = _chase_diag
+            if _chase_error:
+                log.warning(f"[AUTO] {pair} DISPLACEMENT GUARD BLOCKED: {_chase_error}")
+                _finalize_trace(
+                    signal, cfg, action="block", stage="displacementGuard", reason=_chase_error
+                )
+                self._write_error(signal, _chase_error)
+                return False
+
             approval = risk_check(
                 signal=signal,
                 account_balance=account["balance"],
@@ -2424,6 +2474,12 @@ class AutoTrader:
                     
                     # Get AI analysis if available
                     ai_analysis = signal.get("ai_analysis", {})
+                    factor_diagnostics = signal.get("factorDiagnostics") or {}
+                    scoring_timeframes = (
+                        factor_diagnostics.get("scoringTimeframes") or {}
+                        if isinstance(factor_diagnostics, dict)
+                        else {}
+                    )
                     telegram_notify.notify_signal_with_ai(
                         pair=signal.get("pair", ""),
                         direction=signal.get("direction", ""),
@@ -2441,6 +2497,8 @@ class AutoTrader:
                         ai_risk=ai_analysis.get("riskLevel", ""),
                         ai_warnings=ai_analysis.get("warnings", []),
                         is_auto_executed=True,
+                        momentum_tf=scoring_timeframes.get("momentum"),
+                        trigger_tf=scoring_timeframes.get("trigger") or signal.get("triggerTf"),
                     )
                 except Exception as tn_e:
                     log.debug(f"[AUTO] Telegram notification failed: {tn_e}")

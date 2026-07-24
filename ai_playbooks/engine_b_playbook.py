@@ -29,6 +29,13 @@ def get_engine_b_playbook() -> dict:
             "macroSwing": "H4 (always, separate from structTf)",
             "authority": "Use server-supplied engineBContext regimeTf/biasTf/structTf/zoneTf/setupTf/triggerTf/executionTf/atrTf for this exact signal.",
             "adaptation": "Roles may differ by symbol profile, style, speed class, and liquidity state. Missing role provenance blocks timeframe-specific AI claims; it never authorizes a legacy fallback.",
+            "resolved_profile": "timeframeProfile — the resolved policy profile name stamped on the signal.",
+            "profile_source": "policySource — SYMBOL_OVERRIDE / SCORE_GROUP_OVERRIDE / ASSET_STYLE_DEFAULT / SAFE_FALLBACK / CONFIG_CONFLICT.",
+            "symbol_override_applied": "symbolOverrideApplied — true when a symbol-level override patched roles on top of the group/asset template.",
+            "score_group": "timeframePolicyDiagnostics.scoreGroup — the score group the policy resolved under.",
+            "engine_overlay": "engineId + style — the engine/style overlay applied after profile resolution.",
+            "execution_mode": "executionMode — live_quote production execution; executionTf is advisory execution context only.",
+            "m5_policy": "m5Policy — disabled|conditional. Conditional M5 requires server-stamped m5Eligible=true with m5EligibilityReasons; M5 refines timing only, never direction or conviction.",
         },
         "timeframeAuthority": "Server-supplied engineBContext structTf/zoneTf/setupTf/triggerTf/executionTf/atrTf and triggerTimeframeExpected/Actual/GateOk are authoritative. Never substitute H1 for a requested M15/M30 trigger.",
         "entryModels": [

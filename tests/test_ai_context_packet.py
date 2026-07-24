@@ -487,6 +487,8 @@ def test_marcus_prompt_uses_config_rr_not_hardcoded_swing_three():
     assert "levelsVerdict" in prompt
     assert "ENGINE C CONSENSUS" in prompt
     assert "sizing_override/conviction for Engine C" in prompt
+    assert "FOREX volume is non-authoritative" in prompt
+    assert "bos_without_volume" in prompt
 
 
 def test_engine_b_prompt_prefix_uses_config_rr_not_hardcoded_swing_three():
@@ -635,3 +637,77 @@ def test_engine_a_response_parses_with_and_without_levels_fields():
         }
     )
     assert without_levels.levelsVerdict is None
+
+
+def test_calibration_context_timeframe_policy_provenance_fields():
+    signal = {
+        "pair": "GBP/USD",
+        "symbol": "GBPUSD",
+        "type": "forex",
+        "confluenceScore": 2.4,
+        "maxScore": 3.0,
+        "timeframePolicyVersion": "timeframe_policy.v4",
+        "timeframeProfile": "FOREX_MAJORS_FAST",
+        "policySource": "SYMBOL_OVERRIDE",
+        "symbolOverrideApplied": True,
+        "engineId": "engine_a",
+        "style": "intraday",
+        "executionMode": "live_quote",
+        "m5Policy": "conditional",
+        "m5Eligible": False,
+        "m5EligibilityReasons": ["spread_missing"],
+        "triggerState": "ARMED",
+        "triggerAge": 120.0,
+        "triggerExpiry": "2026-07-13T11:40:00+00:00",
+        "fillSource": "live_quote",
+        "fillPrice": 1.3001,
+        "currentSpread": 0.0002,
+        "distanceFromSetup": 0.001,
+        "distanceFromTrigger": 0.0004,
+        "actualRrAtFill": 1.9,
+        "timeframePolicyDiagnostics": {"scoreGroup": "forex_majors_fast"},
+    }
+
+    ctx = build_ai_calibration_context(signal, "engine_a", "intraday")
+    tf = ctx["timeframe_policy"]
+
+    assert tf["resolvedProfile"] == "FOREX_MAJORS_FAST"
+    assert tf["profileSource"] == "SYMBOL_OVERRIDE"
+    assert tf["symbolOverrideApplied"] is True
+    assert tf["scoreGroup"] == "forex_majors_fast"
+    # Symbol override won, so the asset default is not derivable.
+    assert tf["assetDefault"] is None
+    assert tf["engineOverlay"] == {"engineId": "engine_a", "style": "intraday"}
+    assert tf["executionMode"] == "live_quote"
+    assert tf["m5Policy"] == "conditional"
+    assert tf["m5Eligible"] is False
+    assert tf["m5EligibilityReasons"] == ["spread_missing"]
+    assert tf["triggerState"] == "ARMED"
+    assert tf["triggerAge"] == 120.0
+    assert tf["triggerExpiry"] == "2026-07-13T11:40:00+00:00"
+    assert tf["fillSource"] == "live_quote"
+    assert tf["fillPrice"] == 1.3001
+    assert tf["currentSpread"] == 0.0002
+    assert tf["distanceFromSetup"] == 0.001
+    assert tf["distanceFromTrigger"] == 0.0004
+    assert tf["actualRrAtFill"] == 1.9
+
+
+def test_calibration_context_asset_default_derivable_only_from_asset_source():
+    signal = {
+        "pair": "NEWCOIN/USDT",
+        "symbol": "NEWCOINUSDT",
+        "type": "crypto",
+        "timeframeProfile": "CRYPTO_ASSET_DEFAULT",
+        "policySource": "ASSET_STYLE_DEFAULT",
+    }
+
+    ctx = build_ai_calibration_context(signal, "engine_a", "intraday")
+    tf = ctx["timeframe_policy"]
+
+    assert tf["resolvedProfile"] == "CRYPTO_ASSET_DEFAULT"
+    assert tf["profileSource"] == "ASSET_STYLE_DEFAULT"
+    assert tf["assetDefault"] == "CRYPTO_ASSET_DEFAULT"
+    # Unstamped signals keep None provenance (backward compatible).
+    assert tf["m5Eligible"] is None
+    assert tf["triggerState"] is None

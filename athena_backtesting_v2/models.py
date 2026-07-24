@@ -191,6 +191,7 @@ class RunRequest:
     variant_id: str | None
     random_seed: int
     force: bool
+    market_on_close: bool = False
 
     @classmethod
     def from_payload(cls, raw: Any) -> "RunRequest":
@@ -267,6 +268,9 @@ class RunRequest:
             variant_id=str(raw.get("variantId") or "").strip() or None,
             random_seed=seed,
             force=bool(raw.get("force", False)),
+            # Explicit opt-in to market-on-close fills (decision-bar close).
+            # Default False: same-candle fills are prohibited.
+            market_on_close=bool(raw.get("marketOnClose", raw.get("market_on_close", False))),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -340,6 +344,8 @@ class TradeRecord:
     ambiguous_same_bar: bool
     duration_bars: int
     split: str = "UNASSIGNED"
+    fill_source: str = ""
+    actual_rr_at_fill: float | None = None
     decision: dict[str, Any] = field(default_factory=dict)
     costs: dict[str, Any] = field(default_factory=dict)
 

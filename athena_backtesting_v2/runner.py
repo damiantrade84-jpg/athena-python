@@ -73,7 +73,22 @@ def run_symbol_task(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"execution timeframe {execution_tf} absent from dataset")
         cost_model = CostModel(**dict(request["cost_model"]))
         validation_plan = ValidationPlan(**dict(request["validation"]))
-        simulator = EventDrivenSimulator(cost_model, max_hold_bars=validation_plan.max_hold_bars)
+        # NEXT_AVAILABLE_QUOTE ladder: offer the simulator only real dataset
+        # frames strictly finer than the execution timeframe; nothing is
+        # fabricated when they are absent.
+        execution_seconds = TIMEFRAME_SECONDS[execution_tf]
+        fill_frames = {
+            timeframe: frame
+            for timeframe, frame in frames.items()
+            if timeframe != execution_tf
+            and TIMEFRAME_SECONDS.get(timeframe, execution_seconds) < execution_seconds
+        }
+        simulator = EventDrivenSimulator(
+            cost_model,
+            max_hold_bars=validation_plan.max_hold_bars,
+            market_on_close=bool(request.get("market_on_close")),
+            fill_frames=fill_frames,
+        )
         trades, simulation = simulator.simulate(payload["run_id"], intents, execution_frame)
         start = datetime.fromisoformat(str(request["start_date"])).replace(tzinfo=timezone.utc)
         end = datetime.fromisoformat(str(request["end_date"])).replace(tzinfo=timezone.utc)

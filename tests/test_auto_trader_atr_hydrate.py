@@ -52,6 +52,21 @@ def test_auto_trader_invokes_hydrate_before_risk_check(monkeypatch):
     monkeypatch.setattr(
         "execution._hydrate_execution_candle_quality", fake_hydrate
     )
+    # Stub the Phase 5a pre-risk parity gates so the test stays focused on
+    # hydrate ordering (the gates are covered in
+    # tests/test_execution_displacement_guard.py).
+    monkeypatch.setattr(
+        "execution._engine_b_pre_risk_broker_price",
+        lambda sig, venue, cfg: (None, {"brokerPrice": sig.get("price")}),
+    )
+    monkeypatch.setattr(
+        "execution._reconcile_engine_b_rr_after_broker_entry",
+        lambda sig, cfg: None,
+    )
+    monkeypatch.setattr(
+        "execution._displacement_guard_block_reason",
+        lambda sig, cfg: (None, {"enabled": True}),
+    )
     monkeypatch.setattr("athena_runtime.rt", lambda: MagicMock(CONFIG={}, ALL_PAIRS=[]))
 
     fake_account = {"balance": 10000.0, "equity": 10000.0, "risk_domain": "test"}

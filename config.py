@@ -3581,6 +3581,79 @@ def _fatal_config_validation(cfg: dict) -> None:
     log.info("[BOOT] Fatal config validation passed (%d checks)", 6)
 
 
+# Deprecated v3 timeframe-policy keys (timeframe-architecture migration).
+# These keys are absent from config.yaml today; the remaining occurrences in
+# the config.py defaults (TIMEFRAME_ROUTING chart routing and
+# ENGINE_A_SCORING_PROFILE.BY_STYLE display metadata) are advisory, not
+# engine-authoritative. This scan is a guard-rail + documentation only — it
+# logs a deduplicated deprecation warning and never changes behaviour.
+_DEPRECATED_TIMEFRAME_KEYS = {
+    "exec_tf": (
+        "execution_mode (live_quote) + trigger_tf — production execution is "
+        "live-quote based; the execution role timeframe is advisory context "
+        "only (timeframe_policy v4)"
+    ),
+    "execution_tf": (
+        "execution_mode (live_quote) + trigger_tf — production execution is "
+        "live-quote based; the execution role timeframe is advisory context "
+        "only (timeframe_policy v4)"
+    ),
+    "m5_refinement": (
+        "m5_policy (disabled|conditional) — declarative M5 authority; "
+        "conditional M5 is gated by the M5-eligibility layer, never by speed"
+    ),
+    "m5_execution": (
+        "m5_policy (disabled|conditional) — declarative M5 authority; "
+        "speed never promotes M5 execution (timeframe_policy v4)"
+    ),
+}
+
+
+def _warn_deprecated_timeframe_keys(cfg: dict) -> None:
+    """Log a deduplicated deprecation warning for v3 timeframe keys in CONFIG."""
+    hits: dict[str, list[str]] = {}
+    seen: set[int] = set()
+
+    def _walk(node, path: str) -> None:
+        if id(node) in seen:
+            return
+        if isinstance(node, dict):
+            seen.add(id(node))
+            for key, value in node.items():
+                child = f"{path}.{key}"
+                key_lower = str(key).strip().lower()
+                if key_lower in _DEPRECATED_TIMEFRAME_KEYS:
+                    hits.setdefault(key_lower, []).append(child)
+                _walk(value, child)
+        elif isinstance(node, (list, tuple)):
+            seen.add(id(node))
+            for index, value in enumerate(node):
+                _walk(value, f"{path}[{index}]")
+
+    try:
+        _walk(cfg, "CONFIG")
+        for key_lower in sorted(hits):
+            paths = hits[key_lower]
+            examples = ", ".join(paths[:3])
+            more = f" (+{len(paths) - 3} more)" if len(paths) > 3 else ""
+            log.warning(
+                "[CFG] Deprecated timeframe key %r found %d time(s) in loaded CONFIG "
+                "(%s%s) — authoritative replacement: %s. Remaining advisory usages "
+                "(e.g. TIMEFRAME_ROUTING chart routing) are legacy; old policy group "
+                "names are normalized via "
+                "engine_a_groups.normalize_timeframe_policy_group.",
+                key_lower,
+                len(paths),
+                examples,
+                more,
+                _DEPRECATED_TIMEFRAME_KEYS[key_lower],
+            )
+    except Exception:
+        log.warning("[CFG] deprecated timeframe key scan failed", exc_info=True)
+
+
+_warn_deprecated_timeframe_keys(CONFIG)
+
 validate_config(CONFIG)
 _fatal_config_validation(CONFIG)
 

@@ -2127,6 +2127,54 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             }
         )
 
+    # Phase 5a: actual RR from the TRUE fill price. Zero/invalid risk
+    # distance or a fill RR below the signal minimum follows the existing
+    # post-fill violation path (emergency close + alert). Sizing unchanged.
+    from execution import _directional_rr, _post_fill_rr_violation
+
+    _rr_at_fill = _directional_rr(
+        float(results[0].price), float(sl), float(tp), direction
+    )
+    _rr_fill_error = _post_fill_rr_violation(signal, _rr_at_fill, CONFIG)
+    if _rr_fill_error:
+        log.error(
+            f"[MT5] {mt5_symbol}: {_rr_fill_error} - emergency-closing filled leg(s)"
+        )
+        rollback_results = []
+        for _leg in legs:
+            try:
+                _cr = mt5_close_position(_leg["ticket"])
+                rollback_results.append(
+                    {
+                        "position_ticket": _leg["ticket"],
+                        "result": _cr,
+                        "success": bool(isinstance(_cr, dict) and _cr.get("success")),
+                    }
+                )
+                log.warning(
+                    f"[MT5] Emergency close leg position_ticket={_leg['ticket']} -> {_cr}"
+                )
+            except Exception as _rb_e:
+                rollback_results.append(
+                    {
+                        "position_ticket": _leg.get("ticket"),
+                        "success": False,
+                        "error": str(_rb_e),
+                    }
+                )
+                log.error(f"[MT5] Emergency close failed for leg: {_rb_e}")
+        return {
+            "success": False,
+            "error": _rr_fill_error,
+            "ticket": legs[0]["ticket"],
+            "entryPrice": float(results[0].price),
+            "actualRrAtFill": (
+                round(_rr_at_fill, 4) if _rr_at_fill is not None else None
+            ),
+            "rollbackResults": rollback_results,
+            "rollbackComplete": all(r.get("success") for r in rollback_results),
+        }
+
     # Secondary operations for the primary position
     result = results[0]
     position_ticket = legs[0]["ticket"]
@@ -2182,6 +2230,15 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         "feeCost": _fee_cost,
         "signalPriceRef": _sref,
         "slippageBps": _sbps,
+        "actualRrAtFill": (
+            round(_rr_at_fill, 4) if _rr_at_fill is not None else None
+        ),
+        "distanceFromSetup": (
+            signal.get("distanceFromSetup") or signal.get("distance_from_setup")
+        ),
+        "distanceFromTrigger": (
+            signal.get("distanceFromTrigger") or signal.get("distance_from_trigger")
+        ),
         # F4: structural rebase event (None when no drift > 1% rebase fired).
         "structuralRebase": _structural_rebase_event,
     }

@@ -18,7 +18,10 @@ import statistics
 from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-POLICY_VERSION = "timeframe_policy.v3"
+from m5_eligibility import M5EligibilityContext, evaluate_m5_eligibility
+from trigger_lifecycle import TriggerRecord, TriggerState, TriggerTracker
+
+POLICY_VERSION = "timeframe_policy.v4"
 
 
 class PolicyConfigurationError(ValueError):
@@ -32,8 +35,11 @@ class Timeframe(str, Enum):
     M30 = "M30"
     M15 = "M15"
     M5 = "M5"
+    M1 = "M1"
 
 
+# M1 is the terminal rung and may appear only in scalp/engine-d-native
+# templates; ``resolve_timeframe_policy`` enforces that restriction.
 TIMEFRAME_LADDER = (
     Timeframe.D1,
     Timeframe.H4,
@@ -41,6 +47,7 @@ TIMEFRAME_LADDER = (
     Timeframe.M30,
     Timeframe.M15,
     Timeframe.M5,
+    Timeframe.M1,
 )
 
 
@@ -73,6 +80,41 @@ class M5Role(str, Enum):
     REFINEMENT = "refinement"
     ADVISORY = "advisory"
     DISABLED = "disabled"
+
+
+class ExecutionMode(str, Enum):
+    """How the execution role is filled.
+
+    ``LIVE_QUOTE`` — production fills are quote-based (bid/ask); the emitted
+    ``executionTf`` is advisory execution context only and is not required to
+    sit on the slower-to-faster ladder relative to the trigger.
+    ``NEXT_AVAILABLE_QUOTE`` — historical/backtest fills use the next
+    deterministic quote after the decision timestamp.
+    """
+
+    LIVE_QUOTE = "live_quote"
+    NEXT_AVAILABLE_QUOTE = "next_available_quote"
+
+
+class M5Policy(str, Enum):
+    """Declarative M5 authority for a resolved profile.
+
+    ``CONDITIONAL`` pairs with ``m5Role=refinement`` and
+    ``m15_confirmation_required_for_m5=True``: M5 may act only after M15
+    confirmation and a passing M5-eligibility evaluation. ``DISABLED`` pairs
+    with ``m5Role=disabled``. There is no unconditional M5 authority in v4.
+    """
+
+    DISABLED = "disabled"
+    CONDITIONAL = "conditional"
+
+
+# Single mapping point so m5Policy can never drift from the legacy m5Role /
+# M15-confirmation fields that are still emitted for backward compatibility.
+_M5_POLICY_DERIVED: dict[M5Policy, tuple[M5Role, bool]] = {
+    M5Policy.DISABLED: (M5Role.DISABLED, False),
+    M5Policy.CONDITIONAL: (M5Role.REFINEMENT, True),
+}
 
 
 def parse_m5_matrix_language(value: str) -> tuple[M5Role, Timeframe | None]:
@@ -313,11 +355,13 @@ def speed_state_from_policy_payload(
 ) -> SpeedState | None:
     """Rebuild only the policy-selection state emitted on a policy-stamped signal.
 
-    This is used by execute-time server recomputation so a session-conditional
-    M5 promotion is resolved to the same role instead of silently reverting to
-    the baseline timeframe.  It does not restore indicator inputs or bypass the
-    resolver; malformed values fail closed to baseline resolution, and callers
-    verify that the recomputed policy hash still matches the stamped hash.
+    This is used by execute-time server recomputation so the policy is
+    re-resolved with the same speed/liquidity inputs instead of silently
+    reverting to the baseline timeframe.  It does not restore indicator inputs
+    or bypass the resolver; malformed values fail closed to baseline
+    resolution, and callers verify that the recomputed policy hash still
+    matches the stamped hash.  Both v3 (``executionTf``/``m5Role``) and v4
+    (``m5Policy``) payloads are tolerated.
     """
     payload = signal if isinstance(signal, Mapping) else {}
     raw_speed = payload.get("currentSpeedClass", payload.get("liveSpeedClass"))
@@ -340,6 +384,7 @@ def speed_state_from_policy_payload(
         speed_percentile = None
     execution_tf = str(payload.get("executionTf") or "").upper()
     m5_role = str(payload.get("m5Role") or "").lower()
+    m5_policy = str(payload.get("m5Policy") or "").lower()
     return SpeedState(
         live_speed_class=live_speed,
         liquidity_class=liquidity,
@@ -350,7 +395,15 @@ def speed_state_from_policy_payload(
             LiquidityClass.UNAVAILABLE,
         },
         m5_quality_acceptable=(
-            execution_tf == Timeframe.M5.value and m5_role == M5Role.EXECUTION.value
+            # v3 payloads: speed-promoted M5 execution was stamped as
+            # executionTf=M5 + m5Role=execution. v4 payloads: declarative
+            # m5Policy=conditional. Both are tolerated; neither re-arms the
+            # removed speed-driven M5 promotion.
+            (
+                execution_tf == Timeframe.M5.value
+                and m5_role == M5Role.EXECUTION.value
+            )
+            or m5_policy == M5Policy.CONDITIONAL.value
         ),
     )
 
@@ -371,6 +424,9 @@ class PolicyDiagnostics:
     adaptation_applied: bool = False
     adaptation_reason: str = "INSUFFICIENT_HISTORY"
     liquidity_class: LiquidityClass = LiquidityClass.UNAVAILABLE
+    symbol_override_applied: bool = False
+    symbol_override_patched_roles: tuple[str, ...] = ()
+    m5_liquidity_blocked: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -388,6 +444,9 @@ class PolicyDiagnostics:
             "adaptationApplied": self.adaptation_applied,
             "adaptationReason": self.adaptation_reason,
             "liquidityClass": self.liquidity_class.value,
+            "symbolOverrideApplied": self.symbol_override_applied,
+            "symbolOverridePatchedRoles": list(self.symbol_override_patched_roles),
+            "m5LiquidityBlocked": self.m5_liquidity_blocked,
         }
 
 
@@ -413,6 +472,11 @@ class TimeframePolicy:
     style: str
     policy_key: str
     execution_prerequisite_tf: Timeframe | None = None
+    # v4 fields (defaulted so older constructions remain source-compatible):
+    # execution is live-quote based for resolved production policies; the
+    # emitted executionTf is advisory execution context only.
+    execution_mode: ExecutionMode = ExecutionMode.LIVE_QUOTE
+    m5_policy: M5Policy = M5Policy.DISABLED
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -425,6 +489,8 @@ class TimeframePolicy:
             "trigger_tf": self.trigger_tf.value,
             "execution_tf": self.execution_tf.value,
             "m5_role": self.m5_role.value,
+            "execution_mode": self.execution_mode.value,
+            "m5_policy": self.m5_policy.value,
             "required_closed_tfs": [tf.value for tf in self.required_closed_tfs],
             "forming_tf": self.forming_tf.value if self.forming_tf else None,
             "baseline_speed_class": self.baseline_speed_class.value,
@@ -461,6 +527,8 @@ class TimeframePolicy:
             "triggerTf": self.trigger_tf.value,
             "executionTf": self.execution_tf.value,
             "m5Role": self.m5_role.value,
+            "executionMode": self.execution_mode.value,
+            "m5Policy": self.m5_policy.value,
             "baselineSpeedClass": self.baseline_speed_class.value,
             "liveSpeedClass": self.live_speed_class.value,
             "speedPercentile": None,
@@ -489,85 +557,152 @@ class _Template:
     structure: Timeframe = Timeframe.H1
     setup: Timeframe = Timeframe.M30
     trigger: Timeframe = Timeframe.M15
+    # Advisory execution-context TF; production execution is live-quote based
+    # (execution_mode) and never resolved from this field.
     execution: Timeframe = Timeframe.M15
-    m5_role: M5Role = M5Role.REFINEMENT
+    m5_role: M5Role = M5Role.DISABLED
+    m5_policy: M5Policy = M5Policy.DISABLED
+    execution_mode: ExecutionMode = ExecutionMode.LIVE_QUOTE
     baseline_speed: SpeedClass = SpeedClass.NORMAL
     m15_confirmation_required_for_m5: bool = False
+    # DEPRECATED (policy v4): accepted so older serialized state and callers
+    # still parse, but ignored. Speed never promotes M5 execution; conditional
+    # M5 authority is governed by m5_policy plus the M5-eligibility layer.
     allow_dynamic_m5_execution: bool = False
 
 
-def _template(
+def _group_template(
     profile: str,
     *,
+    regime: Timeframe = Timeframe.D1,
     bias: Timeframe = Timeframe.H4,
     structure: Timeframe = Timeframe.H1,
     setup: Timeframe = Timeframe.M30,
     trigger: Timeframe = Timeframe.M15,
-    execution: Timeframe = Timeframe.M15,
-    m5_role: M5Role = M5Role.REFINEMENT,
+    m5_policy: M5Policy = M5Policy.DISABLED,
     speed: SpeedClass = SpeedClass.NORMAL,
-    confirm_m15: bool = False,
-    allow_dynamic_m5_execution: bool = False,
 ) -> _Template:
+    m5_role, confirm_m15 = _M5_POLICY_DERIVED[m5_policy]
     return _Template(
         profile=profile,
+        regime=regime,
         bias=bias,
         structure=structure,
         setup=setup,
         trigger=trigger,
-        execution=execution,
+        # Advisory execution context follows the trigger by default.
+        execution=trigger,
         m5_role=m5_role,
+        m5_policy=m5_policy,
+        execution_mode=ExecutionMode.LIVE_QUOTE,
         baseline_speed=speed,
         m15_confirmation_required_for_m5=confirm_m15,
-        allow_dynamic_m5_execution=allow_dynamic_m5_execution,
     )
 
 
-_LIQUID_FAST = _template(
-    "LIQUID_FAST",
-    execution=Timeframe.M5,
-    m5_role=M5Role.EXECUTION,
-    speed=SpeedClass.FAST,
-    confirm_m15=True,
+# Policy-v4 group matrix (regime/bias/structure/setup/trigger/M5 policy).
+_FOREX_MAJORS_STANDARD = _group_template(
+    "FOREX_MAJORS_STANDARD", setup=Timeframe.M30, trigger=Timeframe.M15
 )
-_STANDARD = _template("STANDARD_LIQUID", m5_role=M5Role.REFINEMENT)
-_SESSION_FAST = _template(
-    "LIQUID_FAST_SESSION_CONDITIONAL",
-    m5_role=M5Role.REFINEMENT,
+_FOREX_MAJORS_FAST = _group_template(
+    "FOREX_MAJORS_FAST",
+    setup=Timeframe.M15,
+    trigger=Timeframe.M5,
+    m5_policy=M5Policy.CONDITIONAL,
     speed=SpeedClass.FAST,
-    confirm_m15=True,
-    allow_dynamic_m5_execution=True,
 )
-_BROAD_STRUCTURE_CROSS = _template(
-    "BROAD_STRUCTURE_CROSS",
-    bias=Timeframe.H4,
+_FOREX_CROSSES_BROAD = _group_template(
+    "FOREX_CROSSES_BROAD",
     structure=Timeframe.H4,
     setup=Timeframe.H1,
     trigger=Timeframe.M30,
-    execution=Timeframe.M15,
-    m5_role=M5Role.ADVISORY,
 )
-_YEN_CROSS = _template("STANDARD_YEN_CROSS", m5_role=M5Role.REFINEMENT)
-_VOLATILE_FAST = _template("VOLATILE_FAST", m5_role=M5Role.REFINEMENT, speed=SpeedClass.FAST)
-_THIN_EVENT_SENSITIVE = _template("THIN_EVENT_SENSITIVE", m5_role=M5Role.ADVISORY)
-_NO_M5 = _template("EXTREME_EVENT_SENSITIVE", m5_role=M5Role.DISABLED, speed=SpeedClass.FAST)
-_EXOTIC = _template("THIN_EVENT_SENSITIVE", m5_role=M5Role.ADVISORY, speed=SpeedClass.SLOW)
-_EQUITY = _template(
-    "CASH_EQUITY_LIQUID",
+_FOREX_CROSSES_LIQUID = _group_template(
+    "FOREX_CROSSES_LIQUID", setup=Timeframe.M30, trigger=Timeframe.M15
+)
+_FOREX_EXOTICS_LIQUID = _group_template(
+    "FOREX_EXOTICS_LIQUID",
+    structure=Timeframe.H4,
+    setup=Timeframe.H1,
+    trigger=Timeframe.M30,
+    speed=SpeedClass.SLOW,
+)
+_FOREX_EXOTICS_RESTRICTED = _group_template(
+    "FOREX_EXOTICS_RESTRICTED",
+    structure=Timeframe.H4,
+    setup=Timeframe.H1,
+    trigger=Timeframe.H1,
+    speed=SpeedClass.SLOW,
+)
+_ENERGY_OIL = _group_template(
+    "ENERGY_OIL_CONDITIONAL",
+    setup=Timeframe.M15,
+    trigger=Timeframe.M5,
+    m5_policy=M5Policy.CONDITIONAL,
+    speed=SpeedClass.FAST,
+)
+_NAT_GAS = _group_template(
+    "NAT_GAS_NO_M5",
+    setup=Timeframe.M30,
+    trigger=Timeframe.M15,
+    speed=SpeedClass.FAST,
+)
+_LIQUID_METALS = _group_template(
+    "LIQUID_METALS", setup=Timeframe.M30, trigger=Timeframe.M15
+)
+_THIN_METALS_BASE_SOFTS = _group_template(
+    "THIN_METALS_BASE_SOFTS",
+    structure=Timeframe.H4,
+    setup=Timeframe.H1,
+    trigger=Timeframe.M30,
+)
+_EQUITY_INDEX_FAST = _group_template(
+    "EQUITY_INDEX_FAST",
+    setup=Timeframe.M15,
+    trigger=Timeframe.M5,
+    m5_policy=M5Policy.CONDITIONAL,
+    speed=SpeedClass.FAST,
+)
+_EQUITY_INDEX_STANDARD = _group_template(
+    "EQUITY_INDEX_STANDARD", setup=Timeframe.M30, trigger=Timeframe.M15
+)
+_US_STOCK_SINGLE = _group_template(
+    "US_STOCK_SINGLE",
     bias=Timeframe.D1,
     structure=Timeframe.H1,
-    execution=Timeframe.M5,
-    m5_role=M5Role.EXECUTION,
-    speed=SpeedClass.NORMAL,
-    confirm_m15=True,
+    setup=Timeframe.M15,
+    trigger=Timeframe.M5,
+    m5_policy=M5Policy.CONDITIONAL,
 )
-_EQUITY_FAST = replace(_EQUITY, profile="CASH_EQUITY_FAST")
-_OIL = _template(
-    "LIQUID_EVENT_FAST",
-    execution=Timeframe.M5,
-    m5_role=M5Role.EXECUTION,
+_BOND_TLT_SMALLCAP_EM_ETF = _group_template(
+    "BOND_TLT_SMALLCAP_EM_ETF",
+    bias=Timeframe.D1,
+    structure=Timeframe.H1,
+    setup=Timeframe.M30,
+    trigger=Timeframe.M15,
+)
+_CRYPTO_MAJORS_FAST = _group_template(
+    "CRYPTO_MAJORS_FAST",
+    setup=Timeframe.M15,
+    trigger=Timeframe.M5,
+    m5_policy=M5Policy.CONDITIONAL,
     speed=SpeedClass.FAST,
-    confirm_m15=True,
+)
+_CRYPTO_ALT_MAJORS = _group_template(
+    "CRYPTO_ALT_MAJORS", setup=Timeframe.M30, trigger=Timeframe.M15
+)
+_CRYPTO_OTHER_THIN = _group_template(
+    "CRYPTO_OTHER_THIN",
+    structure=Timeframe.H4,
+    setup=Timeframe.H1,
+    trigger=Timeframe.M30,
+)
+# Fail-closed base for CONFIG_CONFLICT / SAFE_FALLBACK resolutions.
+_FAIL_CLOSED = _group_template(
+    "EXTREME_EVENT_SENSITIVE",
+    setup=Timeframe.M30,
+    trigger=Timeframe.M15,
+    speed=SpeedClass.SLOW,
 )
 
 
@@ -613,6 +748,14 @@ for _canonical, _values in {
     "EURJPY": ("EUR/JPY", "EURJPY=X"),
     "AUDJPY": ("AUD/JPY", "AUDJPY=X"),
     "EURCHF": ("EUR/CHF", "EURCHF=X"),
+    "AUDCHF": ("AUD/CHF", "AUDCHF=X"),
+    "EURAUD": ("EUR/AUD", "EURAUD=X"),
+    "GBPAUD": ("GBP/AUD", "GBPAUD=X"),
+    "USDSGD": ("USD/SGD", "USDSGD=X"),
+    "USDZAR": ("USD/ZAR", "USDZAR=X"),
+    "USDMXN": ("USD/MXN", "USDMXN=X"),
+    "USDBRL": ("USD/BRL", "USDBRL=X"),
+    "USDINR": ("USD/INR", "USDINR=X"),
     "XAUUSD": ("XAU/USD", "GC=F"),
     "XAGUSD": ("XAG/USD", "SI=F"),
     "XPTUSD": ("XPT/USD", "PL=F"),
@@ -637,73 +780,140 @@ for _canonical, _values in {
     "POLUSDT": ("POL/USDT", "MATICUSDT"),
     "AAPL": ("AAPL.US",),
     "SPY": ("SPY.US",),
+    "TLT": ("TLT.US",),
+    "IWM": ("IWM.US",),
+    "EEM": ("EEM.US",),
 }.items():
     _aliases(_canonical, *_values)
 
 
-_SYMBOL_OVERRIDES: dict[str, _Template] = {
-    "EURUSD": _STANDARD,
-    "GBPUSD": _LIQUID_FAST,
-    "USDJPY": _SESSION_FAST,
-    "USDCHF": _STANDARD,
-    "AUDUSD": _STANDARD,
-    "USDCAD": _template("STANDARD_SESSION_FAST", m5_role=M5Role.REFINEMENT),
-    "EURGBP": _BROAD_STRUCTURE_CROSS,
-    "AUDNZD": _BROAD_STRUCTURE_CROSS,
-    "GBPJPY": _SESSION_FAST,
-    "EURJPY": _YEN_CROSS,
-    "AUDJPY": _YEN_CROSS,
-    "EURCHF": _BROAD_STRUCTURE_CROSS,
-    "XAUUSD": _LIQUID_FAST,
-    "XAGUSD": _VOLATILE_FAST,
-    "XPTUSD": _THIN_EVENT_SENSITIVE,
-    "XPDUSD": _THIN_EVENT_SENSITIVE,
-    "WTI": _OIL,
-    "BRENT": _OIL,
-    "NATGAS": replace(_NO_M5, profile="NATGAS_NO_M5", baseline_speed=SpeedClass.FAST),
-    "NAS100": _template("LIQUID_FAST", m5_role=M5Role.REFINEMENT, speed=SpeedClass.FAST, confirm_m15=True, allow_dynamic_m5_execution=True),
-    "US30": _template("LIQUID_FAST", m5_role=M5Role.REFINEMENT, speed=SpeedClass.FAST, confirm_m15=True, allow_dynamic_m5_execution=True),
-    "GER40": _SESSION_FAST,
-    "JPN225": _template("STANDARD_INDEX_SESSION_CONDITIONAL", m5_role=M5Role.REFINEMENT, confirm_m15=True, allow_dynamic_m5_execution=True),
-    "US500": _template("STANDARD_LIQUID_INDEX", m5_role=M5Role.REFINEMENT),
-    "UK100": _template("STANDARD_LIQUID_INDEX", m5_role=M5Role.REFINEMENT),
-    "AAPL": _EQUITY_FAST,
-    "SPY": _EQUITY,
-    "BTCUSDT": replace(_LIQUID_FAST, profile="CRYPTO_LIQUID_FAST"),
-    "ETHUSDT": replace(_LIQUID_FAST, profile="CRYPTO_LIQUID_FAST"),
-    "BNBUSDT": replace(_STANDARD, profile="CRYPTO_STANDARD"),
-    "SOLUSDT": replace(_STANDARD, profile="CRYPTO_HIGH_BETA"),
-    "XRPUSDT": replace(_STANDARD, profile="CRYPTO_HIGH_BETA_EVENT"),
-    "DOGEUSDT": replace(_STANDARD, profile="CRYPTO_HIGH_BETA_SPECULATIVE", baseline_speed=SpeedClass.FAST),
-    "ADAUSDT": replace(_STANDARD, profile="CRYPTO_HIGH_BETA"),
-    "LINKUSDT": replace(_STANDARD, profile="CRYPTO_HIGH_BETA"),
+# Symbol overrides are per-role patches over the resolved group/asset
+# template (unset roles inherit).  ``m5_policy`` patches also re-derive
+# m5_role/m15 confirmation via _M5_POLICY_DERIVED, and a patched trigger moves
+# the advisory execution context with it unless ``execution`` is patched
+# explicitly.  Patches pin every spec'd role so a symbol resolves
+# deterministically regardless of the group fallback underneath it.
+_SYMBOL_OVERRIDES: dict[str, dict[str, Any]] = {
+    # Standard majors — D1/H4/H1/M30/M15, M5 disabled.
+    "EURUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
+    "USDCHF": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
+    "AUDUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
+    "NZDUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
+    "USDCAD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
+    # Fast majors — D1/H4/H1/M15/M5, M5 conditional.
+    "GBPUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "FOREX_MAJORS_FAST"},
+    "USDJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "FOREX_MAJORS_FAST"},
+    # Broad crosses — D1/H4/H4/H1/M30, M5 disabled.
+    "EURGBP": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "AUDNZD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "EURCHF": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "AUDCHF": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "EURAUD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "GBPAUD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "USDSGD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    # Liquid crosses — D1/H4/H1/M30/M15, M5 disabled.
+    "EURJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
+    "AUDJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
+    # GBP/JPY fast-cross symbol override: partial patch over the liquid-cross
+    # group (regime/bias inherit D1/H4); H1 structure, M15 setup, conditional
+    # M5 trigger.
+    "GBPJPY": {"structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "GBPJPY_FAST_CROSS_CONDITIONAL"},
+    # Exotics — liquid: D1/H4/H4/H1/M30; restricted: H1 confirmed trigger, no
+    # M30/M15/M5 promotion.
+    "USDZAR": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_LIQUID"},
+    "USDMXN": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_LIQUID"},
+    "USDBRL": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
+    "USDINR": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
+    # Metals — XAU conditional M5 (M15 setup); XAG stays M15; XPT/XPD H4 structure.
+    "XAUUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "XAU_CONDITIONAL_M5"},
+    "XAGUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "LIQUID_METALS"},
+    "XPTUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "THIN_METALS_BASE_SOFTS"},
+    "XPDUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "THIN_METALS_BASE_SOFTS"},
+    # Energy — WTI/Brent conditional M5; NATGAS M5 never.
+    "WTI": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "ENERGY_OIL_CONDITIONAL"},
+    "BRENT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "ENERGY_OIL_CONDITIONAL"},
+    "NATGAS": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.FAST, "profile": "NAT_GAS_NO_M5"},
+    # Indices — fast conditional; standard disabled.
+    "NAS100": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
+    "US30": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
+    "GER40": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
+    "US500": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
+    "UK100": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
+    "JPN225": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
+    # Single stocks / bond & small-cap & EM ETFs — D1 bias.
+    "AAPL": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},
+    "SPY": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},
+    "TLT": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
+    "IWM": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
+    "EEM": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
+    # Crypto — fast majors conditional; alt majors disabled; thin H4 structure.
+    "BTCUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
+    "ETHUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
+    "SOLUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
+    "BNBUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
+    "XRPUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
+    "ADAUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
+    "LINKUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
+    "DOGEUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_OTHER_THIN"},
 }
 
 
+def _apply_symbol_patch(
+    base: _Template, patch: Mapping[str, Any]
+) -> tuple[_Template, tuple[str, ...]]:
+    """Merge a per-role symbol patch over the resolved group/asset template."""
+    updates: dict[str, Any] = {}
+    patched_roles: list[str] = []
+    for role in ("regime", "bias", "structure", "setup", "trigger", "execution"):
+        if role in patch:
+            updates[role] = patch[role]
+            patched_roles.append(role)
+    if "m5_policy" in patch:
+        policy = patch["m5_policy"]
+        m5_role, confirm_m15 = _M5_POLICY_DERIVED[policy]
+        updates["m5_policy"] = policy
+        updates["m5_role"] = m5_role
+        updates["m15_confirmation_required_for_m5"] = confirm_m15
+        patched_roles.append("m5_policy")
+    if "execution" not in patch and "trigger" in patch:
+        # Advisory execution context follows a patched trigger.
+        updates["execution"] = patch["trigger"]
+    if "profile" in patch:
+        updates["profile"] = patch["profile"]
+    if "baseline_speed" in patch:
+        updates["baseline_speed"] = patch["baseline_speed"]
+    return replace(base, **updates), tuple(sorted(patched_roles))
+
+
 _GROUP_OVERRIDES: dict[str, _Template] = {
-    "forex_crosses": _BROAD_STRUCTURE_CROSS,
-    "forex_exotics": _EXOTIC,
-    "energy_oil": _OIL,
-    "nat_gas": replace(_NO_M5, profile="NATGAS_NO_M5", baseline_speed=SpeedClass.FAST),
-    "pgm_metals": _THIN_EVENT_SENSITIVE,
-    "base_metals": _THIN_EVENT_SENSITIVE,
-    "softs": _THIN_EVENT_SENSITIVE,
-    "us_stock_single": _EQUITY,
-    "bond_tlt": _EQUITY,
-    "smallcap_em_etf": _EQUITY,
-    "crypto_other": replace(_STANDARD, profile="CRYPTO_REFINEMENT"),
-    "crypto_alt_majors": replace(_STANDARD, profile="CRYPTO_REFINEMENT"),
+    "forex_majors_standard": _FOREX_MAJORS_STANDARD,
+    "forex_majors_fast": _FOREX_MAJORS_FAST,
+    "forex_crosses_broad": _FOREX_CROSSES_BROAD,
+    "forex_crosses_liquid": _FOREX_CROSSES_LIQUID,
+    "forex_exotics_liquid": _FOREX_EXOTICS_LIQUID,
+    "forex_exotics_restricted": _FOREX_EXOTICS_RESTRICTED,
+    "energy_oil": _ENERGY_OIL,
+    "nat_gas": _NAT_GAS,
+    "liquid_metals": _LIQUID_METALS,
+    "thin_metals_base_softs": _THIN_METALS_BASE_SOFTS,
+    "equity_index_fast": _EQUITY_INDEX_FAST,
+    "equity_index_standard": _EQUITY_INDEX_STANDARD,
+    "us_stock_single": _US_STOCK_SINGLE,
+    "bond_tlt_smallcap_em_etf": _BOND_TLT_SMALLCAP_EM_ETF,
+    "crypto_majors_fast": _CRYPTO_MAJORS_FAST,
+    "crypto_alt_majors": _CRYPTO_ALT_MAJORS,
+    "crypto_other_thin": _CRYPTO_OTHER_THIN,
 }
 
 
 _ASSET_DEFAULTS: dict[str, _Template] = {
-    "forex": _STANDARD,
-    "commodity": _THIN_EVENT_SENSITIVE,
-    "index": _STANDARD,
-    "stock": _EQUITY,
-    "etf": _EQUITY,
-    "etf_bond": _EQUITY,
-    "crypto": replace(_STANDARD, profile="CRYPTO_REFINEMENT"),
+    "forex": _FOREX_MAJORS_STANDARD,
+    "commodity": _THIN_METALS_BASE_SOFTS,
+    "index": _EQUITY_INDEX_STANDARD,
+    "stock": _US_STOCK_SINGLE,
+    "etf": _BOND_TLT_SMALLCAP_EM_ETF,
+    "etf_bond": _BOND_TLT_SMALLCAP_EM_ETF,
+    "crypto": _CRYPTO_OTHER_THIN,
 }
 
 
@@ -716,6 +926,25 @@ def _adjacent(tf: Timeframe, faster: bool) -> Timeframe:
     index = TIMEFRAME_LADDER.index(tf)
     index = min(len(TIMEFRAME_LADDER) - 1, index + 1) if faster else max(0, index - 1)
     return TIMEFRAME_LADDER[index]
+
+
+def _normalize_group_name(name: Any) -> str | None:
+    """Map deprecated policy-group aliases to the v4 taxonomy.
+
+    Old group names keep working as deprecated aliases (one logged warning per
+    name per process); scoring-group names from ``engine_a_groups`` are mapped
+    to their policy-group equivalent.  Unknown names pass through unchanged so
+    they fail closed to asset defaults as before.
+    """
+    text = str(name or "").strip().lower()
+    if not text:
+        return None
+    try:
+        from engine_a_groups import normalize_timeframe_policy_group
+
+        return normalize_timeframe_policy_group(text)
+    except Exception:
+        return text
 
 
 def _normalize_policy_identity(engine_id: str, style: str) -> tuple[str, str]:
@@ -750,9 +979,19 @@ def validate_timeframe_role_order(
     setup: Timeframe,
     trigger: Timeframe,
     execution: Timeframe,
+    *,
+    execution_mode: ExecutionMode | None = None,
 ) -> None:
-    """Reject a policy whose roles reverse the slower-to-faster ladder."""
-    roles = (regime, bias, structure, setup, trigger, execution)
+    """Reject a policy whose roles reverse the slower-to-faster ladder.
+
+    Regime through trigger are always strictly ordered.  The execution TF is
+    only required to sit on the ladder when execution is timeframe-based; with
+    ``ExecutionMode.LIVE_QUOTE`` the execution TF is advisory context and is
+    exempt from ordering relative to the trigger.
+    """
+    roles: tuple[Timeframe, ...] = (regime, bias, structure, setup, trigger)
+    if execution_mode != ExecutionMode.LIVE_QUOTE:
+        roles = (*roles, execution)
     indexes = [TIMEFRAME_LADDER.index(tf) for tf in roles]
     if indexes != sorted(indexes):
         rendered = " -> ".join(tf.value for tf in roles)
@@ -763,30 +1002,39 @@ def _clamp_adaptive_roles(
     structure: Timeframe,
     setup: Timeframe,
     trigger: Timeframe,
-    execution: Timeframe,
-) -> tuple[Timeframe, Timeframe, Timeframe]:
-    """Clamp adaptive roles to their permitted slower-to-faster ordering."""
+) -> tuple[Timeframe, Timeframe]:
+    """Clamp the adaptive roles (setup/trigger) to the permitted ordering.
+
+    Regime/bias/structure are never adapted, and execution is no longer an
+    adapted role (execution is live-quote based in v4).
+    """
     previous = TIMEFRAME_LADDER.index(structure)
     clamped: list[Timeframe] = []
-    for tf in (setup, trigger, execution):
+    for tf in (setup, trigger):
         index = max(previous, TIMEFRAME_LADDER.index(tf))
         clamped.append(TIMEFRAME_LADDER[index])
         previous = index
-    return clamped[0], clamped[1], clamped[2]
+    return clamped[0], clamped[1]
 
 
 def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
     if engine_id == "engine_d":
+        # Engine D native scalp contract: H1 context/regime, M15 confirmed
+        # structure/bias, M5 setup, M1 trigger. Execution is live-quote based;
+        # the emitted M1 executionTf is advisory context only.
         return _Template(
             profile="ENGINE_D_NATIVE",
             regime=Timeframe.H1,
-            bias=Timeframe.H1,
+            bias=Timeframe.M15,
             structure=Timeframe.M15,
-            setup=Timeframe.M15,
-            trigger=Timeframe.M5,
-            execution=Timeframe.M5,
-            m5_role=M5Role.EXECUTION,
+            setup=Timeframe.M5,
+            trigger=Timeframe.M1,
+            execution=Timeframe.M1,
+            m5_role=M5Role.REFINEMENT,
+            m5_policy=M5Policy.CONDITIONAL,
+            execution_mode=ExecutionMode.LIVE_QUOTE,
             baseline_speed=base.baseline_speed,
+            m15_confirmation_required_for_m5=True,
         )
     if engine_id == "engine_b" and style == "swing":
         return _Template(
@@ -798,6 +1046,8 @@ def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
             trigger=Timeframe.H1,
             execution=Timeframe.H1,
             m5_role=M5Role.DISABLED,
+            m5_policy=M5Policy.DISABLED,
+            execution_mode=ExecutionMode.LIVE_QUOTE,
             baseline_speed=base.baseline_speed,
         )
     if engine_id == "engine_b" and style == "intraday":
@@ -806,26 +1056,39 @@ def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
             profile=f"ENGINE_B_INTRADAY_{base.profile}",
         )
     if engine_id == "engine_b" and style == "scalp":
+        # Scalp chain H1/M15/M15/M5/M1: H1 is context only (never a mandatory
+        # H4 gate), M15 confirms structure/bias, M5 setup, M1 trigger with
+        # conditional M5 policy.
         return _Template(
             profile=f"ENGINE_B_SCALP_{base.profile}",
-            regime=Timeframe.H4,
-            bias=Timeframe.H1,
-            structure=Timeframe.H1,
-            setup=Timeframe.M30,
-            trigger=Timeframe.M15,
-            execution=Timeframe.M5,
-            m5_role=M5Role.EXECUTION,
+            regime=Timeframe.H1,
+            bias=Timeframe.M15,
+            structure=Timeframe.M15,
+            setup=Timeframe.M5,
+            trigger=Timeframe.M1,
+            execution=Timeframe.M1,
+            m5_role=M5Role.REFINEMENT,
+            m5_policy=M5Policy.CONDITIONAL,
+            execution_mode=ExecutionMode.LIVE_QUOTE,
             baseline_speed=base.baseline_speed,
+            m15_confirmation_required_for_m5=True,
         )
-    # Engine A retains the symbol timing profile for both intraday and swing.
-    # Swing raises only bias/structure; setup/trigger/execution keep the
-    # pre-style-routing timing contract selected by symbol/group.
+    # Engine A intraday keeps the instrument profile unchanged.  Swing is a
+    # full slow overlay: D1 regime/bias, H4 structure, H1 setup, H1 confirmed
+    # trigger, M5 disabled.
     if engine_id == "engine_a" and style == "swing":
         return replace(
             base,
             profile=f"ENGINE_A_SWING_{base.profile}",
+            regime=Timeframe.D1,
             bias=Timeframe.D1,
             structure=Timeframe.H4,
+            setup=Timeframe.H1,
+            trigger=Timeframe.H1,
+            execution=Timeframe.H1,
+            m5_role=M5Role.DISABLED,
+            m5_policy=M5Policy.DISABLED,
+            m15_confirmation_required_for_m5=False,
         )
     return base
 
@@ -840,37 +1103,55 @@ def resolve_timeframe_policy(
     engine_id: str = "engine_a",
     authoritative_group: str | None = None,
 ) -> TimeframePolicy:
-    """Resolve the deterministic policy using the documented precedence."""
+    """Resolve the deterministic policy using the documented precedence.
+
+    Precedence: CONFIG_CONFLICT guard → score-group/asset-default template →
+    per-role symbol-override patch → engine/style overlay → restricted speed
+    adaptation (setup/trigger only).  Execution is live-quote based; the
+    emitted executionTf is advisory execution context.
+    """
     requested = str(symbol or "").strip()
     canonical = canonical_symbol(requested)
     asset = str(asset_type or "").strip().lower()
-    group = str(score_group or "").strip().lower() or None
-    authoritative = str(authoritative_group or "").strip().lower() or None
+    group = _normalize_group_name(score_group)
+    authoritative = _normalize_group_name(authoritative_group)
     resolved_engine, resolved_style = _normalize_policy_identity(engine_id, style)
     messages: list[str] = []
+    symbol_override_applied = False
+    symbol_override_patched_roles: tuple[str, ...] = ()
 
     config_conflict = bool(authoritative and group != authoritative)
     if config_conflict:
-        base = replace(_NO_M5, profile="CONFIG_CONFLICT", baseline_speed=SpeedClass.SLOW)
+        base = replace(
+            _FAIL_CLOSED, profile="CONFIG_CONFLICT", baseline_speed=SpeedClass.SLOW
+        )
         source = PolicySource.CONFIG_CONFLICT
         messages.append(
             f"canonical group conflict: requested={group or 'none'} authoritative={authoritative}"
         )
-    elif canonical and canonical in _SYMBOL_OVERRIDES:
-        base = _SYMBOL_OVERRIDES[canonical]
-        source = PolicySource.SYMBOL_OVERRIDE
-    elif group and group in _GROUP_OVERRIDES:
-        base = _GROUP_OVERRIDES[group]
-        source = PolicySource.SCORE_GROUP_OVERRIDE
-    elif asset in _ASSET_DEFAULTS:
-        base = _ASSET_DEFAULTS[asset]
-        source = PolicySource.ASSET_STYLE_DEFAULT
-        if canonical is None:
-            messages.append("symbol_not_in_alias_registry; using explicit asset/style default")
     else:
-        base = replace(_NO_M5, profile="SAFE_FALLBACK", baseline_speed=SpeedClass.SLOW)
-        source = PolicySource.SAFE_FALLBACK
-        messages.append("unknown symbol/asset; fail-closed higher-timeframe fallback")
+        if group and group in _GROUP_OVERRIDES:
+            base = _GROUP_OVERRIDES[group]
+            source = PolicySource.SCORE_GROUP_OVERRIDE
+        elif asset in _ASSET_DEFAULTS:
+            base = _ASSET_DEFAULTS[asset]
+            source = PolicySource.ASSET_STYLE_DEFAULT
+            if canonical is None:
+                messages.append(
+                    "symbol_not_in_alias_registry; using explicit asset/style default"
+                )
+        else:
+            base = replace(
+                _FAIL_CLOSED, profile="SAFE_FALLBACK", baseline_speed=SpeedClass.SLOW
+            )
+            source = PolicySource.SAFE_FALLBACK
+            messages.append("unknown symbol/asset; fail-closed higher-timeframe fallback")
+        if canonical and canonical in _SYMBOL_OVERRIDES:
+            base, symbol_override_patched_roles = _apply_symbol_patch(
+                base, _SYMBOL_OVERRIDES[canonical]
+            )
+            symbol_override_applied = True
+            source = PolicySource.SYMBOL_OVERRIDE
 
     selected = _engine_template(base, resolved_engine, resolved_style)
     reported_speed = (
@@ -886,45 +1167,52 @@ def resolve_timeframe_policy(
     effective_speed = reported_speed if adaptation_ready else selected.baseline_speed
     setup = selected.setup
     trigger = selected.trigger
+    # Execution is never adapted: no speed/liquidity input may rewrite the
+    # advisory execution TF, and speed never promotes M5 execution (the v3
+    # allow_dynamic_m5_execution promotion is removed in v4).
     execution = selected.execution
     m5_role = selected.m5_role
+    m5_policy = selected.m5_policy
 
     if not adaptation_ready:
         messages.append("INSUFFICIENT_HISTORY: baseline policy retained")
     elif effective_speed == SpeedClass.SLOW:
+        # Speed adaptation may modify setup and trigger ONLY — never
+        # regime/bias/structure, never execution.
         setup = _adjacent(setup, faster=False)
         trigger = _adjacent(trigger, faster=False)
-        execution = _adjacent(execution, faster=False)
-        if execution != Timeframe.M5 and m5_role == M5Role.EXECUTION:
-            m5_role = M5Role.REFINEMENT
-    elif effective_speed in {SpeedClass.FAST, SpeedClass.EXTREME}:
-        if selected.allow_dynamic_m5_execution and selected.m5_role == M5Role.REFINEMENT:
-            if (
-                speed_state.m5_quality_acceptable
-                and speed_state.liquidity_class in {LiquidityClass.DEEP, LiquidityClass.NORMAL}
-            ):
-                execution = _adjacent(execution, faster=True)
-                if execution == Timeframe.M5:
-                    m5_role = M5Role.EXECUTION
-            else:
-                messages.append("M5 authority withheld: quote/spread/liquidity quality unacceptable")
 
-    if speed_state and speed_state.liquidity_class in {
-        LiquidityClass.THIN,
-        LiquidityClass.UNAVAILABLE,
-    }:
-        if execution == Timeframe.M5:
-            execution = Timeframe.M15
-        if m5_role == M5Role.EXECUTION:
-            m5_role = M5Role.DISABLED
-        messages.append("THIN or UNAVAILABLE liquidity removed M5 execution authority")
+    # THIN/UNAVAILABLE liquidity no longer rewrites any role TF.  It is
+    # recorded as an M5-eligibility input consumed by the eligibility layer.
+    m5_liquidity_blocked = bool(
+        speed_state
+        and speed_state.liquidity_class
+        in {LiquidityClass.THIN, LiquidityClass.UNAVAILABLE}
+    )
+    if m5_liquidity_blocked and (
+        m5_policy == M5Policy.CONDITIONAL
+        or trigger == Timeframe.M5
+        or setup == Timeframe.M5
+    ):
+        messages.append(
+            "THIN or UNAVAILABLE liquidity recorded as M5-eligibility block "
+            "(m5_liquidity_blocked)"
+        )
 
-    setup, trigger, execution = _clamp_adaptive_roles(
+    setup, trigger = _clamp_adaptive_roles(
         selected.structure,
         setup,
         trigger,
-        execution,
     )
+    if (
+        Timeframe.M1
+        in (selected.regime, selected.bias, selected.structure, setup, trigger, execution)
+        and resolved_engine != "engine_d"
+        and resolved_style != "scalp"
+    ):
+        raise PolicyConfigurationError(
+            "M1 roles are only permitted in scalp/engine-d-native policy templates"
+        )
     validate_timeframe_role_order(
         selected.regime,
         selected.bias,
@@ -932,6 +1220,7 @@ def resolve_timeframe_policy(
         setup,
         trigger,
         execution,
+        execution_mode=selected.execution_mode,
     )
 
     required = tuple(dict.fromkeys((
@@ -941,10 +1230,14 @@ def resolve_timeframe_policy(
         setup,
         trigger,
     )))
-    forming_tf = execution if execution == Timeframe.M5 and m5_role in {
-        M5Role.EXECUTION,
-        M5Role.REFINEMENT,
-    } else None
+    forming_tf = (
+        execution
+        if (
+            (execution == Timeframe.M5 and m5_policy == M5Policy.CONDITIONAL)
+            or execution == Timeframe.M1
+        )
+        else None
+    )
     thresholds = speed_state.thresholds if speed_state else SpeedThresholds()
     diagnostics = PolicyDiagnostics(
         canonical_symbol=canonical or "UNKNOWN",
@@ -961,8 +1254,6 @@ def resolve_timeframe_policy(
         adaptation_applied=adaptation_ready and (
             setup != selected.setup
             or trigger != selected.trigger
-            or execution != selected.execution
-            or m5_role != selected.m5_role
         ),
         adaptation_reason=(
             "SPEED_AND_LIQUIDITY"
@@ -974,6 +1265,9 @@ def resolve_timeframe_policy(
             if speed_state
             else LiquidityClass.UNAVAILABLE
         ),
+        symbol_override_applied=symbol_override_applied,
+        symbol_override_patched_roles=symbol_override_patched_roles,
+        m5_liquidity_blocked=m5_liquidity_blocked,
     )
     canonical_identity = canonical or _key(requested) or "UNKNOWN"
     policy_key = policy_key_for(canonical_identity, resolved_engine, resolved_style)
@@ -1002,6 +1296,8 @@ def resolve_timeframe_policy(
             if selected.m15_confirmation_required_for_m5
             else None
         ),
+        execution_mode=selected.execution_mode,
+        m5_policy=m5_policy,
     )
 
 
@@ -1838,6 +2134,235 @@ def _configured_session_candidate(
     return candidate if isinstance(candidate, Mapping) else None
 
 
+# ---------------------------------------------------------------------------
+# Conditional M5 eligibility + trigger lifecycle wiring (diagnostics only).
+#
+# Both layers are additive and fail-safe: they never mutate score, direction,
+# or conviction, never raise into payload stamping, and stamp nothing when
+# their required inputs are absent (backward compatible).
+# ---------------------------------------------------------------------------
+
+#: Module-level trigger registry keyed by signal id. The execution layer
+#: reads state through :func:`get_trigger_record`.
+_TRIGGER_TRACKER = TriggerTracker()
+
+#: TTL defaults, overridable via CONFIG["TRIGGER_LIFECYCLE"]: whichever of
+#: 8 trigger-timeframe bars or 4 hours elapses first.
+_TRIGGER_LIFECYCLE_DEFAULT_MAX_BARS = 8
+_TRIGGER_LIFECYCLE_DEFAULT_TTL_SECONDS = 4 * 3600.0
+
+_TF_SECONDS: dict[str, float] = {
+    "D1": 86400.0,
+    "H4": 14400.0,
+    "H1": 3600.0,
+    "M30": 1800.0,
+    "M15": 900.0,
+    "M5": 300.0,
+    "M1": 60.0,
+}
+
+
+def get_trigger_tracker() -> TriggerTracker:
+    """Return the module-level trigger registry."""
+    return _TRIGGER_TRACKER
+
+
+def get_trigger_record(signal_id: str) -> TriggerRecord | None:
+    """Return the tracked trigger record for ``signal_id`` (or None).
+
+    Read API for the execution layer; never mutates tracker state.
+    """
+    if signal_id in {None, ""}:
+        return None
+    return _TRIGGER_TRACKER.get(str(signal_id))
+
+
+def _first_signal_value(signal: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = signal.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _parse_signal_timestamp(raw: Any) -> datetime | None:
+    """Parse an epoch (s/ms) or ISO-8601 timestamp to an aware UTC datetime."""
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        ts = raw
+    elif isinstance(raw, (int, float)) and math.isfinite(raw):
+        seconds = float(raw)
+        if seconds > 1e12:  # epoch milliseconds
+            seconds = seconds / 1000.0
+        try:
+            ts = datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    elif isinstance(raw, str):
+        try:
+            ts = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
+def _stamp_trigger_lifecycle(
+    signal: dict[str, Any],
+    policy: TimeframePolicy,
+    config: Mapping[str, Any] | None,
+) -> None:
+    """Arm/update a :class:`TriggerRecord` and stamp its state on the signal.
+
+    Required inputs: a signal id, a setup zone, a trigger level, and a usable
+    decision timestamp (all timestamps are passed in from the payload context
+    — the lifecycle module has no wall-clock dependence). When any is absent
+    nothing is stamped. TTL comes from CONFIG["TRIGGER_LIFECYCLE"] with
+    defaults of max 8 trigger bars / 4 hours, whichever elapses first.
+    """
+    try:
+        signal_id = signal.get("signalId")
+        zone = _first_signal_value(signal, "setupZone", "setup_zone")
+        trigger_level = _first_signal_value(signal, "triggerLevel", "trigger_level")
+        now = _parse_signal_timestamp(
+            _first_signal_value(signal, "timestamp", "ts", "time", "decisionTime", "decision_time")
+        )
+        if signal_id in {None, ""} or now is None:
+            return
+        if not (isinstance(zone, (list, tuple)) and len(zone) == 2):
+            return
+        try:
+            setup_zone = (float(zone[0]), float(zone[1]))
+            trigger_price = float(trigger_level)
+        except (TypeError, ValueError):
+            return
+        lifecycle = config.get("TRIGGER_LIFECYCLE") if isinstance(config, Mapping) else None
+        if not isinstance(lifecycle, Mapping):
+            lifecycle = {}
+        try:
+            ttl_seconds = float(
+                lifecycle.get("TTL_SECONDS", _TRIGGER_LIFECYCLE_DEFAULT_TTL_SECONDS)
+            )
+            max_bars = int(
+                lifecycle.get("MAX_TRIGGER_BARS", _TRIGGER_LIFECYCLE_DEFAULT_MAX_BARS)
+            )
+        except (TypeError, ValueError):
+            ttl_seconds = _TRIGGER_LIFECYCLE_DEFAULT_TTL_SECONDS
+            max_bars = _TRIGGER_LIFECYCLE_DEFAULT_MAX_BARS
+        bar_seconds = _TF_SECONDS.get(policy.trigger_tf.value)
+
+        _TRIGGER_TRACKER.sweep_expired(now)
+        record = _TRIGGER_TRACKER.get(str(signal_id))
+        if record is None:
+            record = _TRIGGER_TRACKER.arm(
+                signal_id=str(signal_id),
+                symbol=policy.canonical_symbol,
+                engine=policy.engine_id,
+                style=policy.style,
+                direction=str(signal.get("direction") or ""),
+                profile=policy.profile,
+                regime_tf=policy.regime_tf.value,
+                bias_tf=policy.bias_tf.value,
+                structure_tf=policy.structure_tf.value,
+                setup_tf=policy.setup_tf.value,
+                trigger_tf=policy.trigger_tf.value,
+                armed_at=now,
+                setup_zone=setup_zone,
+                trigger_level=trigger_price,
+                ttl_seconds=ttl_seconds,
+                max_trigger_bars=max_bars if bar_seconds else None,
+                bar_seconds=bar_seconds,
+            )
+        signal["triggerState"] = record.state.value
+        signal["triggerAge"] = (
+            max(0.0, (now - record.armed_at).total_seconds())
+            if record.armed_at is not None
+            else None
+        )
+        signal["triggerExpiry"] = record.to_dict().get("expires_at")
+    except Exception:
+        # Diagnostics must never break payload stamping.
+        return
+
+
+def _stamp_m5_eligibility(
+    signal: dict[str, Any],
+    policy: TimeframePolicy,
+    config: Mapping[str, Any] | None,
+) -> None:
+    """Stamp ``m5Eligible``/``m5EligibilityReasons`` from available inputs.
+
+    Builds an :class:`M5EligibilityContext` from data already present on the
+    signal (thresholds fall back to CONFIG["M5_ELIGIBILITY"]). Missing inputs
+    fail closed as ``*_missing`` reason codes; this layer never raises and
+    never mutates score/direction/conviction.
+    """
+    try:
+        m5_cfg = config.get("M5_ELIGIBILITY") if isinstance(config, Mapping) else None
+        if not isinstance(m5_cfg, Mapping):
+            m5_cfg = {}
+
+        def _threshold(*keys: str, cfg_key: str) -> Any:
+            value = _first_signal_value(signal, *keys)
+            if value is None:
+                value = m5_cfg.get(cfg_key)
+            return value
+
+        record = _TRIGGER_TRACKER.get(str(signal.get("signalId") or ""))
+        if record is not None:
+            trigger_expired = record.state == TriggerState.EXPIRED
+        else:
+            trigger_expired = bool(
+                _first_signal_value(signal, "triggerExpired", "trigger_expired") or False
+            )
+        context = M5EligibilityContext(
+            m5_policy=policy.m5_policy,
+            htf_structure_valid=_first_signal_value(
+                signal, "htfStructureValid", "htf_structure_valid", "structureOk", "structure_ok"
+            ),
+            setup_armed=_first_signal_value(signal, "setupArmed", "setup_armed"),
+            session_or_participation_eligible=_first_signal_value(
+                signal,
+                "sessionEligible",
+                "session_eligible",
+                "participationEligible",
+                "participation_eligible",
+            ),
+            current_spread=_first_signal_value(signal, "currentSpread", "current_spread", "spread"),
+            spread_threshold=_threshold("m5SpreadThreshold", "m5_spread_threshold", cfg_key="SPREAD_THRESHOLD"),
+            distance_from_setup_atr=_first_signal_value(
+                signal, "distanceFromSetupAtr", "distance_from_setup_atr"
+            ),
+            max_displacement_atr=_threshold(
+                "m5MaxDisplacementAtr", "m5_max_displacement_atr", cfg_key="MAX_DISPLACEMENT_ATR"
+            ),
+            entry_event=_first_signal_value(signal, "m5EntryEvent", "m5_entry_event"),
+            trigger_expired=trigger_expired,
+            structural_rr_at_current_price=_first_signal_value(
+                signal, "rrAtCurrentPrice", "structuralRrAtCurrentPrice", "structural_rr_at_current_price"
+            ),
+            min_rr=_threshold("m5MinRr", "m5_min_rr", cfg_key="MIN_RR"),
+            quote_inside_opposing_zone=bool(
+                _first_signal_value(signal, "quoteInsideOpposingZone", "quote_inside_opposing_zone")
+                or False
+            ),
+            ltf_direction_agrees_with_thesis=_first_signal_value(
+                signal, "ltfDirectionAgrees", "ltf_direction_agrees", "m5DirectionAgrees", "m5_direction_agrees"
+            ),
+            fallback_trigger_tf=policy.trigger_tf.value,
+        )
+        result = evaluate_m5_eligibility(context)
+        signal["m5Eligible"] = bool(result.eligible)
+        signal["m5EligibilityReasons"] = list(result.reasons)
+    except Exception:
+        signal["m5Eligible"] = False
+        signal["m5EligibilityReasons"] = ["m5_eligibility_error"]
+
+
 def attach_timeframe_policy_payload(
     signal: dict[str, Any],
     pair: Mapping[str, Any],
@@ -1944,6 +2469,7 @@ def attach_timeframe_policy_payload(
         if legacy.get(key) != payload.get(key)
     }
     signal.update(payload)
+    signal["symbolOverrideApplied"] = policy.diagnostics.symbol_override_applied
     apply_authoritative_policy_result(
         signal,
         policy_mode=mode,
@@ -2121,6 +2647,8 @@ def attach_timeframe_policy_payload(
         ),
     )
     signal.update(resolved_session.to_dict())
+    _stamp_trigger_lifecycle(signal, policy, runtime_config)
+    _stamp_m5_eligibility(signal, policy, runtime_config)
     return policy
 
 

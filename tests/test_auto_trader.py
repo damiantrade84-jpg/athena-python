@@ -791,7 +791,26 @@ class TestExecuteSignal:
                           "volume_min": 0.01, "volume_max": 100, "volume_step": 0.01} if symbol_ok else None,
         )
 
+    def _mock_pre_risk(self, monkeypatch):
+        """Stub the Phase 5a pre-risk parity gates (broker quote refresh, Engine B
+        RR reconcile, displacement guard) so these tests stay focused on the
+        risk/guardian/executor path. The gates themselves are covered in
+        tests/test_execution_displacement_guard.py."""
+        monkeypatch.setattr(
+            "execution._engine_b_pre_risk_broker_price",
+            lambda sig, venue, cfg: (None, {"brokerPrice": sig.get("price")}),
+        )
+        monkeypatch.setattr(
+            "execution._reconcile_engine_b_rr_after_broker_entry",
+            lambda sig, cfg: None,
+        )
+        monkeypatch.setattr(
+            "execution._displacement_guard_block_reason",
+            lambda sig, cfg: (None, {"enabled": True}),
+        )
+
     def _mock_risk_and_execution(self, monkeypatch, risk_ok=True, guardian_ok=True, exec_ok=True):
+        self._mock_pre_risk(monkeypatch)
         monkeypatch.setattr(
             "risk_engine.risk_check",
             lambda *a, **kw: _MockApproval(approved=risk_ok),
@@ -894,6 +913,7 @@ class TestExecuteSignal:
 
     def test_exception_during_execution(self, monkeypatch):
         self._mock_bybit(monkeypatch)
+        self._mock_pre_risk(monkeypatch)
         monkeypatch.setattr(
             "risk_engine.risk_check",
             lambda *a, **kw: (_raise_execution_exception()),

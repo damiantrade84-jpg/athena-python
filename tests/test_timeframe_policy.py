@@ -7,7 +7,9 @@ from pathlib import Path
 from athena_app.services.market_state import candle_timestamp_epoch, split_market_state
 from market_structure import engine_b_candles_for_tf, resolve_engine_b_tfs
 from timeframe_policy import (
+    ExecutionMode,
     LiquidityClass,
+    M5Policy,
     M5Role,
     PolicyConfigurationError,
     PolicyMode,
@@ -95,24 +97,42 @@ def test_unknown_symbol_resolution_is_visible_and_fail_closed_when_asset_unknown
 
 
 def test_required_baseline_matrix() -> None:
+    # policy v4 matrix: (structure, trigger, advisory execution context, m5 role)
     cases = {
-        "EUR/USD": ("forex", "forex_majors", Timeframe.H1, Timeframe.M15, M5Role.REFINEMENT),
-        "GBP/USD": ("forex", "forex_majors", Timeframe.H1, Timeframe.M5, M5Role.EXECUTION),
-        "EUR/GBP": ("forex", "forex_crosses", Timeframe.H4, Timeframe.M15, M5Role.ADVISORY),
-        "XAU/USD": ("commodity", "precious_trackers", Timeframe.H1, Timeframe.M5, M5Role.EXECUTION),
-        "XPT/USD": ("commodity", "pgm_metals", Timeframe.H1, Timeframe.M15, M5Role.ADVISORY),
-        "WTI Oil": ("commodity", "energy_oil", Timeframe.H1, Timeframe.M5, M5Role.EXECUTION),
-        "S&P 500": ("index", "us_indices_trackers", Timeframe.H1, Timeframe.M15, M5Role.REFINEMENT),
-        "AAPL": ("stock", "us_stock_single", Timeframe.H1, Timeframe.M5, M5Role.EXECUTION),
-        "BTC/USDT": ("crypto", "crypto_btc", Timeframe.H1, Timeframe.M5, M5Role.EXECUTION),
-        "SOL/USDT": ("crypto", "crypto_alt_majors", Timeframe.H1, Timeframe.M15, M5Role.REFINEMENT),
+        "EUR/USD": ("forex", "forex_majors", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "GBP/USD": ("forex", "forex_majors", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "EUR/GBP": ("forex", "forex_crosses", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
+        "XAU/USD": ("commodity", "precious_trackers", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "XPT/USD": ("commodity", "pgm_metals", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
+        "WTI Oil": ("commodity", "energy_oil", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "S&P 500": ("index", "us_indices_trackers", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "AAPL": ("stock", "us_stock_single", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "BTC/USDT": ("crypto", "crypto_btc", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "SOL/USDT": ("crypto", "crypto_alt_majors", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
     }
-    for symbol, (asset, group, structure, execution, m5_role) in cases.items():
+    for symbol, (asset, group, structure, trigger, execution, m5_role) in cases.items():
         policy = resolve_timeframe_policy(symbol, asset, group, "intraday")
         assert policy.regime_tf == Timeframe.D1
         assert policy.structure_tf == structure
+        assert policy.trigger_tf == trigger
         assert policy.execution_tf == execution
         assert policy.m5_role == m5_role
+        assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
+
+    conditional = resolve_timeframe_policy("GBP/USD", "forex", "forex_majors", "intraday")
+    assert conditional.m5_policy == M5Policy.CONDITIONAL
+    assert conditional.diagnostics.m15_confirmation_required_for_m5 is True
+    assert conditional.execution_prerequisite_tf == Timeframe.M15
+    payload = conditional.payload()
+    assert payload["executionMode"] == ExecutionMode.LIVE_QUOTE.value
+    assert payload["m5Policy"] == M5Policy.CONDITIONAL.value
+    # Backward-compat fields remain emitted alongside the v4 fields.
+    assert payload["executionTf"] == "M5"
+    assert payload["m5Role"] == M5Role.REFINEMENT.value
+
+    standard = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday")
+    assert standard.m5_policy == M5Policy.DISABLED
+    assert standard.payload()["m5Policy"] == M5Policy.DISABLED.value
 
     oil = resolve_timeframe_policy("SpotBrent", "commodity", "energy_oil", "intraday")
     assert oil.diagnostics.m15_confirmation_required_for_m5 is True
@@ -120,33 +140,33 @@ def test_required_baseline_matrix() -> None:
 
 def test_corrected_symbol_specific_profiles() -> None:
     cases = {
-        "USD/JPY": ("forex", "forex_majors", "LIQUID_FAST_SESSION_CONDITIONAL", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "USD/CAD": ("forex", "forex_majors", "STANDARD_SESSION_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "AUD/NZD": ("forex", "forex_crosses", "BROAD_STRUCTURE_CROSS", Timeframe.H4, Timeframe.M30, Timeframe.M15, M5Role.ADVISORY),
-        "GBP/JPY": ("forex", "forex_crosses", "LIQUID_FAST_SESSION_CONDITIONAL", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "EUR/JPY": ("forex", "forex_crosses", "STANDARD_YEN_CROSS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "AUD/JPY": ("forex", "forex_crosses", "STANDARD_YEN_CROSS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "EUR/CHF": ("forex", "forex_crosses", "BROAD_STRUCTURE_CROSS", Timeframe.H4, Timeframe.M30, Timeframe.M15, M5Role.ADVISORY),
-        "XAG/USD": ("commodity", "precious_trackers", "VOLATILE_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "XPT/USD": ("commodity", "pgm_metals", "THIN_EVENT_SENSITIVE", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.ADVISORY),
-        "XPD/USD": ("commodity", "pgm_metals", "THIN_EVENT_SENSITIVE", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.ADVISORY),
-        "Natural Gas": ("commodity", "nat_gas", "NATGAS_NO_M5", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
-        "NAS100": ("index", "us_indices_trackers", "LIQUID_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "US30": ("index", "us_indices_trackers", "LIQUID_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "GER40": ("index", "eu_indices", "LIQUID_FAST_SESSION_CONDITIONAL", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "JPN225": ("index", "asia_indices", "STANDARD_INDEX_SESSION_CONDITIONAL", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "US500": ("index", "us_indices_trackers", "STANDARD_LIQUID_INDEX", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "UK100": ("index", "eu_indices", "STANDARD_LIQUID_INDEX", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "AAPL": ("stock", "us_stock_single", "CASH_EQUITY_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M5, M5Role.EXECUTION),
-        "SPY": ("etf", "us_etfs", "CASH_EQUITY_LIQUID", Timeframe.H1, Timeframe.M15, Timeframe.M5, M5Role.EXECUTION),
-        "BTC/USDT": ("crypto", "crypto_btc", "CRYPTO_LIQUID_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M5, M5Role.EXECUTION),
-        "ETH/USDT": ("crypto", "crypto_eth", "CRYPTO_LIQUID_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M5, M5Role.EXECUTION),
-        "BNB/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_STANDARD", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "SOL/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_HIGH_BETA", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "XRP/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_HIGH_BETA_EVENT", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "DOGE/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_HIGH_BETA_SPECULATIVE", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "ADA/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_HIGH_BETA", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
-        "LINK/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_HIGH_BETA", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "USD/JPY": ("forex", "forex_majors", "FOREX_MAJORS_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "USD/CAD": ("forex", "forex_majors", "FOREX_MAJORS_STANDARD", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "AUD/NZD": ("forex", "forex_crosses", "FOREX_CROSSES_BROAD", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
+        "GBP/JPY": ("forex", "forex_crosses", "GBPJPY_FAST_CROSS_CONDITIONAL", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "EUR/JPY": ("forex", "forex_crosses", "FOREX_CROSSES_LIQUID", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "AUD/JPY": ("forex", "forex_crosses", "FOREX_CROSSES_LIQUID", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "EUR/CHF": ("forex", "forex_crosses", "FOREX_CROSSES_BROAD", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
+        "XAG/USD": ("commodity", "precious_trackers", "LIQUID_METALS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "XPT/USD": ("commodity", "pgm_metals", "THIN_METALS_BASE_SOFTS", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
+        "XPD/USD": ("commodity", "pgm_metals", "THIN_METALS_BASE_SOFTS", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
+        "Natural Gas": ("commodity", "nat_gas", "NAT_GAS_NO_M5", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "NAS100": ("index", "us_indices_trackers", "EQUITY_INDEX_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "US30": ("index", "us_indices_trackers", "EQUITY_INDEX_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "GER40": ("index", "eu_indices", "EQUITY_INDEX_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "JPN225": ("index", "asia_indices", "EQUITY_INDEX_STANDARD", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "US500": ("index", "us_indices_trackers", "EQUITY_INDEX_STANDARD", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "UK100": ("index", "eu_indices", "EQUITY_INDEX_STANDARD", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "AAPL": ("stock", "us_stock_single", "US_STOCK_SINGLE", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "SPY": ("etf", "us_etfs", "US_STOCK_SINGLE", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "BTC/USDT": ("crypto", "crypto_btc", "CRYPTO_MAJORS_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "ETH/USDT": ("crypto", "crypto_eth", "CRYPTO_MAJORS_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "BNB/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "SOL/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_MAJORS_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "XRP/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "DOGE/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_OTHER_THIN", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
+        "ADA/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
+        "LINK/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
     }
     for symbol, (asset, group, profile, structure, trigger, execution, m5_role) in cases.items():
         policy = resolve_timeframe_policy(symbol, asset, group, "intraday")
@@ -155,6 +175,110 @@ def test_corrected_symbol_specific_profiles() -> None:
         assert policy.trigger_tf == trigger
         assert policy.execution_tf == execution
         assert policy.m5_role == m5_role
+
+
+def test_symbol_overrides_are_partial_role_patches_with_diagnostics() -> None:
+    # GBP/JPY is a genuine partial patch: only structure/setup/trigger/m5 are
+    # pinned; regime/bias inherit from the resolved cross-group template.
+    gbpjpy = resolve_timeframe_policy("GBP/JPY", "forex", "forex_crosses", "intraday")
+    assert gbpjpy.policy_source == PolicySource.SYMBOL_OVERRIDE
+    assert gbpjpy.diagnostics.symbol_override_applied is True
+    assert gbpjpy.diagnostics.symbol_override_patched_roles == (
+        "m5_policy",
+        "setup",
+        "structure",
+        "trigger",
+    )
+    assert gbpjpy.regime_tf == Timeframe.D1
+    assert gbpjpy.bias_tf == Timeframe.H4
+    assert gbpjpy.structure_tf == Timeframe.H1
+    assert gbpjpy.setup_tf == Timeframe.M15
+    assert gbpjpy.trigger_tf == Timeframe.M5
+    assert gbpjpy.m5_policy == M5Policy.CONDITIONAL
+
+    eurusd = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday")
+    assert eurusd.diagnostics.symbol_override_applied is True
+    assert set(eurusd.diagnostics.symbol_override_patched_roles) == {
+        "regime",
+        "bias",
+        "structure",
+        "setup",
+        "trigger",
+        "m5_policy",
+    }
+
+    # A symbol without an override resolves from the group template directly.
+    pol = resolve_timeframe_policy("POL/USDT", "crypto", "crypto_alt_majors", "intraday")
+    assert pol.policy_source == PolicySource.SCORE_GROUP_OVERRIDE
+    assert pol.diagnostics.symbol_override_applied is False
+    assert pol.diagnostics.symbol_override_patched_roles == ()
+    assert pol.profile == "CRYPTO_ALT_MAJORS"
+
+
+def test_deprecated_group_names_normalize_to_v4_taxonomy(caplog) -> None:
+    import logging
+
+    import engine_a_groups
+
+    # Warnings are emitted once per deprecated name per process; reset the
+    # dedupe set so this test exercises the warning deterministically.
+    engine_a_groups._deprecation_logged.discard("forex_crosses")
+    with caplog.at_level(logging.WARNING, logger="engine_a_groups"):
+        policy = resolve_timeframe_policy("EUR/GBP", "forex", "forex_crosses", "intraday")
+    assert policy.diagnostics.score_group == "forex_crosses_broad"
+    assert any(
+        "forex_crosses" in record.message and "deprecated" in record.message
+        for record in caplog.records
+    )
+    # The same deprecated name warns only once per process.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="engine_a_groups"):
+        resolve_timeframe_policy("EUR/GBP", "forex", "forex_crosses", "intraday")
+    assert not caplog.records
+    # New group names resolve directly without any deprecation warning.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="engine_a_groups"):
+        direct = resolve_timeframe_policy(
+            "EUR/GBP", "forex", "forex_crosses_broad", "intraday"
+        )
+    assert direct.diagnostics.score_group == "forex_crosses_broad"
+    assert not caplog.records
+
+
+def test_timeframe_policy_group_taxonomy_routing() -> None:
+    from engine_a_groups import (
+        ENGINE_A_TIMEFRAME_POLICY_GROUPS,
+        resolve_timeframe_policy_group,
+    )
+
+    assert len(ENGINE_A_TIMEFRAME_POLICY_GROUPS) == 17
+    cases = {
+        ("EUR/USD", "forex"): "forex_majors_standard",
+        ("GBP/USD", "forex"): "forex_majors_fast",
+        ("USD/JPY", "forex"): "forex_majors_fast",
+        ("EUR/GBP", "forex"): "forex_crosses_broad",
+        ("USD/SGD", "forex"): "forex_crosses_broad",
+        ("EUR/JPY", "forex"): "forex_crosses_liquid",
+        ("GBP/JPY", "forex"): "forex_crosses_liquid",
+        ("USD/ZAR", "forex"): "forex_exotics_liquid",
+        ("USD/BRL", "forex"): "forex_exotics_restricted",
+        ("XAU/USD", "commodity"): "liquid_metals",
+        ("XPT/USD", "commodity"): "thin_metals_base_softs",
+        ("WTI OIL", "commodity"): "energy_oil",
+        ("NAT GAS", "commodity"): "nat_gas",
+        ("NASDAQ-100", "index"): "equity_index_fast",
+        ("S&P 500", "index"): "equity_index_standard",
+        ("AAPL", "stock"): "us_stock_single",
+        ("SPY", "etf"): "us_stock_single",
+        ("TLT", "etf_bond"): "bond_tlt_smallcap_em_etf",
+        ("IWM", "etf"): "bond_tlt_smallcap_em_etf",
+        ("BTC/USDT", "crypto"): "crypto_majors_fast",
+        ("SOL/USDT", "crypto"): "crypto_majors_fast",
+        ("XRP/USDT", "crypto"): "crypto_alt_majors",
+        ("DOGE/USDT", "crypto"): "crypto_other_thin",
+    }
+    for (display, ptype), group in cases.items():
+        assert resolve_timeframe_policy_group({"display": display, "type": ptype}) == group
 
 
 def test_policy_keys_are_scoped_by_engine_and_style() -> None:
@@ -195,7 +319,7 @@ def test_speed_class_boundaries_and_hysteresis() -> None:
     assert transitioned == SpeedClass.NORMAL
 
 
-def test_extreme_thin_market_cannot_gain_m5_authority() -> None:
+def test_extreme_thin_market_blocks_m5_eligibility_without_rewriting_roles() -> None:
     state = SpeedState(
         live_speed_class=SpeedClass.EXTREME,
         speed_percentile=95.0,
@@ -206,12 +330,18 @@ def test_extreme_thin_market_cannot_gain_m5_authority() -> None:
     )
     policy = resolve_timeframe_policy("BTC/USDT", "crypto", "crypto_btc", "intraday", state)
 
-    assert policy.execution_tf == Timeframe.M15
-    assert policy.m5_role == M5Role.DISABLED
-    assert any("liquidity removed" in message for message in policy.diagnostics.messages)
+    # v4: THIN liquidity never rewrites role timeframes.  M5 stays declarative
+    # and conditional; the eligibility block is recorded for the M5-eligibility
+    # layer instead of stripping M5 authority here.
+    assert policy.trigger_tf == Timeframe.M5
+    assert policy.execution_tf == Timeframe.M5
+    assert policy.m5_role == M5Role.REFINEMENT
+    assert policy.m5_policy == M5Policy.CONDITIONAL
+    assert policy.diagnostics.m5_liquidity_blocked is True
+    assert any("m5_liquidity_blocked" in message for message in policy.diagnostics.messages)
 
 
-def test_dynamic_policy_moves_only_one_adjacent_execution_timeframe() -> None:
+def test_speed_adaptation_moves_setup_and_trigger_only() -> None:
     slow = SpeedState(
         live_speed_class=SpeedClass.SLOW,
         speed_percentile=20.0,
@@ -231,15 +361,35 @@ def test_dynamic_policy_moves_only_one_adjacent_execution_timeframe() -> None:
 
     slow_policy = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday", slow)
     fast_policy = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday", fast)
-    promoted_policy = resolve_timeframe_policy("USD/JPY", "forex", "forex_majors", "intraday", fast)
+    fast_majors = resolve_timeframe_policy("USD/JPY", "forex", "forex_majors", "intraday", fast)
+    slow_majors = resolve_timeframe_policy("USD/JPY", "forex", "forex_majors", "intraday", slow)
 
-    assert slow_policy.execution_tf == Timeframe.M30
-    # STANDARD_LIQUID keeps M5 as refinement-only even when speed is fast.
+    # SLOW demotes setup/trigger exactly one rung slower; execution (advisory
+    # context) and regime/bias/structure are never adapted.
+    assert slow_policy.setup_tf == Timeframe.H1
+    assert slow_policy.trigger_tf == Timeframe.M30
+    assert slow_policy.execution_tf == Timeframe.M15
+    assert slow_policy.structure_tf == Timeframe.H1
+    assert slow_policy.bias_tf == Timeframe.H4
+    assert slow_policy.diagnostics.adaptation_applied is True
+    # FAST does not promote anything: the standard profile keeps M15 trigger.
+    assert fast_policy.setup_tf == Timeframe.M30
+    assert fast_policy.trigger_tf == Timeframe.M15
     assert fast_policy.execution_tf == Timeframe.M15
-    # Session-conditional profiles may promote exactly one rung when the caller
-    # supplies qualifying liquidity and quote quality.
-    assert promoted_policy.execution_tf == Timeframe.M5
-    assert promoted_policy.m5_role == M5Role.EXECUTION
+    assert fast_policy.diagnostics.adaptation_applied is False
+    # Conditional-M5 profiles keep their template M5 trigger under FAST; there
+    # is no speed-driven promotion to add or remove.
+    assert fast_majors.trigger_tf == Timeframe.M5
+    assert fast_majors.execution_tf == Timeframe.M5
+    assert fast_majors.m5_role == M5Role.REFINEMENT
+    assert fast_majors.m5_policy == M5Policy.CONDITIONAL
+    assert fast_majors.diagnostics.adaptation_applied is False
+    # SLOW on a conditional profile demotes the M5 trigger to M15 but never
+    # rewrites the advisory execution TF or the declarative M5 policy.
+    assert slow_majors.setup_tf == Timeframe.M30
+    assert slow_majors.trigger_tf == Timeframe.M15
+    assert slow_majors.execution_tf == Timeframe.M5
+    assert slow_majors.m5_policy == M5Policy.CONDITIONAL
 
 
 def test_speed_state_uses_confirmed_volatility_velocity_volume_and_quote_quality() -> None:
@@ -327,6 +477,9 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     engine_b_cross = resolve_timeframe_policy(
         "EUR/GBP", "forex", "forex_crosses", "intraday", engine_id="engine_b"
     )
+    engine_b_scalp = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "scalp", engine_id="engine_b"
+    )
     engine_d = resolve_timeframe_policy("BTC/USDT", "crypto", "crypto_btc", "engine_d")
 
     assert equity.structure_tf == Timeframe.H1
@@ -346,15 +499,32 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     assert engine_b_swing["bias"] == "D1"
     assert engine_b_swing["trigger"] == "H1"
     assert engine_b_fast.execution_tf == Timeframe.M5
-    assert engine_b_fast.m5_role == M5Role.EXECUTION
+    assert engine_b_fast.trigger_tf == Timeframe.M5
+    assert engine_b_fast.m5_role == M5Role.REFINEMENT
+    assert engine_b_fast.m5_policy == M5Policy.CONDITIONAL
     assert engine_b_fast.execution_prerequisite_tf == Timeframe.M15
     assert engine_b_cross.structure_tf == Timeframe.H4
     assert engine_b_cross.trigger_tf == Timeframe.M30
-    assert engine_b_cross.m5_role == M5Role.ADVISORY
-    assert engine_d.bias_tf == Timeframe.H1
+    assert engine_b_cross.m5_role == M5Role.DISABLED
+    assert engine_b_cross.m5_policy == M5Policy.DISABLED
+    # Scalp chain H1/M15/M15/M5/M1: H1 is context only, H4 is not a gate.
+    assert engine_b_scalp.regime_tf == Timeframe.H1
+    assert engine_b_scalp.bias_tf == Timeframe.M15
+    assert engine_b_scalp.structure_tf == Timeframe.M15
+    assert engine_b_scalp.setup_tf == Timeframe.M5
+    assert engine_b_scalp.trigger_tf == Timeframe.M1
+    assert engine_b_scalp.execution_tf == Timeframe.M1
+    assert engine_b_scalp.m5_policy == M5Policy.CONDITIONAL
+    assert engine_b_scalp.execution_mode == ExecutionMode.LIVE_QUOTE
+    # Engine D native: H1 context, M15 confirmed structure/bias, M5 setup, M1
+    # trigger; execution is live-quote based.
+    assert engine_d.regime_tf == Timeframe.H1
+    assert engine_d.bias_tf == Timeframe.M15
     assert engine_d.structure_tf == Timeframe.M15
-    assert engine_d.trigger_tf == Timeframe.M5
-    assert engine_d.execution_tf == Timeframe.M5
+    assert engine_d.setup_tf == Timeframe.M5
+    assert engine_d.trigger_tf == Timeframe.M1
+    assert engine_d.execution_tf == Timeframe.M1
+    assert engine_d.execution_mode == ExecutionMode.LIVE_QUOTE
 
     eng_a_intra = resolve_timeframe_policy(
         "EUR/USD", "forex", "forex_majors", "intraday", engine_id="engine_a"
@@ -366,13 +536,15 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     assert eng_a_intra.setup_tf == Timeframe.M30
     assert eng_a_intra.trigger_tf == Timeframe.M15
     assert eng_a_intra.execution_tf == Timeframe.M15
+    # Engine A swing is a full slow overlay: D1/D1/H4/H1/H1, M5 disabled.
     assert eng_a_swing.regime_tf == Timeframe.D1
     assert eng_a_swing.bias_tf == Timeframe.D1
     assert eng_a_swing.structure_tf == Timeframe.H4
-    assert eng_a_swing.setup_tf == Timeframe.M30
-    assert eng_a_swing.trigger_tf == Timeframe.M15
-    assert eng_a_swing.execution_tf == Timeframe.M15
-    assert eng_a_swing.m5_role == M5Role.REFINEMENT
+    assert eng_a_swing.setup_tf == Timeframe.H1
+    assert eng_a_swing.trigger_tf == Timeframe.H1
+    assert eng_a_swing.execution_tf == Timeframe.H1
+    assert eng_a_swing.m5_role == M5Role.DISABLED
+    assert eng_a_swing.m5_policy == M5Policy.DISABLED
 
 
 def test_auto_policy_preserves_legacy_intraday_default() -> None:
@@ -586,7 +758,9 @@ def test_mt5_execution_timing_uses_bid_candle_close_not_quote_midpoint() -> None
     assert signal["entryReadiness"] == "READY"
 
 
-def test_distinct_execution_tf_holds_entry_without_rescoring_engine_a_or_b() -> None:
+def test_shared_m30_trigger_execution_holds_entry_without_rescoring_engine_a_or_b() -> None:
+    # v4: the advisory execution context follows the trigger, so EUR/GBP
+    # (broad cross) shares an M30 trigger/execution timeframe.
     required_states = {
         tf: {
             "confirmed": [
@@ -612,14 +786,22 @@ def test_distinct_execution_tf_holds_entry_without_rescoring_engine_a_or_b() -> 
         }
         states = {
             **required_states,
-            "M15": {
-                "confirmed": [],
+            "M30": {
+                "confirmed": [
+                    {
+                        "time": "2026-07-13T10:00:00Z",
+                        "open": 1.10,
+                        "high": 1.11,
+                        "low": 1.09,
+                        "close": 1.105,
+                    }
+                ],
                 "forming": {
-                    "time": "2026-07-13T10:15:00Z",
+                    "time": "2026-07-13T10:30:00Z",
                     "open": 1.10,
-                    "high": 1.102,
+                    "high": 1.107,
                     "low": 1.094,
-                    "close": 1.096,
+                    "close": 1.106,
                 },
                 "stale": False,
             },
@@ -637,8 +819,8 @@ def test_distinct_execution_tf_holds_entry_without_rescoring_engine_a_or_b() -> 
         )
 
         assert opposed["triggerTf"] == "M30"
-        assert opposed["executionTf"] == "M15"
-        assert opposed["executionTfActual"] == "M15"
+        assert opposed["executionTf"] == "M30"
+        assert opposed["executionTfActual"] == "M30"
         assert opposed["executionTfConsumed"] is True
         assert opposed["executionTimingStatus"] == "OPPOSED"
         assert opposed["entryReadiness"] == "PENDING"
@@ -680,6 +862,9 @@ def test_distinct_execution_tf_holds_entry_without_rescoring_engine_a_or_b() -> 
             "direction": "SHORT",
             "trigger_ok": True,
         }
+        states_without_m30 = {
+            tf: state for tf, state in required_states.items() if tf != "M30"
+        }
         attach_timeframe_policy_payload(
             unavailable,
             {
@@ -689,7 +874,7 @@ def test_distinct_execution_tf_holds_entry_without_rescoring_engine_a_or_b() -> 
             },
             "intraday",
             engine=engine,
-            market_states=required_states,
+            market_states=states_without_m30,
         )
 
         assert unavailable["executionTfActual"] is None
@@ -699,8 +884,31 @@ def test_distinct_execution_tf_holds_entry_without_rescoring_engine_a_or_b() -> 
         assert unavailable["direction"] == "SHORT"
 
 
-def test_policy_payload_rebuild_preserves_dynamic_execution_selection() -> None:
-    rebuilt = speed_state_from_policy_payload(
+def test_policy_payload_rebuild_tolerates_v3_and_v4_payloads() -> None:
+    # v4 payload: declarative conditional M5.
+    rebuilt_v4 = speed_state_from_policy_payload(
+        {
+            "currentSpeedClass": "FAST",
+            "liquidityClass": "NORMAL",
+            "speedPercentile": 80.0,
+            "executionTf": "M5",
+            "m5Role": "refinement",
+            "m5Policy": "conditional",
+        }
+    )
+    assert rebuilt_v4 is not None
+    assert rebuilt_v4.m5_quality_acceptable is True
+    policy = resolve_timeframe_policy(
+        "USD/JPY", "forex", "forex_majors", "intraday", rebuilt_v4
+    )
+    assert policy.trigger_tf == Timeframe.M5
+    assert policy.execution_tf == Timeframe.M5
+    assert policy.m5_role == M5Role.REFINEMENT
+    assert policy.m5_policy == M5Policy.CONDITIONAL
+
+    # v3 payload: speed-promoted M5 execution stamps still parse, but the
+    # removed promotion is never re-armed — resolution stays on the template.
+    rebuilt_v3 = speed_state_from_policy_payload(
         {
             "currentSpeedClass": "FAST",
             "liquidityClass": "NORMAL",
@@ -709,13 +917,14 @@ def test_policy_payload_rebuild_preserves_dynamic_execution_selection() -> None:
             "m5Role": "execution",
         }
     )
-
-    assert rebuilt is not None
-    policy = resolve_timeframe_policy(
-        "USD/JPY", "forex", "forex_majors", "intraday", rebuilt
+    assert rebuilt_v3 is not None
+    assert rebuilt_v3.m5_quality_acceptable is True
+    policy_v3 = resolve_timeframe_policy(
+        "USD/JPY", "forex", "forex_majors", "intraday", rebuilt_v3
     )
-    assert policy.execution_tf == Timeframe.M5
-    assert policy.m5_role == M5Role.EXECUTION
+    assert policy_v3.m5_role == M5Role.REFINEMENT
+    assert policy_v3.m5_policy == M5Policy.CONDITIONAL
+    assert policy_v3.payload()["timeframePolicyHash"] == policy.payload()["timeframePolicyHash"]
 
 
 def test_missing_lower_tf_preserves_payload_and_execution_has_no_higher_tf_fallback() -> None:
@@ -751,6 +960,8 @@ def test_payload_contract_and_warmup_derivation() -> None:
         "triggerTf",
         "executionTf",
         "m5Role",
+        "executionMode",
+        "m5Policy",
         "baselineSpeedClass",
         "liveSpeedClass",
         "currentSpeedClass",
@@ -830,6 +1041,7 @@ def test_role_order_and_ladder_are_canonical_and_reversals_are_rejected() -> Non
         Timeframe.M30,
         Timeframe.M15,
         Timeframe.M5,
+        Timeframe.M1,
     )
     try:
         validate_timeframe_role_order(
@@ -844,6 +1056,68 @@ def test_role_order_and_ladder_are_canonical_and_reversals_are_rejected() -> Non
         assert "reverses" in str(exc)
     else:
         raise AssertionError("reversed policy was accepted")
+
+    # Regime..trigger stay strict under LIVE_QUOTE, but the advisory execution
+    # TF is exempt from ordering relative to the trigger.
+    validate_timeframe_role_order(
+        Timeframe.H1,
+        Timeframe.M15,
+        Timeframe.M15,
+        Timeframe.M5,
+        Timeframe.M1,
+        Timeframe.M1,
+        execution_mode=ExecutionMode.LIVE_QUOTE,
+    )
+    try:
+        validate_timeframe_role_order(
+            Timeframe.D1,
+            Timeframe.H4,
+            Timeframe.H1,
+            Timeframe.M30,
+            Timeframe.M15,
+            Timeframe.M30,
+            execution_mode=ExecutionMode.NEXT_AVAILABLE_QUOTE,
+        )
+    except ValueError as exc:
+        assert "reverses" in str(exc)
+    else:
+        raise AssertionError("timeframe-based execution behind trigger was accepted")
+
+
+def test_m1_roles_are_rejected_outside_scalp_templates(monkeypatch) -> None:
+    import timeframe_policy
+
+    # Legitimate scalp/native resolutions use M1 as trigger.
+    scalp = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "scalp", engine_id="engine_b"
+    )
+    assert scalp.trigger_tf == Timeframe.M1
+    native = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "scalp", engine_id="engine_d"
+    )
+    assert native.trigger_tf == Timeframe.M1
+
+    # A (hypothetical) non-scalp template that resolves M1 fails closed.
+    monkeypatch.setitem(
+        timeframe_policy._SYMBOL_OVERRIDES,
+        "EURUSD",
+        {"trigger": Timeframe.M1, "profile": "BROKEN_M1_PATCH"},
+    )
+    for engine_id, style in (("engine_a", "intraday"), ("engine_b", "intraday")):
+        try:
+            resolve_timeframe_policy(
+                "EUR/USD", "forex", "forex_majors", style, engine_id=engine_id
+            )
+        except PolicyConfigurationError as exc:
+            assert "M1" in str(exc)
+        else:
+            raise AssertionError(f"M1 accepted for {engine_id}/{style}")
+    # Swing overlays replace the full role set, so they legitimately drop the
+    # patched M1 trigger instead of failing.
+    swing = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "swing", engine_id="engine_a"
+    )
+    assert swing.trigger_tf == Timeframe.H1
 
 
 def test_cold_start_keeps_baseline_and_reports_unavailable() -> None:
@@ -905,7 +1179,7 @@ def test_hard_liquidity_failure_does_not_reclassify_persistent_speed() -> None:
     assert state.m5_quality_acceptable is False
 
 
-def test_liquidity_is_separate_from_speed_and_fail_closed_for_m5() -> None:
+def test_liquidity_is_separate_from_speed_and_blocks_m5_eligibility() -> None:
     liquidity = classify_liquidity(
         quote_age_sec=1,
         spread_trigger_atr=0.25,
@@ -922,8 +1196,14 @@ def test_liquidity_is_separate_from_speed_and_fail_closed_for_m5() -> None:
     policy = resolve_timeframe_policy(
         "BTC/USDT", "crypto", "crypto_btc", "intraday", state
     )
-    assert policy.execution_tf != Timeframe.M5
-    assert policy.m5_role == M5Role.DISABLED
+    # v4 fail-closed path: TFs are never rewritten by liquidity; M5 authority
+    # is withheld by the recorded eligibility block plus the conditional
+    # policy, not by mutating the resolved roles.
+    assert policy.trigger_tf == Timeframe.M5
+    assert policy.execution_tf == Timeframe.M5
+    assert policy.m5_policy == M5Policy.CONDITIONAL
+    assert policy.diagnostics.m15_confirmation_required_for_m5 is True
+    assert policy.diagnostics.m5_liquidity_blocked is True
 
 
 def test_alias_group_conflict_sets_config_error_and_disables_policy_autotrade() -> None:
@@ -952,16 +1232,20 @@ def test_fresh_scan_unavailable_speed_state_round_trips_policy_hash() -> None:
 
     The execute-time refresh pins speed/liquidity from the stamped payload via
     speed_state_from_policy_payload; both passes must produce the same policy
-    hash for a baseline-M5 symbol, otherwise execution is rejected with
-    ENGINE_B_TF_POLICY_CHANGED. Resolving the scan with None (the old
-    fresh-scan wiring) skipped the liquidity demotion gate and stamped an M5
-    policy the pinned refresh could never reproduce.
+    hash.  In v4, THIN/UNAVAILABLE liquidity never rewrites role timeframes —
+    it is recorded as m5_liquidity_blocked for the eligibility layer — so a
+    baseline (None-speed) resolution can no longer diverge from the pinned
+    refresh either.
     """
     scan_state = SpeedState()  # fail-closed default: UNAVAILABLE speed/liquidity
     scan = resolve_timeframe_policy(
         "BTCUSDT", "crypto", None, "intraday", scan_state, engine_id="engine_b"
     )
     stamped = scan.payload()
+
+    assert scan.diagnostics.m5_liquidity_blocked is True
+    assert scan.trigger_tf == Timeframe.M5
+    assert scan.m5_policy == M5Policy.CONDITIONAL
 
     pinned = speed_state_from_policy_payload(stamped)
     assert pinned is not None
@@ -970,12 +1254,12 @@ def test_fresh_scan_unavailable_speed_state_round_trips_policy_hash() -> None:
     )
     assert refreshed.payload()["timeframePolicyHash"] == stamped["timeframePolicyHash"]
 
-    # The old asymmetry: a scan resolved with speed_state=None kept baseline M5
-    # authority and produced a hash the UNAVAILABLE-pinned refresh never matches.
+    # The v3 asymmetry is gone: liquidity no longer demotes M5, so a scan
+    # resolved with speed_state=None produces the same stamped policy.
     legacy = resolve_timeframe_policy(
         "BTCUSDT", "crypto", None, "intraday", None, engine_id="engine_b"
     )
-    assert legacy.payload()["timeframePolicyHash"] != stamped["timeframePolicyHash"]
+    assert legacy.payload()["timeframePolicyHash"] == stamped["timeframePolicyHash"]
 
 
 def test_reconciliation_rejects_aliases_assigned_to_conflicting_groups() -> None:
@@ -1077,3 +1361,198 @@ def test_enforced_demo_promotes_policy_score_direction_and_locks_real_account() 
         signal, cfg, {"accountId": "real-42", "exchange": "Bybit", "demo": False}
     ) == "TF_POLICY_REAL_ACCOUNT_LOCKED"
     assert signal["timeframePolicyExecution"]["accountEnvironment"] == "real"
+
+
+# --- Phase 6/7: conditional M5 eligibility + trigger lifecycle stamping ---
+
+
+def _closed_states(tfs=("D1", "H4", "H1", "M30", "M15", "M5")) -> dict:
+    return {
+        tf: {"confirmed": [{"time": "2026-07-13T10:00:00Z"}], "stale": False}
+        for tf in tfs
+    }
+
+
+def _eurusd_pair() -> dict:
+    return {"display": "EUR/USD", "type": "forex", "score_group": "forex_majors"}
+
+
+def _gbpusd_pair() -> dict:
+    return {"display": "GBP/USD", "type": "forex", "score_group": "forex_majors"}
+
+
+def test_attach_stamps_m5_ineligible_with_policy_reason_when_policy_disabled() -> None:
+    signal = {"score": 2.15, "direction": "LONG", "price": 1.1, "atr": 0.01}
+    before = {key: signal[key] for key in ("score", "direction")}
+
+    attach_timeframe_policy_payload(
+        signal, _eurusd_pair(), "intraday", market_states=_closed_states()
+    )
+
+    assert signal["m5Policy"] == M5Policy.DISABLED.value
+    assert signal["m5Eligible"] is False
+    assert signal["m5EligibilityReasons"] == ["m5_policy_disabled"]
+    # Eligibility is diagnostics-only: score/direction never mutate.
+    assert {key: signal[key] for key in before} == before
+    # No trigger inputs => no trigger fields (backward compatible).
+    assert "triggerState" not in signal
+    assert "triggerAge" not in signal
+    assert "triggerExpiry" not in signal
+
+
+def test_attach_stamps_m5_eligible_when_all_conditional_inputs_present() -> None:
+    signal = {
+        "score": 2.5,
+        "direction": "LONG",
+        "price": 1.3,
+        "atr": 0.01,
+        "timestamp": "2026-07-13T10:00:00Z",
+        "setupZone": [1.29, 1.30],
+        "triggerLevel": 1.301,
+        "htfStructureValid": True,
+        "setupArmed": True,
+        "sessionEligible": True,
+        "currentSpread": 0.0002,
+        "m5SpreadThreshold": 0.0005,
+        "distanceFromSetupAtr": 0.3,
+        "m5MaxDisplacementAtr": 1.5,
+        "m5EntryEvent": "sweep_reclaim",
+        "rrAtCurrentPrice": 2.1,
+        "m5MinRr": 1.5,
+        "quoteInsideOpposingZone": False,
+        "ltfDirectionAgrees": True,
+    }
+
+    policy = attach_timeframe_policy_payload(
+        signal, _gbpusd_pair(), "intraday", market_states=_closed_states()
+    )
+
+    assert policy.m5_policy == M5Policy.CONDITIONAL
+    assert signal["m5Eligible"] is True
+    assert signal["m5EligibilityReasons"] == ["entry_event:sweep_reclaim"]
+    assert signal["score"] == 2.5
+    assert signal["direction"] == "LONG"
+
+
+def test_attach_m5_eligibility_fail_closed_on_missing_inputs() -> None:
+    signal = {"score": 2.5, "direction": "LONG", "price": 1.3}
+
+    attach_timeframe_policy_payload(
+        signal, _gbpusd_pair(), "intraday", market_states=_closed_states()
+    )
+
+    assert signal["m5Policy"] == M5Policy.CONDITIONAL.value
+    assert signal["m5Eligible"] is False
+    reasons = signal["m5EligibilityReasons"]
+    assert "spread_missing" in reasons
+    assert "displacement_missing" in reasons
+    assert "structural_rr_missing" in reasons
+    assert "no_m5_entry_event" in reasons
+    assert "setup_not_armed" in reasons
+
+
+def test_attach_stamps_trigger_lifecycle_with_defaults() -> None:
+    signal = {
+        "direction": "LONG",
+        "price": 1.31,
+        "timestamp": "2026-07-13T11:00:00Z",
+        "setupZone": [1.29, 1.30],
+        "triggerLevel": 1.301,
+    }
+
+    policy = attach_timeframe_policy_payload(
+        signal, _gbpusd_pair(), "intraday", market_states=_closed_states()
+    )
+
+    assert signal["signalId"]
+    assert signal["triggerState"] == "ARMED"
+    assert signal["triggerAge"] == 0.0
+    # Default TTL: whichever of 8 trigger bars (8 x M5 = 40 min) or 4h first.
+    assert policy.trigger_tf == Timeframe.M5
+    assert signal["triggerExpiry"] == "2026-07-13T11:40:00+00:00"
+
+    from timeframe_policy import get_trigger_record
+
+    record = get_trigger_record(signal["signalId"])
+    assert record is not None
+    assert record.state.value == "ARMED"
+    assert record.setup_zone == (1.29, 1.30)
+    assert record.trigger_level == 1.301
+    assert record.trigger_tf == "M5"
+
+
+def test_attach_trigger_lifecycle_respects_config_ttl_override() -> None:
+    signal = {
+        "direction": "SHORT",
+        "price": 1.31,
+        "timestamp": "2026-07-13T12:00:00Z",
+        "setupZone": [1.31, 1.32],
+        "triggerLevel": 1.309,
+    }
+
+    attach_timeframe_policy_payload(
+        signal,
+        _gbpusd_pair(),
+        "intraday",
+        market_states=_closed_states(),
+        config={"TRIGGER_LIFECYCLE": {"TTL_SECONDS": 600, "MAX_TRIGGER_BARS": 8}},
+    )
+
+    # min(600s, 8 x 300s) = 600s after the 12:00 arm time.
+    assert signal["triggerExpiry"] == "2026-07-13T12:10:00+00:00"
+
+
+def test_attach_trigger_lifecycle_expires_stale_record_on_restamp() -> None:
+    pair = _gbpusd_pair()
+    states = _closed_states()
+    armed = {
+        "direction": "LONG",
+        "price": 1.31,
+        "timestamp": "2026-07-13T13:00:00Z",
+        "setupZone": [1.29, 1.30],
+        "triggerLevel": 1.301,
+    }
+    attach_timeframe_policy_payload(armed, pair, "intraday", market_states=states)
+    assert armed["triggerState"] == "ARMED"
+
+    # Same signal id re-stamped 5h later: past both TTL bounds (8 x M5 bars =
+    # 40 min, 4h wall clock), so the attach-time sweep expires the record.
+    restamped = dict(armed)
+    restamped["signalId"] = armed["signalId"]
+    restamped["timestamp"] = "2026-07-13T18:00:00Z"
+    attach_timeframe_policy_payload(restamped, pair, "intraday", market_states=states)
+
+    assert restamped["signalId"] == armed["signalId"]
+    assert restamped["triggerState"] == "EXPIRED"
+    assert restamped["triggerAge"] == 5 * 3600.0
+    assert restamped["triggerExpiry"] == "2026-07-13T13:40:00+00:00"
+    # The expired trigger feeds M5 eligibility fail-closed.
+    assert "trigger_expired" in restamped["m5EligibilityReasons"]
+
+
+def test_attach_omits_trigger_fields_when_required_inputs_absent() -> None:
+    # Setup zone / trigger level / timestamp missing => nothing stamped.
+    signal = {"direction": "LONG", "price": 1.1}
+    attach_timeframe_policy_payload(
+        signal, _eurusd_pair(), "intraday", market_states=_closed_states()
+    )
+    assert "triggerState" not in signal
+
+    # Zone + level present but no usable timestamp => still nothing stamped.
+    signal2 = {"direction": "LONG", "price": 1.1, "setupZone": [1.09, 1.10], "triggerLevel": 1.101}
+    attach_timeframe_policy_payload(
+        signal2, _eurusd_pair(), "intraday", market_states=_closed_states()
+    )
+    assert "triggerState" not in signal2
+
+
+def test_attach_stamps_symbol_override_applied_flag() -> None:
+    signal = {"direction": "LONG", "price": 1.1}
+    policy = attach_timeframe_policy_payload(
+        signal, _eurusd_pair(), "intraday", market_states=_closed_states()
+    )
+    assert signal["symbolOverrideApplied"] == policy.diagnostics.symbol_override_applied
+    assert (
+        signal["timeframePolicyDiagnostics"]["symbolOverrideApplied"]
+        == signal["symbolOverrideApplied"]
+    )

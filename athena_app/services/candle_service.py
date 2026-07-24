@@ -18,6 +18,19 @@ def engine_a_scoring_candles_from_state(
     return list(fallback or [])
 
 
+def _trim_unconfirmed_tail(candles: list | None) -> list:
+    """Drop trailing candles explicitly marked unconfirmed (forming bar).
+
+    Mirrors data_feeds.trim_unconfirmed_tail_candles: only rows with
+    ``confirmed is False`` are removed; unmarked rows are treated as
+    confirmed (legacy providers).
+    """
+    out = list(candles or [])
+    while out and isinstance(out[-1], dict) and out[-1].get("confirmed") is False:
+        out.pop()
+    return out
+
+
 def _resolve_regime_state(sig: Dict[str, Any]) -> int | None:
     regime = sig.get("regime")
     if isinstance(regime, dict):
@@ -70,11 +83,18 @@ def recompute_levels_for_style(
     d1 = fetch_candles(pair_obj, "D1", _lim["D1"])
     h4 = fetch_candles(pair_obj, "H4", _lim["H4"])
     h1 = fetch_candles(pair_obj, "H1", _lim["H1"])
+
+    # Confirmed-only ATR/levels: strip provider-marked forming tail bars so the
+    # quick-exec ATR matches the confirmed-only policy used for scoring
+    # indicators (same semantics as data_feeds.trim_unconfirmed_tail_candles;
+    # kept local to avoid the heavyweight data_feeds import). The crypto Bybit
+    # levels feed is unaffected: its ATR is computed upstream from
+    # confirmed-only bars and overrides this value below.
+    d1 = _trim_unconfirmed_tail(d1)
+    h4 = _trim_unconfirmed_tail(h4)
+    h1 = _trim_unconfirmed_tail(h1)
     if not d1 or not h4 or not h1:
         raise ValueError("Candles unavailable")
-
-    # Parity with analyze_pair() F8: use the fetched series as-is (including the
-    # open/forming bar when the provider includes it). Do not strip the last bar here.
 
     d1i = calc_indicators_with_normalized(d1, ptype) if d1 else {}
     h4i = calc_indicators_with_normalized(h4, ptype) if h4 else {}

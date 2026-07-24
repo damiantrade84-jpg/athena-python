@@ -63,7 +63,9 @@ def test_calc_levels_exposes_base_and_effective_multipliers():
     assert levels["tp2"] == price + atr * levels["mults_effective"]["tp2"]
 
 
-def test_recompute_levels_for_style_keeps_forming_bar_parity_with_analyze_pair():
+def test_recompute_levels_for_style_passes_unmarked_series_through_unchanged():
+    # Confirmed (unmarked) series produce identical indicator inputs to before
+    # the forming-bar fix: only explicit `confirmed is False` tails are stripped.
     pair_obj = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
     sig = {
         "pair": "EUR/USD",
@@ -115,6 +117,38 @@ def test_recompute_levels_for_style_keeps_forming_bar_parity_with_analyze_pair()
         (10, "forex"),
         (10, "forex"),
     ]
+
+
+def test_recompute_levels_for_style_strips_forming_bar_from_atr_inputs():
+    """Regression: a provider-marked forming tail bar must not contaminate ATR."""
+    pair_obj = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
+    sig = {"pair": "EUR/USD", "direction": "LONG", "price": 1.1000}
+
+    confirmed = [{"close": 1.0} for _ in range(9)]
+    forming = {"close": 999.0, "confirmed": False}
+    series = {tf: confirmed + [dict(forming)] for tf in ("D1", "H4", "H1")}
+
+    captured = {"indicator_calls": []}
+
+    def _calc_indicators_with_normalized(candles, pair_type):
+        captured["indicator_calls"].append((len(candles), pair_type))
+        return {"snap": {"atr": sum(c["close"] for c in candles) / len(candles)}}
+
+    out = recompute_levels_for_style(
+        sig,
+        "intraday",
+        resolve_pair_from_signal=lambda _sig: pair_obj,
+        fetch_candles=lambda _pair, tf, _limit: list(series[tf]),
+        calc_indicators_with_normalized=_calc_indicators_with_normalized,
+        atr_for_levels=lambda _d1i, _h4i, h1i, **_kwargs: h1i["snap"]["atr"],
+        calc_levels=lambda *_args, **_kwargs: {"sl": 1.09, "tp1": 1.11, "tp2": 1.12},
+        config={"D1_CANDLES": 10, "H4_CANDLES": 10, "H1_CANDLES": 10},
+    )
+
+    # The 999.0 forming bar is stripped before indicators/ATR; ATR reflects the
+    # nine confirmed closes only.
+    assert captured["indicator_calls"] == [(9, "forex"), (9, "forex"), (9, "forex")]
+    assert out["atr"] == pytest.approx(1.0)
 
 
 def test_recompute_levels_for_style_uses_level_atr_class_helper():

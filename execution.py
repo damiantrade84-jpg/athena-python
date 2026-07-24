@@ -609,6 +609,7 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
         return "SIGNAL_PRICE_MISSING", {}
 
     broker_drift_price = None
+    broker_spread = None
     try:
         if venue == "bybit":
             from bybit_executor import (
@@ -626,6 +627,13 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
                 return "BROKER_QUOTE_UNAVAILABLE", {}
             ticker = exchange.fetch_ticker(symbol)
             broker_price = _bybit_execution_side_price(ticker, direction)
+            try:
+                _bid = float(ticker.get("bid") or 0)
+                _ask = float(ticker.get("ask") or 0)
+                if _bid > 0 and _ask >= _bid:
+                    broker_spread = _ask - _bid
+            except (AttributeError, TypeError, ValueError):
+                pass
             broker_quote_age = _bybit_ticker_age_seconds(ticker)
             if broker_quote_age is None:
                 raw_symbol = symbol.split(":")[0].replace("/", "")
@@ -659,6 +667,7 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
                     ask = float(tick.ask)
                     if bid > 0 and ask >= bid:
                         broker_drift_price = (bid + ask) / 2.0
+                        broker_spread = ask - bid
                 except (AttributeError, TypeError, ValueError):
                     pass
             broker_quote_age = _mt5_tick_age_seconds(tick) if tick else None
@@ -697,6 +706,8 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
         "ageSec": round(max(0.0, float(broker_quote_age)), 3),
         "fresh": True,
     }
+    if broker_spread is not None and broker_spread > 0:
+        sig["quoteSpread"] = broker_spread
     if not structural_engine_b:
         # Engine A keeps its analyzed entry and levels.  The executors retain
         # responsibility for their existing price-drift/rebase checks; only
@@ -924,6 +935,307 @@ def _geometric_rr(entry: float, sl: float, tp: float) -> float | None:
     if risk_abs <= 0:
         return None
     return abs(tp - entry) / risk_abs
+
+
+def _directional_rr(
+    entry: float, sl: float, tp: float, direction: str
+) -> float | None:
+    """Direction-aware reward/risk from a (filled) entry price.
+
+    Returns ``None`` when the levels are invalid for the direction (zero or
+    negative risk/reward distance) so callers can fail closed.
+    """
+    try:
+        entry = float(entry)
+        sl = float(sl)
+        tp = float(tp)
+    except (TypeError, ValueError):
+        return None
+    direction = str(direction or "").upper()
+    if direction == "LONG":
+        risk = entry - sl
+        reward = tp - entry
+    elif direction == "SHORT":
+        risk = sl - entry
+        reward = entry - tp
+    else:
+        return None
+    if risk <= 0 or reward <= 0:
+        return None
+    return reward / risk
+
+
+def _signal_min_rr(sig: dict) -> float | None:
+    """Signal-stamped minimum RR (first explicit positive value wins)."""
+    for source in (sig, sig.get("engine_b_status"), sig.get("engine_b"), sig.get("naked_data")):
+        if not isinstance(source, dict):
+            continue
+        for key in (
+            "engine_b_min_rr",
+            "min_rr",
+            "required_rr",
+            "engine_b_rr_required",
+            "rr_required",
+            "minRr",
+            "minRR",
+        ):
+            raw = source.get(key)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+    return None
+
+
+_DISPLACEMENT_GUARD_DEFAULTS = {
+    "ENABLED": True,
+    # Max chase distance from the trigger level, normalized by structure ATR.
+    "MAX_DISPLACEMENT_ATR": 1.5,
+    # Max fraction of the expected trigger->TP1 path already consumed.
+    "MAX_EXCURSION_FRACTION": 0.60,
+    # Optional absolute floors; signal-stamped min RR wins when present.
+    "MIN_RR_AT_ENTRY": None,
+    "MIN_RR_AT_FILL": None,
+}
+
+
+def _displacement_guard_cfg(cfg: dict | None) -> dict:
+    merged = dict(_DISPLACEMENT_GUARD_DEFAULTS)
+    section = (cfg or {}).get("DISPLACEMENT_GUARD")
+    if isinstance(section, dict):
+        for key in merged:
+            if section.get(key) is not None:
+                merged[key] = section[key]
+    return merged
+
+
+_SETUP_LEVEL_KEYS = ("setupLevel", "setup_level", "setupPrice", "setup_price")
+_TRIGGER_LEVEL_KEYS = ("triggerLevel", "trigger_level", "triggerPrice", "trigger_price")
+
+
+def _first_positive_level(sig: dict, keys) -> float | None:
+    for source in (sig, sig.get("engine_b"), sig.get("naked_data")):
+        if not isinstance(source, dict):
+            continue
+        for key in keys:
+            try:
+                value = float(source.get(key))
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+    return None
+
+
+def _setup_zone_mid(sig: dict) -> float | None:
+    for source in (sig, sig.get("engine_b"), sig.get("naked_data")):
+        if not isinstance(source, dict):
+            continue
+        zone = source.get("setupZone") or source.get("setup_zone")
+        if isinstance(zone, (list, tuple)) and len(zone) == 2:
+            try:
+                lo = float(zone[0])
+                hi = float(zone[1])
+            except (TypeError, ValueError):
+                continue
+            if lo > 0 and hi > 0:
+                return (lo + hi) / 2.0
+    return None
+
+
+def _displacement_guard_block_reason(sig: dict, cfg: dict | None) -> tuple[str | None, dict]:
+    """Pre-order chase/displacement protection shared by both execution venues.
+
+    Thresholds are normalized per instrument via structure ATR and the current
+    spread — no fixed pip thresholds. Missing ATR/spread inputs skip that
+    sub-check and record why (advisory data); a missing executable price fails
+    closed. Returns ``(block_reason_or_None, diagnostics)``.
+    """
+    guard = _displacement_guard_cfg(cfg)
+    diag: dict = {"enabled": bool(guard.get("ENABLED")), "skipped": {}}
+    if not diag["enabled"]:
+        diag["skipped"]["guard"] = "disabled via DISPLACEMENT_GUARD.ENABLED"
+        return None, diag
+    direction = str(sig.get("direction") or "").upper()
+    if direction not in ("LONG", "SHORT"):
+        diag["skipped"]["guard"] = "direction unresolved — directional gates upstream own this"
+        return None, diag
+    try:
+        current = float(
+            sig.get("brokerPreflightPrice") or sig.get("price") or sig.get("entry") or 0
+        )
+    except (TypeError, ValueError):
+        current = 0.0
+    if current <= 0:
+        return "CHASE_PROTECTION_PRICE_MISSING", diag
+    diag["referencePrice"] = current
+
+    setup_ref = _first_positive_level(sig, _SETUP_LEVEL_KEYS)
+    if setup_ref is None:
+        setup_ref = _setup_zone_mid(sig)
+    trigger_ref = _first_positive_level(sig, _TRIGGER_LEVEL_KEYS)
+    scan_ref = None
+    try:
+        scan_ref = float(sig.get("signalPriceRef") or 0) or None
+    except (TypeError, ValueError):
+        scan_ref = None
+    if setup_ref is None:
+        setup_ref = scan_ref
+    if trigger_ref is None:
+        trigger_ref = scan_ref
+    if setup_ref:
+        diag["distanceFromSetupAtFill"] = round(abs(current - setup_ref), 8)
+    if trigger_ref:
+        diag["distanceFromTriggerAtFill"] = round(abs(current - trigger_ref), 8)
+
+    chase_ref = trigger_ref or setup_ref
+    displacement = 0.0
+    if chase_ref:
+        displacement = (current - chase_ref) if direction == "LONG" else (chase_ref - current)
+
+    nested = sig.get("naked_data") if isinstance(sig.get("naked_data"), dict) else sig.get("engine_b")
+    try:
+        atr = float(sig.get("atr") or (nested or {}).get("atr") or 0)
+    except (TypeError, ValueError):
+        atr = 0.0
+    if chase_ref and atr > 0:
+        dist_atr = max(0.0, displacement) / atr
+        diag["distanceInAtr"] = round(dist_atr, 4)
+        diag["maxDisplacementAtr"] = float(guard["MAX_DISPLACEMENT_ATR"])
+        if dist_atr > float(guard["MAX_DISPLACEMENT_ATR"]):
+            return "CHASE_PROTECTION_ATR_DISPLACEMENT", diag
+    else:
+        diag["skipped"]["atrDisplacement"] = "missing trigger/setup reference or ATR"
+
+    try:
+        spread = float(
+            sig.get("quoteSpread") or sig.get("currentSpread") or sig.get("spread") or 0
+        )
+    except (TypeError, ValueError):
+        spread = 0.0
+    if chase_ref and spread > 0:
+        diag["distanceInSpreads"] = round(max(0.0, displacement) / spread, 2)
+    else:
+        diag["skipped"]["spreadDisplacement"] = "missing trigger/setup reference or current spread"
+
+    try:
+        tp1 = float(sig.get("tp1") or 0)
+    except (TypeError, ValueError):
+        tp1 = 0.0
+    if chase_ref and tp1 > 0:
+        original_path = (tp1 - chase_ref) if direction == "LONG" else (chase_ref - tp1)
+        if original_path > 0:
+            fraction = max(0.0, displacement) / original_path
+            diag["expectedExcursionFraction"] = round(fraction, 4)
+            diag["maxExcursionFraction"] = float(guard["MAX_EXCURSION_FRACTION"])
+            if fraction > float(guard["MAX_EXCURSION_FRACTION"]):
+                return "CHASE_PROTECTION_EXCURSION_CONSUMED", diag
+        else:
+            diag["skipped"]["excursionFraction"] = "tp1 not beyond trigger/setup reference"
+    else:
+        diag["skipped"]["excursionFraction"] = "missing trigger/setup reference or tp1"
+
+    try:
+        sl = float(sig.get("sl") or 0)
+    except (TypeError, ValueError):
+        sl = 0.0
+    min_rr = _signal_min_rr(sig)
+    if min_rr is None and guard.get("MIN_RR_AT_ENTRY") is not None:
+        try:
+            min_rr = float(guard["MIN_RR_AT_ENTRY"])
+        except (TypeError, ValueError):
+            min_rr = None
+    if tp1 > 0 and sl > 0 and min_rr:
+        rr = _directional_rr(current, sl, tp1, direction)
+        if rr is not None:
+            diag["rrAtEntry"] = round(rr, 4)
+            diag["minRrAtEntry"] = min_rr
+        if rr is None or rr + 1e-12 < min_rr:
+            return "CHASE_PROTECTION_RR_BELOW_MIN", diag
+    else:
+        diag["skipped"]["rrAtEntry"] = "missing sl/tp1 or no minimum RR floor"
+
+    return None, diag
+
+
+def _post_fill_rr_violation(
+    sig: dict, rr_at_fill: float | None, cfg: dict | None
+) -> str | None:
+    """Post-fill RR violation reason computed from the TRUE fill price.
+
+    Zero/invalid risk distance fails closed; when the fill RR falls below the
+    signal's minimum RR (or the configured DISPLACEMENT_GUARD.MIN_RR_AT_FILL
+    floor) the caller follows the existing post-fill violation path
+    (emergency close + alert). No floor configured -> record only.
+    """
+    if rr_at_fill is None:
+        return "ACTUAL_RR_INVALID_AT_FILL: zero/invalid risk distance at fill"
+    min_rr = _signal_min_rr(sig)
+    if min_rr is None:
+        floor = _displacement_guard_cfg(cfg).get("MIN_RR_AT_FILL")
+        try:
+            min_rr = float(floor) if floor is not None else None
+        except (TypeError, ValueError):
+            min_rr = None
+    if min_rr is not None and min_rr > 0 and rr_at_fill + 1e-12 < min_rr:
+        return f"ACTUAL_RR_BELOW_MIN_AT_FILL: {rr_at_fill:.4f} < min {min_rr}"
+    return None
+
+
+def _trigger_lifecycle_block_reason(sig: dict) -> str | None:
+    """Block execution when a trigger is EXPIRED/INVALIDATED or past expiry.
+
+    Reads the stamped fields (``triggerState``/``triggerExpiry``, plus the
+    snake_case/``triggerExpiresAt`` aliases) and, when the signal carries a
+    ``signalId``, the live tracker record via
+    ``timeframe_policy.get_trigger_record``. Backward compatible: signals
+    without any trigger fields or tracked record are unaffected. An expiry
+    that cannot be parsed is treated as expired (fail-closed, mirroring the
+    un-attestable broker-tick rule).
+    """
+    sig = sig or {}
+    state = str(sig.get("triggerState") or sig.get("trigger_state") or "").strip().upper()
+    expires_raw = (
+        sig.get("triggerExpiry")
+        or sig.get("trigger_expiry")
+        or sig.get("triggerExpiresAt")
+        or sig.get("trigger_expires_at")
+    )
+    if state in ("EXPIRED", "INVALIDATED"):
+        return f"TRIGGER_LIFECYCLE_{state}"
+    if expires_raw:
+        try:
+            expires_at = datetime.fromisoformat(str(expires_raw).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return "TRIGGER_LIFECYCLE_EXPIRED"
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) >= expires_at:
+            return "TRIGGER_LIFECYCLE_EXPIRED"
+    if not state and not expires_raw and sig.get("signalId"):
+        # No stamped fields: consult the live tracker so a trigger that
+        # expired/was invalidated after the scan is still fail-closed.
+        try:
+            from timeframe_policy import get_trigger_record
+
+            record = get_trigger_record(sig.get("signalId"))
+        except Exception:
+            record = None
+        if record is not None:
+            record_state = str(getattr(record.state, "value", record.state) or "").upper()
+            if record_state in ("EXPIRED", "INVALIDATED"):
+                return f"TRIGGER_LIFECYCLE_{record_state}"
+            record_expiry = getattr(record, "expires_at", None)
+            if record_expiry is not None:
+                if record_expiry.tzinfo is None:
+                    record_expiry = record_expiry.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) >= record_expiry:
+                    return "TRIGGER_LIFECYCLE_EXPIRED"
+    return None
 
 
 def _reconcile_engine_b_rr_after_broker_entry(sig: dict, cfg: dict) -> str | None:
@@ -1783,6 +2095,10 @@ def _refresh_engine_b_execution_context(
     Engine B signals cannot be refreshed with Engine A's generic scorer because
     the stop/target and pass flag come from the structural checklist.
     """
+    _trigger_block = _trigger_lifecycle_block_reason(sig)
+    if _trigger_block:
+        return None, _trigger_block
+
     refresh_fn = getattr(runtime, "compute_naked_analysis", None)
     if not callable(refresh_fn):
         return None, "ENGINE_B_REFRESH_REQUIRED: Engine B refresh function unavailable"
@@ -2012,6 +2328,9 @@ def _refresh_engine_a_v3_execution_context(
 
     if not is_engine_a_v3_signal(sig):
         return None
+    _trigger_block = _trigger_lifecycle_block_reason(sig)
+    if _trigger_block:
+        return _trigger_block
     pair_key = sig.get("pair") or sig.get("display") or sig.get("symbol") or ""
     pair_obj = next(
         (
@@ -2424,6 +2743,12 @@ def api_quick_execute():
         _rr_reconcile_error = _reconcile_engine_b_rr_after_broker_entry(sig, _r.CONFIG)
         if _rr_reconcile_error:
             return jsonify({"error": _rr_reconcile_error, "pair": sig.get("pair")}), 409
+
+        # Phase 5a: shared pre-order chase/displacement protection (both venues).
+        _chase_error, _chase_diag = _displacement_guard_block_reason(sig, _r.CONFIG)
+        sig["displacementGuard"] = _chase_diag
+        if _chase_error:
+            return jsonify({"error": _chase_error, "displacementGuard": _chase_diag}), 409
 
         approval = risk_check(
             signal=sig,
@@ -3649,6 +3974,12 @@ def api_execute():
         _rr_reconcile_error = _reconcile_engine_b_rr_after_broker_entry(sig, _r.CONFIG)
         if _rr_reconcile_error:
             return jsonify({"error": _rr_reconcile_error, "pair": sig.get("pair")}), 409
+
+        # Phase 5a: shared pre-order chase/displacement protection (both venues).
+        _chase_error, _chase_diag = _displacement_guard_block_reason(sig, _r.CONFIG)
+        sig["displacementGuard"] = _chase_diag
+        if _chase_error:
+            return jsonify({"error": _chase_error, "displacementGuard": _chase_diag}), 409
 
         approval = risk_check(
             signal=sig,

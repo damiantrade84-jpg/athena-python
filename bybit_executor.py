@@ -1913,6 +1913,18 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         fill_level_error = _validate_exit_levels(
             direction, filled_price, float(sl or 0), float(tp1 or 0)
         )
+        # Phase 5a: actual RR from the TRUE fill price. Zero/invalid risk
+        # distance or a fill RR below the signal minimum follows the same
+        # post-fill violation path (emergency close + alert) as invalid
+        # post-fill levels. Sizing is unchanged.
+        _rr_at_fill = None
+        if not fill_level_error:
+            from execution import _directional_rr, _post_fill_rr_violation
+
+            _rr_at_fill = _directional_rr(
+                filled_price, float(sl or 0), float(tp1 or 0), direction
+            )
+            fill_level_error = _post_fill_rr_violation(signal, _rr_at_fill, CONFIG)
         if fill_level_error:
             try:
                 close_side = "sell" if direction == "LONG" else "buy"
@@ -2167,6 +2179,15 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             "feeCost": fee_cost,
             "signalPriceRef": _sig_ref,
             "slippageBps": _slip_bps,
+            "actualRrAtFill": (
+                round(_rr_at_fill, 4) if _rr_at_fill is not None else None
+            ),
+            "distanceFromSetup": (
+                signal.get("distanceFromSetup") or signal.get("distance_from_setup")
+            ),
+            "distanceFromTrigger": (
+                signal.get("distanceFromTrigger") or signal.get("distance_from_trigger")
+            ),
             "providerDrift": (
                 round(_provider_drift_pct, 6)
                 if _provider_drift_pct is not None
