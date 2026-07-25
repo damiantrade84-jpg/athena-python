@@ -3035,6 +3035,51 @@ def fetch_polygon(pair, tf, limit):
 
         return {"error": True, "symbol": symbol, "detail": str(e)}
 
+def _mt5_copy_rates_capped(mt5, mt5_symbol: str, mt5_tf, count: int, *, display: str = "", tf: str = ""):
+    """copy_rates_from_pos split around the terminal's "Max bars in chart" cap.
+
+    MT5 rejects a request of maxbars or more outright — ``(-2, 'Terminal: Invalid
+    params')`` — instead of returning the bars it holds, so a deep backtest window
+    (a 3-year M5 span asks for ~260k bars) read as a provider failure and fell
+    through to the cross-provider fallback. Requests that fit under the cap keep
+    the original single call, so live scan sized fetches are unchanged.
+    """
+    try:
+        cap = int(getattr(mt5.terminal_info(), "maxbars", 0) or 0)
+    except Exception:
+        cap = 0
+    if cap <= 0 or count < cap:
+        return mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, count)
+
+    import numpy as np
+
+    chunk = cap - 1
+    pages = []
+    fetched = 0
+    while fetched < count:
+        want = min(chunk, count - fetched)
+        page = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, fetched, want)
+        if page is None or len(page) == 0:
+            break
+        pages.append(page)
+        fetched += len(page)
+        if len(page) < want:
+            break  # broker history exhausted
+    if not pages:
+        return None
+    log.info(
+        "[MT5] %s %s: %d bars requested above the %d max-bars cap; paged in %d fetches (%d bars)",
+        display or mt5_symbol,
+        tf,
+        count,
+        cap,
+        len(pages),
+        fetched,
+    )
+    # Pages walk backwards in time; each page is ascending internally.
+    return np.concatenate(pages[::-1])
+
+
 def fetch_mt5(pair: dict, tf: str, limit: int):
     """Download OHLCV candles directly from the live MT5 broker terminal. Fast, accurate, real-time."""
     import mt5_executor
@@ -3093,7 +3138,9 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
 
     request_limit = limit + 100
 
-    bars = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, request_limit)
+    bars = _mt5_copy_rates_capped(
+        mt5, mt5_symbol, mt5_tf, request_limit, display=symbol, tf=tf
+    )
 
     if bars is None or len(bars) == 0:
         err = mt5.last_error()
@@ -3116,7 +3163,9 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
                 _retry_sleep_ms = int(CONFIG.get("MT5_H4_FETCH_RETRY_SLEEP_MS", 400) or 0)
                 if _retry_sleep_ms > 0:
                     time.sleep(min(_retry_sleep_ms, 2000) / 1000.0)
-                _retry_bars = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, request_limit)
+                _retry_bars = _mt5_copy_rates_capped(
+                    mt5, mt5_symbol, mt5_tf, request_limit, display=symbol, tf=tf
+                )
                 if _retry_bars is not None and len(_retry_bars) > 0:
                     _r_newest = float(_retry_bars[-1]["time"])
                     _, _retry_lag = should_refetch_mt5_d1_stale(
@@ -3176,7 +3225,9 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
                     _retry_sleep_ms = int(CONFIG.get("MT5_H4_FETCH_RETRY_SLEEP_MS", 400) or 0)
                     if _retry_sleep_ms > 0:
                         time.sleep(min(_retry_sleep_ms, 2000) / 1000.0)
-                    _retry_bars = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, request_limit)
+                    _retry_bars = _mt5_copy_rates_capped(
+                    mt5, mt5_symbol, mt5_tf, request_limit, display=symbol, tf=tf
+                )
                     if _retry_bars is not None and len(_retry_bars) > 0:
                         _r_now = time.time()
                         _r_newest = float(_retry_bars[-1]["time"])
@@ -3249,7 +3300,9 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
                     _retry_sleep_ms = int(CONFIG.get("MT5_H4_FETCH_RETRY_SLEEP_MS", 400) or 0)
                     if _retry_sleep_ms > 0:
                         time.sleep(min(_retry_sleep_ms, 2000) / 1000.0)
-                    _retry_bars = mt5.copy_rates_from_pos(mt5_symbol, mt5_tf, 0, request_limit)
+                    _retry_bars = _mt5_copy_rates_capped(
+                    mt5, mt5_symbol, mt5_tf, request_limit, display=symbol, tf=tf
+                )
                     if _retry_bars is not None and len(_retry_bars) > 0:
                         _r_now = time.time()
                         _r_newest = float(_retry_bars[-1]["time"])
