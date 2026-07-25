@@ -1,5 +1,5 @@
+interface:
+  display_name: "Athena Audit"
+  short_description: "Full explicit audit and strict findings workflow"
 policy:
   allow_implicit_invocation: false
-interface:
-  name: Athena Audit
-  short_description: Full audit, bug hunt, and safety review for Athena trading system

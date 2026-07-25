@@ -21,7 +21,7 @@
 - Engine A, Engine B, Engine C, and Engine D are independent unless the task explicitly concerns consensus, blending, or cross-engine coordination.
 - Run only tests directly related to the touched behavior. Do not run the full test suite or unrelated engine/UI/backtest tests unless explicitly requested or shared infrastructure was changed. See **`AGENTS.md` Test & token budget** for the canonical one-file-per-pass rule.
 - Do not read `tasks/`, old audit reports, generated logs, backtest artifacts, or historical skill references at startup. Read them only when the user names them or the current task requires that exact artifact.
-- Use subagents, Superpowers, or other workflow helpers only when the task benefits from parallel investigation or a specialized workflow and the active tool policy allows it. Do not use them to broaden a small fix into a full audit.
+- Use subagents or other workflow helpers only when the task benefits from parallel investigation or a specialized workflow and the active tool policy allows it. Do not use them to broaden a small fix into a full audit.
 
 ---
 
@@ -340,10 +340,10 @@ Detailed repeatable workflows live in repo skills. See `docs/codex-guidance.md` 
 
 ### Planning & execution (Claude/planning loop)
 
-- Use **plan mode** for non-trivial work (3+ steps or architecture).
+- Use **plan mode** only when the user asks, or for a migration, architecture change, new subsystem, significant refactor, or multi-stage change spanning more than five production files.
 - Re-plan if assumptions break or safety is at risk.
-- Use **subagents** or Superpowers only when the task benefits from parallel exploration or a specialized workflow, and keep each delegated task focused on the current request.
-- After **user corrections**, append patterns to `tasks/lessons.md`.
+- Do not use subagents or heavyweight workflow helpers for ordinary fixes. Use them only when the user explicitly requests them or independent workstreams make a large task materially safer.
+- Do not update `tasks/lessons.md` unless the user explicitly requests durable repository tracking.
 - **Verify before done:** tests, logs, staff-engineer bar.
 - For non-trivial edits, ask whether a cleaner design exists; avoid hacky fixes.
 - **Autonomy:** fix reported bugs/CI using evidence; avoid hand-holding.
@@ -359,13 +359,13 @@ Task files are not startup context and do not replace running targeted tests or 
 
 Use the manual audit skill only when the user explicitly asks for an audit, bug hunt, full trace, or strict finding format. Keep the root guide limited to scope and safety rules; the audit `SKILL.md` owns detailed audit procedure and checks.
 
-All audits and code reviews must follow **`docs/codex-code-review-discipline.md`**: build a coverage map before any verdict, no summary-only reviews, run the negative-check pass, and say **"Coverage incomplete"** with missing areas when proof is insufficient.
+Only explicitly requested formal audits or strict end-to-end verdicts follow **`docs/codex-code-review-discipline.md`**. Routine fixes and localized reviews use the direct-fix workflow and do not require coverage maps or generic negative-check passes.
 
-For audit, verification, shipped-change validation, or "make sure nothing was missed" asks, invoke **`.agents/skills/athena-anti-miss-review/SKILL.md`** (review map, parallel lanes when multi-surface and explicitly scoped, required search pass, adversarial pass, structured verdict). Parallel lanes are for explicit audit asks only — not single-file fixes. Lane definitions: **`references/review-lanes.md`** under that skill. No pytest during audit phase; see **`AGENTS.md` Test & token budget**.
+Repository skills are explicit-only. Invoke **`$athena-anti-miss-review`** only when the user requests that complete shipped-change verification workflow. Do not auto-chain parity, audit, or lane skills.
 
 ### Implementation mode
 
-Short plan when non-trivial; smallest safe diff; config-gated where needed; targeted tests only; summarize risk.
+Default to direct implementation with the smallest safe diff. No plan for ordinary changes. Run one smallest relevant verification command and stop when acceptance criteria are met.
 
 ### When to stop and re-plan
 

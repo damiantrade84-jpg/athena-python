@@ -1,28 +1,19 @@
 ---
 name: athena-risk-execution
-description: Use before or while changing execution.py, auto_trader.py, risk_engine.py, guardian.py, mt5_executor.py, bybit_executor.py, or helpers directly on the execution path — gates, sizing, SL/TP, paper/live separation, kill switch, freshness, and broker handoff. Do not use for Engine A/B/C/D scoring logic unless execution payload consumption is in scope. Do not use to enable live trading or weaken gates.
+description: Manual-only deep review of a named execution, risk, freshness, kill-switch, sizing, SL/TP, or broker-path change. Invoke explicitly as $athena-risk-execution; root safety rules cover ordinary edits.
 ---
 
 # Athena risk and execution
 
-High-risk path. Paper-only unless the user explicitly approves live.
+Use only when explicitly invoked for a deep execution-path review. Root `AGENTS.md` safety rules still apply to every ordinary edit of execution files.
 
-## Control path
+Review only the modified path: signal entry → relevant risk/freshness/kill gate → sizing or SL/TP branch → broker/paper handoff → response handling.
 
-signal/autopilot entry → risk gates → sizing → SL/TP construction → broker call → response → monitor/audit
+Confirm where applicable:
 
-## Verify
+- missing, stale, null, false, empty, malformed, or wrong-type safety fields fail closed;
+- SL/TP direction, precision, tighten-only rules, and broker constraints remain valid;
+- paper/live separation, kill switch, freshness, and deterministic approval remain reachable;
+- AI cannot approve or execute.
 
-1. Fail-closed on missing, stale, null, false, empty, or malformed safety fields.
-2. SL/TP direction, precision, tighten-only rules, broker constraints.
-3. Kill switch and freshness reachable on modified branches.
-4. AI cannot approve or execute; deterministic gates remain authoritative.
-5. Name **one** targeted test per changed branch; suggest a concrete test name if missing. Run only that file after patch (`pytest path/to/test_file.py -q`).
-
-## Before editing
-
-Consider invoking `athena-audit` when the user asked for execution-safety review or strict findings, not for small mechanical fixes. For shipped-change verification on execution paths, use `athena-anti-miss-review` (coverage map, search/adversarial pass, no PASS without traced gates).
-
-Align with `AGENTS.md` and `references/invariants.md` under `athena-audit` when checking invariants.
-
-Optional Codex subagent: `.codex/agents/execution-safety-reviewer.toml` for diff-only review after patches.
+Do not invoke audit or anti-miss skills unless the user names them. After a requested fix, run one focused test command by default; a second is allowed only for a distinct changed safety boundary.

@@ -1,45 +1,27 @@
 ---
 name: athena-engine-parity
-description: Use when investigating live-chart, backtest, or scan parity for Engine A, Engine B, Engine C, or Engine D — candle policy, provider routing, data freshness, ATR provenance, scoring drift, overlay contracts, UI chart payloads, or AI review context mismatches. Do not use for execution-gate changes, unrelated Python cleanup, or threshold tuning unless the user explicitly requests it.
+description: Manual-only investigation of one named live, scan, backtest, chart, or payload parity issue. Invoke explicitly as $athena-engine-parity; never use for unrelated fixes or threshold tuning.
 ---
 
 # Athena engine parity
 
-Verify outputs match intended data source, candle policy, scoring contract, and consumer payloads without changing strategy semantics.
+Use only when explicitly invoked for a named engine, route, and parity question. Do not inspect every engine or load another skill unless the user explicitly requests it.
 
-## Review discipline
+## Workflow
 
-Follow `docs/codex-code-review-discipline.md`. Build a **coverage map** before any parity verdict. For shipped-change or "nothing missed" parity checks, also follow `.agents/skills/athena-anti-miss-review/SKILL.md`.
+1. Identify one engine and one route: live scan, backtest, API, UI, or AI context.
+2. Trace only the relevant provider/cache, candle policy, engine calculation, payload, and consumer.
+3. Inspect only config keys and tests that control the suspected drift.
+4. Check one alternate route or fallback if evidence shows it can bypass the intended path.
+5. Document the precise drift before patching.
 
-Do not claim parity without tracing the full chain: provider/source → candle policy → scoring/confidence → gates → SL/TP/RR → payload → UI/API consumer → tests. If incomplete, say **"Coverage incomplete"** and list missing paths.
+## Budget
 
-## Steps
-
-1. Identify engine and route (live scan, backtest, API, UI).
-2. Trace provider → cache → engine → payload consumer (caller/callee with file evidence).
-3. Inspect relevant `config.yaml` keys and env routing — do not assume from comments.
-4. Compare score/confidence/overlay fields to tests and config sources.
-5. Run targeted `rg` for duplicate paths, stale fallbacks, hardcoded thresholds, and UI/backend field drift in scope.
-6. Adversarial pass: assume drift exists — check alternate routes, old fallbacks, engine-only fixes.
-7. Document exact drift point before patching.
-
-## Inspect first
-
-`scanner.py`, `candles_cache.py`, `candle_feeds.py`, engine modules (`forex_scoring.py`, `factor_scoring.py`, `market_structure.py`, `engine_c.py`, `scalp_engine.py`), `routes_market_data.py`, chart UI under `static/react-app/`.
-
-For **config → API → UI → test** closed-loop checks (indicator periods, sent-but-unused payload fields, masked parity tests), also load **`athena-cross-surface-parity`** and `references/parity-checklist.md`.
-
-Multi-engine parity: use parallel lanes in `athena-anti-miss-review/references/review-lanes.md`.
+- No default repository-wide grep, lane map, subagents, or full engine chain outside the named issue.
+- No pytest during read-only investigation.
+- After a fix, run one smallest relevant test command.
+- No threshold changes, full suites, or backtest matrices unless explicitly requested.
 
 ## Output
 
-Per finding: severity, file/anchor, execution path, expected vs actual, minimal fix, regression test. End with Coverage and Verdict (**PASS** / **PASS WITH GAPS** / **FAIL** / **BLOCKED**) when user asked for verification.
-
-## Boundaries
-
-- No threshold changes unless explicitly requested.
-- Do not collapse Engine A/B/C/D responsibilities.
-- No long backtest matrix, multi-file pytest batches, or `pytest tests/` unless the user explicitly requests.
-- Every fix needs one named regression test; run only that file after patch. Proof of no unintended scoring change via source trace, not broad test runs.
-- **No pytest during parity investigation** — read tests for coverage; run pytest only post-fix, one file per fix.
-- Current source and tests are proof — not memory or old audit notes.
+Report evidence, expected versus actual behavior, minimal fix, focused regression test, and material unverified areas.

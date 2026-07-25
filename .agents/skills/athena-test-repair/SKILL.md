@@ -1,24 +1,16 @@
 ---
 name: athena-test-repair
-description: Use when fixing pytest failures, import errors, fixture setup, or test isolation issues tied to the current change. Do not use for full audit, changing production thresholds to green tests, or running the entire test suite unless the user explicitly requests it.
+description: Manual-only focused repair of a named pytest failure, import error, fixture, or isolation problem. Invoke explicitly as $athena-test-repair; never run broad test suites.
 ---
 
 # Athena test repair
 
-Focused test fixes for the task at hand.
+Use only when explicitly invoked for a named failing test, import error, fixture issue, or isolation problem.
 
-## Rules
+1. Reproduce with the smallest failing test case.
+2. Read that test and the directly tested production path.
+3. Patch minimally; do not weaken assertions or change production thresholds merely to make tests green.
+4. Run the same smallest command once after the patch.
+5. Report unrelated failures without expanding scope.
 
-- Never import `athena.py` in tests.
-- Fix tests to match intended production contract; do not weaken safety assertions.
-- Run only affected files: `pytest path/to/test.py -q` or `::test_name`.
-- SQLite: WAL, 15s timeout in new DB helpers.
-
-## Steps
-
-1. Reproduce with the smallest failing command.
-2. Read the failing test and the production module under test.
-3. Patch minimally; add a regression test when fixing a real bug.
-4. Report unrelated failures separately without broad fixes.
-
-Read `tests/AGENTS.md` for folder conventions.
+Never run the full suite or a multi-file batch unless the user explicitly requests it. Do not import `athena.py` in tests. Use WAL mode and a 15-second timeout for new SQLite test helpers where applicable.

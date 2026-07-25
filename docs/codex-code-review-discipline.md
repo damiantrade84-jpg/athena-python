@@ -1,74 +1,36 @@
-# Codex code review discipline (Athena)
+# Codex formal audit discipline — Athena
 
-Codex must not perform sampled, surface-level, or summary-only reviews on this repo.
+This document applies only when the user explicitly invokes a formal audit/review skill or requests a strict end-to-end verdict. It does not apply to ordinary implementation, localized bug fixes, explanations, or routine diff checks.
 
-For every audit or code review, build a **coverage map** before giving a verdict.
+## Routine review
 
-## Required coverage map
+For a normal fix or localized review, inspect the changed code, its immediate caller/consumer, and the smallest relevant test. Do not create a coverage map, spawn subagents, run generic search templates, or inspect unrelated engines/surfaces.
 
-Include in every audit/review output:
+## Formal audit scope
 
-- entry points inspected
-- caller/callee path traced
-- config/env keys inspected
-- tests inspected
-- UI/API contract inspected (when relevant)
-- files explicitly **not** inspected
-- assumptions and unknowns
+Before a formal verdict, record:
 
-Do not say "looks good", "no issues found", or "implemented correctly" unless the relevant execution path was traced from entry point to output contract.
+- exact question and in-scope path;
+- files and tests inspected;
+- material path intentionally excluded;
+- assumptions or blockers that affect the verdict.
 
-If coverage is incomplete, say **"Coverage incomplete"** and list the exact missing areas.
+A table is optional unless the user requests one. Do not broaden the audit merely to fill a template.
 
-## Finding format
+## Findings
 
-Every finding must include:
+Each confirmed finding should include severity, file/anchor, evidence path, impact, minimal fix, and one focused regression test recommendation. Separate confirmed defects from suspicious but unverified patterns.
 
-- severity
-- exact file path
-- function / class / route / component
-- line or nearby anchor
-- why it is a real issue
-- expected behavior
-- minimal fix direction
-- regression test required
+## Negative check
 
-## Negative-check pass
+Perform only checks relevant to the named path, such as an alternate route, stale fallback, duplicate config key, swallowed error, bypassed safety gate, or producer/consumer drift. Do not run a repository-wide checklist by default.
 
-Every review must include a negative-check pass:
+## Parallel review
 
-- duplicate provider/model paths
-- hardcoded thresholds/gates
-- stale fallback logic
-- swallowed exceptions
-- bypassed risk/guardian checks
-- UI/backend contract drift
-- tests that assert stale behavior
-- dead config keys or env keys
+Use one reviewer by default. Spawn subagents only when the user explicitly requests parallel review and the scope contains independent surfaces that cannot be reviewed efficiently in one path.
 
-## Engine logic chain
+## Test budget
 
-When reviewing Athena engine logic, inspect the full relevant chain:
+No pytest during a read-only audit. After a requested fix, run one smallest relevant test command by default. Never run a full suite, broad `-k` search, multi-file batch, frontend suite, backtest matrix, live service, or broker action unless explicitly requested.
 
-- data provider/source
-- candle policy
-- scoring/confidence calculation
-- gate/blocker logic
-- SL/TP/RR calculation
-- payload/output contract
-- UI/API/AI review consumer
-- tests
-
-## Parallel lane review
-
-For multi-surface audits, spawn one subagent per lane (Engine A, Engine B, Engine D/Scalp Workbench, UI/API contracts, tests/imports). Each lane returns coverage, findings, and not-reviewed areas. Consolidate only after all lanes return. Lane details: `.agents/skills/athena-anti-miss-review/references/review-lanes.md`.
-
-## Test runs during review
-
-Reviews verify tests by **reading** test source files and mapping coverage. **Do not run pytest** during the audit/review phase. After applying a fix, run at most **one** test file per fix (`pytest path/to/test_file.py -q`). See **`AGENTS.md` Test & token budget**.
-
-## Source of truth
-
-Do not rely on memory, prior summaries, old audit notes, or comments in code as proof. **Current source files and current tests** are the source of truth.
-
-See also: `AGENTS.md`, `.agents/skills/athena-audit/SKILL.md`, `.agents/skills/athena-anti-miss-review/SKILL.md`, `docs/agent-operating-guide.md`.
+Use `not verified` for material gaps. Issue PASS/FAIL only when the user explicitly asked for a formal verdict.

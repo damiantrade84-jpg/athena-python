@@ -20,6 +20,7 @@ CODEX_SKILLS = [
     "athena-audit",
     "athena-anti-miss-review",
     "athena-engine-parity",
+    "athena-cross-surface-parity",
     "athena-research-lab",
     "athena-ui-chart-review",
     "athena-test-repair",
@@ -43,10 +44,12 @@ REQUIRED_FILES = [
     ROOT / "athena_research" / "AGENTS.md",
     ROOT / "tests" / "AGENTS.md",
     ROOT / ".claude" / "skills" / "athena-audit" / "SKILL.md",
-    ROOT / ".agents" / "skills" / "athena-audit" / "agents" / "openai.yaml",
 ]
 REQUIRED_FILES.extend(
     ROOT / ".agents" / "skills" / name / "SKILL.md" for name in CODEX_SKILLS
+)
+REQUIRED_FILES.extend(
+    ROOT / ".agents" / "skills" / name / "agents" / "openai.yaml" for name in CODEX_SKILLS
 )
 
 FORBIDDEN_REFERENCES = [
@@ -135,9 +138,17 @@ def main() -> None:
                 f"{skill_path.relative_to(ROOT)} frontmatter must only contain name and description; found {sorted(extra_keys)}"
             )
 
-    codex_policy = ROOT / ".agents" / "skills" / "athena-audit" / "agents" / "openai.yaml"
-    if "allow_implicit_invocation: false" not in codex_policy.read_text(encoding="utf-8"):
-        violations.append("Codex skill policy must contain allow_implicit_invocation: false")
+    for skill_name in CODEX_SKILLS:
+        codex_policy = ROOT / ".agents" / "skills" / skill_name / "agents" / "openai.yaml"
+        policy_text = codex_policy.read_text(encoding="utf-8")
+        if "allow_implicit_invocation: false" not in policy_text:
+            violations.append(
+                f"{codex_policy.relative_to(ROOT)} must disable implicit invocation"
+            )
+        if "display_name:" not in policy_text:
+            violations.append(
+                f"{codex_policy.relative_to(ROOT)} must define interface.display_name"
+            )
 
     claude_skill = ROOT / ".claude" / "skills" / "athena-audit" / "SKILL.md"
     if "disable-model-invocation: true" not in claude_skill.read_text(encoding="utf-8"):

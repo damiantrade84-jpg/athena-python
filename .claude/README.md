@@ -74,7 +74,7 @@ Shared hook config lives in:
 Current hooks:
 
 - `PreToolUse`: warns on edits touching execution/risk/broker-sensitive files.
-- `PostToolUse`: runs targeted pytest only when a touched path is a `tests/test_*.py` file.
+- Tests are run manually under the verification budget in `CLAUDE.md`; no PostToolUse hook runs pytest automatically.
 
 Hook scripts live under:
 

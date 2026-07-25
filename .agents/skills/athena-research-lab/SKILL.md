@@ -1,27 +1,16 @@
 ---
 name: athena-research-lab
-description: Use for athena_research, vectorbt research lab, backtest matrix discovery, indicator calibration, research YAML configs, and diagnostic strategy experiments. Do not use to change live thresholds, execution gates, auto-trader behavior, or production scoring without explicit user approval.
+description: Manual-only bounded Athena Research Lab or vectorbt experiment. Invoke explicitly as $athena-research-lab; never auto-run backtests or change production behavior.
 ---
 
 # Athena research lab
 
-Diagnostic research only — not live gate tuning.
+Use only when explicitly invoked for a named research experiment, dataset, config, and output. Research does not authorize live threshold or execution changes.
 
-## Steps
+- Keep runs bounded to the requested symbols, periods, and parameters.
+- Do not launch a full matrix, regenerate existing artifacts, or repeat a completed run unless requested.
+- Reuse current outputs when their provenance and freshness are sufficient.
+- Separate measured research results from any proposed production change.
+- Do not modify live scoring, risk, execution, or production config without explicit approval.
 
-1. Confirm scope under `athena_research/` or `tools/vectorbt_research_lab.py` and named configs.
-2. Use bounded runs; avoid full matrix unless requested.
-3. Report what was measured vs what would need a separate live change request.
-
-## Boundaries
-
-- Treat backtest results as discovery, not proof for production threshold changes.
-- Do not hardcode thresholds in Python; use config layers when changes are explicitly approved.
-- Read `athena_research/AGENTS.md` for folder conventions.
-
-## Deliverables
-
-- commands run (bounded),
-- artifacts produced,
-- findings vs live contract (`not verified` if not compared),
-- recommended follow-up tests if code changed.
+Report the exact command, artifact, measured result, and any live parity not verified.

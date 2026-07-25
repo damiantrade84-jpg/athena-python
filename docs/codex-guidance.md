@@ -7,11 +7,11 @@ How Athena repo instructions are split for **Codex (app)**, **Codex CLI**, **Cur
 | Layer | Path | Role |
 |-------|------|------|
 | Always-on rules | `AGENTS.md` | Repo-wide safety, workflow, engine boundaries, output contract |
-| On-demand workflows | `.agents/skills/<name>/SKILL.md` | Audits, parity, research lab, UI review, test repair, execution safety |
+| Manual workflows | `.agents/skills/<name>/SKILL.md` | Explicit audits, parity, research, UI review, test repair, and execution review |
 | Large plans | `PLANS.md` (optional, repo root) | Multi-step refactors or audit plans; not loaded by default |
 | Tool access | `.codex/config.toml`, MCP servers | Databases, browser, docs — **not** behavior rules (Codex/CLI only) |
 | Memory policy | `docs/codex-memory-policy.md` | Repo vs `~/.codex/memories/`; archive rules — read when stale context appears |
-| Review discipline | `docs/codex-code-review-discipline.md` | Coverage map, finding format, negative-check pass — read for audits/reviews |
+| Formal audit discipline | `docs/codex-code-review-discipline.md` | Read only for explicitly requested formal audits or strict verdicts |
 | Deep reference | `docs/agent-operating-guide.md` | Repo map, engine tables, Vision tokens — read when needed, not at startup |
 
 **Not instruction files:** `memory.md`, `memories.md`, `MEMORY.md`, or `docs/archive/*memory*` — archive only. See `docs/codex-memory-policy.md`.
@@ -24,7 +24,7 @@ Use the **same repo files** in all three. Different models do not change which f
 
 | Surface | Always-on | On-demand skills | Extra |
 |---------|-----------|------------------|-------|
-| **Codex app** | `AGENTS.md` (+ nested `AGENTS.md` by cwd) | `.agents/skills/` metadata at session start; full `SKILL.md` when matched | `.codex/config.toml` MCP |
+| **Codex app** | `AGENTS.md` (+ nested `AGENTS.md` by cwd) | `.agents/skills/` metadata at session start; all Athena skills require explicit `$skill` invocation | `.codex/config.toml` MCP |
 | **Codex CLI** | Same as app | Same | Same; start from repo root: `cd` repo → `codex` |
 | **Cursor** | `AGENTS.md` + `.cursor/rules/*.mdc` | Name skill in prompt or `@` skill file (do not assume auto-invoke) | Cursor MCP is separate from `.codex/config.toml` |
 
@@ -38,7 +38,7 @@ python tools/sync_agent_docs.py
 
 1. Open **`c:\dev\athena-python`** (repo root), not a random subfolder.
 2. Rely on **`AGENTS.md`** for safety and workflow — do not paste long prompts per model.
-3. For repeatable work, **name the skill** in the first message, e.g. `Use athena-risk-execution for this execution.py diff only`.
+3. Skills are manual-only. Invoke one explicitly with `$skill-name` only when its full workflow is needed.
 4. Do **not** load `docs/agent-operating-guide.md` at startup; cite a section or `@` it only when needed.
 5. For multi-session work, add **`PLANS.md`** at repo root and reference it explicitly (`Follow PLANS.md step 2 only`).
 
@@ -50,7 +50,7 @@ python tools/sync_agent_docs.py
 
 ### Codex CLI / app verification
 
-In a new thread: *List repo skills you see and their descriptions.* — expect all seven Athena skills.
+In a new thread: *List repo skills you see and their descriptions.* — expect all eight Athena skills, all explicit-only.
 
 ### Claude Code (if used in this repo)
 
@@ -68,7 +68,7 @@ In a new thread: *List repo skills you see and their descriptions.* — expect a
 
 Skills live at `.agents/skills/<skill-name>/SKILL.md`.
 
-Each skill has YAML frontmatter with **`name`** and **`description`** only. The description must include trigger phrases and negative boundaries so Codex selects the right skill.
+Each skill has YAML frontmatter with **`name`** and **`description`** only, plus `agents/openai.yaml` with `allow_implicit_invocation: false`. Skills must be invoked explicitly; descriptions document scope and boundaries.
 
 Long domain detail belongs in `references/` under the skill folder, not in root `AGENTS.md`.
 
@@ -77,6 +77,7 @@ Long domain detail belongs in `references/` under the skill folder, not in root 
 | `athena-audit` | Full audit, bug hunt, strict findings, e2e trace |
 | `athena-anti-miss-review` | Verification, shipped-change validation, missed-issue detection, regression check, parallel lane reviews |
 | `athena-engine-parity` | Live/backtest/chart/engine payload parity |
+| `athena-cross-surface-parity` | Config → API → UI closed-loop parity |
 | `athena-research-lab` | Research Lab, vectorbt, calibration |
 | `athena-ui-chart-review` | React/native chart, Vision/review UI |
 | `athena-test-repair` | Focused pytest repair |
@@ -84,7 +85,7 @@ Long domain detail belongs in `references/` under the skill folder, not in root 
 
 ## PLANS.md
 
-Optional at repo root for large multi-step efforts. **Not auto-loaded.** Reference in the prompt: `Execute PLANS.md step N only; update checkboxes when done.`
+Optional at repo root only when the user requests a durable plan or the work is a migration, architecture change, new subsystem, significant refactor, or multi-stage change spanning more than five production files. **Not auto-loaded.**
 
 ## agent-operating-guide.md
 

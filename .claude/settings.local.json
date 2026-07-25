@@ -222,7 +222,16 @@
       "PowerShell(git restore --staged athena_ase/universe.py reports/ase_training_report.md tests/test_ase_standalone.py)",
       "PowerShell(Stop-Process -Id 63044 -Force -Confirm:$false)",
       "PowerShell(Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue)",
-      "PowerShell(try { $r = Invoke-RestMethod -Uri \"http://localhost:5000/api/ase-executed-trades?limit=5\" -TimeoutSec 30; $r | ConvertTo-Json -Depth 4 } catch { \"request failed: $\\($_.Exception.Message\\)\" })"
+      "PowerShell(try { $r = Invoke-RestMethod -Uri \"http://localhost:5000/api/ase-executed-trades?limit=5\" -TimeoutSec 30; $r | ConvertTo-Json -Depth 4 } catch { \"request failed: $\\($_.Exception.Message\\)\" })",
+      "Bash(npx vitest *)",
+      "Bash(tasklist //FI \"IMAGENAME eq python.exe\")",
+      "Bash(sort -k6)",
+      "Bash(powershell.exe -NoProfile -Command 'Get-CimInstance Win32_Process -Filter \"Name='\\\\''python.exe'\\\\'' OR Name='\\\\''pythonw.exe'\\\\''\" | Select-Object ProcessId,CreationDate,@{n='\\\\''Cmd'\\\\'';e={$_.CommandLine.Substring\\(0,[Math]::Min\\(90,$_.CommandLine.Length\\)\\)}} | Format-Table -Auto -Wrap')",
+      "Bash(grep -nA10 'LIVE_PRICE_MAX_AGE_SEC' config.yaml)",
+      "Bash(netstat -ano)",
+      "Bash(netstat -ano -p tcp)",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK .venv/Scripts/python.exe scripts/timeframe_feed_audit.py --probe-mt5 --out-dir reports/tf_audit)",
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK .venv/Scripts/python.exe -m pytest tests/test_engine_b_diagnostic_trigger_tf.py -q)"
     ]
   },
   "disabledMcpjsonServers": [
