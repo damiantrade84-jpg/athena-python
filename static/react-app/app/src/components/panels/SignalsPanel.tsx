@@ -45,6 +45,7 @@ import {
   canExecuteEngineBSignal,
   computeLevelOverrideRR,
   engineBExecuteBlockReason,
+  isEngineBOnlySignal,
   resolveEngineBExecutionPreviewLevels,
 } from '@/lib/manualExecuteHelpers';
 import VolumeModeField from '@/components/execution/VolumeModeField';
@@ -908,15 +909,21 @@ export default function SignalsPanel() {
 
   const onConfirmExecute = useCallback(async () => {
     if (!confirmRow) return;
-    const sig = confirmRow.signal;
+    // The executed signal decides whether this is an Engine B execution, not the
+    // row's engine set. On a dual A+B row preferredExecutionSignal picks the naked
+    // Engine B card, so a row-derived flag stripped that card's own is_naked /
+    // naked_data proof and levels: the backend then saw no Engine B context,
+    // recomputed Engine A-style levels, and risk_check rejected the trade with
+    // ENGINE_B_CHECKLIST_MISSING. Mirrors TVChartPanel's signal-derived flag.
+    const execSignal = preferredExecutionSignal(confirmRow);
+    const isEngineBOnly = isEngineBOnlySignal(execSignal);
     const effectiveStyle = pendingStyle === 'auto'
-      ? (sig.style || (style === 'auto' ? 'swing' : style))
+      ? (execSignal.style || (style === 'auto' ? 'swing' : style))
       : pendingStyle;
-    const isEngineBOnly = confirmRow.engines.has('B') && !confirmRow.engines.has('A');
     const payload = buildQuickExecutePayload({
-      signal: preferredExecutionSignal(confirmRow),
+      signal: execSignal,
       engineBOverlay: (isEngineBOnly
-        ? (sig.naked_data ?? sig.engine_b ?? {})
+        ? (execSignal.naked_data ?? execSignal.engine_b ?? {})
         : {}) as Record<string, unknown>,
       isEngineBOnly,
       pipMode: String(effectiveStyle),
@@ -935,7 +942,7 @@ export default function SignalsPanel() {
         showToast(`Rejected: ${result.approval.reason}`, 'error');
       } else if (result.success || result.ticket) {
         showToast(
-          `Executed ${sig.pair || sig.display} (${effectiveStyle.toUpperCase()}) - ticket ${result.ticket || '?'}`,
+          `Executed ${execSignal.pair || execSignal.display} (${effectiveStyle.toUpperCase()}) - ticket ${result.ticket || '?'}`,
           'success',
         );
       } else {
