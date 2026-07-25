@@ -797,3 +797,180 @@ def test_tf_trend_label_is_vote_count_aware():
     four_votes = {**three_votes, "ema200Slope10": 0.4}
     _score4, label4, _ok4 = _tf_trend(four_votes)
     assert label4 == "UP"
+
+
+def _conditional_m5_policy() -> dict[str, str]:
+    """Crypto-majors shape: policy resolves M5 but grants it no standalone authority."""
+    return {
+        "regime": "D1",
+        "bias": "H4",
+        "structure": "H1",
+        "setup": "M15",
+        "trigger": "M5",
+        "execution": "M5",
+        "m5_policy": "conditional",
+        "execution_prerequisite": "M15",
+    }
+
+
+def _split_snapshots(monkeypatch, *, m5_bearish: bool):
+    """Snapshots where M5 and M15 disagree, so the confirming rung is observable."""
+    import engine_a_v3.quant_scorer as scorer_module
+
+    captured: dict[str, tuple[str, ...]] = {}
+
+    def _fake_snapshots(candle_map, asset_type, periods, snapshot_cache=None, *, extra_tfs=(), **_kwargs):
+        captured["extra_tfs"] = extra_tfs
+        return {
+            "D1": _bullish_snap(),
+            "H4": _bullish_snap(),
+            "H1": _bullish_snap(),
+            "M15": _bullish_snap(),
+            "M5": _bearish_snap() if m5_bearish else _bullish_snap(),
+        }
+
+    monkeypatch.setattr(scorer_module, "_snapshots", _fake_snapshots)
+    return captured
+
+
+def _crypto_route():
+    return route_specialist(
+        {
+            "display": "BTC/USDT",
+            "symbol": "BTCUSDT",
+            "type": "crypto",
+            "score_group": "crypto_majors",
+        }
+    )
+
+
+def _crypto_candles() -> dict[str, list[dict]]:
+    candles = _candles()
+    candles["M15"] = _rows(80, timedelta(minutes=15))
+    candles["M5"] = _rows(80, timedelta(minutes=5))
+    return candles
+
+
+def test_trigger_evidence_confirms_on_m15_prerequisite_when_m5_is_conditional(monkeypatch):
+    # Policy v4 gives M5 no standalone authority (m5_policy=conditional,
+    # execution_prerequisite=M15). Confirmation must read the M15 rung even
+    # though the resolved trigger is M5, so an opposing 5-minute momentum
+    # reading cannot veto the D1/H4-led setup.
+    captured = _split_snapshots(monkeypatch, m5_bearish=True)
+
+    quant = score_pair(
+        _crypto_route(),
+        "intraday",
+        _crypto_candles(),
+        policy_timeframes=_conditional_m5_policy(),
+    )
+
+    evidence = quant.factor_diagnostics["triggerEvidence"]
+    assert evidence["timeframe"] == "M15"
+    assert evidence["policyTriggerTf"] == "M5"
+    assert evidence["confirmationRung"] == "execution_prerequisite"
+    assert evidence["available"] is True
+    assert evidence["signal"] > 0
+    # The raw trigger rung is still loaded — it stays refinement, not the gate.
+    assert "M5" in captured["extra_tfs"]
+    assert "M15" in captured["extra_tfs"]
+
+
+def test_trigger_evidence_returns_to_raw_m5_when_flag_disabled(monkeypatch):
+    from config import CONFIG
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_TRIGGER_CONFIRM_ON_M5_PREREQUISITE", False)
+    _split_snapshots(monkeypatch, m5_bearish=True)
+
+    quant = score_pair(
+        _crypto_route(),
+        "intraday",
+        _crypto_candles(),
+        policy_timeframes=_conditional_m5_policy(),
+    )
+
+    evidence = quant.factor_diagnostics["triggerEvidence"]
+    assert evidence["timeframe"] == "M5"
+    assert "confirmationRung" not in evidence
+    assert evidence["signal"] < 0
+
+
+def test_unconditional_trigger_rung_still_confirms_itself(monkeypatch):
+    # M15 trigger with no conditional-M5 contract must be untouched.
+    _split_snapshots(monkeypatch, m5_bearish=True)
+
+    quant = score_pair(
+        _crypto_route(),
+        "intraday",
+        _crypto_candles(),
+        policy_timeframes={
+            "regime": "D1",
+            "bias": "H4",
+            "structure": "H1",
+            "setup": "M15",
+            "trigger": "M15",
+            "execution": "M15",
+            "m5_policy": "disabled",
+        },
+    )
+
+    evidence = quant.factor_diagnostics["triggerEvidence"]
+    assert evidence["timeframe"] == "M15"
+    assert "confirmationRung" not in evidence
+
+
+def test_evaluator_confirms_conditional_m5_signal_on_prerequisite_rung(monkeypatch):
+    # End-to-end: evidence stamped M15 must satisfy the confirmation check for a
+    # policy whose trigger rung is M5. Before the fix the evaluator expected M5
+    # and rejected this with trigger_timeframe_mismatch.
+    import engine_a_v3.evaluator as evaluator_module
+
+    def _fake_score_pair(*args, **kwargs):
+        return QuantScore(
+            direction="LONG",
+            confluence_score=1.0,
+            max_score=3.0,
+            score_norm=0.3333,
+            conviction=0.3333,
+            decision="WATCH",
+            threshold=1.5,
+            level_style="trend",
+            factor_scores={},
+            factor_diagnostics={
+                "atrPct": 1.0,
+                "triggerEvidence": {
+                    "timeframe": "M15",
+                    "source": "trigger_timeframe_momentum",
+                    "available": True,
+                    "signal": 0.8,
+                    "quality": 0.7,
+                    "policyTriggerTf": "M5",
+                    "confirmationRung": "execution_prerequisite",
+                },
+            },
+            components={},
+        )
+
+    monkeypatch.setattr(evaluator_module, "score_pair", _fake_score_pair)
+    monkeypatch.setattr(evaluator_module, "detect_setup", lambda *args, **kwargs: None)
+
+    candles = _candles()
+    candles["M15"] = _rows(400, timedelta(minutes=15))
+    candles["M5"] = _rows(400, timedelta(minutes=5))
+    signal = evaluate_engine_a_v3(
+        {
+            "display": "BTC/USDT",
+            "symbol": "BTCUSDT",
+            "type": "crypto",
+            "score_group": "crypto_majors",
+        },
+        candles,
+        horizon="intraday",
+        policy_timeframes=_conditional_m5_policy(),
+    )
+
+    assert signal.decision != "NO_SIGNAL", signal.rejectionReasons
+    assert signal.triggerConfirmed is True
+    confirmation = signal.factorDiagnostics["triggerConfirmation"]
+    assert confirmation["passed"] is True
+    assert confirmation["timeframe"] == "M15"

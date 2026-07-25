@@ -412,6 +412,11 @@ def evaluate_engine_a_v3(
     policy_trigger_tf = str(
         (policy or {}).get("trigger") or (policy or {}).get("triggerTf") or ""
     ).upper()
+    # Entry confirmation runs on the rung policy grants authority to: the M15
+    # prerequisite where M5 is conditional refinement, else the trigger rung.
+    from timeframe_policy import resolve_entry_confirmation_tf
+
+    policy_confirmation_tf = resolve_entry_confirmation_tf(policy) or policy_trigger_tf
     if policy and policy_entry_tf:
         primary_tf = policy_entry_tf
     elif entry_tf_override is not None and diagnostic_override is None:
@@ -898,7 +903,7 @@ def evaluate_engine_a_v3(
     trigger_confirmed, trigger_confirmation = _evaluate_trigger_confirmation(
         quant.factor_diagnostics,
         direction,
-        policy_trigger_tf,
+        policy_confirmation_tf,
     )
     factor_diagnostics = None
     if not compact_unqualified:

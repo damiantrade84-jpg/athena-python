@@ -1051,6 +1051,12 @@ def score_pair(
     policy = policy_timeframes if isinstance(policy_timeframes, Mapping) else None
     policy_setup_tf = str((policy or {}).get("setup") or (policy or {}).get("setupTf") or "").upper()
     policy_trigger_tf = str((policy or {}).get("trigger") or (policy or {}).get("triggerTf") or "").upper()
+    # Entry confirmation runs on the rung that actually carries authority: the
+    # M15 prerequisite when policy marks M5 conditional refinement, else the
+    # trigger rung itself. See timeframe_policy.resolve_entry_confirmation_tf.
+    from timeframe_policy import resolve_entry_confirmation_tf
+
+    policy_confirmation_tf = resolve_entry_confirmation_tf(policy) or policy_trigger_tf
     if policy and policy_setup_tf:
         # Policy-controlled setup/location and trigger/momentum sources are
         # authoritative.  There is deliberately no H1/H4 fallback below.
@@ -1091,6 +1097,7 @@ def score_pair(
         entry_tf,
         policy_setup_tf,
         policy_trigger_tf,
+        policy_confirmation_tf,
         getattr(profile, "profile_sha256", None),
     )
     plan = feature_cache.get(plan_key) if feature_cache is not None else None
@@ -1118,7 +1125,13 @@ def score_pair(
         extra_tfs = tuple(
             tf
             for tf in set(
-                (*tf_weights.keys(), entry_tf, momentum_tf, policy_trigger_tf)
+                (
+                    *tf_weights.keys(),
+                    entry_tf,
+                    momentum_tf,
+                    policy_trigger_tf,
+                    policy_confirmation_tf,
+                )
             )
             if tf and tf not in ("D1", "H4", "H1")
         )
@@ -1204,9 +1217,9 @@ def score_pair(
     trend, coherence = trend_result
     momentum, mom_diag = _momentum_component(momentum_snap, asset_type, group)
     trigger_evidence = None
-    if policy_trigger_tf:
-        trigger_snap = snaps.get(policy_trigger_tf) or {}
-        if policy_trigger_tf == momentum_tf:
+    if policy_confirmation_tf:
+        trigger_snap = snaps.get(policy_confirmation_tf) or {}
+        if policy_confirmation_tf == momentum_tf:
             trigger_momentum, trigger_mom_diag = momentum, mom_diag
         else:
             trigger_momentum, trigger_mom_diag = _momentum_component(
@@ -1219,7 +1232,7 @@ def score_pair(
             for key in ("rsiTerm", "diTerm", "macdSlopeTerm")
         )
         trigger_evidence = {
-            "timeframe": policy_trigger_tf,
+            "timeframe": policy_confirmation_tf,
             "source": "trigger_timeframe_momentum",
             "available": bool(
                 trigger_snap
@@ -1229,6 +1242,10 @@ def score_pair(
             "signal": round(trigger_momentum.signal, 4),
             "quality": round(trigger_momentum.quality, 4),
         }
+        if policy_confirmation_tf != policy_trigger_tf:
+            # M5 stays refinement: recorded for diagnostics, never the gate.
+            trigger_evidence["policyTriggerTf"] = policy_trigger_tf
+            trigger_evidence["confirmationRung"] = "execution_prerequisite"
     if mom_diag.get("adxHardAbort") and mom_diag.get("adxAbortReason") == "missing_both_abort":
         return QuantScore(
             direction="FLAT",

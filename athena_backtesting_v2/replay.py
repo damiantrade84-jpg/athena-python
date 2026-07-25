@@ -38,6 +38,14 @@ def _policy_roles(policy: dict[str, Any]) -> dict[str, str]:
         "setup": str(policy.get("setup_tf") or policy.get("setupTf") or "H1").upper(),
         "trigger": str(policy.get("trigger_tf") or policy.get("triggerTf") or "H1").upper(),
         "execution": str(policy.get("execution_tf") or policy.get("executionTf") or "H1").upper(),
+        # Carried so replay confirms entries on the same rung as live: policy
+        # marks M5 conditional refinement behind an M15 prerequisite.
+        "m5_policy": str(policy.get("m5_policy") or policy.get("m5Policy") or ""),
+        "execution_prerequisite": str(
+            policy.get("execution_prerequisite_tf")
+            or policy.get("executionPrerequisiteTf")
+            or ""
+        ).upper(),
     }
 
 

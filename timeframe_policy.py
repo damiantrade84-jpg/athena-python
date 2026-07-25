@@ -1790,6 +1790,55 @@ def policy_mode_is_authoritative(mode: str | PolicyMode | None, config: Mapping[
     return resolved in {PolicyMode.ENFORCED_DEMO, PolicyMode.ENFORCED_LIVE}
 
 
+def resolve_entry_confirmation_tf(
+    policy_timeframes: Mapping[str, Any] | None,
+    *,
+    config: Mapping[str, Any] | None = None,
+) -> str:
+    """Return the rung whose direction must confirm an entry.
+
+    Normally the trigger rung. The exception is the conditional-M5 profiles
+    (fast/liquid majors, XAU, oil, fast indices, single stocks, crypto majors),
+    where policy resolves ``trigger=M5`` but declares that M5 carries no
+    standalone authority: ``m5_policy=conditional`` / ``m5_role=refinement``
+    with an M15 ``execution_prerequisite``. Engine B enforces that through the
+    setup-armed gate (``ENGINE_B_M5_REQUIRE_SETUP_ARMED``); Engine A confirmed
+    on the raw trigger rung, which made a 5-minute momentum reading the sole
+    entry authority and let it overrule the D1/H4-led stack that produced the
+    signal. Confirm on the prerequisite rung instead — M5 stays refinement and
+    is still emitted as diagnostics. Reversible via
+    ``ENGINE_A_TRIGGER_CONFIRM_ON_M5_PREREQUISITE``.
+    """
+    roles = policy_timeframes if isinstance(policy_timeframes, Mapping) else {}
+    trigger = str(roles.get("trigger") or roles.get("triggerTf") or "").upper()
+    if not trigger:
+        return ""
+    cfg = config
+    if cfg is None:
+        try:
+            from config import CONFIG
+
+            cfg = CONFIG
+        except Exception:
+            cfg = {}
+    if not bool(cfg.get("ENGINE_A_TRIGGER_CONFIRM_ON_M5_PREREQUISITE", True)):
+        return trigger
+    if trigger != Timeframe.M5.value:
+        return trigger
+    m5_policy = str(roles.get("m5_policy") or roles.get("m5Policy") or "").lower()
+    if m5_policy != M5Policy.CONDITIONAL.value:
+        return trigger
+    prerequisite = str(
+        roles.get("execution_prerequisite")
+        or roles.get("executionPrerequisiteTf")
+        or roles.get("execution_prerequisite_tf")
+        or roles.get("setup")
+        or roles.get("setupTf")
+        or ""
+    ).upper()
+    return prerequisite or trigger
+
+
 def apply_authoritative_policy_result(
     signal: dict[str, Any],
     *,

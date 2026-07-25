@@ -2586,6 +2586,13 @@ CONFIG: dict = {
     # rung (M5/M15/M30). The trigger rung's momentum is reported either way as
     # factorDiagnostics.triggerEvidence.
     "ENGINE_A_MOMENTUM_ANCHOR": "profile",
+    # Engine A entry confirmation rung. Policy v4 gives M5 no standalone
+    # authority on fast/liquid profiles (m5_policy=conditional, m5_role=
+    # refinement, execution_prerequisite=M15) and Engine B enforces that via
+    # ENGINE_B_M5_REQUIRE_SETUP_ARMED. true confirms Engine A entries on the
+    # prerequisite rung; false restores confirmation on the raw M5 trigger,
+    # which let a 5-minute momentum reading veto the D1/H4-led setup.
+    "ENGINE_A_TRIGGER_CONFIRM_ON_M5_PREREQUISITE": True,
     "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED": False,
     # Scan-only: Engine B selects its direction from its own structure evidence;
     # Engine A direction is consulted only after scoring for alignment.
@@ -2912,6 +2919,7 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_A_DIAGNOSTIC_ENTRY_TF_ENABLED",
     "ENGINE_A_POLICY_TREND_WEIGHTS_FROM_PROFILE",
     "ENGINE_A_MOMENTUM_ANCHOR",
+    "ENGINE_A_TRIGGER_CONFIRM_ON_M5_PREREQUISITE",
     "ENGINE_A_BACKTEST_ENTRY_TF",
     "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS",
     "ENGINE_C_AI_WEIGHT_ADJUST_ENABLED",

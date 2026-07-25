@@ -14818,6 +14818,15 @@ def analyze_pair(
             "setup": _resolved_policy.setup_tf.value,
             "trigger": _resolved_policy.trigger_tf.value,
             "execution": _resolved_policy.execution_tf.value,
+            # M5 authority is conditional in v4: entry confirmation runs on the
+            # prerequisite rung, not on the raw M5 trigger. Carried so the
+            # scorer/evaluator can resolve that without re-resolving the policy.
+            "m5_policy": _resolved_policy.m5_policy.value,
+            "execution_prerequisite": (
+                _resolved_policy.execution_prerequisite_tf.value
+                if _resolved_policy.execution_prerequisite_tf
+                else None
+            ),
         }
     _v3_live_entry_tf = resolve_live_v3_entry_timeframe(
         pair.get("type", ""),
