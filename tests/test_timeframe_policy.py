@@ -663,7 +663,11 @@ def test_engine_b_trigger_false_without_entry_ok_stays_pending() -> None:
     assert signal["triggerConfirmed"] is False
 
 
-def test_shared_trigger_execution_tf_uses_current_forming_direction() -> None:
+def test_shared_trigger_execution_tf_is_satisfied_by_the_confirmed_trigger() -> None:
+    # The forming bar points the other way, but execution and trigger share the
+    # M15 rung, so the confirmed trigger carries the timing evidence.  Re-testing
+    # the next unconfirmed bar of the same timeframe would re-decide a confirmed
+    # entry on an intrabar coin flip.
     signal = {
         "score": 2.7,
         "direction": "LONG",
@@ -702,8 +706,9 @@ def test_shared_trigger_execution_tf_uses_current_forming_direction() -> None:
     )
 
     assert signal["triggerTf"] == signal["executionTf"] == "M15"
-    assert signal["executionTimingStatus"] == "OPPOSED"
-    assert signal["entryReadiness"] == "PENDING"
+    assert signal["executionTimingStatus"] == "SHARED_TRIGGER_CONFIRMED"
+    assert signal["executionTimingSource"] == "confirmed_trigger"
+    assert signal["entryReadiness"] == "READY"
     assert signal["score"] == 2.7
     assert signal["direction"] == "LONG"
 
@@ -739,6 +744,9 @@ def test_mt5_execution_timing_uses_bid_candle_close_not_quote_midpoint() -> None
         "close": 0.81605,
     }
 
+    # SLOW adaptation steps setup/trigger one rung slower (M30/M15 → H1/M30)
+    # while execution stays on M15, which is the only shape that still compares
+    # the forming execution bar against the live move.
     attach_timeframe_policy_payload(
         signal,
         {
@@ -750,17 +758,28 @@ def test_mt5_execution_timing_uses_bid_candle_close_not_quote_midpoint() -> None
         "intraday",
         engine="engine_b",
         market_states=states,
+        speed_state=SpeedState(
+            live_speed_class=SpeedClass.SLOW,
+            speed_percentile=10.0,
+            history_ready=True,
+            liquidity_class=LiquidityClass.NORMAL,
+        ),
     )
 
+    assert signal["triggerTf"] == "M30"
+    assert signal["executionTf"] == "M15"
     assert signal["executionTimingStatus"] == "ALIGNED"
     assert signal["executionTimingDirection"] == "SHORT"
     assert signal["executionTimingSource"] == "forming_candle_mt5_bid_close"
     assert signal["entryReadiness"] == "READY"
 
 
-def test_shared_m30_trigger_execution_holds_entry_without_rescoring_engine_a_or_b() -> None:
+def test_shared_m30_trigger_execution_clears_entry_without_rescoring_engine_a_or_b() -> None:
     # v4: the advisory execution context follows the trigger, so EUR/GBP
-    # (broad cross) shares an M30 trigger/execution timeframe.
+    # (broad cross) shares an M30 trigger/execution timeframe.  Both engines
+    # take the confirmed M30 trigger as the timing evidence whichever way the
+    # forming M30 bar happens to point, and neither is rescored by it.  Missing
+    # execution-TF data still fails closed.
     required_states = {
         tf: {
             "confirmed": [
@@ -778,7 +797,7 @@ def test_shared_m30_trigger_execution_holds_entry_without_rescoring_engine_a_or_
     }
 
     for engine in ("engine_a", "engine_b"):
-        opposed = {
+        forming_against = {
             "score": 2.4,
             "direction": "SHORT",
             "trigger_ok": True,
@@ -807,7 +826,7 @@ def test_shared_m30_trigger_execution_holds_entry_without_rescoring_engine_a_or_
             },
         }
         attach_timeframe_policy_payload(
-            opposed,
+            forming_against,
             {
                 "display": "EUR/GBP",
                 "type": "forex",
@@ -818,30 +837,30 @@ def test_shared_m30_trigger_execution_holds_entry_without_rescoring_engine_a_or_
             market_states=states,
         )
 
-        assert opposed["triggerTf"] == "M30"
-        assert opposed["executionTf"] == "M30"
-        assert opposed["executionTfActual"] == "M30"
-        assert opposed["executionTfConsumed"] is True
-        assert opposed["executionTimingStatus"] == "OPPOSED"
-        assert opposed["entryReadiness"] == "PENDING"
-        assert opposed["score"] == 2.4
-        assert opposed["direction"] == "SHORT"
+        assert forming_against["triggerTf"] == "M30"
+        assert forming_against["executionTf"] == "M30"
+        assert forming_against["executionTfActual"] == "M30"
+        assert forming_against["executionTfConsumed"] is True
+        assert forming_against["executionTimingStatus"] == "SHARED_TRIGGER_CONFIRMED"
+        assert forming_against["entryReadiness"] == "READY"
+        assert forming_against["score"] == 2.4
+        assert forming_against["direction"] == "SHORT"
         assert timeframe_policy_execution_block_reason(
-            opposed,
+            forming_against,
             {
                 "TF_POLICY_MODE": "enforced_demo",
                 "TF_POLICY_DEMO_AUTOTRADE_ENABLED": True,
             },
-        ) == "TF_POLICY_ENTRY_READINESS_PENDING"
+        ) is None
 
-        aligned = {
+        forming_with = {
             "score": 2.4,
             "direction": "SHORT",
             "trigger_ok": True,
             "current_price": 1.095,
         }
         attach_timeframe_policy_payload(
-            aligned,
+            forming_with,
             {
                 "display": "EUR/GBP",
                 "type": "forex",
@@ -852,10 +871,10 @@ def test_shared_m30_trigger_execution_holds_entry_without_rescoring_engine_a_or_
             market_states=states,
         )
 
-        assert aligned["executionTimingStatus"] == "ALIGNED"
-        assert aligned["entryReadiness"] == "READY"
-        assert aligned["score"] == 2.4
-        assert aligned["direction"] == "SHORT"
+        assert forming_with["executionTimingStatus"] == "SHARED_TRIGGER_CONFIRMED"
+        assert forming_with["entryReadiness"] == "READY"
+        assert forming_with["score"] == 2.4
+        assert forming_with["direction"] == "SHORT"
 
         unavailable = {
             "score": 2.4,
@@ -882,6 +901,13 @@ def test_shared_m30_trigger_execution_holds_entry_without_rescoring_engine_a_or_
         assert unavailable["entryReadiness"] == "UNAVAILABLE"
         assert unavailable["score"] == 2.4
         assert unavailable["direction"] == "SHORT"
+        assert timeframe_policy_execution_block_reason(
+            unavailable,
+            {
+                "TF_POLICY_MODE": "enforced_demo",
+                "TF_POLICY_DEMO_AUTOTRADE_ENABLED": True,
+            },
+        ) == "TF_POLICY_ENTRY_READINESS_UNAVAILABLE"
 
 
 def test_policy_payload_rebuild_tolerates_v3_and_v4_payloads() -> None:

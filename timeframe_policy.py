@@ -1879,11 +1879,16 @@ def evaluate_execution_timeframe(
 ) -> dict[str, Any]:
     """Evaluate entry timing on the policy execution TF without changing the thesis.
 
-    The trigger remains the final analytical confirmation.  This helper compares
-    the current forming/live move on the policy execution timeframe with the
-    signal direction and only decides whether the entry may be taken now.  It
-    never changes score, direction, structure, or SL/TP, and it never substitutes
-    a slower timeframe when execution data is unavailable.
+    The trigger remains the final analytical confirmation.  When the execution
+    rung is genuinely faster than the trigger this helper compares the current
+    forming/live move on the execution timeframe with the signal direction and
+    decides whether the entry may be taken now.  When execution and trigger
+    share a timeframe — the v4 default, since the advisory execution context
+    follows the trigger — the confirmed trigger bar *is* the execution-timing
+    evidence: re-testing the next, still-forming bar of that same timeframe
+    re-decides a confirmed entry on an unconfirmed coin flip.  It never changes
+    score, direction, structure, or SL/TP, and it never substitutes a slower
+    timeframe when execution data is unavailable.
     """
     states = market_states or {}
     execution_tf = policy.execution_tf.value
@@ -1932,6 +1937,27 @@ def evaluate_execution_timeframe(
             "executionTimingSource": "trigger_timeframe",
             "executionCandleTime": candle_time,
         }
+    if shared_trigger:
+        # Trigger confirmed on the same timeframe the execution role names: the
+        # confirmed bar already carries the timing evidence, so the forming bar
+        # is not consulted.  Only a distinct (faster) execution rung is compared
+        # against the live move below.
+        candle = (confirmed[-1] if confirmed else forming)
+        candle_time = (
+            candle.get("time")
+            or candle.get("timestamp")
+            or candle.get("datetime")
+            or candle.get("date")
+        ) if isinstance(candle, Mapping) else None
+        return {
+            "executionTfActual": execution_tf,
+            "executionTfConsumed": True,
+            "executionTimingStatus": "SHARED_TRIGGER_CONFIRMED",
+            "executionTimingAligned": True,
+            "executionTimingDirection": str(signal.get("direction") or "").upper() or None,
+            "executionTimingSource": "confirmed_trigger",
+            "executionCandleTime": candle_time,
+        }
 
     live_price_raw = signal.get("current_price") or signal.get("price")
     try:
@@ -1972,22 +1998,6 @@ def evaluate_execution_timeframe(
         source = "live_price_vs_confirmed_close"
         reference_value = reference_candle.get("close")
         current_value = live_price
-    elif shared_trigger:
-        candle_time = (
-            reference_candle.get("time")
-            or reference_candle.get("timestamp")
-            or reference_candle.get("datetime")
-            or reference_candle.get("date")
-        )
-        return {
-            "executionTfActual": execution_tf,
-            "executionTfConsumed": True,
-            "executionTimingStatus": "SHARED_TRIGGER_CONFIRMED",
-            "executionTimingAligned": True,
-            "executionTimingDirection": str(signal.get("direction") or "").upper() or None,
-            "executionTimingSource": "confirmed_trigger",
-            "executionCandleTime": candle_time,
-        }
     else:
         return {
             "executionTfActual": execution_tf,
