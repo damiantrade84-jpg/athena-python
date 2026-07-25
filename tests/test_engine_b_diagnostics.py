@@ -1534,6 +1534,7 @@ def test_engine_b_research_lab_precious_trackers_maps_to_metals_group(monkeypatc
 
 def test_calculate_confidence_emits_bos_without_volume():
     res = _base_res_long()
+    res["asset_type"] = "crypto"
     res["bos_volume_confirmed"] = False
     res["trigger_ok"] = False
     out = engine.calculate_confidence(
@@ -1548,8 +1549,43 @@ def test_calculate_confidence_emits_bos_without_volume():
     assert ENGINE_B_REASON_BOS_WITHOUT_VOLUME in codes
 
 
+def test_calculate_confidence_forex_excludes_non_authoritative_volume_from_ai_score(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_WEIGHTED_SCORING",
+        {**config.CONFIG.get("ENGINE_B_WEIGHTED_SCORING", {}), "ENABLED": True},
+    )
+    res = _base_res_long()
+    res.update({
+        "asset_type": "forex",
+        "bos_volume_confirmed": False,
+        "bos_data": {
+            "bos_volume_available": False,
+            "bos_volume_status": "unavailable",
+        },
+    })
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
+    assert ENGINE_B_REASON_BOS_WITHOUT_VOLUME not in codes
+    assert ENGINE_B_REASON_BOS_VOLUME_BELOW_THRESHOLD not in codes
+    assert out["volume_scoring_applicable"] is False
+    assert out["volume_bonus"] == 0.0
+    assert "volume_confirmation" not in out["quality_components"]
+    assert out["engine_b_diagnostics"]["bos_volume"]["scoring_applicable"] is False
+
+
 def test_calculate_confidence_distinguishes_bos_volume_below_threshold():
     res = _base_res_long()
+    res["asset_type"] = "crypto"
     res["bos_volume_confirmed"] = False
     res["trigger_ok"] = False
     res["bos_data"] = {

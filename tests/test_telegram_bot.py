@@ -254,6 +254,7 @@ def test_scalp_card_includes_strict_fabio_and_gate():
 
 def test_telegram_command_specs_include_ops_commands():
     commands = dict(telegram_bot._telegram_command_specs())
+    assert commands["fullscan"] == "Full Engine A and B scan"
 
     assert commands["engineb"] == "Engine B naked-structure scan"
     assert "scan" in commands

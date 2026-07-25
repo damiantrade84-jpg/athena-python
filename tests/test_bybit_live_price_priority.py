@@ -70,6 +70,33 @@ def test_ws_update_stores_bybit_ws_source_and_display_key():
     assert entry["last_ws_ts"] == 1000.0
 
 
+def test_ws_delta_without_bbo_carries_forward_known_bid_ask():
+    # Bybit v5 ticker is snapshot+delta; delta ticks omit unchanged fields.
+    # A price-only delta must not wipe the last known bid/ask, otherwise
+    # spread stays unmeasurable and liquidity gating fails to UNAVAILABLE.
+    assert candle_feeds._record_bybit_ws_price(
+        "TRXUSDT",
+        0.2935,
+        bid=0.2934,
+        ask=0.2936,
+        now_ts=1000.0,
+        pairs=PAIRS,
+        category="linear",
+    )
+    assert candle_feeds._record_bybit_ws_price(
+        "TRXUSDT",
+        0.2940,
+        now_ts=1001.0,
+        pairs=PAIRS,
+        category="linear",
+    )
+
+    entry = _entry("TRX/USDT")
+    assert entry["price"] == pytest.approx(0.2940)
+    assert entry["bid"] == pytest.approx(0.2934)
+    assert entry["ask"] == pytest.approx(0.2936)
+
+
 def test_rest_update_does_not_overwrite_fresh_ws():
     assert candle_feeds._record_bybit_ws_price(
         "TRXUSDT",

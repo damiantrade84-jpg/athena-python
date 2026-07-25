@@ -69,6 +69,31 @@ def test_ws_update_stores_binance_ws_source_and_display_key():
     assert entry["ask"] == pytest.approx(0.511)
 
 
+def test_ws_tick_without_bbo_carries_forward_known_bid_ask():
+    # Binance futures !ticker@arr carries no bid/ask fields; both venue feeds
+    # write the same display key, so a Binance tick must not wipe the BBO the
+    # Bybit ticker feed contributed.
+    assert candle_feeds._record_binance_ws_price(
+        "XRPUSDT",
+        0.51,
+        bid=0.509,
+        ask=0.511,
+        now_ts=1000.0,
+        pairs=PAIRS,
+    )
+    assert candle_feeds._record_binance_ws_price(
+        "XRPUSDT",
+        0.512,
+        now_ts=1001.0,
+        pairs=PAIRS,
+    )
+
+    entry = _entry("XRP/USDT")
+    assert entry["price"] == pytest.approx(0.512)
+    assert entry["bid"] == pytest.approx(0.509)
+    assert entry["ask"] == pytest.approx(0.511)
+
+
 def test_rest_update_does_not_overwrite_fresh_ws_source_bid_ask():
     assert candle_feeds._record_binance_ws_price(
         "XRPUSDT",

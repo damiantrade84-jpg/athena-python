@@ -6,6 +6,7 @@ import requests
 
 import telegram_bot
 import telegram_notify
+from telegram_bot import _fmt_signal_card
 
 
 @dataclass
@@ -113,6 +114,33 @@ def test_send_message_async_disabled_does_not_start_worker(monkeypatch):
     monkeypatch.setattr(telegram_notify, "_ensure_delivery_worker", fail_worker)
 
     assert telegram_notify._send_message_async("hello") is False
+
+
+def test_tlt_telegram_cards_distinguish_momentum_from_policy_trigger(monkeypatch):
+    signal = {
+        "pair": "TLT",
+        "direction": "LONG",
+        "confluenceScore": 2.4,
+        "maxScore": 3.0,
+        "factorDiagnostics": {
+            "scoringTimeframes": {"momentum": "D1", "trigger": "M15"}
+        },
+    }
+
+    card = _fmt_signal_card(signal)
+    assert "Momentum `D1` | Trigger `M15`" in card
+
+    _set_config(monkeypatch)
+    sent = []
+    monkeypatch.setattr(
+        telegram_notify,
+        "_send_message_async",
+        lambda message: sent.append(message) or True,
+    )
+    telegram_notify.send_signal_alert(
+        {**signal, "momentum_tf": "D1", "trigger_tf": "M15"}
+    )
+    assert "Momentum `D1` | Trigger `M15`" in sent[0]
 
 
 def test_system_alert_helpers_use_shared_delivery(monkeypatch):

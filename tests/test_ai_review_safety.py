@@ -1248,7 +1248,7 @@ class TestExpertPromptDeadRangingMarcusRule:
         athena_path = os.path.join(os.path.dirname(__file__), "..", "athena.py")
         with open(athena_path, encoding="utf-8") as f:
             text = f.read()
-        marker = 'EXPERT_PROMPT = """'
+        marker = 'EXPERT_PROMPT_FALLBACK = """'
         i0 = text.index(marker) + len(marker)
         i1 = text.index('"""', i0)
         prompt_body = text[i0:i1]
