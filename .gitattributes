@@ -1,0 +1,17 @@
+# Normalize text files to LF inside the repository. The working tree keeps the
+# platform form, so core.autocrlf=true still checks these out as CRLF on Windows
+# and nothing on disk changes.
+#
+# Why this file exists: git silently stops normalizing a file once its committed
+# blob already contains CRLF. On 2026-07-24 a commit wrote CRLF into part of
+# athena.py, scanner.py, market_structure.py and engine_b_quality.py, which
+# disabled normalization for them — every later commit of those files then stored
+# the whole pure-CRLF working copy and rendered the diff, blame and merge history
+# unusable. Declaring the intent here makes it independent of any tool's settings.
+* text=auto
+
+# Windows shells are tolerant of LF, but these are launched by the OS rather than
+# by git, so keep them explicitly CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
