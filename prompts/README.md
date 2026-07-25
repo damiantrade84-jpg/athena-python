@@ -7,7 +7,13 @@ External, versioned prompt templates for Athena's advisory AI surfaces.
 Phase 0 of the Athena AI Edge Program. Default-off via `AI_PROMPT_STORE_ENABLED: false`.
 When disabled, every surface falls back to its hardcoded prompt — zero behavior change.
 When enabled, `prompt_store.py` reads `<surface>.md` from this directory with
-hot-reload (mtime-based) and sha256 audit.
+hot-reload (mtime-based) and sha256 audit. Versioned filenames (for example
+`marcus_v6.md`) are resolved via `_SURFACE_FILE_ALIASES` when the surface key
+does not match the on-disk stem.
+
+Python fallbacks remain the default runtime source while
+`AI_PROMPT_STORE_ENABLED` is false. Keep markdown bodies and Python fallbacks
+in sync; focused tests assert they cannot silently drift.
 
 ## Safety contract
 
