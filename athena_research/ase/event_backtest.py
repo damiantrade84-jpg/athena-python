@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Literal
 
 import pandas as pd
 
 from athena_ase.data.ptis import PTISStore
-from athena_ase.horizon import Horizon
+from athena_ase.horizon import Horizon, horizon_bar_ms
 from athena_ase.instruments import DEFAULT_INSTRUMENTS, Instrument
 from athena_ase.labels.triple_barrier import label_candidate, simulate_barriers
 from athena_ase.signals.arbitrate import Candidate
@@ -19,6 +19,7 @@ from athena_ase.signals.engine import iter_candidates
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 EVENTS_PATH = OUTPUT_DIR / "phase1_events.parquet"
+EntryTiming = Literal["confirmed_close", "next_bar_open"]
 
 
 @dataclass
@@ -27,8 +28,10 @@ class EventOutcome:
     family: str
     horizon: str
     decision_time_ms: int
+    entry_time_ms: int
     direction: int
     entry_log: float
+    evidence_entry_log: float
     sigma_bar: float
     gross_R: float
     cost_R: float
@@ -50,8 +53,35 @@ def simulate_candidate(
     instrument: Instrument,
     *,
     series: BarSeries | None = None,
+    entry_timing: EntryTiming = "confirmed_close",
 ) -> EventOutcome | None:
+    """Label one candidate using an explicit, auditable historical entry rule.
+
+    ``next_bar_open`` is the backtest analogue of a live executable quote:
+    evidence is fixed at the confirmed decision candle, but entry begins at the
+    first price that would have been actionable afterwards.  It fails closed
+    when the open is unavailable.
+    """
+    entry_log = candidate.entry_log
+    entry_time_ms = candidate.decision_time_ms
+    if entry_timing == "next_bar_open":
+        if series is None or series.open_log is None:
+            return None
+        entry_idx = candidate.bar_index + 1
+        if entry_idx >= len(series.open_log) or entry_idx >= len(series.value_time):
+            return None
+        entry_log = float(series.open_log[entry_idx])
+        if not pd.notna(entry_log):
+            return None
+        # A session gap means the prior bar close is not necessarily this
+        # bar's open (e.g. Friday close to Monday open).  Derive the actual
+        # start of the actionable bar from its own close and timeframe.
+        entry_time_ms = int(series.value_time[entry_idx]) - horizon_bar_ms(candidate.horizon)
+    elif entry_timing != "confirmed_close":
+        raise ValueError(f"unsupported entry timing: {entry_timing}")
     if series is None:
+        if entry_timing != "confirmed_close":
+            return None
         labeled = label_candidate(candidate, store, instrument)
     else:
         labeled = simulate_barriers(
@@ -61,7 +91,7 @@ def simulate_candidate(
             value_time=series.value_time,
             idx=candidate.bar_index,
             direction=candidate.direction,
-            entry_log=candidate.entry_log,
+            entry_log=entry_log,
             sigma_bar=candidate.sigma_bar,
             horizon=candidate.horizon,
             instrument=instrument,
@@ -73,8 +103,10 @@ def simulate_candidate(
         family=labeled.family,
         horizon=labeled.horizon,
         decision_time_ms=labeled.decision_time_ms,
+        entry_time_ms=entry_time_ms,
         direction=labeled.direction,
         entry_log=labeled.entry_log,
+        evidence_entry_log=candidate.entry_log,
         sigma_bar=labeled.sigma_bar,
         gross_R=labeled.gross_R,
         cost_R=labeled.cost_R,
@@ -98,6 +130,7 @@ def run_event_backtest(
     start_ms: int,
     end_ms: int,
     instruments: tuple[Instrument, ...] | None = None,
+    entry_timing: EntryTiming = "confirmed_close",
 ) -> list[EventOutcome]:
     inst_map = {i.symbol: i for i in (instruments or DEFAULT_INSTRUMENTS)}
     series_by_instrument = {
@@ -122,6 +155,7 @@ def run_event_backtest(
             store,
             inst,
             series=series_by_instrument.get(cand.instrument),
+            entry_timing=entry_timing,
         )
         if out is not None:
             outcomes.append(out)
@@ -142,10 +176,20 @@ def run_and_persist(
     start_ms: int,
     end_ms: int,
     horizons: tuple[Horizon, ...] = ("intraday", "swing"),
+    instruments: tuple[Instrument, ...] | None = None,
+    entry_timing: EntryTiming = "confirmed_close",
+    path: Path | None = None,
 ) -> Path:
     all_outcomes: list[EventOutcome] = []
     for hz in horizons:
         all_outcomes.extend(
-            run_event_backtest(store, horizon=hz, start_ms=start_ms, end_ms=end_ms)
+            run_event_backtest(
+                store,
+                horizon=hz,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                instruments=instruments,
+                entry_timing=entry_timing,
+            )
         )
-    return persist_events(all_outcomes)
+    return persist_events(all_outcomes, path)

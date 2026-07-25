@@ -64,6 +64,10 @@ class EngineAResponse(BaseModel):
     )
     reason: str = Field(description="One concise reason for the score/action")
     verdict: str = Field(description="One punchy sentence assessment")
+    evidenceStatus: Optional[str] = Field(
+        default=None,
+        description="SUPPORTED, MIXED, INSUFFICIENT_DATA, or INTERNALLY_INCONSISTENT",
+    )
     narrative: str = Field(description="2-3 sentences referencing specific data")
     entryZone: str = Field(description="Exact entry price or fib level")
     invalidation: str = Field(description="Price level that invalidates the trade")
@@ -542,6 +546,10 @@ class EngineBResponse(BaseModel):
     )
     riskLevel: str = Field(description="LOW, MEDIUM, or HIGH")
     verdict: str = Field(description="Concise structural analysis")
+    evidenceStatus: Optional[str] = Field(
+        default=None,
+        description="SUPPORTED, MIXED, INSUFFICIENT_DATA, or INTERNALLY_INCONSISTENT",
+    )
     reviewSource: Optional[str] = Field(
         default=None,
         description="Review provenance label, e.g. engine_b_marcus",
@@ -580,6 +588,10 @@ class EngineCMarcusResponse(BaseModel):
     edgeProbability: float = Field(ge=0, le=100, description="Win probability estimate 0-100")
     riskLevel: str = Field(description="Low, Medium, or High")
     verdict: str = Field(description="One punchy sentence assessment")
+    evidenceStatus: Optional[str] = Field(
+        default=None,
+        description="SUPPORTED, MIXED, INSUFFICIENT_DATA, or INTERNALLY_INCONSISTENT",
+    )
     reviewSource: Optional[str] = Field(default=None, description="engine_c_marcus")
     reason: Optional[str] = Field(default=None, description="Concise reason for grade/action")
     narrative: Optional[str] = Field(default=None, description="2-3 sentences referencing consensus data")

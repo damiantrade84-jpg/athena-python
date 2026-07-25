@@ -440,6 +440,15 @@ def send_signal_alert(signal: Dict[str, Any]) -> None:
     )
     if signal.get("regime"):
         text += f"\nRegime: `{signal['regime']}`"
+    momentum_tf = signal.get("momentum_tf")
+    trigger_tf = signal.get("trigger_tf")
+    if momentum_tf or trigger_tf:
+        tf_bits = []
+        if momentum_tf:
+            tf_bits.append(f"Momentum `{momentum_tf}`")
+        if trigger_tf:
+            tf_bits.append(f"Trigger `{trigger_tf}`")
+        text += "\nTFs: " + " | ".join(tf_bits)
     meta_bits = []
     if signal.get("ai_edge_prob") is not None:
         meta_bits.append(f"Edge: `{signal['ai_edge_prob']}%`")
@@ -501,6 +510,8 @@ def notify_signal_with_ai(
     ai_risk: str,
     ai_warnings: Optional[List[str]] = None,
     is_auto_executed: bool = False,
+    momentum_tf: Optional[str] = None,
+    trigger_tf: Optional[str] = None,
 ) -> None:
     """Send Telegram only for auto-executed high-confluence signals (70%+ score).
     Called from a background thread — never blocks the scan loop."""
@@ -528,6 +539,8 @@ def notify_signal_with_ai(
             "regime": regime,
             "ai_edge_prob": ai_edge_prob,
             "ai_risk": ai_risk,
+            "momentum_tf": momentum_tf,
+            "trigger_tf": trigger_tf,
         }
     )
     _daily_stats["signals_fired"].append(

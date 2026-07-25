@@ -84,6 +84,9 @@ class BarSeries:
     low_log: np.ndarray
     sigma_bar: np.ndarray
     sigma_long: np.ndarray
+    # Optional for backwards-compatible fixtures.  Entry-timing experiments
+    # reject a series without it rather than falling back to the close.
+    open_log: np.ndarray | None = None
 
 
 def ewma_vol(logret: np.ndarray, span: int) -> np.ndarray:
@@ -134,10 +137,12 @@ def load_bar_series(
     if source is None:
         return None
     close_id = price_series_id(source, symbol, tf, "close")
+    open_id = price_series_id(source, symbol, tf, "open")
     high_id = price_series_id(source, symbol, tf, "high")
     low_id = price_series_id(source, symbol, tf, "low")
     try:
         close_rows = store.load_window(close_id, start_ms, end_ms)
+        open_rows = store.load_window(open_id, start_ms, end_ms)
         high_rows = store.load_window(high_id, start_ms, end_ms)
         low_rows = store.load_window(low_id, start_ms, end_ms)
     except KeyError:
@@ -156,6 +161,7 @@ def load_bar_series(
 
     high_map = {int(r["value_time"]): float(r["value"]) for r in high_rows}
     low_map = {int(r["value_time"]): float(r["value"]) for r in low_rows}
+    open_map = {int(r["value_time"]): float(r["value"]) for r in open_rows}
     high_log = np.array(
         [math.log(max(high_map.get(int(t), math.exp(c)), 1e-12)) for t, c in zip(vt, close_log)],
         dtype=float,
@@ -173,6 +179,10 @@ def load_bar_series(
         low_log=low_log,
         sigma_bar=sigma_bar,
         sigma_long=sigma_long,
+        open_log=np.array(
+            [math.log(max(open_map.get(int(t), float("nan")), 1e-12)) for t in vt],
+            dtype=float,
+        ),
     )
 
 

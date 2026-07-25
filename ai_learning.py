@@ -1,19 +1,106 @@
-"""ai_learning.py — AI self-learning and outcome tracking for Sentinel Pro.
+"""ai_learning.py — Outcome tracking and observation-only context for Athena AI.
 
-After each trade closes, extract what the AI predicted vs what actually happened.
-Build a feedback context injected into future AI prompts so Marcus Reid learns
-from real live (and demo) outcomes over time.
+After each trade closes, extract what the AI predicted vs what actually happened
+and optionally inject aggregate statistics into future advisory prompts.
+
+This is NOT autonomous self-learning: outcomes are recorded and may be shown as
+context, but live prompts, weights, thresholds, and engine rules are never
+silently rewritten from individual wins/losses. Validated calibration promotion
+with out-of-sample checks and rollback is not implemented for the AI path.
 """
+
+from __future__ import annotations
 
 import json
 import logging
 import sqlite3
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 from ai_utils import parse_json_object
 from prompt_store import load_prompt
 
 log = logging.getLogger("sentinel.learning")
+
+# Capability labels for API/config consumers. Do not advertise self-learning.
+LEARNING_MODE_NONE = "none"
+LEARNING_MODE_OBSERVATION_ONLY = "observation_only"
+LEARNING_MODE_CALIBRATED = "calibrated"
+_VALID_LEARNING_MODES = frozenset(
+    {
+        LEARNING_MODE_NONE,
+        LEARNING_MODE_OBSERVATION_ONLY,
+        LEARNING_MODE_CALIBRATED,
+    }
+)
+
+
+def resolve_learning_mode(config: Optional[dict] = None) -> str:
+    """Return effective learning_mode: none | observation_only | calibrated.
+
+    ``calibrated`` requires a validated promote/rollback path that does not exist
+    for live AI prompts today, so an explicit calibrated config is downgraded to
+    observation_only with a debug log.
+    """
+    try:
+        from config import CONFIG as _CFG
+    except Exception:
+        _CFG = {}
+    cfg = config if isinstance(config, dict) else _CFG
+    if not bool(cfg.get("LEARNING_ENABLED", True)):
+        return LEARNING_MODE_NONE
+    raw = str(cfg.get("LEARNING_MODE") or LEARNING_MODE_OBSERVATION_ONLY).strip().lower()
+    if raw in ("off", "disabled", "false", "0"):
+        raw = LEARNING_MODE_NONE
+    if raw not in _VALID_LEARNING_MODES:
+        raw = LEARNING_MODE_OBSERVATION_ONLY
+    if raw == LEARNING_MODE_CALIBRATED:
+        # No AI-path OOS promotion/rollback yet — do not claim calibrated.
+        log.debug(
+            "[LEARN] LEARNING_MODE=calibrated requested but AI adaptive promotion "
+            "is unavailable; using observation_only"
+        )
+        return LEARNING_MODE_OBSERVATION_ONLY
+    return raw
+
+
+def learning_capability_metadata(config: Optional[dict] = None) -> dict:
+    """Honest capability stamp for AI responses and diagnostics."""
+    mode = resolve_learning_mode(config)
+    return {
+        "learning_mode": mode,
+        "learningMode": mode,
+        "self_learning": False,
+        "selfLearning": False,
+        "outcome_tracking": mode != LEARNING_MODE_NONE,
+        "adaptive_promotion": False,
+        "engine_namespaces_separate": True,
+    }
+
+
+def _normalize_engine_key(engine: Optional[str]) -> Optional[str]:
+    if engine is None:
+        return None
+    text = str(engine).strip().lower().replace("-", "_").replace(" ", "_")
+    if not text:
+        return None
+    aliases = {
+        "a": "engine_a",
+        "enginea": "engine_a",
+        "engine_a": "engine_a",
+        "b": "engine_b",
+        "engineb": "engine_b",
+        "engine_b": "engine_b",
+        "naked": "engine_b",
+        "c": "engine_c",
+        "enginec": "engine_c",
+        "engine_c": "engine_c",
+        "d": "engine_d",
+        "engined": "engine_d",
+        "engine_d": "engine_d",
+        "scalp": "engine_d",
+    }
+    return aliases.get(text, text)
 
 # ── DB schema ────────────────────────────────────────────────────────────────
 
@@ -202,13 +289,25 @@ def _infer_asset_type(pair: str) -> str:
 
 
 def get_ai_learning_context(
-    pair: str, asset_type: str, db_path: str, lookback_days: int = 90
+    pair: str,
+    asset_type: str,
+    db_path: str,
+    lookback_days: int = 90,
+    engine: Optional[str] = None,
 ) -> dict:
     """Query learning_log and build a context dict for AI prompt injection.
 
-    Returns empty dict if insufficient data.
+    Returns empty dict if learning mode is none or data is insufficient.
+    When ``engine`` is provided, only rows for that engine namespace are used so
+    Engine A and Engine B calibration context stay separate.
     """
+    mode = resolve_learning_mode()
+    meta = learning_capability_metadata()
+    if mode == LEARNING_MODE_NONE:
+        return dict(meta)
+
     cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+    engine_key = _normalize_engine_key(engine)
     try:
         with sqlite3.connect(db_path, timeout=15.0) as con:
             con.row_factory = sqlite3.Row
@@ -217,12 +316,21 @@ def get_ai_learning_context(
             ).fetchall()
     except Exception as e:
         log.debug(f"[LEARN] context query failed: {e}")
-        return {}
-
-    if len(rows) < 5:
-        return {"sample_size": len(rows)}
+        return dict(meta)
 
     rows = [dict(r) for r in rows]
+    if engine_key:
+        filtered = []
+        for r in rows:
+            row_engine = _normalize_engine_key(r.get("engine"))
+            if row_engine == engine_key:
+                filtered.append(r)
+        rows = filtered
+
+    if len(rows) < 5:
+        out = {"sample_size": len(rows), "engine": engine_key}
+        out.update(meta)
+        return out
 
     # ── Grade accuracy ───────────────────────────────────────────────────────
     grade_acc: dict = {}
@@ -379,7 +487,7 @@ def get_ai_learning_context(
         reverse=True,
     )
 
-    return {
+    out = {
         "sample_size": len(rows),
         "grade_accuracy": grade_summary,
         "asset_type_stats": asset_stats,
@@ -387,7 +495,10 @@ def get_ai_learning_context(
         "recent_failures": recent_failures,
         "top_votes": top_votes[:5],
         "factor_reliability": factor_reliability[:8],
+        "engine": engine_key,
     }
+    out.update(meta)
+    return out
 
 
 # ── Weekly meta-analysis ──────────────────────────────────────────────────────

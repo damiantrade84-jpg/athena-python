@@ -7,7 +7,7 @@ from typing import Iterator
 
 from athena_ase.data.ptis import PTISStore
 from athena_ase.features.build import vol_regime_ordinal
-from athena_ase.horizon import Horizon, HORIZONS
+from athena_ase.horizon import Horizon, HORIZONS, is_intraday
 from athena_ase.instruments import DEFAULT_INSTRUMENTS, Instrument, instruments_for_family
 from athena_ase.settings import (
     intraday_families,
@@ -71,11 +71,11 @@ def iter_candidates(
     family_cache: dict[str, dict[str, BarSeries]] = {}
 
     for inst in universe:
-        if inst.swing_only and horizon == "intraday":
+        if inst.swing_only and is_intraday(horizon):
             continue
         # Intraday Layer-1 is limited to configured families (default forex/crypto/commodity).
         # Equity and index_etf use swing path (carry + xsec).
-        if horizon == "intraday" and inst.family not in _INTRADAY_ALLOWED:
+        if is_intraday(horizon) and inst.family not in _INTRADAY_ALLOWED:
             continue
         series = load_bar_series(store, inst.symbol, horizon, start_ms, end_ms)
         if series is None or len(series.value_time) < max(cfg.tsmom_lookbacks) + 5:
@@ -113,7 +113,7 @@ def iter_candidates(
                     )
                     if not xs.disabled:
                         fired.append(FiredSignal("xsec", xs.direction, xs.raw_strength))
-            if horizon == "intraday" and inst.family == "forex":
+            if is_intraday(horizon) and inst.family == "forex":
                 mr = compute_meanrev(inst, series.close_log, idx, tsm.blend)
                 fired.append(FiredSignal("meanrev", mr.direction, mr.raw_strength))
 

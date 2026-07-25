@@ -40,6 +40,7 @@ def _telegram_command_specs() -> list[tuple[str, str]]:
     return [
         ("scan", "Engine A scan by asset class"),
         ("engineb", "Engine B naked-structure scan"),
+        ("fullscan", "Full Engine A and B scan"),
         ("enginec", "Engine C consensus scan"),
         ("scalp", "Engine D scalp scan"),
         ("signal", "Analyse one pair"),
@@ -333,6 +334,21 @@ def _fmt_signal_card(sig: dict) -> str:
     score_group = sig.get("score_group") or sig.get("scoreGroup")
     if score_group:
         lines.append(f"Group:  `{score_group}`")
+    factor_diagnostics = sig.get("factorDiagnostics") or sig.get("factor_diagnostics") or {}
+    scoring_timeframes = (
+        factor_diagnostics.get("scoringTimeframes")
+        or factor_diagnostics.get("scoring_timeframes")
+        or {}
+    ) if isinstance(factor_diagnostics, dict) else {}
+    momentum_tf = scoring_timeframes.get("momentum")
+    trigger_tf = scoring_timeframes.get("trigger") or sig.get("triggerTf")
+    if momentum_tf or trigger_tf:
+        tf_bits = []
+        if momentum_tf:
+            tf_bits.append(f"Momentum `{momentum_tf}`")
+        if trigger_tf:
+            tf_bits.append(f"Trigger `{trigger_tf}`")
+        lines.append("TFs:    " + " | ".join(tf_bits))
     freshness = sig.get("dataFreshness")
     if isinstance(freshness, dict):
         f_status = freshness.get("status") or freshness.get("allowed")
@@ -686,6 +702,7 @@ def _build_and_run(token: str, chat_ids: list[str]):
             "🤖 *Sentinel Pro — Commands*\n\n"
             "`/scan crypto`       Engine A scan by class\n"
             "`/engineb crypto`    Engine B naked scan\n"
+            "`/fullscan [class]`  Full Engine A + B scan\n"
             "`/enginec forex`      Engine C consensus scan\n"
             "`/scalp BTC/USDT`     Engine D scalp scan\n"
             "`/signal ETH/USDT`   Analyse a single pair\n"
@@ -1098,6 +1115,84 @@ def _build_and_run(token: str, chat_ids: list[str]):
             await msg.edit_text("⚠️ Athena offline — check server")
 
     # ── /signal ───────────────────────────────────────────────────────────────
+
+    async def cmd_fullscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not _guard(update):
+            return
+        requested = context.args[0].lower() if context.args else "all"
+        requested = "stock" if requested == "stocks" else requested
+        asset_classes = ["crypto", "forex", "commodity", "stock", "index"]
+        if requested != "all":
+            if requested not in asset_classes:
+                await update.message.reply_text(
+                    "Usage: `/fullscan [all|crypto|forex|commodity|stock|index]`",
+                    parse_mode="Markdown",
+                )
+                return
+            asset_classes = [requested]
+
+        scope = requested.upper()
+        msg = await update.message.reply_text(
+            f"Running full Engine A + B scan: *{scope}*...",
+            parse_mode="Markdown",
+        )
+        totals = {"a": 0, "b": 0}
+        top_a: list[dict] = []
+        top_b: list[dict] = []
+        failures: list[str] = []
+        try:
+            for index, asset_class in enumerate(asset_classes, start=1):
+                await msg.edit_text(
+                    f"Full scan `{index}/{len(asset_classes)}`: *{asset_class.upper()}* (Engine A + B)...",
+                    parse_mode="Markdown",
+                )
+                a_resp = await _run_in_thread(lambda ac=asset_class: _safe_json(req.post(
+                    f"{_BASE}/api/scan",
+                    json={"style": "auto", "asset_class": ac},
+                    timeout=_TIMEOUT_SCAN,
+                )))
+                if a_resp.get("error"):
+                    failures.append(f"A/{asset_class}: {a_resp['error']}")
+                else:
+                    a_signals = a_resp.get("tradeSignals", a_resp.get("signals", [])) or []
+                    totals["a"] += len(a_signals)
+                    top_a.extend(a_signals)
+
+                b_resp = await _run_in_thread(lambda ac=asset_class: _safe_json(req.post(
+                    f"{_BASE}/api/scan-naked",
+                    json={"assetClass": ac, "style": "auto"},
+                    timeout=_TIMEOUT_SCAN,
+                )))
+                if b_resp.get("error"):
+                    failures.append(f"B/{asset_class}: {b_resp['error']}")
+                else:
+                    b_signals = b_resp.get("signals", []) or []
+                    totals["b"] += len(b_signals)
+                    top_b.extend(b_signals)
+
+            failure_note = f"\nFailures: `{len(failures)}`" if failures else ""
+            await msg.edit_text(
+                f"*Full Engine A + B Scan - {scope}*\n"
+                f"Engine A signals: `{totals['a']}` | Engine B signals: `{totals['b']}`"
+                f"{failure_note}",
+                parse_mode="Markdown",
+            )
+            for sig in top_a[:3]:
+                await _send_signal_card(update.effective_chat.id, sig, context)
+            for sig in top_b[:3]:
+                key = _store_pending_signal(sig)
+                await update.message.reply_text(
+                    _fmt_engine_b_card(sig),
+                    parse_mode="Markdown",
+                    reply_markup=_execution_keyboard(key),
+                )
+            if failures:
+                await update.message.reply_text(
+                    "Partial scan failures:\n" + "\n".join(f"- `{item[:120]}`" for item in failures),
+                    parse_mode="Markdown",
+                )
+        except Exception as exc:
+            await msg.edit_text(f"Full scan stopped: `{str(exc)[:120]}`", parse_mode="Markdown")
 
     async def cmd_enginec(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not _guard(update):
@@ -1886,6 +1981,7 @@ def _build_and_run(token: str, chat_ids: list[str]):
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("start", cmd_help))
     app.add_handler(CommandHandler("scan", cmd_scan))
+    app.add_handler(CommandHandler("fullscan", cmd_fullscan))
     app.add_handler(CommandHandler("engineb", cmd_engineb))
     app.add_handler(CommandHandler("enginec", cmd_enginec))
     app.add_handler(CommandHandler("scalp", cmd_scalp))

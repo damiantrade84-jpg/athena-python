@@ -145,3 +145,7 @@ def features_v2_enabled() -> bool:
 def microstructure_enabled() -> bool:
     block = _cfg().get("ASE_MICROSTRUCTURE") or {}
     return bool(block.get("ENABLED", False))
+
+
+def auto_scan_enabled() -> bool:
+    return bool(_cfg().get("ASE_AUTO_SCAN_ENABLED", False))

@@ -24,6 +24,8 @@ from athena_fx.models import (
 
 log = logging.getLogger("athena.api.forex_factor")
 
+_FX_BACKTEST_ATTESTATION_RETIREMENT_CODE = "FX_BACKTEST_ATTESTATION_RETIRED"
+
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _FX_SYMBOL = re.compile(r"^[A-Z]{6}$")
 
@@ -1048,6 +1050,15 @@ def api_forex_rebalance():
     if isinstance(symbols_raw, list) and symbols_raw:
         symbols = [str(s).replace("/", "").upper() for s in symbols_raw]
 
+    if execute_trades and not dry_run:
+        return _envelope(
+            data=None,
+            status="blocked",
+            diagnostics=[{"code": _FX_BACKTEST_ATTESTATION_RETIREMENT_CODE}],
+            success=False,
+            http=403,
+        )
+
     from config import CONFIG
 
     if execute_trades and not dry_run:
@@ -1134,6 +1145,10 @@ def _trading_status_payload() -> dict[str, Any]:
     validation_pass, validation_snapshot, validation_run_id = _fx_backtest_validation_state()
     if validation_required and not validation_pass:
         block_reasons.append("FX_FACTOR_VALIDATION_REQUIRED")
+
+    # Analysis and dry-run remain available, but the retired validation harness
+    # can no longer attest demo execution.
+    block_reasons.append(_FX_BACKTEST_ATTESTATION_RETIREMENT_CODE)
 
     can_demo_execute = not block_reasons
     return {
@@ -1322,28 +1337,13 @@ def api_forex_execute_candidate():
         )
 
     if not dry_run:
-        from athena_fx.execution import default_fx_execution_deps, assert_fx_execution_allowed
-
-        allowed, reason = assert_fx_execution_allowed(default_fx_execution_deps())
-        if not allowed:
-            return _envelope(
-                data=None,
-                status="blocked",
-                diagnostics=[{"code": reason}],
-                success=False,
-                http=403,
-            )
-        validation_pass, validation_snapshot, validation_run_id = _fx_backtest_validation_state()
-        if not validation_pass:
-            return _envelope(
-                data=None,
-                status="blocked",
-                diagnostics=[
-                    _validation_block_detail(validation_snapshot, validation_run_id),
-                ],
-                success=False,
-                http=403,
-            )
+        return _envelope(
+            data=None,
+            status="blocked",
+            diagnostics=[{"code": _FX_BACKTEST_ATTESTATION_RETIREMENT_CODE}],
+            success=False,
+            http=403,
+        )
 
     try:
         from athena_fx.execution import (

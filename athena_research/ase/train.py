@@ -44,7 +44,7 @@ from athena_research.ase.dsr_pbo import deflated_sharpe_ratio
 from athena_research.ase.event_backtest import EVENTS_PATH
 from athena_research.ase.training_report import write_training_report
 from athena_research.ase.walkforward import expanding_folds, purge_embargo_mask
-from athena_ase.horizon import HORIZONS
+from athena_ase.horizon import HORIZONS, horizon_bar_ms
 
 log = logging.getLogger("ase.train")
 
@@ -131,7 +131,7 @@ def materialize_labeled_dataset(store: PTISStore, df: pd.DataFrame, *, family: s
         )
         if has_phase1_label:
             hold_bars = int(rec["hold_bars"])
-            bar_ms = 3_600_000 if horizon == "intraday" else 86_400_000
+            bar_ms = horizon_bar_ms(horizon)
             start_ms = int(rec["decision_time_ms"])
             label = LabelOutcome(
                 instrument=inst.symbol,
@@ -370,6 +370,10 @@ def train_family_horizon(
     store: PTISStore | None = None,
     events_path: Path | None = None,
     version: str = "v1",
+    dataset_dir: Path | None = None,
+    artifact_root: Path | None = None,
+    write_train_state: bool = True,
+    write_audit: bool = True,
 ) -> dict[str, Any]:
     store = store or PTISStore(default_ptis_root())
     src = events_path or EVENTS_PATH
@@ -380,7 +384,9 @@ def train_family_horizon(
     if raw.empty:
         raise ValueError(f"no events for {family}/{horizon}")
 
+    log.info("materializing %d %s/%s event rows", len(raw), family, horizon)
     labeled = materialize_labeled_dataset(store, raw, family=family, horizon=horizon)
+    log.info("materialized %d %s/%s labeled rows", len(labeled), family, horizon)
     if len(labeled) < MIN_TRAIN_CANDIDATES:
         raise ValueError(
             f"insufficient candidates for {family}/{horizon}: "
@@ -388,8 +394,9 @@ def train_family_horizon(
         )
     train_frame, eval_frame = chronological_train_eval_split(labeled)
 
-    DATASET_DIR.mkdir(parents=True, exist_ok=True)
-    ds_path = DATASET_DIR / f"{family}_{horizon}_train.parquet"
+    target_dataset_dir = dataset_dir or DATASET_DIR
+    target_dataset_dir.mkdir(parents=True, exist_ok=True)
+    ds_path = target_dataset_dir / f"{family}_{horizon}_train.parquet"
     labeled.to_parquet(ds_path, index=False)
     ds_hash = hashlib.sha256(ds_path.read_bytes()).hexdigest()
 
@@ -672,22 +679,25 @@ def train_family_horizon(
             "enriched": enriched_summary,
         },
         monitor_reference=build_monitor_reference(eval_frame, core_schema),
+        root=artifact_root,
     )
-    TRAIN_STATE.write_text(
-        json.dumps({"family": family, "horizon": horizon, "version": version, "artifact_path": str(artifact_path)}),
-        encoding="utf-8",
-    )
-    _append_audit(
-        "train",
-        {
-            "family": family,
-            "horizon": horizon,
-            "version": version,
-            "dataset_hash": ds_hash,
-            "eval_expectancy": eval_summary["expectancy"],
-            "threshold_fallback": threshold.fallback,
-        },
-    )
+    if write_train_state:
+        TRAIN_STATE.write_text(
+            json.dumps({"family": family, "horizon": horizon, "version": version, "artifact_path": str(artifact_path)}),
+            encoding="utf-8",
+        )
+    if write_audit:
+        _append_audit(
+            "train",
+            {
+                "family": family,
+                "horizon": horizon,
+                "version": version,
+                "dataset_hash": ds_hash,
+                "eval_expectancy": eval_summary["expectancy"],
+                "threshold_fallback": threshold.fallback,
+            },
+        )
     return {
         "family": family,
         "horizon": horizon,

@@ -12,7 +12,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from athena_ase.data.ptis import PTISStore, asof
-from athena_ase.horizon import HORIZONS, Horizon
+from athena_ase.horizon import HORIZONS, Horizon, is_intraday
 from athena_ase.settings import features_v2_enabled, microstructure_enabled
 
 # Instruments with < COT_MIN_WEEKS of COT history route to core model only.
@@ -411,7 +411,7 @@ def build_features_for_candidate(
         out["vol_of_vol"] = float(np.std(vol_tail) / max(np.mean(vol_tail), 1e-12))
     out["vol_regime"] = float(_vol_regime_ordinal(vol_level))
 
-    ret_lags = _RET_INTRADAY if ctx.horizon == "intraday" else _RET_SWING
+    ret_lags = _RET_INTRADAY if is_intraday(ctx.horizon) else _RET_SWING
     for name in _RET_ALL:
         if name not in ret_lags:
             continue

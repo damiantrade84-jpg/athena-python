@@ -382,6 +382,14 @@ def _merge_binance_ws_price(existing, price: float, bid, ask, now_ts: float) -> 
         "preferred_source": "binance_ws",
         "overwrite_reason": "ws_update_preferred",
     }
+    # Carry forward the last known BBO when this tick omits it: the Binance
+    # futures !ticker@arr payload has no bid/ask fields, and both venue feeds
+    # write the same display key — rebuilding without carry-forward wipes the
+    # Bybit-provided BBO and leaves spread unmeasurable for liquidity gating.
+    if bid is None or float(bid) <= 0:
+        bid = old.get("bid")
+    if ask is None or float(ask) <= 0:
+        ask = old.get("ask")
     if bid is not None and float(bid) > 0:
         entry["bid"] = float(bid)
     if ask is not None and float(ask) > 0:
@@ -609,6 +617,12 @@ def _merge_bybit_ws_price(
         "bybit_symbol": _normalize_bybit_symbol(bybit_symbol),
         "bybit_category": str(category or "linear").lower(),
     }
+    # Bybit v5 ticker is snapshot+delta: delta ticks omit unchanged fields, so
+    # carry forward the last known BBO instead of wiping it on every delta.
+    if bid is None or float(bid) <= 0:
+        bid = old.get("bid")
+    if ask is None or float(ask) <= 0:
+        ask = old.get("ask")
     if bid is not None and float(bid) > 0:
         entry["bid"] = float(bid)
     if ask is not None and float(ask) > 0:

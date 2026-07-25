@@ -1294,99 +1294,46 @@ def _engine_b_independent_direction_probe(
     not-passed, then higher confidence score. Returns ``(None, None, None)``
     when neither direction has a CLEAR structural verdict.
     """
-    candidates: list[dict[str, Any]] = []
-    engine.set_registry_context(pair.get("symbol") or pair.get("display"))
-    _diag_kw = engine_b_live_trigger_kwargs(style_profile, role_candles)
-    precompute = engine.precompute_structure_data(
-        d1_candles or [],
-        h4_candles or [],
-        h1_candles or [],
-        current_price,
-        atr,
-        regime=regime_label,
-        fallback_rr=style_profile.get("fallback_rr", 2.0),
-        asset_type=asset_type,
-        d1_snap=d1_snap or {},
-        h4_snap=h4_snap or {},
+    from engine_b_snapshot import evaluate_engine_b_snapshot
+
+    candles_by_role = {
+        "D1": list(d1_candles or []),
+        "H4": list(h4_candles or []),
+        "H1": list(h1_candles or []),
+        **{str(tf).upper(): list(rows or []) for tf, rows in (role_candles or {}).items()},
+    }
+    entry_tf = str(style_profile.get("entry_tf") or "H1").upper()
+    candles_by_role[entry_tf] = list(entry_candles or candles_by_role.get(entry_tf) or [])
+
+    def _gate(confidence, profile, regime, kind, **_kwargs):
+        return engine_b_confidence_passes(confidence, profile, regime, kind)
+
+    result = evaluate_engine_b_snapshot(
+        pair,
+        candles_by_role,
+        current_price=current_price,
         style=resolved_style,
-        pair=pair,
+        atr_override=atr,
+        score_group=style_profile.get("score_group"),
+        style_profile=style_profile,
+        regime_label=regime_label,
+        d1_snapshot=d1_snap,
+        h4_snapshot=h4_snap,
         dxy_h4_closes=dxy_h4_closes,
-        **_diag_kw,
+        engine=engine,
+        context_mode="live",
+        gate_fn=_gate,
+        picker_fn=engine_b_pick_directional_candidate,
+        conflict_fn=independent_conflict_blocks_emit,
     )
-    for try_direction in ("LONG", "SHORT"):
-        res_b = engine.analyze_structure_direction(
-            precompute, current_price, try_direction
-        )
-        if res_b.get("structural_verdict") != "CLEAR":
-            continue
-        conf_b = engine.calculate_confidence(
-            res_b,
-            current_price,
-            try_direction,
-            entry_candles=entry_candles,
-            style_profile=style_profile,
-        )
-        if str(conf_b.get("lifecycle_state") or "").lower() in {
-            "invalidated",
-            "expired",
-        }:
-            continue
-        gate_ok, _ = engine_b_confidence_passes(
-            conf_b, style_profile, regime_label, asset_type,
-        )
-        try:
-            score = float(conf_b.get("score") or 0.0)
-        except (TypeError, ValueError):
-            score = 0.0
-        candidates.append(
-            {
-                "direction": try_direction,
-                "score": score,
-                "gate_ok": bool(gate_ok),
-                "res_b": res_b,
-                "conf_b": conf_b,
-            }
-        )
-
-    if not candidates:
+    selected = result.selected
+    if selected is None:
         return None, None, None
-
-    passed_candidates = [
-        {
-            "direction": c["direction"],
-            "score": c["score"],
-            "res_b": c["res_b"],
-            "conf_b": c["conf_b"],
-        }
-        for c in candidates
-        if c["gate_ok"]
-    ]
-    if passed_candidates:
-        picked = engine_b_pick_directional_candidate(
-            passed_candidates,
-            min_gap=engine_b_direction_min_score_gap(),
-        )
-        if picked is None:
-            return None, None, None
-        if independent_conflict_blocks_emit(picked["direction"], picked["res_b"]):
-            return None, None, None
-        return picked["direction"], picked["res_b"], picked["conf_b"]
-
-    best: tuple[bool, float, str, dict, dict] | None = None
-    for candidate in candidates:
-        row = (
-            candidate["gate_ok"],
-            candidate["score"],
-            candidate["direction"],
-            candidate["res_b"],
-            candidate["conf_b"],
-        )
-        if best is None or row > best:
-            best = row
-    if best is None:
-        return None, None, None
-    _, _, direction, res_b, conf_b = best
-    return direction, res_b, conf_b
+    return (
+        str(selected["direction"]),
+        dict(selected["structure"]),
+        dict(selected["confidence"] or {}),
+    )
 
 
 def _annotate_engine_b_only_signal_for_scan(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import bisect
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import os
 import time
@@ -297,7 +298,15 @@ def _fetch_bybit_ticker(symbol: str, *, category: str = "linear") -> dict | None
         return None
 
 
-def _fetch_bybit_klines_paginated(symbol: str, tf: str, total_bars: int) -> list[dict] | None:
+def _fetch_bybit_klines_paginated(
+    symbol: str,
+    tf: str,
+    total_bars: int,
+    *,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    workers: int = 1,
+) -> list[dict] | None:
     """Fetch older Bybit linear USDT perpetual klines by walking ``end`` backward."""
     try:
         target = int(total_bars or 0)
@@ -307,12 +316,56 @@ def _fetch_bybit_klines_paginated(symbol: str, tf: str, total_bars: int) -> list
         return None
 
     collected: dict[int, dict] = {}
-    end_ms: int | None = None
+    cursor_end_ms = int(end_ms) if end_ms is not None else None
     remaining = target
+
+    worker_count = max(1, min(int(workers or 1), 32))
+    interval_ms = _bybit_interval_ms(tf)
+    if worker_count > 1 and interval_ms:
+        first_limit = min(1000, remaining)
+        first = _fetch_bybit_klines(symbol, tf, first_limit, end_ms=cursor_end_ms)
+        if not first:
+            return None
+        for candle in first:
+            try:
+                collected[int(candle.get("open_time"))] = candle
+            except (TypeError, ValueError):
+                continue
+        earliest = min(collected) if collected else 0
+        remaining = target - len(collected)
+        page_specs: list[tuple[int, int]] = []
+        page_index = 0
+        while remaining > 0 and earliest > 0:
+            page_end = earliest - 1 - page_index * 1000 * interval_ms
+            if start_ms is not None and page_end < int(start_ms):
+                break
+            page_limit = min(1000, remaining)
+            page_specs.append((page_limit, page_end))
+            remaining -= page_limit
+            page_index += 1
+        with ThreadPoolExecutor(
+            max_workers=min(worker_count, len(page_specs) or 1),
+            thread_name_prefix="BybitHistory",
+        ) as pool:
+            futures = {
+                pool.submit(_fetch_bybit_klines, symbol, tf, limit, end_ms=page_end): (limit, page_end)
+                for limit, page_end in page_specs
+            }
+            for future in as_completed(futures):
+                chunk = future.result()
+                if not chunk:
+                    continue
+                for candle in chunk:
+                    try:
+                        collected[int(candle.get("open_time"))] = candle
+                    except (TypeError, ValueError):
+                        continue
+        candles = [collected[key] for key in sorted(collected)]
+        return candles[-target:] if len(candles) > target else candles
 
     while remaining > 0:
         batch_limit = min(1000, remaining)
-        chunk = _fetch_bybit_klines(symbol, tf, batch_limit, end_ms=end_ms)
+        chunk = _fetch_bybit_klines(symbol, tf, batch_limit, end_ms=cursor_end_ms)
         if not chunk:
             break
         new_rows = 0
@@ -329,7 +382,9 @@ def _fetch_bybit_klines_paginated(symbol: str, tf: str, total_bars: int) -> list
         earliest = min(int(c.get("open_time", 0)) for c in chunk if c.get("open_time") is not None)
         if earliest <= 0:
             break
-        end_ms = earliest - 1
+        cursor_end_ms = earliest - 1
+        if start_ms is not None and cursor_end_ms < int(start_ms):
+            break
         remaining = target - len(collected)
 
     if not collected:

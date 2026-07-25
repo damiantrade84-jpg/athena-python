@@ -161,6 +161,7 @@ def resolve_engine_a_scoring_profile(
         or default_block.get("momentum_tf")
         or "H4"
     ).upper()
+    group_momentum_tf = str(group_block.get("momentum_tf") or "").upper() or None
     regime_tf = str(
         group_block.get("regime_tf")
         or style_block.get("regime_tf")
@@ -202,6 +203,7 @@ def resolve_engine_a_scoring_profile(
         "trend_weights": trend_weights,
         "trend_timeframes": trend_timeframes,
         "momentum_tf": momentum_tf,
+        "group_momentum_tf": group_momentum_tf,
         "regime_tf": regime_tf,
         "execution_tf": execution_tf,
         "chart_tf": chart_tf,

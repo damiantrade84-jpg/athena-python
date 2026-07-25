@@ -8,6 +8,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from athena_ase.horizon import horizon_bar_ms
+
 HOLDOUT_FRACTION = 0.20
 N_EXPANDING_FOLDS = 4
 
@@ -64,8 +66,7 @@ def expanding_folds(df: pd.DataFrame, *, n_folds: int = N_EXPANDING_FOLDS) -> li
 
 
 def _bar_ms(row: pd.Series, default_ms: int = 3_600_000) -> int:
-    hz = str(row.get("horizon", "intraday"))
-    return 3_600_000 if hz == "intraday" else 86_400_000
+    return horizon_bar_ms(str(row.get("horizon", "intraday")))
 
 
 def purge_embargo_mask(

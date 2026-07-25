@@ -32,6 +32,23 @@ _CACHE_LOCK = threading.Lock()
 
 _DEFAULT_STORE_DIR_NAME = "prompts"
 
+# Surface key → versioned filename stem (without extension).
+# README documents versioned names; load_prompt historically looked up <surface>.md only.
+_SURFACE_FILE_ALIASES: dict[str, str] = {
+    "marcus_expert": "marcus_v6",
+    "engine_b_ai_expert_prefix": "engine_b_v2",
+    "engine_c_ai_system": "engine_c_v2",
+    "marcus_chat_system": "chat_system_v3",
+    "news_sentiment_system": "news_v2",
+    "meta_analysis_system": "meta_v2",
+    "lee_system": "lee_v2",
+    "vision_system": "vision_v3",
+    "chart_review_engine_a_preamble": "chart_review_a_v3",
+    "chart_review_engine_b_preamble": "chart_review_b_v3",
+    "scalp_review_engine_d_preamble": "scalp_review_d_v3",
+    "research_safety_preamble": "research_analyst_v2",
+}
+
 
 def _resolve_store_dir() -> str:
     """Resolve the prompt store directory. Never raises."""
@@ -93,10 +110,15 @@ def _candidate_paths(store_dir: str, surface: str) -> list[str]:
     if not safe or safe != surface:
         # Reject path traversal / absolute surfaces; only bare names allowed.
         return []
-    return [
-        os.path.join(store_dir, f"{safe}.md"),
-        os.path.join(store_dir, f"{safe}.txt"),
-    ]
+    stems = [safe]
+    alias = _SURFACE_FILE_ALIASES.get(safe)
+    if alias and alias not in stems:
+        stems.append(alias)
+    paths: list[str] = []
+    for stem in stems:
+        paths.append(os.path.join(store_dir, f"{stem}.md"))
+        paths.append(os.path.join(store_dir, f"{stem}.txt"))
+    return paths
 
 
 def load_prompt(
