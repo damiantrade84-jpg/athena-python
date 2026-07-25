@@ -209,6 +209,14 @@ export interface EngineBScoreBreakdown {
   scoreFloorPasses: boolean;
   confidencePasses: boolean;
   bonusPoints: number | null;
+  /** Quality-layer percent (0-100). The only Engine B score that varies on pass. */
+  qualityPct: number | null;
+  /**
+   * False when the style/regime floor cannot reject anything for this signal —
+   * under the legacy `total` basis a passing signal always has gate_score ==
+   * gate_max_possible, which already exceeds the configured floor.
+   */
+  minScoreFloorBinding: boolean | null;
 }
 
 function engineBConfidenceSource(
@@ -288,6 +296,13 @@ export function engineBScoreBreakdown(
   const bonusPoints = readSignalNumber(conf, 'bonus_points', 'bonusPoints');
   const resolvedBonus = Number.isFinite(bonusPoints) ? bonusPoints : null;
 
+  const qualityPct = readSignalNumber(conf, 'quality_pct', 'qualityPct');
+  const qualityPctFromTop = readSignalNumber(row, 'engine_b_quality_pct', 'quality_pct');
+  const resolvedQualityPct = Number.isFinite(qualityPct) ? qualityPct : qualityPctFromTop;
+
+  const floorBindingRaw = conf.min_score_floor_binding ?? row.engine_b_min_score_floor_binding;
+  const resolvedFloorBinding = typeof floorBindingRaw === 'boolean' ? floorBindingRaw : null;
+
   if (
     !Number.isFinite(resolvedGate)
     && !Number.isFinite(resolvedTotal)
@@ -317,10 +332,23 @@ export function engineBScoreBreakdown(
     scoreFloorPasses,
     confidencePasses,
     bonusPoints: resolvedBonus,
+    qualityPct: Number.isFinite(resolvedQualityPct) ? resolvedQualityPct : null,
+    minScoreFloorBinding: resolvedFloorBinding,
   };
 }
 
-/** Compute a confluence percent anchored to the per-pair threshold (~67% = passing). */
+/**
+ * Confluence as a percent of the achievable maximum (score / maxScore).
+ *
+ * This used to be anchored to the per-pair threshold — `round(score/threshold*67)`
+ * — which is a threshold-clearance ratio, not a quality percentage. Group
+ * thresholds span 1.5-2.2 on the same 0-3 scale, so the number was not
+ * comparable across score groups and saturated early: an index signal at
+ * 2.24/3.00 (threshold 1.5) displayed 100% while a perfect forex_majors signal
+ * at 3.00/3.00 (threshold 2.1) displayed 96%. It also disagreed with the list
+ * sort, which ranks on the absolute score. Threshold clearance is now surfaced
+ * separately by `confluenceThresholdPct` so the bar can mark it.
+ */
 export function confluencePct(
   sig: EngineASignal | null | undefined,
   scoreOverride?: number | null,
@@ -333,17 +361,33 @@ export function confluencePct(
     : useDecisionScore && breakdown?.decisionScore != null
       ? breakdown.decisionScore
       : toNum(sig.confluenceScore ?? sig.score, NaN);
-  const threshold = engineAThreshold(sig);
   const max = toNum(sig.maxScore, NaN);
   if (!Number.isFinite(score)) return null;
-  if (threshold != null && threshold > 0) {
-    const pct = Math.round((score / threshold) * 67);
-    return Math.max(0, Math.min(100, pct));
-  }
   if (Number.isFinite(max) && max > 0) {
     return Math.max(0, Math.min(100, Math.round((score / max) * 100)));
   }
+  const norm = toNum((sig as Record<string, unknown>).scoreNorm, NaN);
+  if (Number.isFinite(norm)) {
+    return Math.max(0, Math.min(100, Math.round(norm * 100)));
+  }
   return null;
+}
+
+/**
+ * Where this pair's trade threshold sits on the same 0-100 axis as
+ * `confluencePct`, so the score bar can render it as a marker instead of
+ * rescaling the whole axis around it.
+ */
+export function confluenceThresholdPct(
+  sig: EngineASignal | null | undefined,
+): number | null {
+  if (!sig) return null;
+  const threshold = engineAThreshold(sig);
+  const max = toNum(sig.maxScore, NaN);
+  if (threshold == null || !(threshold > 0) || !Number.isFinite(max) || !(max > 0)) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, Math.round((threshold / max) * 100)));
 }
 
 /** Score for list sort / group headers — decision-time for V3 or adjusted payloads. */
@@ -353,6 +397,57 @@ export function engineAListScore(sig: EngineASignal | null | undefined): number 
   const useDecision = isEngineAV3Signal(sig) && breakdown?.hasAdjustments;
   if (useDecision && breakdown?.decisionScore != null) return breakdown.decisionScore;
   return toNum(sig.confluenceScore ?? sig.score, 0);
+}
+
+/**
+ * Scale-free sort key (0-1) for lists that mix Engine A and Engine B-only rows.
+ *
+ * `engineAListScore` returns the raw `confluenceScore`, but for Engine B-only
+ * rows the backend writes Engine B's total (0-~6.0 scale) into that same field,
+ * so a B row outranks every Engine A row (max 3.0) on any tiebreak that reaches
+ * the score comparison. Normalising by each row's own max keeps the comparison
+ * meaningful; Engine B rows prefer their quality percent, which is the only
+ * Engine B number that varies between passing signals.
+ */
+export function unifiedListSortKey(sig: EngineASignal | null | undefined): number {
+  if (!sig) return 0;
+  const raw = sig as Record<string, unknown>;
+  const engine = String(raw.engine_source ?? raw.engine ?? '').toUpperCase();
+  const isBRow = engine === 'ENGINE_B' || engine === 'B' || engine === 'NAKED'
+    || raw.is_naked === true;
+
+  if (isBRow) {
+    const qualityPct = toNum(raw.engine_b_quality_pct ?? raw.quality_pct, NaN);
+    if (Number.isFinite(qualityPct)) {
+      return Math.max(0, Math.min(1, qualityPct / 100));
+    }
+  }
+
+  const score = engineAListScore(sig);
+  const max = toNum(sig.maxScore, NaN);
+  if (Number.isFinite(max) && max > 0) {
+    return Math.max(0, Math.min(1, score / max));
+  }
+  const norm = toNum(raw.scoreNorm, NaN);
+  return Number.isFinite(norm) ? Math.max(0, Math.min(1, norm)) : 0;
+}
+
+/**
+ * Conviction for sorting/display. Engine A's `conviction` is its own score_norm;
+ * Engine B-only rows carry no `conviction` at all, so sorting on the raw field
+ * treated every Engine B row as zero conviction. Fall back to the blended
+ * consensus value, then to each engine's own normalized score.
+ */
+export function signalConviction(sig: EngineASignal | null | undefined): number | null {
+  if (!sig) return null;
+  const raw = sig as Record<string, unknown>;
+  for (const key of ['conviction', 'combinedConviction', 'scoreNorm'] as const) {
+    const n = toNum(raw[key], NaN);
+    if (Number.isFinite(n)) return Math.max(0, Math.min(1, n));
+  }
+  const qualityPct = toNum(raw.engine_b_quality_pct ?? raw.quality_pct, NaN);
+  if (Number.isFinite(qualityPct)) return Math.max(0, Math.min(1, qualityPct / 100));
+  return null;
 }
 
 export function convictionTier(c: number | null | undefined): {

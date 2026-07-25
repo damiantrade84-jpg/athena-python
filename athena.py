@@ -5623,8 +5623,13 @@ def _normalize_ai_analyze_signal(sig: dict) -> dict:
                 )
         if sig.get("score_pct") is None:
             sig["score_pct"] = sig.get("confluencePct")
-        if sig.get("quality_pct") is None and naked.get("pct") is not None:
-            sig["quality_pct"] = naked.get("pct")
+        # quality_pct is the earned quality layer (0-100, full range). `pct` is
+        # the total ratio, which floors near 83% for every passing signal because
+        # gate_score == gate_max on pass — it is not a quality measure.
+        if sig.get("quality_pct") is None:
+            sig["quality_pct"] = _first_present(
+                naked.get("quality_pct"), sig.get("engine_b_quality_pct")
+            )
         if sig.get("price") is None:
             sig["price"] = _first_present(sig.get("entry"), naked.get("current_price"))
         if sig.get("sl") is None:
@@ -14612,7 +14617,14 @@ def _attach_v3_intermarket_confirmation(
                 try:
                     _max = float(signal["maxScore"])
                     if _max > 0:
-                        signal["scoreNorm"] = round(min(1.0, adjusted / _max), 6)
+                        _norm = round(min(1.0, adjusted / _max), 6)
+                        signal["scoreNorm"] = _norm
+                        # conviction is quant_scorer's score_norm; re-derive it
+                        # with the adjusted score. Leaving it at the pre-blend
+                        # value made the UI conviction badge and the conviction
+                        # sort disagree with the score shown beside them.
+                        if signal.get("conviction") is not None:
+                            signal["conviction"] = _norm
                 except (TypeError, ValueError):
                     pass
             retier_v3_after_score_adjust(signal)

@@ -56,7 +56,18 @@ def _candles() -> dict[str, list[dict]]:
     }
 
 
-def test_policy_momentum_honors_explicit_tlt_group_override() -> None:
+def test_policy_momentum_honors_explicit_tlt_group_override(monkeypatch) -> None:
+    from config import CONFIG
+
+    # Default ENGINE_A_MOMENTUM_ANCHOR="profile": the configured momentum_tf wins,
+    # so a group with an explicit override (bond_tlt -> D1) keeps it and a group
+    # without one falls back to the profile anchor (H4) rather than being dragged
+    # onto the policy trigger rung.
+    assert _resolve_policy_momentum_tf("bond_tlt", "stock", "intraday", "M15") == "D1"
+    assert _resolve_policy_momentum_tf("us_stock_single", "stock", "intraday", "M15") == "H4"
+
+    # "policy_trigger" restores the legacy behaviour for groups with no override.
+    monkeypatch.setitem(CONFIG, "ENGINE_A_MOMENTUM_ANCHOR", "policy_trigger")
     assert _resolve_policy_momentum_tf("bond_tlt", "stock", "intraday", "M15") == "D1"
     assert _resolve_policy_momentum_tf("us_stock_single", "stock", "intraday", "M15") == "M15"
 
@@ -93,6 +104,7 @@ def test_policy_trigger_evidence_uses_actual_trigger_timeframe(monkeypatch):
         snapshot_cache=None,
         *,
         extra_tfs=(),
+        **_kwargs,
     ):
         captured["extra_tfs"] = extra_tfs
         return {
@@ -277,10 +289,16 @@ def test_mr_yields_tradable_level(monkeypatch):
     candles = _candles()
     candles["H1"] = _mr_primary_candles()
 
-    def _fake_snapshots(candle_map, asset_type, periods, snapshot_cache=None):
+    # The momentum anchor (H4) must be non-trending for the MR regime to engage —
+    # see ENGINE_A_V3_MEAN_REVERSION.REQUIRE_HIGHER_TF_ADX_CONFIRMATION. A range
+    # fade is only coherent when the higher rung is also ranging; the previously
+    # used ADX 28 anchor described a trending H4, which the corroboration check
+    # now (correctly) blocks — covered by
+    # test_mr_blocked_when_momentum_anchor_is_trending.
+    def _fake_snapshots(candle_map, asset_type, periods, snapshot_cache=None, **_kwargs):
         return {
-            "D1": _bearish_snap(),
-            "H4": _bearish_snap(),
+            "D1": _bearish_snap(adx=16.0),
+            "H4": _bearish_snap(adx=16.0),
             "H1": _stretched_below_snap(),
         }
 
@@ -337,7 +355,9 @@ def test_setup_upgrade_respects_quality_floor(monkeypatch):
     from engine_a_v3.quant_scorer import QuantScore
     from engine_a_v3.setups import SetupCandidate
 
-    def _fake_score_pair(route, horizon, candles, *, context=None, profile=None, snapshot_cache=None):
+    def _fake_score_pair(
+        route, horizon, candles, *, context=None, profile=None, snapshot_cache=None, **_kwargs
+    ):
         return QuantScore(
             direction="FLAT",
             confluence_score=0.1,
@@ -352,7 +372,9 @@ def test_setup_upgrade_respects_quality_floor(monkeypatch):
             components={},
         )
 
-    def _fake_detect_setup(route, horizon, candles, *, display=None, indicator_periods=None):
+    def _fake_detect_setup(
+        route, horizon, candles, *, display=None, indicator_periods=None, **_kwargs
+    ):
         return SetupCandidate("fx_trend_pullback", "TRADE", "LONG", (), (), "trend")
 
     monkeypatch.setattr(evaluator_module, "score_pair", _fake_score_pair)
@@ -472,7 +494,7 @@ def test_subsystems_enabled_carry_can_flip_direction(monkeypatch):
     )
     import engine_a_v3.quant_scorer as qs
 
-    def _fake_snapshots(candle_map, asset_type, periods, snapshot_cache=None):
+    def _fake_snapshots(candle_map, asset_type, periods, snapshot_cache=None, **_kwargs):
         return {
             "D1": {"close": 100, "ema21": 100, "ema50": 100, "ema200": 100, "adxSlope": 0},
             "H4": {"close": 100, "ema21": 100, "ema50": 100, "ema200": 100, "adxSlope": 0},
@@ -656,3 +678,122 @@ def test_f13_score_pair_rejects_unsupported_horizon():
     quant = score_pair(route, "scalp", {"D1": [], "H4": [], "H1": []})
     assert quant.direction == "FLAT"
     assert quant.factor_diagnostics.get("rejectionReason") == "unsupported_horizon"
+
+
+def test_mr_blocked_when_momentum_anchor_is_trending(monkeypatch):
+    """A fast-rung ADX dip must not flip a trending higher timeframe into a fade.
+
+    Entry rung ADX 15 + stretched below the lower band looks like a range fade,
+    but the momentum anchor reads ADX 28 with aligned DI (12/22) — a real H4
+    downtrend. Fading that is counter-trend, so the regime must stay `trend`.
+    """
+    import engine_a_v3.quant_scorer as qs
+
+    candles = _candles()
+    candles["H1"] = _mr_primary_candles()
+
+    def _fake_snapshots(candle_map, asset_type, periods, snapshot_cache=None, **_kwargs):
+        return {
+            "D1": _bearish_snap(adx=28.0),
+            "H4": _bearish_snap(adx=28.0),
+            "H1": _stretched_below_snap(adx=15.0),
+        }
+
+    monkeypatch.setattr(qs, "_snapshots", _fake_snapshots)
+    route = route_specialist({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"})
+    quant = score_pair(route, "intraday", candles)
+    assert quant.level_style == "trend"
+    assert quant.direction != "LONG"
+
+
+def test_location_corroboration_is_reversible():
+    """With the corroboration disabled the entry rung alone decides the regime."""
+    trending_anchor_adx = 28.0
+    _comp, style_guarded = _location_component(
+        _stretched_below_snap(adx=15.0),
+        "forex",
+        "forex_majors",
+        corroborating_adx=trending_anchor_adx,
+    )
+    assert style_guarded == "trend"
+
+    _comp, style_no_anchor = _location_component(
+        _stretched_below_snap(adx=15.0), "forex", "forex_majors"
+    )
+    assert style_no_anchor == "mean_reversion"
+
+
+def test_trend_mode_location_credits_pullback_and_extension_equally():
+    """Trend-mode location scores entry timing, not side.
+
+    A LONG with price 0.5 ATR below the trend EMA is the pullback this component
+    was written to reward; previously it was discarded for "disagreeing" with the
+    direction while an equal-sized extension above the EMA was credited in full.
+    """
+    from engine_a_v3.quant_scorer import _location_component as loc
+
+    base = {
+        "atr": 2.0,
+        "ema21": 100.0,
+        "adx": 40.0,  # well above the MR ceiling -> trend mode
+        "bbUpper": 120.0,
+        "bbLower": 80.0,
+    }
+    pullback, style_pb = loc({**base, "close": 99.0}, "forex", "forex_majors")
+    extension, style_ext = loc({**base, "close": 101.0}, "forex", "forex_majors")
+
+    assert style_pb == "trend" and style_ext == "trend"
+    assert pullback.directional is False
+    assert extension.directional is False
+    assert pullback.quality == pytest.approx(extension.quality)
+
+
+def test_max_attainable_score_reports_unavailable_components(monkeypatch):
+    """A missing component keeps its weight in the divisor, so report the ceiling."""
+    import engine_a_v3.quant_scorer as qs
+
+    def _fake_snapshots(candle_map, asset_type, periods, snapshot_cache=None, **_kwargs):
+        return {"D1": _bullish_snap(), "H4": _bullish_snap(), "H1": _bullish_snap()}
+
+    monkeypatch.setattr(qs, "_snapshots", _fake_snapshots)
+    monkeypatch.setattr(
+        qs, "_volume_component", lambda *a, **k: Component(0.0, 0.0, available=False)
+    )
+    route = route_specialist({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"})
+    quant = score_pair(route, "intraday", _candles())
+
+    diag = quant.factor_diagnostics
+    assert "volume" in (diag.get("unavailableComponents") or [])
+    assert 0.0 < diag["maxAttainableScore"] < 3.0
+    assert quant.confluence_score <= diag["maxAttainableScore"] + 1e-6
+
+
+def test_momentum_diag_emits_adx_slope_for_legacy_filters():
+    """legacy_filters reads adxFalling/adxSlope off mom_diag; they must exist."""
+    from engine_a_v3.quant_scorer import _momentum_component
+
+    _comp, diag = _momentum_component(
+        {**_bearish_snap(adx=30.0), "adxSlope": -1.5}, "crypto", "crypto_btc"
+    )
+    assert diag["adxSlope"] == pytest.approx(-1.5)
+    assert diag["adxFalling"] is True
+
+    _comp, rising = _momentum_component(
+        {**_bullish_snap(), "adxSlope": 1.2}, "crypto", "crypto_btc"
+    )
+    assert rising["adxFalling"] is False
+
+
+def test_tf_trend_label_is_vote_count_aware():
+    """A 2-1 majority and a 3-1 majority must both label directional."""
+    from engine_a_v3.quant_scorer import _tf_trend
+
+    # No ema200 slope -> 3 votes. close>ema21, ema21>ema50, ema50<ema200 => 2-1 up.
+    three_votes = {"close": 110.0, "ema21": 108.0, "ema50": 105.0, "ema200": 106.0}
+    score3, label3, ok3 = _tf_trend(three_votes)
+    assert ok3 and label3 == "UP" and score3 == pytest.approx(1 / 3)
+
+    # Same stack plus a positive slope -> 4 votes, 3-1 up.
+    four_votes = {**three_votes, "ema200Slope10": 0.4}
+    _score4, label4, _ok4 = _tf_trend(four_votes)
+    assert label4 == "UP"

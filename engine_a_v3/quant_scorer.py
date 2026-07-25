@@ -132,26 +132,41 @@ def _policy_trend_weights_from_profile(
             ordered_weights.append(float(weights[wkey]))
         except (TypeError, ValueError):
             continue
-    if len(ordered_weights) != len(_POLICY_TREND_ROLES):
+    layer_count_mismatch = len(ordered_weights) != len(_POLICY_TREND_ROLES)
+    if layer_count_mismatch:
         # Profile disabled/incomplete: fall back to the style defaults, which
         # are the same source `_fallback_tf_weights` uses. Never fall through
-        # to the legacy inverted role table.
+        # to the legacy inverted role table. This silently discards a group's
+        # configured stack, so it is reported rather than swallowed — every
+        # group in ENGINE_A_SCORING_PROFILE currently declares three layers, and
+        # a two-layer stack would otherwise be scored with style defaults.
         fallback = _fallback_tf_weights(horizon)
         ordered_weights = [
             float(fallback.get(tf, 0.0)) for tf in ("D1", "H4", "H1")
         ]
     tf_weights: dict[str, float] = {}
     role_map: dict[str, str] = {}
+    role_weights: dict[str, float] = {}
     for (key, alias), weight in zip(_POLICY_TREND_ROLES, ordered_weights):
         tf = str(policy.get(key) or policy.get(alias) or "").upper()
         if not tf:
             continue
         role_map[key] = tf
+        role_weights[key] = round(float(weight), 4)
         tf_weights[tf] = tf_weights.get(tf, 0.0) + weight
     diagnostics = {
-        "trendWeightSource": "policy_roles_profile_weights",
+        "trendWeightSource": (
+            "policy_roles_style_fallback"
+            if layer_count_mismatch
+            else "policy_roles_profile_weights"
+        ),
         "trendRoleTimeframes": dict(role_map),
+        # Profile weights are calibrated by timeframe name but applied by role
+        # position, so a policy promotion redirects a calibrated weight onto a
+        # different timeframe. Emit the resolved (role, tf, weight) triple.
+        "trendRoleWeights": dict(role_weights),
         "trendLayersCollapsed": len(role_map) - len(tf_weights),
+        "trendLayerCountMismatch": layer_count_mismatch,
     }
     return tf_weights, diagnostics
 
@@ -308,6 +323,12 @@ class Component:
     signal: float   # -1..1 directional (sign = LONG/SHORT)
     quality: float  # 0..1 confidence/cleanliness
     available: bool = True
+    # Directional components vote on LONG/SHORT and are credited only when their
+    # sign matches the chosen direction. Non-directional components measure
+    # *quality of the moment* rather than side (trend-mode location: how close
+    # price sits to the trend EMA), so they neither vote on direction nor get
+    # zeroed for disagreeing with it — see `_location_component`.
+    directional: bool = True
 
 
 @dataclass
@@ -343,7 +364,13 @@ def _tf_trend(snap: Mapping[str, Any]) -> tuple[float, str, bool]:
     if slope:
         votes.append(1.0 if slope > 0 else -1.0)
     score = sum(votes) / len(votes)
-    label = "UP" if score > 0.34 else "DOWN" if score < -0.34 else "FLAT"
+    # Label on the majority margin, not a fixed 0.34 cut. The vote count varies
+    # (3 without an ema200 slope, 4 with one), so a fixed cut labelled a 2-1
+    # majority (0.333) FLAT while labelling the equivalent 3-1 majority (0.5) UP
+    # — the trend label flipped on whether a slope value happened to exist.
+    # `score` is a mean of +/-1 votes, so any net majority is >= 1/len(votes).
+    margin = (1.0 / len(votes)) - 1e-9
+    label = "UP" if score >= margin else "DOWN" if score <= -margin else "FLAT"
     return score, label, True
 
 
@@ -638,6 +665,18 @@ def _momentum_component(
 
     adx = _f(adx_raw, 0.0) or 0.0
     diag["adxValue"] = round(adx, 2)
+    # ADX slope/decay. legacy_filters reads these off mom_diag to drive the forex
+    # EMA-cluster and crypto late-trend adjustments; they were never emitted, so
+    # `adx_falling` was hardcoded False downstream and the crypto late-trend
+    # penalty could only fire on weak ADX — never on the strong-but-decaying
+    # trend it was written for (factor_scoring: adx_weak_or_falling).
+    adx_slope = _f(snap.get("adxSlope"))
+    adx_prev = _f(snap.get("adxPrev"))
+    if adx_slope is None and adx_prev is not None:
+        adx_slope = adx - adx_prev
+    if adx_slope is not None:
+        diag["adxSlope"] = round(adx_slope, 4)
+        diag["adxFalling"] = bool(adx_slope < 0)
     trend_min, hard_fail = _resolve_adx_thresholds(asset_type, score_group)
     adx_mult = _adx_multiplier_from_value(adx, trend_min, hard_fail)
     diag["adxMultiplier"] = round(adx_mult, 4)
@@ -646,6 +685,27 @@ def _momentum_component(
     base_quality = sum(quality_terms) / len(quality_terms) if quality_terms else 0.0
     quality = _clamp01(base_quality * adx_mult)
     return Component(_clamp(signal, -1.0, 1.0), quality), diag
+
+
+def _location_trend_timing_only() -> bool:
+    """Whether trend-mode location is scored as timing rather than direction.
+
+    Default (true) fixes an alignment asymmetry: trend-mode ``signal`` was
+    ``dist/2`` (positive above the trend EMA), and the aggregator only credits
+    components whose sign matches the chosen direction. A LONG with price half
+    an ATR *above* ema21 was therefore credited in full, while a LONG with price
+    half an ATR *below* ema21 — the textbook pullback entry this component was
+    written to reward, and the one carrying the higher ``quality`` — contributed
+    nothing. Set ``ENGINE_A_V3_LOCATION.TREND_TIMING_ONLY: false`` to restore the
+    directional behaviour.
+    """
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_LOCATION") or {}
+        return bool(cfg.get("TREND_TIMING_ONLY", True))
+    except Exception:
+        return True
 
 
 def _resolve_mr_adx_ceiling(asset_type: str, score_group: str) -> float:
@@ -670,12 +730,40 @@ def _resolve_mr_adx_ceiling(asset_type: str, score_group: str) -> float:
 
 
 # ── location (pullback timing / mean-reversion regime) ───────────────────────
+def _mean_reversion_requires_higher_tf_confirmation() -> bool:
+    """Whether the MR regime must also see a non-trending higher rung.
+
+    The regime switch reads ADX and Bollinger state from the *entry/setup* rung
+    and then overrides the multi-timeframe consensus direction outright. Without
+    corroboration, a low-ADX pocket on a fast rung (e.g. M30 ADX 15) flipped
+    signals whose momentum anchor was genuinely trending (H4 ADX 28 with aligned
+    DI) into a counter-trend fade. Reversible:
+    ``ENGINE_A_V3_MEAN_REVERSION.REQUIRE_HIGHER_TF_ADX_CONFIRMATION: false``.
+    """
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_MEAN_REVERSION") or {}
+        return bool(cfg.get("REQUIRE_HIGHER_TF_ADX_CONFIRMATION", True))
+    except Exception:
+        return True
+
+
 def _location_component(
-    snap: Mapping[str, Any], asset_type: str, score_group: str
+    snap: Mapping[str, Any],
+    asset_type: str,
+    score_group: str,
+    *,
+    corroborating_adx: float | None = None,
 ) -> tuple[Component, str]:
     """Entry timing. In a trend, a small pullback toward the trend EMA is the
     best entry (high quality); over-extension lowers quality but never vetoes.
-    In a weak-ADX, BB-stretched regime, flips to a mean-reversion fade signal."""
+    In a weak-ADX, BB-stretched regime, flips to a mean-reversion fade signal.
+
+    ``corroborating_adx`` is the momentum-anchor rung's ADX. When supplied, the
+    mean-reversion regime also requires that rung to be non-trending, so the fade
+    cannot be triggered by a fast-rung ADX dip inside a higher-timeframe trend.
+    """
     if not snap:
         return Component(0.0, 0.0, available=False), "trend"
     close = _f(snap.get("close"))
@@ -690,16 +778,27 @@ def _location_component(
     stretched = bool((bb_u is not None and close > bb_u) or (bb_l is not None and close < bb_l))
     mr_adx_ceiling = _resolve_mr_adx_ceiling(asset_type, score_group)
 
-    if adx < mr_adx_ceiling and stretched:
+    higher_tf_ranging = True
+    if corroborating_adx is not None and _mean_reversion_requires_higher_tf_confirmation():
+        higher_tf_ranging = corroborating_adx < mr_adx_ceiling
+
+    if adx < mr_adx_ceiling and stretched and higher_tf_ranging:
         # Range fade: signal opposite to the stretch; quality scales with stretch.
         signal = -1.0 if (bb_u is not None and close > bb_u) else 1.0
         quality = _clamp01(abs(dist) / 3.0)
         return Component(signal, quality), "mean_reversion"
 
-    # Trend timing: quality peaks near the EMA, decays with extension.
+    # Trend timing: quality peaks near the EMA, decays with extension. The
+    # signed distance is retained for diagnostics/direction only in the legacy
+    # mode; by default location is a timing component (see
+    # _location_trend_timing_only) so a pullback and an equal-sized extension
+    # are scored on the same quality curve instead of the pullback being
+    # discarded for "disagreeing" with the trade direction.
     extension = abs(dist)
     quality = _clamp01(1.0 - max(0.0, extension - 0.5) / 3.0)
     signal = _clamp(dist / 2.0, -0.5, 0.5)  # mild directional bias only
+    if _location_trend_timing_only():
+        return Component(signal, quality, directional=False), "trend"
     return Component(signal, quality), "trend"
 
 
@@ -710,6 +809,17 @@ def _volatility_gating_enabled() -> bool:
 
         cfg = CONFIG.get("ENGINE_A_V3_VOLATILITY_GATING") or {}
         return bool(cfg.get("ENABLED", True))
+    except Exception:
+        return True
+
+
+def _volatility_denominator_normalized() -> bool:
+    """Whether the per-component volatility multiplier also scales the divisor."""
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_VOLATILITY_GATING") or {}
+        return bool(cfg.get("NORMALIZE_DENOMINATOR", True))
     except Exception:
         return True
 
@@ -1142,15 +1252,21 @@ def score_pair(
             },
             components={"trend": trend, "momentum": momentum, "location": Component(0.0, 0.0), "volume": Component(0.0, 0.0)},
         )
+    # Momentum-anchor ADX corroborates the mean-reversion regime switch, which is
+    # otherwise decided entirely on the entry/setup rung.
+    corroborating_adx = _f(momentum_snap.get("adx")) if momentum_snap else None
     core_key = (
         "entry_core",
         entry_tf,
         len(entry_candles),
         (context or {}).get("volume_ratio"),
+        corroborating_adx,
     )
     core_result = feature_cache.get(core_key) if feature_cache is not None else None
     if core_result is None:
-        location, level_style = _location_component(entry_snap, asset_type, group)
+        location, level_style = _location_component(
+            entry_snap, asset_type, group, corroborating_adx=corroborating_adx
+        )
         volume = _volume_component(entry_snap, entry_candles, context)
         core_result = location, level_style, volume
         if feature_cache is not None:
@@ -1204,8 +1320,14 @@ def score_pair(
         and comp.available
         and (name != "volume" or comp.quality > 0.0 or comp.signal != 0.0)
     }
+    # dir_sum normalizer: only components that actually cast a directional vote.
+    # A non-directional component (trend-mode location) contributes no term, so
+    # leaving its weight in the denominator would silently damp |dir_sum| and
+    # push borderline signals under the direction deadband / ramp floor.
     weight_sum = 0.0
-    for name in active:
+    for name, comp in active.items():
+        if not comp.directional:
+            continue
         weight_sum += max(0.0, combined_weights.get(name, 0.0))
     if subsystems_enabled():
         for name in SUBSYSTEM_FACTORS:
@@ -1220,19 +1342,46 @@ def score_pair(
 
     # Confluence uses the full configured weight budget so unavailable components
     # cannot inflate scores by shrinking the divisor (L-1).
+    #
+    # The per-component volatility multiplier is applied to the denominator as
+    # well as the numerator, so score_frac stays a true weighted average of
+    # component quality. Previously the multiplier scaled only the numerator,
+    # which made MAX_SCORE unreachable in low-ADX regimes and saturated (then
+    # clamped away) the top of the scale in high-ADX regimes — i.e. the "/3.00"
+    # denominator shown on the card was not the achievable maximum. Disable with
+    # ENGINE_A_V3_VOLATILITY_GATING.NORMALIZE_DENOMINATOR: false.
+    vol_mults = _component_vol_mults(entry_snap)
+    _vol_denom_normalized = _volatility_denominator_normalized()
+
+    def _denom_vol_mult(name: str) -> float:
+        if not _vol_denom_normalized or name not in CORE_COMPONENTS:
+            return 1.0
+        return vol_mults.get(name, 1.0)
+
     confluence_denom = sum(
-        max(0.0, combined_weights.get(name, 0.0)) for name in CORE_COMPONENTS
+        max(0.0, combined_weights.get(name, 0.0)) * _denom_vol_mult(name)
+        for name in CORE_COMPONENTS
+    )
+    # Weight budget that could still be earned: components with no data can
+    # never contribute, so the reachable maximum is below MAX_SCORE for them.
+    attainable_weight = sum(
+        max(0.0, combined_weights.get(name, 0.0)) * _denom_vol_mult(name)
+        for name in CORE_COMPONENTS
+        if name in active
     )
     if subsystems_enabled():
         for name in SUBSYSTEM_FACTORS:
             if _subsystem_contributes(name):
                 confluence_denom += max(0.0, combined_weights.get(name, 0.0))
+                attainable_weight += max(0.0, combined_weights.get(name, 0.0))
     confluence_denom = confluence_denom or 1.0
 
     # Direction = sign of the weighted directional sum over active components,
     # except in mean-reversion regime where the fade direction is authoritative.
     dir_terms: list[tuple[float, float]] = []
     for n, c in active.items():
+        if not c.directional:
+            continue
         dir_terms.append((combined_weights.get(n, 0.0), c.signal * c.quality))
     if subsystems_enabled():
         for n in SUBSYSTEM_FACTORS:
@@ -1252,6 +1401,7 @@ def score_pair(
             mr_guard = CONFIG.get("ENGINE_A_V3_MR_OPPOSITION_GUARD") or {}
             if mr_guard.get("ENABLED", True):
                 min_q = float(mr_guard.get("MIN_OPPOSE_QUALITY", 0.55))
+                require_both = bool(mr_guard.get("REQUIRE_BOTH", True))
                 loc_sign = 1.0 if location.signal > 0 else -1.0
                 trend_opp = (
                     trend.available
@@ -1263,7 +1413,8 @@ def score_pair(
                     and momentum.quality >= min_q
                     and (momentum.signal * loc_sign) < 0.0
                 )
-                if trend_opp and mom_opp:
+                opposed = (trend_opp and mom_opp) if require_both else (trend_opp or mom_opp)
+                if opposed:
                     mr_opposition_blocked = True
                     if dir_sum > profile.direction_deadband:
                         direction, dsign = "LONG", 1.0
@@ -1306,18 +1457,21 @@ def score_pair(
     except Exception:
         dir_ramp_mult = round(0.5 + 0.5 * abs(dir_sum), 4)
 
-    # Confluence = weighted aligned quality. Components that disagree with the
-    # chosen direction contribute nothing (continuous), but never veto.
+    # Confluence = weighted aligned quality. Directional components that disagree
+    # with the chosen direction contribute nothing (continuous), but never veto.
+    # Non-directional components (trend-mode location) are credited on quality
+    # alone once a direction exists — they measure entry timing, not side.
     # Dedicated Trend/Momentum boxes + the rest as "orthogonal" factor boxes,
     # matching the cockpit card. Each box shows signed strength (signal*quality).
     factor_scores: dict[str, Any] = {}
     ortho: dict[str, float] = {}
     score_frac = 0.0
-    vol_mults = _component_vol_mults(entry_snap)
     for name, comp in components.items():
         weight = max(0.0, combined_weights.get(name, 0.0))
         in_direction_pool = name in active or (subsystems_enabled() and _subsystem_contributes(name))
-        aligned = bool(dsign) and (comp.signal * dsign) > 0.0
+        aligned = bool(dsign) and (
+            not comp.directional or (comp.signal * dsign) > 0.0
+        )
         vol_mult = vol_mults.get(name, 1.0) if name in CORE_COMPONENTS else 1.0
         if in_direction_pool and aligned:
             score_frac += weight * comp.quality * vol_mult
@@ -1334,6 +1488,18 @@ def score_pair(
     vol_mult = _volatility_mult(entry_snap) if not compact_result else 1.0
     confluence = _clamp(MAX_SCORE * score_frac * max(0.0, dir_ramp_mult), 0.0, MAX_SCORE)
     threshold = profile.trade_threshold
+    # Ceiling this pair can actually reach with the data it has. A missing
+    # component (e.g. no usable volume feed) keeps its weight in the divisor by
+    # design, so the reachable maximum drops below MAX_SCORE and the group
+    # threshold can become unreachable with no signal-level trace. Reported so
+    # the funnel can distinguish "scored low" from "could not score high".
+    max_attainable = round(MAX_SCORE * (attainable_weight / confluence_denom), 4)
+    unavailable_components = sorted(
+        name
+        for name in CORE_COMPONENTS
+        if name not in active and max(0.0, combined_weights.get(name, 0.0)) > 0
+    )
+    threshold_unreachable = bool(threshold > 0 and max_attainable + 1e-9 < threshold)
     decision = "TRADE" if direction in ("LONG", "SHORT") and confluence >= threshold else "WATCH"
 
     from engine_a_v3.legacy_filters import apply_legacy_filters
@@ -1405,6 +1571,8 @@ def score_pair(
             "legacyFilters": legacy_diag,
             "equityVolumeBlocked": equity_volume_blocked,
             "cryptoDerivBlocked": crypto_deriv_blocked,
+            "maxAttainableScore": max_attainable,
+            "thresholdUnreachable": threshold_unreachable,
             **(
                 {"triggerEvidence": trigger_evidence}
                 if trigger_evidence is not None
@@ -1443,6 +1611,14 @@ def score_pair(
             "mrOppositionBlocked": mr_opposition_blocked,
             "mrAdxCeiling": round(_resolve_mr_adx_ceiling(asset_type, group), 4) if level_style == "mean_reversion" else None,
             "trendCoherence": coherence or {"error": "no_ema_data"},
+            # Reachable ceiling given this pair's available components (see
+            # max_attainable above). thresholdUnreachable=true means the group
+            # threshold cannot be met with the data present, regardless of setup
+            # quality — a data problem, not a weak signal.
+            "maxAttainableScore": max_attainable,
+            "unavailableComponents": unavailable_components or None,
+            "thresholdUnreachable": threshold_unreachable,
+            "volatilityDenominatorNormalized": _vol_denom_normalized,
             "volatilityMult": round(vol_mult, 4),
             "componentVolMults": {k: round(v, 4) for k, v in vol_mults.items()},
             "atrPct": _f(entry_snap.get("atr_pct")),

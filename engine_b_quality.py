@@ -160,12 +160,18 @@ def _ob_confluence_score(res: dict[str, Any], direction: str) -> float:
     directional = _ob_confluence_directional()
     aligned_type = "bullish" if str(direction).upper() == "LONG" else "bearish"
     best = 0.0
+    aligned_seen = False
+    typed_seen = False
     if isinstance(blocks, list):
         for block in blocks:
             if not isinstance(block, dict):
                 continue
-            if directional and str(block.get("type") or "").lower() != aligned_type:
+            block_type = str(block.get("type") or "").lower()
+            if block_type:
+                typed_seen = True
+            if directional and block_type != aligned_type:
                 continue
+            aligned_seen = True
             try:
                 strength = float(block.get("strength") or 0.0)
             except (TypeError, ValueError):
@@ -173,6 +179,13 @@ def _ob_confluence_score(res: dict[str, Any], direction: str) -> float:
             best = max(best, strength)
     if best > 0:
         return round(_clamp01(best / 100.0), 4)
+    if directional and typed_seen and not aligned_seen:
+        # Every typed block at the zone opposes the trade. The 0.5 "strength
+        # unknown" default previously awarded half credit here, so the
+        # directional filter had no effect in exactly the case it was added for.
+        # 0.5 is still returned when an aligned block exists but carries no
+        # usable strength, and when no block is typed at all.
+        return 0.0
     return 0.5
 
 
@@ -289,7 +302,7 @@ def compute_confluence_subscores(
             asset_lower, display, direction, as_of_date=as_of_date
         )
 
-    return {
+    subscores = {
         "structure_alignment": compute_structure_alignment_score(res, direction),
         "ob_confluence": _ob_confluence_score(res, direction),
         "fvg_confluence": _fvg_confluence_score(res, direction),
@@ -300,6 +313,67 @@ def compute_confluence_subscores(
         "session_context": _session_context_score(res),
         "orderflow": round(_clamp01(orderflow), 4),
     }
+    # Drop components no feed can ever supply for this asset class, rather than
+    # scoring them 0 and leaving their weight in the quality denominator — an
+    # unearnable component is a permanent handicap, not an anti-inflation guard.
+    # Components that are merely zero *this bar* (e.g. profile_reaction with no
+    # valid session profile) stay in, so a signal cannot inflate its ratio by
+    # having less evidence.
+    for name in _inapplicable_quality_components(res, asset_lower):
+        subscores.pop(name, None)
+    return subscores
+
+
+def _quality_applicability_pruning_enabled() -> bool:
+    return bool(
+        weighted_scoring_config().get("PRUNE_INAPPLICABLE_COMPONENTS", True)
+    )
+
+
+def _inapplicable_quality_components(
+    res: dict[str, Any], asset_lower: str
+) -> tuple[str, ...]:
+    """Quality components that cannot be earned for this asset class at all."""
+    if not _quality_applicability_pruning_enabled():
+        # Legacy behaviour kept only forex volume_confirmation pruned.
+        return ("volume_confirmation",) if asset_lower == "forex" else ()
+
+    out: list[str] = []
+
+    # Spot FX/MT5 volume is tick activity rather than centralized traded volume,
+    # so an authoritative volume feed cannot exist for forex.
+    if asset_lower == "forex":
+        out.append("volume_confirmation")
+
+    # orderflow: crypto reads aggTrade CVD; other classes read carry/COT via
+    # engine_b_subsystems, whose weight table is empty for stock/index/etf/
+    # unknown — those families scored a hard 0 while still consuming weight.
+    if asset_lower != "crypto":
+        try:
+            from engine_b_subsystems import (
+                resolve_subsystem_weights,
+                subsystems_enabled,
+            )
+
+            weights = resolve_subsystem_weights(asset_lower or "unknown")
+            if not subsystems_enabled() or not any(
+                w > 0 for w in (weights or {}).values()
+            ):
+                out.append("orderflow")
+        except Exception:
+            out.append("orderflow")
+
+    # session_context: only the forex/equity session payloads carry a score
+    # influence. Crypto (24/7), commodity and index rows have no payload, so the
+    # component could never move off 0.
+    if not any(
+        isinstance(res.get(key), dict)
+        and bool(res[key].get("score_influence_enabled", False))
+        for key in ("forex_session_structure", "equity_session_structure")
+    ):
+        out.append("session_context")
+
+    return tuple(out)
 
 
 def apply_regime_component_weights(
@@ -328,9 +402,21 @@ def aggregate_quality_score(
     subscores: dict[str, float],
     cfg: dict[str, Any] | None = None,
 ) -> tuple[float, float, dict[str, float]]:
+    """Weighted average of 0-1 subscores -> (points, max_points, per-component).
+
+    ``APPLY_COMPONENT_MAX`` (default false) controls whether COMPONENT_MAX also
+    multiplies COMPONENT_WEIGHTS. Subscores are already 0-1, so COMPONENT_MAX
+    added nothing but a second, undeclared weight: the effective weight was
+    ``max * weight``, which pushed bos_followthrough (0.16 declared, 1.5 max ->
+    23.2% effective) above structure_alignment (0.22 declared -> 21.3%) and cut
+    session_context and liquidity_proximity roughly in half. COMPONENT_WEIGHTS
+    sums to exactly 1.0, so it is clearly meant to be the weight table on its
+    own. Reversible: ENGINE_B_WEIGHTED_SCORING.APPLY_COMPONENT_MAX: true.
+    """
     scoring_cfg = cfg if isinstance(cfg, dict) else weighted_scoring_config()
     max_map = _component_max_map(scoring_cfg)
     weight_map = _component_weight_map(scoring_cfg)
+    apply_max = bool(scoring_cfg.get("APPLY_COMPONENT_MAX", False))
 
     component_points: dict[str, float] = {}
     quality_points = 0.0
@@ -340,12 +426,78 @@ def aggregate_quality_score(
         weight = weight_map.get(name, 0.0)
         if max_pts <= 0 or weight <= 0:
             continue
-        points = round(subscore * max_pts * weight, 4)
+        scale = (max_pts * weight) if apply_max else weight
+        points = round(subscore * scale, 4)
         component_points[name] = points
         quality_points += points
-        quality_max += max_pts * weight
+        quality_max += scale
 
     return round(quality_points, 4), round(quality_max, 4), component_points
+
+
+def engine_b_conviction_basis() -> str:
+    """``quality`` (default) or ``total`` — see :func:`engine_b_conviction_norm`."""
+    try:
+        from config import CONFIG
+
+        basis = str(CONFIG.get("ENGINE_B_CONVICTION_BASIS", "quality") or "quality")
+    except Exception:
+        basis = "quality"
+    basis = basis.strip().lower()
+    return basis if basis in {"quality", "total"} else "quality"
+
+
+def engine_b_conviction_norm(conf: dict[str, Any] | None) -> float:
+    """Single 0-1 Engine B conviction for blends, ranking and execution gates.
+
+    ``total`` basis (``score / max_possible``) is saturated: Engine B only marks
+    a signal ``passed`` when every mandatory gate is true, so gate_score always
+    equals gate_max_possible and the ratio starts near 0.83. Ranking, the A/B
+    conviction blend and AUTO_TRADE_MIN_CONVICTION all read a number whose lower
+    ~83% is constant. The ``quality`` basis reads the earned quality layer only
+    (``calculate_confidence`` -> ``quality_pct``), which spans the full 0-1 range
+    for passing signals. Reversible: ENGINE_B_CONVICTION_BASIS: total.
+
+    Callers must keep using ``passed`` / ``checklist_passed`` for the gate
+    decision — this function ranks, it never gates.
+    """
+    data = conf if isinstance(conf, dict) else {}
+
+    def _num(*keys: str) -> float | None:
+        for key in keys:
+            raw = data.get(key)
+            if raw is None or raw == "":
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if value != value:  # NaN
+                continue
+            return value
+        return None
+
+    def _total_norm() -> float:
+        score = _num("score", "total_score")
+        max_possible = _num("max_possible", "maxScore")
+        if score is not None and max_possible and max_possible > 0:
+            return _clamp01(score / max_possible)
+        pct = _num("pct")
+        return _clamp01(pct / 100.0) if pct is not None else 0.0
+
+    if engine_b_conviction_basis() == "total":
+        return round(_total_norm(), 4)
+
+    quality_pct = _num("quality_pct")
+    if quality_pct is not None:
+        return round(_clamp01(quality_pct / 100.0), 4)
+    points = _num("quality_points_net", "quality_score", "bonus_points")
+    denom = _num("quality_denominator", "quality_max_possible")
+    if points is not None and denom and denom > 0:
+        return round(_clamp01(points / denom), 4)
+    # Pre-quality_pct payload (cached scan row, replayed backtest): fall back to
+    # the total basis rather than reporting zero conviction.
+    return round(_total_norm(), 4)
 
 
 def normalize_followthrough_bonus(ft_bonus: float, ft_max: float) -> float:

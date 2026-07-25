@@ -2126,6 +2126,31 @@ def engine_b_effective_min_score_floor(
     return scaled
 
 
+def engine_b_min_score_basis() -> str:
+    """``total`` (legacy, default) or ``quality_ratio``.
+
+    See ENGINE_B_MIN_SCORE_BASIS in config.yaml. The legacy basis compares the
+    style floor against ``confidence.score``, which for a passing signal is
+    always at least ``gate_max_possible`` — so the configured floors (4.0/4.5/5.0
+    vs a 5.0 gate floor) are effectively non-binding.
+    """
+    try:
+        basis = str(config.CONFIG.get("ENGINE_B_MIN_SCORE_BASIS", "total") or "total")
+    except Exception:
+        basis = "total"
+    basis = basis.strip().lower()
+    return basis if basis in {"total", "quality_ratio"} else "total"
+
+
+def _engine_b_min_quality_ratio(style_profile: dict | None) -> float:
+    style = str((style_profile or {}).get("style") or "").strip().lower()
+    try:
+        ratios = config.CONFIG.get("ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE", {}) or {}
+        return max(0.0, min(1.0, float(ratios.get(style, 0.0) or 0.0)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def engine_b_confidence_passes(
     conf_data: dict | None,
     style_profile: dict | None,
@@ -2149,7 +2174,26 @@ def engine_b_confidence_passes(
     effective_min = engine_b_effective_min_score_floor(
         min_score_scaled, gate_max_possible
     )
-    score_floor_ok = effective_min <= 0 or quality_score >= effective_min
+    basis = engine_b_min_score_basis()
+    if basis == "quality_ratio":
+        min_ratio = _engine_b_min_quality_ratio(style_profile)
+        try:
+            quality_ratio = float(conf.get("quality_pct") or 0.0) / 100.0
+        except (TypeError, ValueError):
+            quality_ratio = 0.0
+        score_floor_ok = min_ratio <= 0 or quality_ratio >= min_ratio
+    else:
+        score_floor_ok = effective_min <= 0 or quality_score >= effective_min
+    if isinstance(conf_data, dict):
+        # Report whether the floor could reject anything for this signal. Under
+        # the legacy basis a passing signal always clears it (gate_score ==
+        # gate_max_possible >= the configured floor), so a "floor passed" badge
+        # means nothing without this flag.
+        conf_data["min_score_basis"] = basis
+        conf_data["min_score_floor_binding"] = bool(
+            basis == "quality_ratio"
+            or (effective_min > 0 and gate_max_possible > 0 and effective_min > gate_max_possible)
+        )
     passed = bool(conf.get("passed", False)) and score_floor_ok
     try:
         from calibration_diagnostics import (
@@ -6459,9 +6503,16 @@ class NakedEngine:
             space_gate_ok = True
 
         # Stage 2.8: Optional volume confirmation gate.
-        # Contributes to gate_score (+1 bonus) but is NOT mandatory for pass.
+        # Contributes to quality/bonus scoring but is NOT mandatory for pass.
+        # Centralized traded volume is not available for spot FX; tick volume
+        # must not become a synthetic zero that lowers forex quality.
         _bos_data = res.get("bos_data") if isinstance(res.get("bos_data"), dict) else {}
-        volume_ok = bool(res.get("bos_confirmed") and res.get("bos_volume_confirmed", False))
+        _volume_scoring_applicable = asset_type_lower != "forex"
+        volume_ok = bool(
+            _volume_scoring_applicable
+            and res.get("bos_confirmed")
+            and res.get("bos_volume_confirmed", False)
+        )
 
         gate_confirmations = [structure_ok, location_ok, entry_ok, space_gate_ok, rr_ok]
         if require_macro_align:
@@ -6621,11 +6672,22 @@ class NakedEngine:
                     bonus_points += 1.0
                 if _ft_enabled:
                     bonus_points += _ft_bonus
-                max_possible = gate_max_possible + 3 + _profile_points_max + _aggtrade_cvd_bonus_max
+                _legacy_bonus_capacity = 2 + int(_volume_scoring_applicable)
+                max_possible = (
+                    gate_max_possible
+                    + _legacy_bonus_capacity
+                    + _profile_points_max
+                    + _aggtrade_cvd_bonus_max
+                )
                 if _ft_enabled:
                     max_possible += abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
         else:
-            bonus_count = 3 + _profile_points_max + _aggtrade_cvd_bonus_max
+            bonus_count = (
+                2
+                + int(_volume_scoring_applicable)
+                + _profile_points_max
+                + _aggtrade_cvd_bonus_max
+            )
             if _ft_enabled:
                 bonus_count += abs(float(_ft_cfg.get("MAX_BONUS", 1.5)))
             max_possible = gate_max_possible + bonus_count
@@ -6739,6 +6801,29 @@ class NakedEngine:
             if gate_max_possible > 0
             else 0
         )
+        # Quality-only percentage (0-100, full range).
+        #
+        # `passed` requires every entry in `gate_confirmations`, so gate_score ==
+        # gate_max_possible for EVERY passing signal. `pct` therefore starts at
+        # gate_max/(gate_max+quality_max) — ~83% under weighted scoring — and the
+        # whole discriminating range of an executable Engine B signal is the last
+        # ~17 points. That is the gate_pct saturation problem in a softer form:
+        # it made `pct` near-useless for ranking, saturated the A/B conviction
+        # blend (B nominally carries 0.60 weight but ~0.50 of it was constant),
+        # and left the style min_score floors below the guaranteed gate floor.
+        # quality_pct measures only the earned quality layer, net of penalties,
+        # so it spans 0-100 for passing signals and can actually rank them.
+        _quality_denominator = (
+            _quality_max_possible
+            if _use_weighted_scoring
+            else max(0.0, max_possible - gate_max_possible)
+        )
+        _quality_points_net = max(0.0, total_score - gate_score)
+        quality_pct = (
+            min(100.0, max(0.0, round((_quality_points_net / _quality_denominator) * 100.0, 1)))
+            if _quality_denominator > 0
+            else None
+        )
         lifecycle_state, lifecycle_reason = self._determine_lifecycle_state(
             res, current_price, direction, trigger_ok
         )
@@ -6806,7 +6891,11 @@ class NakedEngine:
             _diag_codes.append(dxy_gate_reason)
         if not trigger_ok and not breakout_ok:
             _diag_codes.append(ENGINE_B_REASON_NO_TRIGGER_PATTERN)
-        elif breakout_ok and not res.get("bos_volume_confirmed", False):
+        elif (
+            breakout_ok
+            and _volume_scoring_applicable
+            and not res.get("bos_volume_confirmed", False)
+        ):
             if _bos_data.get("bos_volume_status") == "below_threshold":
                 _diag_codes.append(ENGINE_B_REASON_BOS_VOLUME_BELOW_THRESHOLD)
             else:
@@ -6834,6 +6923,7 @@ class NakedEngine:
         _engine_b_diag_payload = {"reason_codes": _diag_codes}
         if _bos_data:
             _engine_b_diag_payload["bos_volume"] = {
+                "scoring_applicable": _volume_scoring_applicable,
                 "available": _bos_data.get("bos_volume_available"),
                 "status": _bos_data.get("bos_volume_status"),
                 "bar_volume": _bos_data.get("bos_bar_volume"),
@@ -6890,6 +6980,11 @@ class NakedEngine:
             "gate_score": gate_score,
             "pct": pct,
             "gate_pct": gate_pct,
+            # Ranking / conviction basis — see quality_pct above. gate_pct is 100
+            # for every pass and pct floors near 83%; only this field varies.
+            "quality_pct": quality_pct,
+            "quality_points_net": round(_quality_points_net, 4),
+            "quality_denominator": round(_quality_denominator, 4),
             "max_possible": round(max_possible, 2),
             "gate_max_possible": round(gate_max_possible, 2),
             "bonus_points": round(bonus_points, 2),
@@ -6897,6 +6992,7 @@ class NakedEngine:
             "quality_max_possible": round(_quality_max_possible, 2),
             "quality_components": _quality_components,
             "weighted_scoring_enabled": bool(_use_weighted_scoring),
+            "volume_scoring_applicable": _volume_scoring_applicable,
             "struct_points": 1.0 if structure_ok else 0.0,
             "rr_points": 1.0 if rr_ok else 0.0,
             "room_points": 1.0 if room_ok else 0.0,

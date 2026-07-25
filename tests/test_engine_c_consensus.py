@@ -410,12 +410,30 @@ class TestNormaliseEngineA:
 # ── normalise_engine_b edge cases ────────────────────────────────────────────
 
 class TestNormaliseEngineB:
-    def test_pct_over_score(self):
+    def test_quality_pct_over_saturated_total(self):
+        """score_norm reads the quality layer, not the total ratio.
+
+        Engine B only sets `passed` when every mandatory gate is true, so
+        gate_score always equals gate_max_possible and score/max_possible floors
+        near 0.83 — Engine C's A/B blend was reading a near-constant for B. `pct`
+        is also rounded to an integer by calculate_confidence, so preferring it
+        made Engine C and the scanner blend different numbers for one signal.
+        """
         sig = _engine_b_signal()
         conf = _engine_b_confidence(passed=True)
         conf["pct"] = 75
+        conf["quality_pct"] = 42.0
         out = normalise_engine_b(sig, conf)
-        assert out["score_norm"] == 0.75
+        assert out["score_norm"] == 0.42
+
+    def test_score_norm_falls_back_to_total_without_quality_fields(self):
+        sig = _engine_b_signal()
+        conf = _engine_b_confidence(passed=True)
+        conf.pop("quality_pct", None)
+        conf["score"] = 3.0
+        conf["max_possible"] = 6.0
+        out = normalise_engine_b(sig, conf)
+        assert out["score_norm"] == 0.5
 
     def test_missing_direction_no_signal(self):
         sig = {"structural_verdict": "CLEAR"}

@@ -257,6 +257,13 @@ def _execution_conviction_base_with_source(
             raw = signal.get(key)
             if raw is not None:
                 return _clamp01(raw), key
+        # engine_b_score/engine_b_max floors near 0.83 for every signal Engine B
+        # passes (gate_score == gate_max whenever `passed` is true), so
+        # AUTO_TRADE_MIN_CONVICTION could never reject an Engine B row. Prefer
+        # the quality layer, which spans the full range.
+        quality_pct = _num(signal.get("engine_b_quality_pct"), None)
+        if quality_pct is not None:
+            return _clamp01(quality_pct / 100.0), "engine_b_quality_pct"
         b_score = _num(signal.get("engine_b_score"), 0.0) or 0.0
         b_max = _num(signal.get("engine_b_max"), 0.0) or 0.0
         if b_max > 0:
@@ -653,6 +660,13 @@ def _execution_conviction(signal: dict, engine: str) -> float:
                 return max(0.0, min(1.0, float(raw)))
             except (TypeError, ValueError):
                 continue
+        # Quality layer first — see _execution_conviction_base_with_source.
+        raw_quality = signal.get("engine_b_quality_pct")
+        if raw_quality is not None:
+            try:
+                return max(0.0, min(1.0, float(raw_quality) / 100.0))
+            except (TypeError, ValueError):
+                pass
         try:
             b_score = float(signal.get("engine_b_score", 0) or 0)
             b_max = float(signal.get("engine_b_max", 0) or 0)
@@ -706,13 +720,27 @@ def _current_combined_conviction(signal: dict, cfg: dict | None = None) -> float
     a_weight = _engine_a_weight(cfg or {}, asset_type)
 
     if signal.get("enginesAligned", False):
+        # Engine B side must use the same basis the scanner blended with,
+        # otherwise this fallback silently reports a different conviction than
+        # the stored/displayed combinedConviction for the same signal.
         try:
-            b_score = float(signal.get("engine_b_score", 0) or 0)
-            b_max = float(signal.get("engine_b_max", 0) or 0)
-        except (TypeError, ValueError):
-            b_score = 0.0
-            b_max = 0.0
-        b_norm = max(0.0, min(b_score / b_max, 1.0)) if b_max > 0 else 0.0
+            from engine_b_quality import engine_b_conviction_norm
+
+            b_norm = engine_b_conviction_norm(
+                {
+                    "quality_pct": signal.get("engine_b_quality_pct"),
+                    "score": signal.get("engine_b_score"),
+                    "max_possible": signal.get("engine_b_max"),
+                }
+            )
+        except Exception:
+            try:
+                b_score = float(signal.get("engine_b_score", 0) or 0)
+                b_max = float(signal.get("engine_b_max", 0) or 0)
+            except (TypeError, ValueError):
+                b_score = 0.0
+                b_max = 0.0
+            b_norm = max(0.0, min(b_score / b_max, 1.0)) if b_max > 0 else 0.0
         return round((a_norm * a_weight) + (b_norm * (1.0 - a_weight)), 4)
 
     return round(a_norm * a_weight, 4)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   confluencePct,
+  confluenceThresholdPct,
   engineAListScore,
   engineAScoreBreakdown,
   engineAThreshold,
@@ -79,7 +80,28 @@ describe('confluencePct', () => {
       confluencePct: 69,
     } as EngineASignal;
 
-    expect(confluencePct(sig)).toBe(Math.round((2.0861 / 2.2) * 67));
+    expect(confluencePct(sig)).toBe(Math.round((2.0861 / 3) * 100));
+  });
+
+  it('is comparable across score groups with different thresholds', () => {
+    // Threshold-anchored percentages made a 2.24/3.00 index signal (threshold
+    // 1.5) read 100% while a perfect 3.00/3.00 forex signal (threshold 2.1)
+    // read 96%. Both must now report their true share of the max.
+    const indexSig = {
+      confluenceScore: 2.24,
+      confluenceThreshold: 1.5,
+      maxScore: 3,
+    } as EngineASignal;
+    const forexSig = {
+      confluenceScore: 3.0,
+      confluenceThreshold: 2.1,
+      maxScore: 3,
+    } as EngineASignal;
+
+    expect(confluencePct(indexSig)).toBe(75);
+    expect(confluencePct(forexSig)).toBe(100);
+    expect(confluenceThresholdPct(indexSig)).toBe(50);
+    expect(confluenceThresholdPct(forexSig)).toBe(70);
   });
 });
 

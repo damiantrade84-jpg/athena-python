@@ -541,12 +541,17 @@ def normalise_engine_b(signal_b: dict, confidence_b: dict = None) -> dict:
     conf = confidence_b or {}
     score = float(conf.get("score", 0))
     max_possible = float(conf.get("max_possible", 5.0)) or 5.0
-    pct = float(conf.get("pct", 0))
 
-    if pct > 0:
-        norm = min(1.0, pct / 100.0)
-    else:
-        norm = min(1.0, score / max_possible) if max_possible > 0 else 0.0
+    # Conviction basis: the earned quality layer, not the total ratio. Engine B
+    # only sets `passed` when every mandatory gate is true, so gate_score always
+    # equals gate_max and score/max_possible floors near 0.83 for every passing
+    # signal — Engine C's A/B blend was reading a near-constant for B. The old
+    # path also preferred `pct`, which calculate_confidence rounds to an integer,
+    # so Engine C and the scanner blended slightly different numbers for the same
+    # signal. Reversible: ENGINE_B_CONVICTION_BASIS: total.
+    from engine_b_quality import engine_b_conviction_norm
+
+    norm = engine_b_conviction_norm(conf)
 
     verdict = signal_b.get("structural_verdict", "ERROR")
     direction = signal_b.get("direction")

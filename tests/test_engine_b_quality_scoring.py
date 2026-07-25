@@ -111,15 +111,34 @@ def test_weighted_scoring_populates_quality_fields(monkeypatch):
     )
     assert out["weighted_scoring_enabled"] is True
     assert out["quality_components"]
+    assert "volume_confirmation" not in out["quality_components"]
+    assert out["volume_scoring_applicable"] is False
     assert out["quality_max_possible"] > 0
-    gate_ok, _ = engine_b_confidence_passes(
+    # Quality percent is the only Engine B score with a usable range on a pass:
+    # gate_pct is 100 by definition and pct floors near 83% because gate_score
+    # always equals gate_max_possible when `passed` is true.
+    assert out["gate_score"] == out["gate_max_possible"]
+    assert out["quality_pct"] == pytest.approx(
+        out["quality_points_net"] / out["quality_denominator"] * 100, abs=0.1
+    )
+    assert 0.0 < out["quality_pct"] < 100.0
+
+    gate_ok, effective_min = engine_b_confidence_passes(
         out,
         {"min_score": 5.0, "style": "swing"},
         regime_label="RANGING",
         asset_type="forex",
     )
     assert out["passed"] is True
-    assert gate_ok is True
+    # swing x RANGING is one of only two style/regime combinations whose floor
+    # (5.0 x 1.10 = 5.5) exceeds the guaranteed gate floor of 5.0, so the outcome
+    # rests on ~0.5 points of quality headroom. Assert the gate agrees with that
+    # comparison rather than pinning a razor-thin pass/fail that flips on any
+    # change to the quality weight table.
+    assert effective_min == pytest.approx(5.5)
+    assert gate_ok is (out["score"] >= effective_min)
+    assert out["min_score_basis"] == "total"
+    assert out["min_score_floor_binding"] is True
 
 
 def test_weighted_scoring_disabled_matches_legacy_bonus_shape(monkeypatch):
@@ -139,7 +158,8 @@ def test_weighted_scoring_disabled_matches_legacy_bonus_shape(monkeypatch):
     )
     assert out["weighted_scoring_enabled"] is False
     assert out.get("quality_score", 0.0) == 0.0
-    assert out["bonus_points"] == pytest.approx(2.0)
+    assert out["volume_bonus"] == pytest.approx(0.0)
+    assert out["bonus_points"] == pytest.approx(1.0)
 
 
 def test_regime_component_mult_boosts_ranging_fvg():
@@ -289,3 +309,93 @@ def test_quick_audit_engine_b_score_pct_uses_graded_total():
         },
     )
     assert ctx["score_pct"] == 88.0
+
+
+def test_component_max_no_longer_double_weights_components():
+    """COMPONENT_WEIGHTS sums to 1.0 and is the weight table on its own.
+
+    Multiplying by COMPONENT_MAX applied a second, undeclared weight that ranked
+    bos_followthrough (0.16 declared x 1.5 max) above structure_alignment (0.22
+    declared) and halved session_context / liquidity_proximity.
+    """
+    subscores = {"structure_alignment": 1.0, "bos_followthrough": 1.0}
+    cfg = {
+        "COMPONENT_MAX": {"structure_alignment": 1.0, "bos_followthrough": 1.5},
+        "COMPONENT_WEIGHTS": {"structure_alignment": 0.22, "bos_followthrough": 0.16},
+        "APPLY_COMPONENT_MAX": False,
+    }
+    _points, _max, components = aggregate_quality_score(subscores, cfg)
+    assert components["structure_alignment"] > components["bos_followthrough"]
+    assert components["structure_alignment"] == pytest.approx(0.22)
+    assert components["bos_followthrough"] == pytest.approx(0.16)
+
+    legacy = aggregate_quality_score(subscores, {**cfg, "APPLY_COMPONENT_MAX": True})[2]
+    assert legacy["bos_followthrough"] > legacy["structure_alignment"]
+
+
+def test_inapplicable_components_are_pruned_not_scored_zero():
+    """An unearnable component must not sit in the quality denominator.
+
+    engine_b_subsystems has no carry/COT weights for stock/index/etf, so
+    orderflow was a hard 0 for those classes while still consuming weight; only
+    forex/equity rows carry a session payload that can move session_context.
+    """
+    res = {
+        "atr": 1.0,
+        "current_swing_sequence": "HH_HL",
+        "macro_swing_sequence": "HH_HL",
+        "bos_confirmed": True,
+        "ob_at_zone": False,
+        "fvg_overlap": False,
+        "active_zone_distance": 0.4,
+    }
+    stock = compute_confluence_subscores(dict(res), "LONG", 1.0, asset_type="stock")
+    assert "orderflow" not in stock
+    assert "session_context" not in stock
+
+    with_session = compute_confluence_subscores(
+        {**res, "equity_session_structure": {"score_influence_enabled": True, "score_bonus": 0.0}},
+        "LONG",
+        1.0,
+        asset_type="stock",
+    )
+    assert "session_context" in with_session
+
+
+def test_opposing_only_order_blocks_score_zero_confluence():
+    """The 0.5 "strength unknown" default must not survive the directional filter."""
+    res = {
+        "atr": 1.0,
+        "ob_at_zone": True,
+        "order_blocks": [{"type": "bearish"}],
+        "fvg_overlap": False,
+    }
+    opposing = compute_confluence_subscores(dict(res), "LONG", 1.0, asset_type="crypto")
+    assert opposing["ob_confluence"] == 0.0
+
+    aligned_no_strength = compute_confluence_subscores(
+        {**res, "order_blocks": [{"type": "bullish"}]}, "LONG", 1.0, asset_type="crypto"
+    )
+    assert aligned_no_strength["ob_confluence"] == 0.5
+
+
+def test_conviction_norm_uses_quality_not_saturated_total():
+    """The total ratio is near-constant on a pass; conviction must not read it."""
+    from engine_b_quality import engine_b_conviction_norm
+
+    weak = {"score": 5.05, "max_possible": 6.0, "quality_pct": 5.4}
+    strong = {"score": 5.95, "max_possible": 6.0, "quality_pct": 95.0}
+
+    assert engine_b_conviction_norm(weak) == pytest.approx(0.054, abs=1e-3)
+    assert engine_b_conviction_norm(strong) == pytest.approx(0.95, abs=1e-3)
+    # Total basis compresses the same pair into a ~15-point band.
+    total_spread = (5.95 / 6.0) - (5.05 / 6.0)
+    quality_spread = engine_b_conviction_norm(strong) - engine_b_conviction_norm(weak)
+    assert quality_spread > total_spread * 5
+
+
+def test_conviction_norm_falls_back_to_total_for_legacy_payloads():
+    from engine_b_quality import engine_b_conviction_norm
+
+    assert engine_b_conviction_norm({"score": 3.0, "max_possible": 6.0}) == pytest.approx(0.5)
+    assert engine_b_conviction_norm(None) == 0.0

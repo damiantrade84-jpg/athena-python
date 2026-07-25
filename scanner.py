@@ -33,6 +33,7 @@ from athena_app.services.engine_b_direction import (
     annotate_signal_direction_metadata,
     independent_conflict_blocks_emit,
 )
+from engine_b_quality import engine_b_conviction_norm
 from engine_b_subsystems import engine_b_direction_min_score_gap, engine_b_pick_directional_candidate
 from market_structure import (
     NakedEngine,
@@ -3084,8 +3085,12 @@ def run_full_scan(
                                     sig_a["engine_b_gate_max"] = round(b_gate_max, 2) if b_gate_max else None
                                     # Graded pct (score/max). gate_pct saturates at 100 whenever the
                                     # checklist passes, so it stays a separate diagnostic field.
+                                    # engine_b_quality_pct is the only one of the three that spans
+                                    # a full range for passing signals — gate_pct is always 100 and
+                                    # engine_b_pct floors near 83% (gate_score == gate_max on pass).
                                     sig_a["engine_b_pct"] = round(b_score / b_max * 100, 1) if b_max else 0.0
                                     sig_a["engine_b_gate_pct"] = round(b_gate_pct_f, 1)
+                                    sig_a["engine_b_quality_pct"] = conf_b.get("quality_pct")
                                     sig_a["engine_b_direction"] = _engine_b_direction_used
                                     annotate_signal_direction_metadata(
                                         sig_a,
@@ -3104,10 +3109,12 @@ def run_full_scan(
                                     a_max = sig_a.get("maxScore", 3.0)
                                     a_score = sig_a.get("confluenceScore", 0)
                                     a_norm = float(sig_a.get("scoreNorm", 0))
-                                    # Blend input must be the graded Engine B total, never gate_pct
-                                    # (gate_pct == 100 for any pass, which saturates the blend and
-                                    # lets Engine B's binary gate state distort combinedConviction).
-                                    b_norm = min(b_score / b_max, 1.0) if b_max else 0.0
+                                    # Blend input is the earned quality layer, never gate_pct
+                                    # (100 for any pass) and no longer the total ratio, whose
+                                    # lower ~83% is constant for every passing signal because
+                                    # gate_score == gate_max whenever `passed` is true. See
+                                    # engine_b_quality.engine_b_conviction_norm.
+                                    b_norm = engine_b_conviction_norm(conf_b)
 
                                     # Use same regime-conditional weights as engine_c.
                                     _rl = (regime_label or "").upper()

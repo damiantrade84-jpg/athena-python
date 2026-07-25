@@ -8,6 +8,7 @@ import {
   fmtLiveQuoteMeta,
   priceDecimals,
   confluencePct,
+  confluenceThresholdPct,
   convictionTier,
   engineAThreshold,
   engineAScoreBreakdown,
@@ -106,24 +107,42 @@ export default function EngineASignalCard({
   const bBreakdown = isEngineBOnly
     ? engineBScoreBreakdown(raw)
     : null;
-  // Headline % is the graded total (score/max incl. bonuses). gate_pct is 100
-  // for every emitted signal (all mandatory gates must pass to emit), so it is
-  // only a last-resort fallback, never the headline.
+  // Headline % for Engine B is the earned quality layer. The two alternatives
+  // are both near-constant for anything Engine B passes: gate_pct is 100 by
+  // definition (every mandatory gate must pass to emit) and the total ratio
+  // score/max_possible floors near 83% because gate_score == gate_max on pass.
+  // Only quality_pct spans a usable range, so it leads and the others are
+  // ordered strictly as fallbacks for older payloads.
   const nakedQualityPct = isEngineBOnly
-    ? toNum(raw.quality_pct ?? raw.engine_b_pct ?? engineBResult.quality_pct ?? engineBResult.score_pct ?? raw.confluencePct ?? raw.score_pct ?? raw.edgeProbability, NaN)
+    ? toNum(
+        raw.engine_b_quality_pct
+          ?? engineBStatus.quality_pct
+          ?? engineBResult.quality_pct
+          ?? raw.quality_pct,
+        NaN,
+      )
+    : NaN;
+  const nakedTotalPct = isEngineBOnly
+    ? toNum(raw.engine_b_pct ?? engineBStatus.pct ?? engineBResult.pct, NaN)
     : NaN;
   const nakedGatePct = isEngineBOnly
-    ? toNum(raw.engine_b_pct ?? engineBResult.quality_pct ?? engineBResult.score_pct ?? raw.gate_pct ?? engineBResult.gate_pct, NaN)
+    ? toNum(raw.engine_b_gate_pct ?? engineBStatus.gate_pct ?? engineBResult.gate_pct, NaN)
     : NaN;
   const conf = isEngineBOnly
     ? (Number.isFinite(nakedQualityPct)
         ? Math.max(0, Math.min(100, Math.round(nakedQualityPct)))
-        : bBreakdown?.totalScore != null && bBreakdown.totalMax
-          ? Math.max(0, Math.min(100, Math.round((bBreakdown.totalScore / bBreakdown.totalMax) * 100)))
-          : Number.isFinite(nakedGatePct)
-            ? Math.max(0, Math.min(100, Math.round(nakedGatePct)))
-            : null)
+        : Number.isFinite(nakedTotalPct)
+          ? Math.max(0, Math.min(100, Math.round(nakedTotalPct)))
+          : bBreakdown?.totalScore != null && bBreakdown.totalMax
+            ? Math.max(0, Math.min(100, Math.round((bBreakdown.totalScore / bBreakdown.totalMax) * 100)))
+            : Number.isFinite(nakedGatePct)
+              ? Math.max(0, Math.min(100, Math.round(nakedGatePct)))
+              : null)
     : confluencePct(signal);
+  const confLabel = isEngineBOnly && Number.isFinite(nakedQualityPct)
+    ? 'quality'
+    : undefined;
+  const thresholdPct = isEngineBOnly ? null : confluenceThresholdPct(signal);
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
   const score = scoreBreakdown?.displayScore ?? toNum(signal.confluenceScore ?? signal.score, NaN);
@@ -277,29 +296,41 @@ export default function EngineASignalCard({
         <div className="space-y-1">
           <div className="flex items-center justify-between text-[10px] text-muted-foreground">
             <span>
-              {isEngineBOnly ? 'Engine B gates' : 'Confluence'}{' '}
+              {/* Engine B leads with the quality layer: gate_score/gate_max is
+                  5/5 for every executable row, so it belongs in the sub-line as
+                  a pass badge rather than as the headline number. */}
+              {isEngineBOnly ? 'Engine B quality' : 'Confluence'}{' '}
               <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
-                {isEngineBOnly && bBreakdown?.gateScore != null
-                  ? `${fmtNum(bBreakdown.gateScore, 2)}/${fmtNum(bBreakdown.gateMax ?? max, 2)}`
+                {isEngineBOnly
+                  ? bBreakdown?.bonusPoints != null && bBreakdown.totalMax != null && bBreakdown.gateMax != null
+                    ? `${fmtNum(bBreakdown.bonusPoints, 2)}/${fmtNum(bBreakdown.totalMax - bBreakdown.gateMax, 2)}`
+                    : conf != null ? `${conf.toFixed(0)}%` : '—'
                   : `${fmtNum(score, 2)}/${fmtNum(max, 2)}`}
               </span>
               {threshold != null && !isEngineBOnly ? (
                 <span className="ml-1">≥ {fmtNum(threshold, 2)}</span>
               ) : null}
             </span>
-            <span className="font-mono">{conf != null ? `${conf.toFixed(0)}%` : '—'}</span>
+            <span className="font-mono">
+              {conf != null ? `${conf.toFixed(0)}%` : '—'}
+              {confLabel ? <span className="ml-1 text-[9px] opacity-70">{confLabel}</span> : null}
+            </span>
           </div>
           {isEngineBOnly && bBreakdown?.totalScore != null && (
             <p className="text-[9px] text-muted-foreground leading-snug">
-              Quality total{' '}
+              Gates{' '}
+              <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
+                {fmtNum(bBreakdown.gateScore, 2)}/{fmtNum(bBreakdown.gateMax ?? max, 2)}
+              </span>
+              {' · total '}
               <span className="font-mono text-foreground">
                 {fmtNum(bBreakdown.totalScore, 2)}/{fmtNum(bBreakdown.totalMax ?? max, 2)}
               </span>
               {bBreakdown.minScore != null && (
                 <span> ≥ {fmtNum(bBreakdown.minScore, 2)}</span>
               )}
-              {bBreakdown.bonusPoints != null && bBreakdown.bonusPoints !== 0 && (
-                <span> · bonuses {bBreakdown.bonusPoints >= 0 ? '+' : ''}{fmtNum(bBreakdown.bonusPoints, 2)}</span>
+              {bBreakdown.minScoreFloorBinding === false && (
+                <span className="opacity-70"> (floor non-binding)</span>
               )}
               {bBreakdown.scoreFloorPasses && !bBreakdown.confidencePasses && (
                 <span className="text-warning"> — score clears floor; one or more mandatory gates failed</span>
@@ -309,7 +340,9 @@ export default function EngineASignalCard({
           {!isEngineBOnly && scoreBreakdown?.hasAdjustments && (
             <EngineAScoreAdjustmentNote breakdown={scoreBreakdown} />
           )}
-          {/* Violet gradient bar — glows when score passes threshold */}
+          {/* Violet gradient bar — glows when score passes threshold. The axis is
+              score/max, so the threshold is drawn as a tick rather than by
+              rescaling the axis (which made groups incomparable). */}
           <div className="relative w-full rounded-full h-2 overflow-hidden" style={{ background: 'hsl(var(--border) / 0.55)' }}>
             <div
               className={`h-full rounded-full transition-all duration-300 ${passed ? 'glow-gold-sm' : ''}`}
@@ -320,6 +353,17 @@ export default function EngineASignalCard({
                   : 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light)))',
               }}
             />
+            {thresholdPct != null && (
+              <div
+                className="absolute top-0 h-full"
+                style={{
+                  left: `${thresholdPct}%`,
+                  width: '2px',
+                  background: 'hsl(var(--foreground) / 0.65)',
+                }}
+                title={`Trade threshold ${fmtNum(threshold, 2)} of ${fmtNum(max, 2)}`}
+              />
+            )}
           </div>
           {isEngineBOnlyStub ? (
             <p className="text-[9px] text-muted-foreground leading-snug">
@@ -518,6 +562,7 @@ function EngineAV3SignalCard({
   const threshold = scoreBreakdown?.threshold ?? engineAThreshold(signal);
   const passed = Number.isFinite(score) && threshold != null && score >= threshold;
   const conf = confluencePct(signal);
+  const thresholdPct = confluenceThresholdPct(signal);
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
   const hasQuality = Number.isFinite(score) || conf != null || Number.isFinite(conv);
@@ -604,6 +649,17 @@ function EngineAV3SignalCard({
                     : 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light)))',
                 }}
               />
+              {thresholdPct != null && (
+                <div
+                  className="absolute top-0 h-full"
+                  style={{
+                    left: `${thresholdPct}%`,
+                    width: '2px',
+                    background: 'hsl(var(--foreground) / 0.65)',
+                  }}
+                  title={`Trade threshold ${fmtNum(threshold, 2)} of ${fmtNum(max, 2)}`}
+                />
+              )}
             </div>
             {!compact && (
               <p className="text-[9px] text-muted-foreground leading-snug">

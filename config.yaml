@@ -141,6 +141,12 @@ ENGINE_A_V3_MEAN_REVERSION:
   Z_ENTRY: 1.5
   EFF_MAX: 0.35
   LOOKBACK: 20
+  # The MR regime switch reads ADX + Bollinger state from the entry/setup rung and
+  # then overrides the multi-timeframe consensus direction outright. Require the
+  # momentum-anchor rung to be non-trending too, so a low-ADX pocket on a fast rung
+  # (M30 ADX 15) cannot flip a signal whose anchor is genuinely trending (H4 ADX 28
+  # with aligned DI) into a counter-trend fade. Reversible: set false.
+  REQUIRE_HIGHER_TF_ADX_CONFIRMATION: true
 # V3 directional ramp — uses dir_sum (weighted signal×quality), NOT V2 trend_score.
 # Thresholds live in ENGINE_A_V3_DIRECTIONAL_RAMP_BY_CLASS (~0.04–0.06 min).
 # Do not point V3 at ENGINE_A_DIRECTIONAL_RAMP_BY_CLASS (V2 scale ~0.20–0.25).
@@ -179,6 +185,23 @@ ENGINE_A_V3_QUANT_SESSION_GATE:
 ENGINE_A_V3_MR_OPPOSITION_GUARD:
   ENABLED: true
   MIN_OPPOSE_QUALITY: 0.55
+  # Both trend AND momentum must oppose the fade at >= MIN_OPPOSE_QUALITY before the
+  # consensus direction is restored. Kept as-is (true): loosening it to "either"
+  # makes mean reversion unreachable whenever the EMA stack is cleanly aligned,
+  # which it often is even inside a range. The narrower problem — the MR regime
+  # being decided on the entry rung alone — is handled by
+  # ENGINE_A_V3_MEAN_REVERSION.REQUIRE_HIGHER_TF_ADX_CONFIRMATION instead.
+  REQUIRE_BOTH: true
+
+# Engine A location component. Trend-mode location measures entry *timing*
+# (distance from the trend EMA), not side. TREND_TIMING_ONLY: true stops the
+# aggregator from discarding it when price sits on the pullback side of the EMA
+# — previously a LONG half an ATR above ema21 was credited in full while a LONG
+# half an ATR below ema21 (the higher-quality pullback entry) contributed zero,
+# and location also nudged direction toward whichever side price was extended to.
+# Reversible: set false to restore the directional behaviour.
+ENGINE_A_V3_LOCATION:
+  TREND_TIMING_ONLY: true
 # Structural SL must be at least this many ATRs from entry (noise-stop floor).
 ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT: 0.35
 # Structural trend geometry (Engine A V3). Global defaults = historical contract
@@ -248,6 +271,12 @@ ENGINE_A_V3_VOLATILITY_GATING:
   TP2_R_MAX: 2.5
   ATR_PCT_LOW: 0.3
   ATR_PCT_HIGH: 0.9
+  # Apply the per-component volatility multiplier (0.85-1.12) to the confluence
+  # divisor as well as the numerator, so the score stays a true weighted average.
+  # Previously it scaled only the numerator: MAX_SCORE was unreachable in low-ADX
+  # regimes and saturated-then-clamped in high-ADX ones, so the "/3.00" shown on
+  # the card was not the achievable maximum. Reversible: set false.
+  NORMALIZE_DENOMINATOR: true
 
 # Trend-health decay: penalize stale EMA alignment and weakening ADX.
 ENGINE_A_V3_TREND_HEALTH:
@@ -2847,6 +2876,18 @@ ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED: true
 
 ENGINE_B_WEIGHTED_SCORING:
   ENABLED: true
+  # COMPONENT_WEIGHTS sums to 1.0 and is the weight table. Subscores are already
+  # 0-1, so multiplying by COMPONENT_MAX applied a second, undeclared weight:
+  # bos_followthrough (0.16 declared x 1.5 max) became 23.2% effective, above
+  # structure_alignment's 21.3%, while session_context (0.05 x 0.5) fell to 2.4%.
+  # false = COMPONENT_WEIGHTS alone. Reversible: set true for legacy behaviour.
+  APPLY_COMPONENT_MAX: false
+  # Drop quality components no feed can supply for the asset class (orderflow on
+  # stock/index/ETF, session_context outside forex/equity, volume on spot FX)
+  # instead of scoring them 0 with their weight still in the denominator.
+  # Components that are merely zero this bar are NOT pruned. Reversible: false.
+  PRUNE_INAPPLICABLE_COMPONENTS: true
+  # Retained for APPLY_COMPONENT_MAX: true only; ignored otherwise.
   COMPONENT_MAX:
     structure_alignment: 1.0
     ob_confluence: 1.0
@@ -3913,10 +3954,48 @@ ENGINE_B_REGIME_MULTIPLIERS:
   LOW_VOLATILITY: 1.0
 
 ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED: true
+# NOTE (2026-07-25 audit): these floors are compared against confidence.score
+# (mandatory gates + quality bonuses). Engine B only sets `passed` when every
+# mandatory gate is true, so gate_score always equals gate_max_possible (5.0, or
+# 6.0 with the macro gate) for a passing signal. The floor is therefore only
+# binding where floor x ENGINE_B_REGIME_MULTIPLIERS exceeds gate_max_possible.
+# With APPLY_TO_MIN_SCORE: true that is exactly two combinations:
+#   swing x RANGING         -> 5.50, needs ~54% of the quality headroom
+#   swing x HIGH_VOLATILITY -> 5.50, needs ~54% of the quality headroom
+# All ten other style/regime combinations sit at or below 5.00 and can only bite
+# when penalties (aggtrade 0.5 / D1 conflict 0.25 / hard_counter) exceed the
+# earned quality — they cannot reject a clean but low-quality setup, which is
+# what a min-score floor is for.
+# The binding 54% is an artifact of (5.0 x 1.10 - 5.0) / quality_headroom, not a
+# calibrated quality requirement, so it also moves whenever the quality weight
+# table changes: APPLY_COMPONENT_MAX: false shifted it from ~52% to ~54%.
+# ENGINE_B_MIN_SCORE_BASIS below expresses the floor directly on the quality
+# ratio, removing that coupling. It stays OFF until the ratios are calibrated
+# (n>=30 evidence), because switching basis changes which signals pass.
 ENGINE_B_STYLE_MIN_SCORE_BY_STYLE:
   scalp: 4.0
   intraday: 4.5
   swing: 5.0
+
+# Basis for the Engine B style/regime score floor.
+#   total         — legacy: compare ENGINE_B_STYLE_MIN_SCORE_BY_STYLE against
+#                   confidence.score (currently non-binding, see note above).
+#   quality_ratio — compare confidence.quality_pct/100 against
+#                   ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE.
+# The quality ratios below are PLACEHOLDERS, not calibrated values. Do not switch
+# the basis to quality_ratio until they are backed by outcome evidence.
+ENGINE_B_MIN_SCORE_BASIS: total
+ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE:
+  scalp: 0.30
+  intraday: 0.35
+  swing: 0.40
+
+# Ranking / conviction basis for Engine B (blends, sorting, execution gates).
+#   quality — confidence.quality_pct (0-100, full range for passing signals)
+#   total   — legacy confidence.score / max_possible, whose lower ~83% is
+#             constant for every passing signal and saturated the A/B blend.
+# Gate decisions still come from `passed` / `checklist_passed`, never from this.
+ENGINE_B_CONVICTION_BASIS: quality
 
 
 

@@ -26,7 +26,14 @@ import {
   BarChart2, Shield, Gauge, Sparkles,
 } from 'lucide-react';
 import { fmtNum, toNum, cn } from '@/lib/utils';
-import { engineAListScore, fmtAtrMeta, fmtLiveQuoteMeta, fmtPrice } from '@/lib/athenaFormat';
+import {
+  engineAListScore,
+  fmtAtrMeta,
+  fmtLiveQuoteMeta,
+  fmtPrice,
+  signalConviction,
+  unifiedListSortKey,
+} from '@/lib/athenaFormat';
 import { readEngineBCanonicalGatesFromNaked } from '@/lib/engineBCanonicalGates';
 import { engineAV3DecisionRank, engineAV3ListLabel, isEngineAV3Signal } from '@/lib/engineAV3';
 import { fetchVisionCandlePayload, preferredVisionReviewTf } from '@/lib/visionReview';
@@ -138,7 +145,11 @@ function compareUnified(a: UnifiedRow, b: UnifiedRow, sortBy: string): number {
   const aWatch = isWatchlist(a.signal);
   const bWatch = isWatchlist(b.signal);
   if (aWatch !== bWatch) return aWatch ? 1 : -1;
-  if (sortBy === 'conviction') return toNum(b.signal.conviction) - toNum(a.signal.conviction);
+  if (sortBy === 'conviction') {
+    // signalConviction falls back past the raw `conviction` field, which Engine
+    // B-only rows never carry — sorting on it alone sank every B row to zero.
+    return toNum(signalConviction(b.signal)) - toNum(signalConviction(a.signal));
+  }
   if (sortBy === 'rr') return toNum(signalGateRr(b.signal)) - toNum(signalGateRr(a.signal));
   if (sortBy === 'time') {
     return new Date(b.signal.timestamp || 0).getTime() - new Date(a.signal.timestamp || 0).getTime();
@@ -148,7 +159,10 @@ function compareUnified(a: UnifiedRow, b: UnifiedRow, sortBy: string): number {
   if (aV3 >= 0 || bV3 >= 0) {
     if (aV3 !== bV3) return bV3 - aV3;
   }
-  return engineAListScore(b.signal) - engineAListScore(a.signal);
+  // Normalized key: this list mixes Engine A rows (score 0-3) with Engine B-only
+  // rows, whose Engine B total (0-~6) is written into the same confluenceScore
+  // field — comparing raw scores put every B row on top of any tie.
+  return unifiedListSortKey(b.signal) - unifiedListSortKey(a.signal);
 }
 
 function isWatchlist(s: EngineASignal): boolean {
