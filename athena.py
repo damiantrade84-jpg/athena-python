@@ -7582,8 +7582,11 @@ def _compute_naked_analysis(
             and _m5_prereq_tf
             and _m5_prereq_tf not in {"D1", "H4", "H1"}
         ):
+            # Forming-inclusive like the trigger series above: this gate asks
+            # for the current bucket, which a confirmed-only series never holds.
             _active_lower_tfs[_m5_prereq_tf] = _market_state_series(
-                _role_market_states.get(_m5_prereq_tf), include_forming=False
+                _role_market_states.get(_m5_prereq_tf),
+                include_forming=_use_forming_trigger,
             )
         _stale_tfs, _fresh_diag = _engine_b_scan_freshness_stale_tfs(
             pair_obj, d1, h4, h1,
@@ -8535,8 +8538,27 @@ def api_scan_naked():
             _zone_tf = style_profile.get("zone_tf", "H4")
             _entry_tf = style_profile.get("entry_tf", "H1")
             _atr_tf = style_profile.get("atr_tf", "H4")
+            # Conditional M5 arms off the setup rung, so that series is both a
+            # scoring input (analyze_structure's M5 prerequisite) and a
+            # freshness-gate input below. It is not implied by zone/entry/atr,
+            # so fetch it explicitly — otherwise the gate reads an empty series
+            # and blocks every conditional-M5 pair on <prereq>:missing_current_bucket.
+            _naked_m5_prereq_tf = str(
+                style_profile.get("execution_prerequisite_tf")
+                or style_profile.get("setup_tf")
+                or ""
+            ).upper()
+            _naked_m5_conditional = bool(
+                str(_entry_tf).upper() == "M5"
+                and str(style_profile.get("m5_policy") or "").lower() == "conditional"
+                and _naked_m5_prereq_tf
+                and _naked_m5_prereq_tf not in {"D1", "H4", "H1"}
+            )
             # Always load H4/H1/D1 so candleFetchMeta + execution freshness match analyze_pair/risk_check.
-            _needed_tfs = list({_zone_tf, _entry_tf, _atr_tf, "D1", "H4", "H1"})
+            _needed_tfs_set = {_zone_tf, _entry_tf, _atr_tf, "D1", "H4", "H1"}
+            if _naked_m5_conditional:
+                _needed_tfs_set.add(_naked_m5_prereq_tf)
+            _needed_tfs = list(_needed_tfs_set)
             _lim_b = scan_candle_limits()
 
             debug_row["zone_tf"] = _zone_tf
@@ -8634,18 +8656,10 @@ def api_scan_naked():
             _naked_active_lower_tfs: dict[str, list] = {}
             if str(_entry_tf).upper() not in {"D1", "H4", "H1"}:
                 _naked_active_lower_tfs[str(_entry_tf).upper()] = entry_candles
-            _naked_m5_prereq_tf = str(
-                style_profile.get("execution_prerequisite_tf")
-                or style_profile.get("setup_tf")
-                or ""
-            ).upper()
-            if (
-                str(_entry_tf).upper() == "M5"
-                and str(style_profile.get("m5_policy") or "").lower() == "conditional"
-                and _naked_m5_prereq_tf
-                and _naked_m5_prereq_tf not in {"D1", "H4", "H1"}
-            ):
-                _naked_active_lower_tfs[_naked_m5_prereq_tf] = _tf_map.get(
+            if _naked_m5_conditional:
+                # Forming-inclusive like the trigger series: this gate asks for
+                # the current bucket, which a confirmed-only series never holds.
+                _naked_active_lower_tfs[_naked_m5_prereq_tf] = _tf_trigger_map.get(
                     _naked_m5_prereq_tf, []
                 )
 
