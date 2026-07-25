@@ -4,46 +4,47 @@
   "groups": {
     "crypto_alt_majors": {
       "family": "crypto",
-      "n": 160,
+      "n": 320,
       "threshold": 2.0,
-      "median": 1.222,
-      "p90": 1.985,
-      "max": 2.545,
-      "pass_pct": 9.4,
+      "median": 1.219,
+      "p90": 1.898,
+      "max": 2.301,
+      "pass_pct": 6.9,
       "pairs": [
-        "SOL/USDT"
+        "SOL/USDT",
+        "XRP/USDT"
       ],
       "dir": {
-        "LONG": 46,
-        "SHORT": 92,
-        "FLAT": 22
+        "LONG": 84,
+        "SHORT": 197,
+        "FLAT": 39
       }
     },
     "crypto_btc": {
       "family": "crypto",
       "n": 160,
       "threshold": 2.0,
-      "median": 1.317,
-      "p90": 2.01,
-      "max": 2.483,
-      "pass_pct": 10.6,
+      "median": 1.291,
+      "p90": 1.806,
+      "max": 2.204,
+      "pass_pct": 4.4,
       "pairs": [
         "BTC/USDT"
       ],
       "dir": {
-        "LONG": 59,
-        "SHORT": 85,
-        "FLAT": 16
+        "LONG": 52,
+        "SHORT": 91,
+        "FLAT": 17
       }
     },
     "crypto_doge": {
       "family": "crypto",
       "n": 160,
       "threshold": 2.0,
-      "median": 1.271,
-      "p90": 2.086,
-      "max": 2.51,
-      "pass_pct": 11.9,
+      "median": 1.249,
+      "p90": 1.925,
+      "max": 2.304,
+      "pass_pct": 6.9,
       "pairs": [
         "DOGE/USDT"
       ],
@@ -57,95 +58,78 @@
       "family": "crypto",
       "n": 160,
       "threshold": 2.0,
-      "median": 1.304,
-      "p90": 2.047,
-      "max": 2.436,
-      "pass_pct": 11.2,
+      "median": 1.291,
+      "p90": 1.857,
+      "max": 2.263,
+      "pass_pct": 5.0,
       "pairs": [
         "ETH/USDT"
       ],
       "dir": {
-        "LONG": 56,
-        "SHORT": 92,
-        "FLAT": 12
-      }
-    },
-    "crypto_other": {
-      "family": "crypto",
-      "n": 160,
-      "threshold": 2.0,
-      "median": 1.246,
-      "p90": 2.12,
-      "max": 2.579,
-      "pass_pct": 11.9,
-      "pairs": [
-        "XRP/USDT"
-      ],
-      "dir": {
-        "LONG": 35,
-        "SHORT": 104,
-        "FLAT": 21
+        "LONG": 47,
+        "SHORT": 94,
+        "FLAT": 19
       }
     },
     "energy_oil": {
       "family": "commodity",
       "n": 160,
-      "threshold": 2.0,
-      "median": 1.235,
-      "p90": 2.149,
-      "max": 2.55,
+      "threshold": 1.8,
+      "median": 1.264,
+      "p90": 1.928,
+      "max": 2.179,
       "pass_pct": 17.5,
       "pairs": [
         "WTI OIL"
       ],
       "dir": {
-        "LONG": 79,
-        "SHORT": 57,
-        "FLAT": 24
+        "LONG": 78,
+        "SHORT": 66,
+        "FLAT": 16
       }
     },
     "eu_indices": {
       "family": "index",
       "n": 160,
-      "threshold": 2.0,
-      "median": 1.217,
-      "p90": 1.976,
-      "max": 2.488,
-      "pass_pct": 8.1,
+      "threshold": 1.5,
+      "median": 1.137,
+      "p90": 1.827,
+      "max": 2.272,
+      "pass_pct": 26.2,
       "pairs": [
         "DAX 40"
       ],
       "dir": {
-        "LONG": 92,
-        "SHORT": 50,
-        "FLAT": 18
+        "LONG": 88,
+        "SHORT": 52,
+        "FLAT": 20
       }
     },
     "forex_crosses": {
       "family": "forex",
       "n": 160,
-      "threshold": 2.0,
-      "median": 1.509,
-      "p90": 2.096,
-      "max": 2.285,
-      "pass_pct": 16.2,
+      "threshold": 2.1,
+      "median": 1.309,
+      "p90": 1.823,
+      "max": 2.068,
+      "pass_pct": 0.0,
       "pairs": [
         "GBP/JPY"
       ],
       "dir": {
-        "LONG": 115,
-        "SHORT": 26,
-        "FLAT": 19
+        "LONG": 109,
+        "SHORT": 31,
+        "FLAT": 20
       }
     },
     "forex_majors": {
       "family": "forex",
       "n": 556,
-      "threshold": 2.0,
-      "median": 1.256,
-      "p90": 1.987,
-      "max": 2.304,
-      "pass_pct": 9.2,
+      "threshold": 2.1,
+      "median": 1.171,
+      "p90": 2.536,
+      "max": 2.621,
+      "pass_pct": 15.8,
       "pairs": [
         "EUR/USD",
         "GBP/USD",
@@ -153,37 +137,37 @@
         "USD/JPY"
       ],
       "dir": {
-        "LONG": 359,
-        "SHORT": 143,
-        "FLAT": 54
+        "LONG": 351,
+        "SHORT": 153,
+        "FLAT": 52
       }
     },
     "precious_trackers": {
       "family": "commodity",
       "n": 320,
-      "threshold": 2.0,
-      "median": 1.227,
-      "p90": 2.055,
-      "max": 2.431,
-      "pass_pct": 13.1,
+      "threshold": 1.5,
+      "median": 1.081,
+      "p90": 1.779,
+      "max": 2.22,
+      "pass_pct": 25.9,
       "pairs": [
         "XAG/USD",
         "XAU/USD"
       ],
       "dir": {
-        "LONG": 195,
-        "SHORT": 82,
-        "FLAT": 43
+        "LONG": 183,
+        "SHORT": 92,
+        "FLAT": 45
       }
     },
     "us_indices_trackers": {
       "family": "index",
       "n": 480,
-      "threshold": 2.0,
-      "median": 1.394,
-      "p90": 2.176,
-      "max": 2.555,
-      "pass_pct": 18.1,
+      "threshold": 1.5,
+      "median": 1.256,
+      "p90": 2.023,
+      "max": 2.392,
+      "pass_pct": 37.5,
       "pairs": [
         "DOW JONES",
         "NASDAQ-100",
@@ -191,18 +175,18 @@
       ],
       "dir": {
         "LONG": 308,
-        "SHORT": 134,
-        "FLAT": 38
+        "SHORT": 119,
+        "FLAT": 53
       }
     },
     "us_stock_single": {
       "family": "equity_etf",
       "n": 640,
-      "threshold": 2.0,
-      "median": 1.24,
-      "p90": 1.965,
-      "max": 2.555,
-      "pass_pct": 8.4,
+      "threshold": 1.5,
+      "median": 1.113,
+      "p90": 1.74,
+      "max": 2.29,
+      "pass_pct": 23.6,
       "pairs": [
         "AAPL",
         "MSFT",
@@ -210,9 +194,9 @@
         "TSLA"
       ],
       "dir": {
-        "LONG": 345,
-        "SHORT": 243,
-        "FLAT": 52
+        "LONG": 339,
+        "SHORT": 240,
+        "FLAT": 61
       }
     }
   }

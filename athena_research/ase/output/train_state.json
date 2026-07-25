@@ -1,1 +1,1 @@
-{"family": "crypto", "horizon": "intraday", "version": "v1", "artifact_path": "C:\\Users\\damia\\AppData\\Local\\Athena\\models\\ase\\crypto\\intraday\\v1"}
+{"family": "forex", "horizon": "intraday", "version": "cand-forex-intraday-20260711", "artifact_path": "C:\\Users\\damia\\AppData\\Local\\Athena\\models\\ase\\forex\\intraday\\cand-forex-intraday-20260711"}
