@@ -488,6 +488,39 @@ ENGINE_B_MIN_SL_ATR_DEFAULT: 0.75
 ENGINE_B_MAX_SL_ATR_DEFAULT: 3.0
 ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES: {}
 
+# ── Engine B SL/TP geometry (2026-07-25 audit) ──────────────────────────────
+# Measured before these flags, on EUR/USD intraday (H1 ATR 11p, min_rr 1.3):
+# the structural stop only won the tighter-of comparison when the swing pivot
+# sat within 0.25 ATR of entry, so sl_source came back "atr" on effectively
+# every signal and SMC structure had no influence on the stop at all.
+#
+# true: structural stop = pivot + NAKED_ENGINE.structural_sl_pivot_buffer_atr
+#       (0.25-0.45 ATR). false: legacy pivot + zone_multipliers[regime].sl
+#       (1.0-1.8 ATR), which is a standalone stop multiple, not a pivot buffer.
+ENGINE_B_STRUCTURAL_SL_PIVOT_BUFFER_ENABLED: true
+# The clamp's minimum leg widens the stop and could override the
+# _keep_structural_sl decision taken immediately before it: a structural stop at
+# 0.30 ATR clearing the gate at RR 3.33 was pushed to 0.75 ATR at RR 1.33, 2.5x
+# the risk. true: only the maximum leg (risk cap) applies once structure has
+# already cleared min_rr. false restores legacy.
+ENGINE_B_ATR_SL_CLAMP_MIN_RESPECTS_STRUCTURAL: true
+# Hard lower bound that survives the waiver above — risk_engine sizes volume from
+# stop distance, so without it a 0.05 ATR structural stop was reachable, which
+# both gets hit by ordinary bar noise and inflates position size.
+# NOT CALIBRATED: half the preferred 0.75 minimum. Validate against backtest
+# stop-out rates. Clamped to <= ENGINE_B_MIN_SL_ATR_DEFAULT.
+ENGINE_B_ABSOLUTE_MIN_SL_ATR: 0.35
+# Target RR for a synthetic fallback TP. "min_rr" clears the gate and stops.
+# "fallback_rr" is legacy max(fallback_rr, min_rr): on swing forex it replaced a
+# structural target 0.02 RR short of the 1.8 gate with one at 2.5 RR — 41%
+# further out, with no structural level behind the extra distance.
+ENGINE_B_SYNTHETIC_TP_RR_BASIS: min_rr
+# true: when a structural TP misses min_rr, first try tightening the stop to the
+# distance that target implies (floored at ENGINE_B_MIN_SL_ATR_DEFAULT, never
+# widened, still subject to MAX_SL_PCT) and keep the real structural target,
+# instead of extending the target to manufacture RR. Emits sl_tightened_for_rr.
+ENGINE_B_PREFER_SL_TIGHTEN_OVER_TP_EXTENSION: true
+
 # Engine B asset-class structure tuning for stocks, indices, commodities, ETFs.
 # Enabled here for paper/demo testing; config.py defaults remain fail-closed.
 ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED: true
@@ -3795,6 +3828,19 @@ NAKED_ENGINE:
   # Kept separate from zone_multipliers.*.sl so stop width does not suppress tight targets.
   structural_tp_buffer_atr_mult: 0.25
 
+  # ATR buffer placed BEYOND the swing pivot when building the structural stop.
+  # zone_multipliers.*.sl (1.0-1.8) is a standalone ATR stop multiple — the same
+  # magnitude as STYLE_ATR_MULTS — so using it as a pivot buffer made the
+  # structural stop >= 1.5 ATR wide even with the pivot sitting at price. It
+  # could then never clear min_rr, always lost the tighter-of comparison to the
+  # ATR stop, and structure never set the stop. Regime ordering is preserved.
+  # Gated by ENGINE_B_STRUCTURAL_SL_PIVOT_BUFFER_ENABLED.
+  structural_sl_pivot_buffer_atr:
+    TRENDING:        0.35
+    RANGING:         0.25
+    HIGH_VOLATILITY: 0.45
+    LOW_VOLATILITY:  0.25
+
 
   # Order Block minimum strength (0-100) to count as valid confluence
 
@@ -4295,12 +4341,16 @@ ENGINE_B_STRUCTURE_READY_WATCHLIST:
 # select B execution levels).
 ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS: false
 
-# Engine A SL overlay floor. When the Engine B structural SL is applied over an
-# Engine A signal, the legacy behavior picks the TIGHTER of the ATR stop and the
-# structural stop, which can place the stop on swing/sweep liquidity and produce
-# false-breakout stop-outs. When true, the structural SL may only WIDEN the ATR
-# stop, never tighten it inside the ATR baseline (the ATR distance is a floor).
-# TP capping by structure is unchanged. config.py default is false (legacy).
+# Engine A minimum stop width in ATR. When true, ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT
+# participates in the minimum stop distance in engine_a_v3/levels.py; the binding
+# value is max(ENGINE_A_V3_STRUCTURAL_GEOMETRY.SL_MIN_ATR_MULT, that floor). With
+# the shipped 0.8 vs 0.35 the floor never binds — set a BY_ASSET SL_MIN_ATR_MULT
+# below 0.35 to make it active. False removes the floor from that maximum.
+#
+# NOTE: this key was once documented as controlling an Engine B structural-SL
+# overlay on Engine A rows. That overlay (indicators.select_overlay_sl) had no
+# production caller and was removed 2026-07-25 — Engine A V3 builds its own stop
+# and never reads an Engine B structural SL. This key only does the above.
 ENGINE_A_STRUCTURAL_SL_FLOOR_ATR: true
 
 

@@ -343,17 +343,20 @@ def test_tp2_below_min_room_falls_back_to_single_tp(monkeypatch):
         fallback_rr=2.0,
     )
 
-    # Fallback TP2 has only 3 ATR of room; guard requires 5 → single-TP plan.
+    # Fallback TP2 has only 2.25 ATR of room; guard requires 5 → single-TP plan.
+    # With the scale-out dropped the structural target IS being discarded, so the
+    # synthetic TP targets min_rr (1.5) rather than fallback_rr (2.0): 98.5 stop,
+    # 1.5 ATR risk, TP at 100 + 1.5 * 1.5 = 102.25.
     assert out["exit_strategy"] == "single_fallback_rr_tp"
     assert out["scale_out_guard_reason"] == "tp2_room_below_min_atr"
     assert out["runner_tp_requires_structural_break"] is False
-    assert out["execution_tp1"] == pytest.approx(103.0)
-    assert out["execution_tp2"] == pytest.approx(103.0)
-    assert out["execution_rr1"] == pytest.approx(2.0)
-    assert out["execution_rr2"] == pytest.approx(2.0)
+    assert out["execution_tp1"] == pytest.approx(102.25)
+    assert out["execution_tp2"] == pytest.approx(102.25)
+    assert out["execution_rr1"] == pytest.approx(1.5)
+    assert out["execution_rr2"] == pytest.approx(1.5)
     # Legacy gate fields unchanged: trade still flows.
     assert out["execution_levels_valid"] is True
-    assert out["rr_used_for_gate"] == pytest.approx(2.0)
+    assert out["rr_used_for_gate"] == pytest.approx(1.5)
 
 
 def test_tp1_too_close_retries_tighter_sl_and_preserves_scale_out(monkeypatch):
@@ -401,14 +404,15 @@ def test_tp1_too_close_with_no_sane_sl_falls_back_to_single_tp(monkeypatch):
     )
 
     # Even the tightest allowed SL (0.75 ATR) only reaches rr1=1.33 < 2.0 →
-    # scale-out dropped, legacy single-TP levels preserved untouched.
+    # scale-out dropped, single-TP levels preserved. The structural target is
+    # discarded here, so the synthetic TP targets min_rr (1.5): 100 + 1.5 * 1.5.
     assert out["exit_strategy"] == "single_fallback_rr_tp"
     assert out["scale_out_guard_reason"] == "tp1_rr_below_min_no_sane_sl"
     assert out["tp1_sl_retry_applied"] is False
     assert out["execution_sl"] == pytest.approx(98.5)
-    assert out["execution_tp"] == pytest.approx(103.0)
-    assert out["execution_tp1"] == pytest.approx(103.0)
-    assert out["execution_tp2"] == pytest.approx(103.0)
+    assert out["execution_tp"] == pytest.approx(102.25)
+    assert out["execution_tp1"] == pytest.approx(102.25)
+    assert out["execution_tp2"] == pytest.approx(102.25)
     assert out["execution_levels_valid"] is True
 
 
@@ -1442,3 +1446,251 @@ def test_short_single_tp_clamped_to_wall_replaces_trade_tp(monkeypatch):
     assert out["exit_strategy"] == "single_structural_tp"
     assert out["tp1_path_clear"] is True
     assert out["space_gate_ok"] is True
+
+
+# ── 2026-07-25 SL/TP geometry audit ─────────────────────────────────────────
+# Before these fixes Engine B's stop was a static ATR multiple in production:
+# the structural stop was built as pivot + zone_multipliers[regime].sl (1.0-1.8
+# ATR), which made it >= 1.5 ATR wide even with the pivot at price, so it could
+# never clear min_rr and always lost the tighter-of comparison. The RR gate was
+# then satisfied by pushing the target out to fallback_rr rather than by
+# measuring reward against the level price action actually identified.
+
+
+def test_pivot_buffer_is_a_fraction_of_atr_not_a_standalone_stop():
+    """The pivot buffer must be small enough that structure can win selection."""
+    from market_structure import _engine_b_structural_sl_pivot_buffer_atr
+
+    for regime in ("TRENDING", "RANGING", "HIGH_VOLATILITY", "LOW_VOLATILITY"):
+        buf, source = _engine_b_structural_sl_pivot_buffer_atr(regime)
+        legacy = float(
+            config.CONFIG["NAKED_ENGINE"]["zone_multipliers"][regime]["sl"]
+        )
+        assert 0.0 < buf <= 0.5, f"{regime} buffer {buf} is a stop, not a buffer"
+        assert buf < legacy
+        assert "pivot_buffer" in source
+    # Regime ordering from the legacy table is preserved.
+    assert (
+        _engine_b_structural_sl_pivot_buffer_atr("HIGH_VOLATILITY")[0]
+        > _engine_b_structural_sl_pivot_buffer_atr("TRENDING")[0]
+        > _engine_b_structural_sl_pivot_buffer_atr("RANGING")[0]
+    )
+
+
+def test_pivot_buffer_falls_back_to_ranging_for_unknown_regime():
+    from market_structure import _engine_b_structural_sl_pivot_buffer_atr
+
+    assert (
+        _engine_b_structural_sl_pivot_buffer_atr("NOT_A_REGIME")[0]
+        == _engine_b_structural_sl_pivot_buffer_atr("RANGING")[0]
+    )
+
+
+def test_reachable_structural_tp_is_not_replaced_by_wider_synthetic():
+    """A structural target just short of the gate must survive, not be extended.
+
+    Legacy: exec SL 1.8 ATR, structural TP 3.2 ATR -> RR 1.78, 0.02 short of the
+    1.8 gate -> discarded for a synthetic TP at 4.5 ATR (41% further out).
+    """
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=95.0,        # 5 ATR -> loses to the 1.8 ATR swing ATR stop
+        structural_tp=103.2,       # 3.2 ATR
+        atr=1.0,
+        style="swing",
+        asset_class="forex",
+        min_rr=1.8,
+        fallback_rr=2.5,
+    )
+
+    assert out["tp_source"] == "structural"
+    assert out["execution_tp"] == pytest.approx(103.2)
+    assert out["rr_used_for_gate"] >= 1.8
+    assert out["synthetic_rr_tp_used"] is False
+
+
+def test_sl_tightens_to_reach_gate_instead_of_extending_structural_tp():
+    """Risk reduction, not target inflation, is the first way to clear the gate."""
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=99.0,        # 1.0 ATR, RR on the structural TP = 1.0
+        structural_tp=101.0,       # 1.0 ATR
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.3,
+        fallback_rr=1.8,
+    )
+
+    # Stop tightened to 1.0 / 1.3 = 0.769 ATR (above the 0.75 floor); the real
+    # structural target is kept and RR now clears the gate exactly.
+    assert out["tp_source"] == "structural"
+    assert out["execution_tp"] == pytest.approx(101.0)
+    assert out["execution_sl"] == pytest.approx(100.0 - (1.0 / 1.3))
+    assert out["rr_used_for_gate"] == pytest.approx(1.3)
+    assert out["sl_source"].endswith("_rr_tighten")
+    assert out["sl_tightened_for_rr"]["target_rr"] == pytest.approx(1.3)
+    assert out["synthetic_rr_tp_used"] is False
+
+
+def test_sl_tighten_declines_below_min_sl_atr_floor():
+    """Tightening must never breach the configured minimum stop width."""
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=90.0,
+        structural_tp=101.0,       # needs a 0.667 ATR stop to reach min_rr 1.5
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert out["sl_tightened_for_rr"] is None
+    assert not str(out["sl_source"]).endswith("_rr_tighten")
+    assert abs(100.0 - out["execution_sl"]) >= 0.75
+
+
+def test_sl_tighten_never_widens_the_stop():
+    """A structural TP far beyond the gate must not pull the stop outwards."""
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=98.5,
+        structural_tp=110.0,       # RR already 7.7, far above min_rr
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.3,
+        fallback_rr=1.8,
+    )
+
+    assert out["sl_tightened_for_rr"] is None
+    assert out["execution_sl"] == pytest.approx(98.5)
+
+
+def test_synthetic_tp_basis_flag_restores_legacy_fallback_rr(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SYNTHETIC_TP_RR_BASIS", "fallback_rr")
+    monkeypatch.setitem(
+        config.CONFIG, "ENGINE_B_PREFER_SL_TIGHTEN_OVER_TP_EXTENSION", False
+    )
+
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=95.0,
+        structural_tp=103.2,
+        atr=1.0,
+        style="swing",
+        asset_class="forex",
+        min_rr=1.8,
+        fallback_rr=2.5,
+    )
+
+    assert out["tp_source"] == "fallback_rr"
+    assert out["execution_tp"] == pytest.approx(100.0 + 1.8 * 2.5)
+
+
+def test_missing_structural_tp_still_uses_fallback_rr_basis():
+    """Nothing real is discarded when there is no target, so fallback_rr stands.
+
+    Uses an asset class with no ATR multiplier config so no ATR TP is available
+    either — the only path left is synthesis from the structural stop.
+    """
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=98.0,
+        structural_tp=None,
+        atr=1.0,
+        style="intraday",
+        asset_class="no_such_asset_class",
+        min_rr=1.5,
+        fallback_rr=2.0,
+    )
+
+    assert out["tp_source"] == "fallback_rr"
+    assert out["fallback_tp_reason"] == "missing_tp_synthesized"
+    # 2.0 structural-stop distance * fallback_rr 2.0, NOT min_rr 1.5.
+    assert out["execution_tp"] == pytest.approx(100.0 + 2.0 * 2.0)
+
+
+def test_levels_expose_geometry_provenance_for_backtest_attribution():
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=99.0,
+        structural_tp=101.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.3,
+        fallback_rr=1.8,
+    )
+
+    assert "atr_sl_clamp_applied" in out
+    assert "sl_tightened_for_rr" in out
+    assert out["stop_distance_atr"] is not None
+
+
+# ── level_cohort normalization ───────────────────────────────────────────────
+# Refinement stages append a suffix to sl_source, so the resulting level_mode is
+# not one of the four literal cohorts and every refined row was dropped into
+# "unknown_level_mode" — silently removing it from level-cohort performance
+# aggregation. Pre-existing for the clamp/retry suffixes; the RR-tighten path
+# made it the common case.
+
+
+@pytest.mark.parametrize(
+    "level_mode,expected",
+    [
+        # Base modes pass through unchanged.
+        ("structural_sl_structural_tp", "structural_sl_structural_tp"),
+        ("atr_sl_structural_tp", "atr_sl_structural_tp"),
+        ("atr_sl_fallback_rr_tp", "atr_sl_fallback_rr_tp"),
+        ("structural_sl_fallback_rr_tp", "structural_sl_fallback_rr_tp"),
+        # RR-tighten places the stop at structural_tp_distance / min_rr, so the
+        # stop stays structure-derived and the base cohort is preserved.
+        ("structural_rr_tighten_sl_structural_tp", "structural_sl_structural_tp"),
+        ("atr_rr_tighten_sl_structural_tp", "atr_sl_structural_tp"),
+        # These all end at a mechanical ATR / pct distance -> atr cohort.
+        ("structural_atr_clamp_sl_structural_tp", "atr_sl_structural_tp"),
+        ("atr_atr_clamp_sl_fallback_rr_tp", "atr_sl_fallback_rr_tp"),
+        ("structural_tp1_rr_retry_sl_structural_tp", "atr_sl_structural_tp"),
+        # sl_source containing "_sl_" must split on the LAST separator.
+        ("atr_max_sl_clamp_sl_structural_tp", "atr_sl_structural_tp"),
+        ("max_sl_clamp_sl_fallback_rr_tp", "atr_sl_fallback_rr_tp"),
+        # Broken / non-level modes stay unknown rather than polluting a cohort.
+        ("structural_invalid_sl_structural_tp", "unknown_level_mode"),
+        ("max_sl_exceeded", "unknown_level_mode"),
+        ("invalid_atr", "unknown_level_mode"),
+        ("", "unknown_level_mode"),
+        (None, "unknown_level_mode"),
+    ],
+)
+def test_level_cohort_normalizes_refinement_suffixes(level_mode, expected):
+    assert engine_b_level_cohort(level_mode) == expected
+
+
+def test_rr_tighten_row_is_not_lost_from_cohort_aggregation():
+    """A tightened row must land in a real cohort, not unknown_level_mode."""
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=99.0,
+        structural_tp=101.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.3,
+        fallback_rr=1.8,
+    )
+    assert out["sl_source"].endswith("_rr_tighten")
+    assert out["level_cohort"] == "structural_sl_structural_tp"
+
+    agg = aggregate_engine_b_level_cohorts([out])
+    assert "unknown_level_mode" not in agg
+    assert agg["structural_sl_structural_tp"]["count"] == 1

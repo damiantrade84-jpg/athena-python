@@ -115,6 +115,7 @@ def test_engine_b_execution_levels_invariants(case, style, group):
         mp.setitem(config.CONFIG, "ENGINE_B_ATR_SL_CLAMPS_ENABLED", True)
         mp.setitem(config.CONFIG, "ENGINE_B_MIN_SL_ATR_DEFAULT", 0.75)
         mp.setitem(config.CONFIG, "ENGINE_B_MAX_SL_ATR_DEFAULT", 3.0)
+        mp.setitem(config.CONFIG, "ENGINE_B_ABSOLUTE_MIN_SL_ATR", 0.35)
         mp.setitem(config.CONFIG, "ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", True)
         mp.setitem(config.CONFIG, "ENGINE_B_ENFORCE_MAX_SL_PCT", False)
 
@@ -145,7 +146,22 @@ def test_engine_b_execution_levels_invariants(case, style, group):
 
     sl_in_atr = sl_dist / case["atr"]
     assert sl_in_atr <= 3.0 + 1e-6
-    assert sl_in_atr >= 0.75 - 1e-6
+    # Two-tier lower bound. The 0.75 preferred minimum WIDENS the stop, so it is
+    # waived when structural levels already clear min_rr — widening them there
+    # cut the very RR that justified keeping them. The 0.35 absolute floor always
+    # holds, because risk_engine sizes volume from stop distance.
+    assert sl_in_atr >= 0.35 - 1e-6
+    # The waiver condition is _keep_structural_sl: structural levels valid and
+    # already clearing min_rr. sl_source is not a reliable probe for it because
+    # it gains _atr_clamp / _rr_tighten suffixes when those stages then refine
+    # the same stop.
+    structural_waiver = (
+        bool(out["structural_sl_valid"])
+        and bool(out["structural_tp_valid"])
+        and out["structural_rr"] >= case["min_rr"] - 1e-9
+    )
+    if not structural_waiver:
+        assert sl_in_atr >= 0.75 - 1e-6
 
 
 def test_engine_b_synthetic_fallback_disabled_rejects_missing_tp(monkeypatch):

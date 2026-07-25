@@ -1350,7 +1350,6 @@ CONFIG: dict = {
     "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED": True,
     "ENGINE_A_TRADE_MIN_CONFIDENCE": 0.60,
     "ENGINE_A_STRUCTURAL_SL_FLOOR_ATR": True,
-    "ENGINE_A_STRUCTURAL_SL_VALIDATE_SIDE": True,
     "ENGINE_A_BTC_CORR_WARN_ON_MISSING_SERIES": False,
     "ENGINE_AB_CRYPTO_SIGNAL_FEED": "bybit",
     "ENGINE_AB_CRYPTO_SIGNAL_FEED_FALLBACK": False,
@@ -1468,6 +1467,28 @@ CONFIG: dict = {
     "ENGINE_B_MIN_SL_ATR_DEFAULT": 0.75,
     "ENGINE_B_MAX_SL_ATR_DEFAULT": 3.0,
     "ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES": {},
+    # The clamp's minimum leg WIDENS the stop. When structural levels have
+    # already cleared min_rr, widening them undoes that decision and cuts the RR
+    # that justified keeping them (0.30 ATR / RR 3.33 -> 0.75 ATR / RR 1.33).
+    # True: only the maximum leg (the risk cap) applies in that case.
+    "ENGINE_B_ATR_SL_CLAMP_MIN_RESPECTS_STRUCTURAL": True,
+    # Hard lower bound that survives the waiver above. risk_engine sizes volume
+    # from stop distance, so an arbitrarily tight structural stop both gets hit
+    # by ordinary bar noise and inflates position size. NOT CALIBRATED — chosen
+    # as half the preferred 0.75 minimum; validate against backtest stop-out
+    # rates before trusting it. Clamped to <= ENGINE_B_MIN_SL_ATR_DEFAULT.
+    "ENGINE_B_ABSOLUTE_MIN_SL_ATR": 0.35,
+    # True: build the structural stop as pivot + NAKED_ENGINE.structural_sl_pivot_buffer_atr.
+    # False: legacy pivot + zone_multipliers[regime].sl (1.0-1.8 ATR).
+    "ENGINE_B_STRUCTURAL_SL_PIVOT_BUFFER_ENABLED": True,
+    # Target RR for a synthetic fallback TP. "min_rr" clears the gate and stops;
+    # "fallback_rr" is the legacy max(fallback_rr, min_rr), which overshot the
+    # gate (2.5 vs 1.8 on swing forex) and pushed targets 41% further out.
+    "ENGINE_B_SYNTHETIC_TP_RR_BASIS": "min_rr",
+    # True: when a structural TP misses min_rr, first try tightening the stop to
+    # the distance that target implies (floored at ENGINE_B_MIN_SL_ATR_DEFAULT)
+    # and keep the real target, instead of extending the target to manufacture RR.
+    "ENGINE_B_PREFER_SL_TIGHTEN_OVER_TP_EXTENSION": True,
     # Default-off non-forex/crypto structure tuning for stocks, indices, commodities, and ETFs.
     "ENGINE_B_ASSET_CLASS_ADJUSTMENTS_ENABLED": False,
     "ENGINE_B_ASSET_CLASS_VOLATILITY_AWARE_ENABLED": False,
@@ -1552,10 +1573,20 @@ CONFIG: dict = {
     #   quantstock.org, bestmt4ea.com, atrindicator.com, luxalgo.com, fxnx.com,
     #   cryptotrading-guide.com (2026), fxpremiere.com (XAU/USD), tapbit.com (2026).
     #
-    # ATR timeframe reference per style:
+    # ATR timeframe reference per style — THE ORIGINAL CALIBRATION BASIS:
     #   Scalp   → H1 ATR  (EUR/USD H1 ATR ≈ 12 pips)
     #   Intraday → H4 ATR  (EUR/USD H4 ATR ≈ 40 pips)
     #   Swing    → D1 ATR  (EUR/USD D1 ATR ≈ 70-90 pips; crypto also D1)
+    #
+    # WARNING — Engine A and Engine B do NOT both feed those timeframes:
+    #   Engine A (LEVEL_ATR_PRIORITY / _atr_for_levels) does follow the table
+    #     above: intraday → H4, swing → D1.
+    #   Engine B feeds the policy STRUCTURE rung instead (resolve_engine_b_tfs
+    #     returns policy.structure_tf as "atr"), i.e. H1 for intraday and H4 for
+    #     swing — one rung faster than the calibration basis in both cases. The
+    #     effective Engine B stop is therefore roughly half the width these
+    #     numbers imply. Signals emit `levels_atr_tf` so the actual reference is
+    #     measurable; recalibrate against that field, not against this comment.
     #
     # Industry benchmark SL ranges:
     #   Scalp (H1):     1.0–1.5× ATR minimum
@@ -2652,6 +2683,18 @@ CONFIG: dict = {
             "LOW_VOLATILITY": {"upper": 0.2, "lower": 0.8, "sl": 1.0},
         },
         "structural_tp_buffer_atr_mult": 0.25,
+        # ATR buffer placed BEYOND the swing pivot when building the structural
+        # stop. Distinct from zone_multipliers.*.sl, which are standalone ATR
+        # stop multiples (same magnitude as STYLE_ATR_MULTS) and made the
+        # structural stop >= 1.5 ATR wide even with the pivot at price — so it
+        # could never clear min_rr and always lost to the ATR stop. Regime
+        # ordering is preserved from the legacy table.
+        "structural_sl_pivot_buffer_atr": {
+            "TRENDING": 0.35,
+            "RANGING": 0.25,
+            "HIGH_VOLATILITY": 0.45,
+            "LOW_VOLATILITY": 0.25,
+        },
         "d1_pd_array_conflict_window_atr_mult": 3.0,
         "rejection_wick_body_ratio": 1.2,
         "sweep_wick_atr_mult": 0.3,
@@ -2843,9 +2886,12 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_B_CHOCH_STRICT",
     "ENGINE_B_SCAN_CONFIRMATION_GATE_ENABLED",
     "ENGINE_B_SCAN_GATE_FUNNEL_ENABLED",
-    "ENGINE_B_STRUCTURAL_SL_USE_STYLE_ATR_MULTS",
+    "ENGINE_B_STRUCTURAL_SL_PIVOT_BUFFER_ENABLED",
+    "ENGINE_B_ATR_SL_CLAMP_MIN_RESPECTS_STRUCTURAL",
+    "ENGINE_B_ABSOLUTE_MIN_SL_ATR",
+    "ENGINE_B_SYNTHETIC_TP_RR_BASIS",
+    "ENGINE_B_PREFER_SL_TIGHTEN_OVER_TP_EXTENSION",
     "ENGINE_A_STRUCTURAL_SL_FLOOR_ATR",
-    "ENGINE_A_STRUCTURAL_SL_VALIDATE_SIDE",
     "ENGINE_A_EXIT_MODE_GLOBAL_DEFAULT",
     "ENGINE_A_EXIT_MODE_BY_SCORE_GROUP",
     "ENGINE_A_ADVISABLE_PIP_BY_SCORE_GROUP",

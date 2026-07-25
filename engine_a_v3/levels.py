@@ -120,16 +120,21 @@ def build_structural_levels(
             floor_mult = 0.0
     except Exception:
         floor_mult = 0.35
+    # Both knobs express the same thing — a minimum stop width in ATR — so the
+    # binding one is simply the larger. Applying them as two separate min()
+    # steps made the floor unreachable whenever SL_MIN_ATR_MULT >= the floor,
+    # which is the case for every shipped config (0.8 vs 0.35): the first step
+    # already placed the stop beyond the floor, so the second min() was a no-op.
+    # Collapsing them keeps the floor live for any BY_ASSET override that lowers
+    # SL_MIN_ATR_MULT below it, and is a no-op under the current defaults.
+    effective_sl_min_mult = max(sl_min_mult, floor_mult)
     swing_src = swing_candles if swing_candles is not None else primary
     if len(swing_src) < 20:
         swing_src = primary
     recent = swing_src[-20:]
     if direction == "LONG":
         structural = min(float(candle["low"]) for candle in recent)
-        invalidation = min(structural, current - sl_min_mult * atr)
-        if floor_mult > 0:
-            floor_stop = current - floor_mult * atr
-            invalidation = min(invalidation, floor_stop)
+        invalidation = min(structural, current - effective_sl_min_mult * atr)
         if invalidation >= current:
             return None
         risk = current - invalidation
@@ -140,10 +145,7 @@ def build_structural_levels(
         )
     else:
         structural = max(float(candle["high"]) for candle in recent)
-        invalidation = max(structural, current + sl_min_mult * atr)
-        if floor_mult > 0:
-            floor_stop = current + floor_mult * atr
-            invalidation = max(invalidation, floor_stop)
+        invalidation = max(structural, current + effective_sl_min_mult * atr)
         if invalidation <= current:
             return None
         risk = invalidation - current

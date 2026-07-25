@@ -181,6 +181,9 @@ def run_engine_b_backtest(
     _h4_snap_len = -1
     _h4_snap: dict = {}
     _regime_label = "RANGING"
+    # Reported in comparability.slTpGeometry, which is built after the loop — a
+    # run whose replay window contains no evaluable bar must not NameError there.
+    atr_tf = ""
 
     # Warmup: skip until every core TF has its minimum confirmed history.
     min_start_epoch = max(
@@ -387,6 +390,16 @@ def run_engine_b_backtest(
                 "style": resolved_style,
                 "triggerTf": trigger_tf,
                 "exitPolicy": exit_policy,
+                # SL/TP geometry attribution: which stage produced this stop and
+                # target, so stop-width and RR outcomes can be split by origin
+                # (structural pivot vs mechanical ATR vs RR-tighten vs synthesis)
+                # instead of only in aggregate.
+                "slSource": conf.get("sl_source"),
+                "tpSource": conf.get("tp_source"),
+                "levelCohort": conf.get("level_cohort"),
+                "stopDistanceAtr": conf.get("stop_distance_atr"),
+                "slTightenedForRr": bool(conf.get("sl_tightened_for_rr")),
+                "syntheticRrTpUsed": bool(conf.get("synthetic_rr_tp_used")),
                 "outcome": outcome.outcome,
                 "grossR": round(outcome.result_r, 4),
                 "costR": round(friction, 4),
@@ -421,6 +434,36 @@ def run_engine_b_backtest(
                 "replayWindowDays": max_replay_days if replay_window_bounded else None,
                 "replayStartIndex": total_index,
                 "tfWindowBars": {tf: int(tf_window.get(tf, 0)) for tf in _ROLE_TFS},
+                # SL/TP geometry contract this run was produced under. Without it
+                # two runs with different stop/target geometry are byte-comparable
+                # in the result files but not comparable in fact — including runs
+                # from a sibling git worktree still on the pre-2026-07-25 code,
+                # where these keys are absent entirely.
+                "slTpGeometry": {
+                    "pivotBufferEnabled": bool(
+                        CONFIG.get("ENGINE_B_STRUCTURAL_SL_PIVOT_BUFFER_ENABLED", True)
+                    ),
+                    "pivotBufferAtr": (
+                        (CONFIG.get("NAKED_ENGINE") or {}).get(
+                            "structural_sl_pivot_buffer_atr"
+                        )
+                    ),
+                    "syntheticTpRrBasis": str(
+                        CONFIG.get("ENGINE_B_SYNTHETIC_TP_RR_BASIS", "min_rr")
+                    ),
+                    "preferSlTightenOverTpExtension": bool(
+                        CONFIG.get("ENGINE_B_PREFER_SL_TIGHTEN_OVER_TP_EXTENSION", True)
+                    ),
+                    "minSlAtr": CONFIG.get("ENGINE_B_MIN_SL_ATR_DEFAULT"),
+                    "maxSlAtr": CONFIG.get("ENGINE_B_MAX_SL_ATR_DEFAULT"),
+                    "absoluteMinSlAtr": CONFIG.get("ENGINE_B_ABSOLUTE_MIN_SL_ATR"),
+                    "minLegRespectsStructural": bool(
+                        CONFIG.get(
+                            "ENGINE_B_ATR_SL_CLAMP_MIN_RESPECTS_STRUCTURAL", True
+                        )
+                    ),
+                    "levelsAtrTf": atr_tf,
+                },
             },
         }
     )

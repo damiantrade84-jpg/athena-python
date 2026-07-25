@@ -341,8 +341,103 @@ def test_engine_b_execution_sl_clamps_to_min_and_max_atr(monkeypatch):
         fallback_rr=3.0,
     )
 
-    assert tight["stop_distance_atr"] == pytest.approx(0.75)
-    assert wide["stop_distance_atr"] == pytest.approx(3.0)
+    # `tight` structural levels already clear min_rr (4.0 ATR target over a 0.2
+    # ATR stop = RR 20), so the 0.75 minimum leg — which WIDENS — must not undo
+    # the _keep_structural_sl decision and cut that RR to 5.3. The 0.35 absolute
+    # floor still binds: 0.2 ATR would inflate position size.
+    assert tight["stop_distance_atr"] == pytest.approx(0.35)
+    assert tight["sl_source"] == "structural_atr_clamp"
+    assert tight["atr_sl_clamp_applied"]["min_leg_applied"] is False
+    assert tight["atr_sl_clamp_applied"]["effective_min_sl_atr"] == pytest.approx(0.35)
+    # The maximum leg is a risk cap and always applies: 5 ATR -> 3 ATR.
+    assert wide["atr_sl_clamp_applied"]["after_atr"] == pytest.approx(3.0)
+    assert wide["atr_sl_clamp_applied"]["min_leg_applied"] is True
+    # The structural TP (4 ATR) then only reaches RR 1.33 against a 3 ATR stop,
+    # so the stop tightens to 2 ATR to clear min_rr 2.0 rather than the target
+    # being extended to fallback_rr 3.0 (which would have put TP at 109.0).
+    assert wide["stop_distance_atr"] == pytest.approx(2.0)
+    assert wide["execution_tp"] == pytest.approx(104.0)
+    assert wide["tp_source"] == "structural"
+    assert wide["rr_used_for_gate"] == pytest.approx(2.0)
+
+
+def test_engine_b_structural_stop_inside_preferred_min_is_preserved(monkeypatch):
+    """A 0.5 ATR structural stop clearing min_rr must survive untouched.
+
+    This is the case the audit measured: the 0.75 minimum leg pushed a 0.30 ATR
+    stop with RR 3.33 out to 0.75 ATR, cutting RR to 1.33 and 2.5x-ing risk. The
+    tightest, best-located setups were penalised hardest.
+    """
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ATR_SL_CLAMPS_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_MIN_SL_ATR_DEFAULT", 0.75)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ABSOLUTE_MIN_SL_ATR", 0.35)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_MAX_SL_ATR_DEFAULT", 3.0)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ENFORCE_MAX_SL_PCT", False)
+
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=99.5,      # 0.5 ATR — between the absolute and preferred min
+        structural_tp=101.0,     # 1.0 ATR -> structural RR 2.0, clears min_rr 1.3
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.3,
+        fallback_rr=1.8,
+    )
+
+    assert out["stop_distance_atr"] == pytest.approx(0.5)
+    assert out["sl_source"] == "structural"
+    assert out["atr_sl_clamp_applied"] is None
+    assert out["rr_used_for_gate"] == pytest.approx(2.0)
+
+
+def test_engine_b_min_sl_clamp_still_widens_when_structure_misses_rr(monkeypatch):
+    """The minimum leg keeps protecting stops that structure has NOT justified."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ATR_SL_CLAMPS_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_MIN_SL_ATR_DEFAULT", 0.75)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_MAX_SL_ATR_DEFAULT", 3.0)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ENFORCE_MAX_SL_PCT", False)
+
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=99.8,      # 0.2 ATR
+        structural_tp=100.2,     # 0.2 ATR -> structural RR 1.0, below min_rr 2.0
+        atr=1.0,
+        style="swing",
+        asset_class="forex",
+        min_rr=2.0,
+        fallback_rr=3.0,
+    )
+
+    assert out["stop_distance_atr"] == pytest.approx(0.75)
+    assert out["atr_sl_clamp_applied"]["min_leg_applied"] is True
+
+
+def test_engine_b_min_sl_clamp_respect_flag_restores_legacy_widening(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ATR_SL_CLAMPS_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_MIN_SL_ATR_DEFAULT", 0.75)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_MAX_SL_ATR_DEFAULT", 3.0)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ENFORCE_MAX_SL_PCT", False)
+    monkeypatch.setitem(
+        config.CONFIG, "ENGINE_B_ATR_SL_CLAMP_MIN_RESPECTS_STRUCTURAL", False
+    )
+
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=99.8,
+        structural_tp=104.0,
+        atr=1.0,
+        style="swing",
+        asset_class="forex",
+        min_rr=2.0,
+        fallback_rr=3.0,
+    )
+
+    assert out["stop_distance_atr"] == pytest.approx(0.75)
+    assert out["atr_sl_clamp_applied"]["min_leg_applied"] is True
 
 
 def test_engine_b_profile_trust_uses_score_group_allow_list(monkeypatch):

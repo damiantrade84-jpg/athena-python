@@ -1096,6 +1096,56 @@ def _engine_b_structural_tp_buffer_atr_mult() -> float:
     return max(0.0, mult)
 
 
+_ENGINE_B_PIVOT_BUFFER_DEFAULTS = {
+    "TRENDING": 0.35,
+    "RANGING": 0.25,
+    "HIGH_VOLATILITY": 0.45,
+    "LOW_VOLATILITY": 0.25,
+}
+
+
+def _engine_b_structural_sl_pivot_buffer_atr(regime: str) -> tuple[float, str]:
+    """ATR buffer placed BEYOND the structural swing pivot for the stop.
+
+    The legacy path reused ``NAKED_ENGINE.zone_multipliers[regime].sl``
+    (1.0 / 1.5 / 1.8) here. Those are *standalone* ATR stop multiples — the same
+    magnitude as ``STYLE_ATR_MULTS`` (1.5 intraday / 1.8 swing) — so adding one
+    on top of the pivot distance made the structural stop at least 1.5 ATR wide
+    even with the pivot sitting exactly at price. Structural RR could then never
+    reach ``min_rr``, the structural stop lost the tighter-of comparison in
+    ``resolve_engine_b_execution_levels``, and ``sl_source`` came back ``atr`` on
+    every signal whose pivot was more than ~0.25 ATR away. Zones, sweeps, order
+    blocks and breakers had no influence on the stop at all.
+
+    A pivot buffer is protection against a wick through the level, not a stop in
+    its own right, so it is sized in fractions of an ATR. Regime ordering from
+    the legacy table is preserved (HIGH_VOLATILITY > TRENDING > RANGING/LOW).
+
+    Returns ``(buffer_atr_mult, source)``. Set
+    ``ENGINE_B_STRUCTURAL_SL_PIVOT_BUFFER_ENABLED: false`` to restore the legacy
+    ``zone_multipliers.sl`` behaviour.
+    """
+    naked_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
+    raw = naked_cfg.get("structural_sl_pivot_buffer_atr")
+    key = str(regime or "").upper()
+    if isinstance(raw, dict):
+        val = raw.get(key, raw.get("RANGING"))
+        if val is not None:
+            try:
+                return max(0.0, float(val)), f"pivot_buffer:{key.lower() or 'ranging'}"
+            except (TypeError, ValueError):
+                pass
+    elif raw is not None:
+        try:
+            return max(0.0, float(raw)), "pivot_buffer:scalar"
+        except (TypeError, ValueError):
+            pass
+    return (
+        _ENGINE_B_PIVOT_BUFFER_DEFAULTS.get(key, _ENGINE_B_PIVOT_BUFFER_DEFAULTS["RANGING"]),
+        f"pivot_buffer_default:{key.lower() or 'ranging'}",
+    )
+
+
 def _engine_b_d1_conflict_window_atr_mult() -> float:
     naked_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
     try:
@@ -2443,6 +2493,40 @@ ENGINE_B_LEVEL_COHORTS = {
     "structural_sl_fallback_rr_tp",
 }
 
+# Refinement stages append a suffix to sl_source, so the resulting level_mode is
+# not one of the four cohorts above and every refined row fell into
+# "unknown_level_mode" — losing it from aggregate_engine_b_level_cohorts. The
+# cohort answers "where did this stop come from", so each suffix maps to the
+# origin the stop ENDS at:
+#   _atr_clamp      -> moved to a mechanical ATR distance          => atr
+#   _tp1_rr_retry   -> moved to min_sl_atr * ATR                   => atr
+#   _max_sl_clamp   -> moved to a MAX_SL_PCT distance              => atr
+#   _rr_tighten     -> placed at structural_tp_distance / min_rr,
+#                      i.e. derived from the structural target     => base kept
+_ENGINE_B_SL_SOURCE_ATR_SUFFIXES = ("_atr_clamp", "_tp1_rr_retry", "_max_sl_clamp")
+_ENGINE_B_SL_SOURCE_NEUTRAL_SUFFIXES = ("_rr_tighten",)
+
+
+def _engine_b_base_sl_source(sl_part: str) -> str:
+    """Collapse refinement suffixes on an sl_source down to its cohort origin."""
+    base = str(sl_part or "")
+    became_atr = False
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _ENGINE_B_SL_SOURCE_ATR_SUFFIXES:
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                became_atr = True
+                changed = True
+        for suffix in _ENGINE_B_SL_SOURCE_NEUTRAL_SUFFIXES:
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                changed = True
+    if became_atr or base in ("", "max_sl_clamp"):
+        return "atr"
+    return base
+
 
 def _engine_b_analyze_structure_error_result(
     precompute: dict,
@@ -2484,9 +2568,26 @@ def _engine_b_analyze_structure_error_result(
 
 
 def engine_b_level_cohort(level_mode: str | None) -> str:
-    """Normalize execution-level source modes into stable reporting cohorts."""
+    """Normalize execution-level source modes into stable reporting cohorts.
+
+    Refined modes (``structural_atr_clamp_sl_structural_tp``,
+    ``atr_rr_tighten_sl_structural_tp``, ...) collapse onto their origin cohort
+    via ``_engine_b_base_sl_source`` instead of being discarded as unknown.
+    """
     mode = str(level_mode or "")
-    return mode if mode in ENGINE_B_LEVEL_COHORTS else "unknown_level_mode"
+    if mode in ENGINE_B_LEVEL_COHORTS:
+        return mode
+    marker = "_sl_"
+    # rfind, not find: sl_source values can themselves contain "_sl_"
+    # ("atr_max_sl_clamp"), while no tp_source does, so the real separator is
+    # always the last occurrence.
+    idx = mode.rfind(marker)
+    if idx > 0 and mode.endswith("_tp"):
+        tp_part = mode[idx + len(marker):]
+        candidate = f"{_engine_b_base_sl_source(mode[:idx])}_sl_{tp_part}"
+        if candidate in ENGINE_B_LEVEL_COHORTS:
+            return candidate
+    return "unknown_level_mode"
 
 
 def aggregate_engine_b_level_cohorts(rows: list[dict] | tuple[dict, ...]) -> dict[str, dict]:
@@ -2591,10 +2692,24 @@ def _synthesize_tp_from_sl(
     direction: str,
     fallback_rr,
     min_rr,
+    *,
+    basis: str | None = None,
 ) -> tuple[float | None, float]:
     """Compute synthetic TP from SL distance * target RR.
 
     Returns (tp, target_rr) on success, (None, 0.0) when inputs are invalid.
+
+    Target RR basis (``basis``, else ENGINE_B_SYNTHETIC_TP_RR_BASIS):
+      "min_rr"      (default) — clear the RR gate and stop there. Correct when
+                    the synthetic TP *replaces* the structural target: projecting
+                    past the gate to ``fallback_rr`` moves the target further out
+                    than the trade needs, with no structural level behind the
+                    extra distance. On swing forex the legacy basis replaced a
+                    structural target 0.02 RR short of the 1.8 gate with one at
+                    2.5 RR — 41% further out.
+      "fallback_rr" — max(fallback_rr, min_rr). Correct for the scale-out runner
+                    leg, where TP1 *is* the structural target and TP2 is a
+                    deliberate stretch goal, so nothing real is being discarded.
     """
     try:
         _fb = float(fallback_rr)
@@ -2609,7 +2724,15 @@ def _synthesize_tp_from_sl(
     _sl_dist = abs(entry - exec_sl)
     if _sl_dist <= 0:
         return None, 0.0
-    _target_rr = max(_fb, _mr)
+    _basis = str(
+        basis
+        or config.CONFIG.get("ENGINE_B_SYNTHETIC_TP_RR_BASIS", "min_rr")
+        or "min_rr"
+    ).strip().lower()
+    if _basis == "min_rr" and _mr > 0:
+        _target_rr = _mr
+    else:
+        _target_rr = max(_fb, _mr)
     tp = entry + (_sl_dist * _target_rr) if direction == "LONG" else entry - (_sl_dist * _target_rr)
     return tp, _target_rr
 
@@ -2832,22 +2955,53 @@ def resolve_engine_b_execution_levels(
             _max_sl_atr = 3.0
         _min_sl_atr = max(0.0, _min_sl_atr)
         _max_sl_atr = max(_min_sl_atr, _max_sl_atr)
+        # The minimum leg WIDENS the stop, so it can undo the _keep_structural_sl
+        # decision made directly above: a structural stop at 0.30 ATR clearing
+        # min_rr with RR 3.33 was pushed out to 0.75 ATR, cutting RR to 1.33 and
+        # multiplying risk by 2.5 — the tightest, best-located setups were
+        # penalised hardest. When structure has already cleared the RR gate,
+        # only the maximum leg (a genuine risk cap) still applies.
+        # ENGINE_B_ATR_SL_CLAMP_MIN_RESPECTS_STRUCTURAL: false restores legacy.
+        #
+        # The waiver is bounded: ENGINE_B_ABSOLUTE_MIN_SL_ATR always applies. The
+        # 0.75 minimum is not only about RR — risk_engine sizes volume from stop
+        # distance, so an arbitrarily tight structural stop (0.05 ATR was
+        # reachable without this bound) both gets hit by ordinary bar noise and
+        # inflates position size. Waiving the preferred minimum is safe; removing
+        # every lower bound is not.
+        _min_leg_applies = not (
+            _keep_structural_sl
+            and bool(
+                config.CONFIG.get("ENGINE_B_ATR_SL_CLAMP_MIN_RESPECTS_STRUCTURAL", True)
+            )
+        )
+        try:
+            _abs_min_sl_atr = float(
+                _group_clamps.get(
+                    "absolute_min_sl_atr",
+                    config.CONFIG.get("ENGINE_B_ABSOLUTE_MIN_SL_ATR", 0.35),
+                )
+            )
+        except (TypeError, ValueError):
+            _abs_min_sl_atr = 0.35
+        _abs_min_sl_atr = max(0.0, min(_abs_min_sl_atr, _min_sl_atr))
+        _effective_min_sl_atr = _min_sl_atr if _min_leg_applies else _abs_min_sl_atr
         _dist_atr = abs(_entry - _exec_sl) / _atr
-        if _dist_atr < _min_sl_atr or _dist_atr > _max_sl_atr:
-            _target_dist_atr = min(max(_dist_atr, _min_sl_atr), _max_sl_atr)
+        if _dist_atr < _effective_min_sl_atr or _dist_atr > _max_sl_atr:
+            _target_dist_atr = min(max(_dist_atr, _effective_min_sl_atr), _max_sl_atr)
             _exec_sl = (
                 _entry - (_atr * _target_dist_atr)
                 if direction == "LONG"
                 else _entry + (_atr * _target_dist_atr)
             )
             _sl_source = f"{_sl_source}_atr_clamp"
-            _level_mode = f"{_sl_source}_sl_structural_tp"
-            _rr_source = _level_mode
             _atr_sl_clamp_applied = {
                 "before_atr": round(_dist_atr, 4),
                 "after_atr": round(_target_dist_atr, 4),
                 "min_sl_atr": round(_min_sl_atr, 4),
                 "max_sl_atr": round(_max_sl_atr, 4),
+                "min_leg_applied": bool(_min_leg_applies),
+                "effective_min_sl_atr": round(_effective_min_sl_atr, 4),
             }
 
     # Select execution TP: structural when valid, ATR fallback
@@ -2890,6 +3044,7 @@ def resolve_engine_b_execution_levels(
     _fallback_applied = False
     _fallback_reason = None
     _structural_tp_below_min_rr = False
+    _sl_tightened_for_rr = None
     # Synthetic fallback eligibility: a valid SL (correct side, non-zero distance)
     # is required to construct a TP from sl_dist * fallback_rr. We allow the
     # fallback to fire in two cases:
@@ -2941,8 +3096,94 @@ def resolve_engine_b_execution_levels(
                     else f"{_tp_source}_tp_below_min_rr"
                 )
                 _structural_tp_below_min_rr = _tp_source == "structural"
-            if bool(config.CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)):
-                _synth_tp, _ = _synthesize_tp_from_sl(_entry, _exec_sl, direction, _fallback_rr, _min_rr)
+            # Prefer risk reduction over target inflation. The structural target
+            # is the one price action actually identified; extending it past that
+            # level to satisfy the gate manufactures RR instead of measuring it.
+            # Tightening the stop to the distance the structural target implies
+            # keeps the real target and cuts risk, bounded below by the same
+            # min_sl_atr floor the clamp uses so the stop stays sane, and only
+            # ever moves the stop closer to entry.
+            # ENGINE_B_PREFER_SL_TIGHTEN_OVER_TP_EXTENSION: false restores legacy.
+            if (
+                _need_synthetic
+                and not _tp_only_failure
+                and _tp_source == "structural"
+                and _struct_tp_valid
+                and _min_rr is not None
+                and _min_rr > 0
+                and _atr > 0
+                and _exec_sl is not None
+                and _exec_tp is not None
+                and bool(
+                    config.CONFIG.get(
+                        "ENGINE_B_PREFER_SL_TIGHTEN_OVER_TP_EXTENSION", True
+                    )
+                )
+            ):
+                _tighten_group_clamps = (
+                    (config.CONFIG.get("ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES") or {})
+                    .get(str(score_group or "").lower(), {})
+                )
+                try:
+                    _tighten_floor_atr = float(
+                        _tighten_group_clamps.get(
+                            "min_sl_atr",
+                            config.CONFIG.get("ENGINE_B_MIN_SL_ATR_DEFAULT", 0.75),
+                        )
+                    )
+                except (TypeError, ValueError):
+                    _tighten_floor_atr = 0.75
+                _tighten_floor = _atr * max(0.0, _tighten_floor_atr)
+                _needed_sl_dist = abs(_exec_tp - _entry) / _min_rr
+                _cur_sl_dist = abs(_entry - _exec_sl)
+                if (
+                    _tighten_floor <= _needed_sl_dist < _cur_sl_dist
+                    and _needed_sl_dist > 0
+                ):
+                    _tightened_sl = (
+                        _entry - _needed_sl_dist
+                        if direction == "LONG"
+                        else _entry + _needed_sl_dist
+                    )
+                    if _engine_b_sl_within_max_sl_pct(_entry, _tightened_sl, _max_sl_pct):
+                        _t_rr, _t_valid, _t_reject, _t_side = _compute_exec_rr(
+                            _tightened_sl, _exec_tp
+                        )
+                        if _t_valid and _t_rr + 1e-12 >= _min_rr:
+                            _exec_sl = _tightened_sl
+                            _sl_source = f"{_sl_source}_rr_tighten"
+                            _level_mode = f"{_sl_source}_sl_{_tp_source}_tp"
+                            _rr_source = _level_mode
+                            _sl_tightened_for_rr = {
+                                "before_atr": round(_cur_sl_dist / _atr, 4),
+                                "after_atr": round(_needed_sl_dist / _atr, 4),
+                                "target_rr": round(_min_rr, 4),
+                            }
+                            _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = (
+                                _t_rr,
+                                _t_valid,
+                                _t_reject,
+                                _t_side,
+                            )
+                            _need_synthetic = False
+                            _fallback_reason = None
+                            _structural_tp_below_min_rr = False
+            if not _need_synthetic:
+                pass
+            elif bool(config.CONFIG.get("ENGINE_B_ALLOW_SYNTHETIC_FALLBACK_RR_TP", False)):
+                # The min_rr basis exists to stop a REACHABLE structural target
+                # being discarded for a further-out synthetic one. When the TP is
+                # missing or wrong-side there is no such target to preserve — the
+                # level is being invented from nothing, which is exactly what
+                # fallback_rr is the contract for.
+                _synth_tp, _ = _synthesize_tp_from_sl(
+                    _entry,
+                    _exec_sl,
+                    direction,
+                    _fallback_rr,
+                    _min_rr,
+                    basis="fallback_rr" if _tp_only_failure else None,
+                )
                 if _synth_tp is not None:
                     _exec_tp = _synth_tp
                     _tp_source = "fallback_rr"
@@ -3108,6 +3349,28 @@ def resolve_engine_b_execution_levels(
             _plan_rr1 = _tp1_rr
             _plan_retry = False
 
+            # Runner contract: TP1 is the structural target, so nothing real is
+            # discarded by making TP2 a stretch goal — fallback_rr stays its
+            # correct basis even when the single-TP synthesis now targets min_rr.
+            # Only ever extends TP2, and re-validates exchange bounds because the
+            # bounds check upstream ran against the shorter min_rr target.
+            _runner_tp2, _ = _synthesize_tp_from_sl(
+                _entry, _exec_sl, direction, fallback_rr, min_rr, basis="fallback_rr"
+            )
+            if _runner_tp2 is not None and abs(_runner_tp2 - _entry) > abs(_plan_tp2 - _entry):
+                _runner_bounds_ok = True
+                if _asset_class_lower:
+                    try:
+                        from risk_engine import validate_tp_exchange_bounds
+
+                        _runner_bounds_ok, _ = validate_tp_exchange_bounds(
+                            _entry, _runner_tp2, _asset_class_lower, config.CONFIG
+                        )
+                    except Exception:
+                        _runner_bounds_ok = True
+                if _runner_bounds_ok:
+                    _plan_tp2 = _runner_tp2
+
             # Guard: TP1 too close relative to the stop. Retry with the
             # tightest allowed ATR-clamp SL before dropping the scale-out plan.
             # Tightening the stop only increases RR, so this never loosens the
@@ -3148,7 +3411,8 @@ def resolve_engine_b_execution_levels(
                         # strictly closer to entry than the old one, so it
                         # cannot newly violate exchange TP bounds.
                         _retry_tp2, _ = _synthesize_tp_from_sl(
-                            _entry, _retry_sl, direction, fallback_rr, min_rr
+                            _entry, _retry_sl, direction, fallback_rr, min_rr,
+                            basis="fallback_rr",
                         )
                         if (
                             _retry_rr1_valid
@@ -3279,6 +3543,7 @@ def resolve_engine_b_execution_levels(
         "fallback_tp_reason": _fallback_reason,
         "synthetic_rr_tp_used": bool(_tp_source == "fallback_rr" and _fallback_applied),
         "atr_sl_clamp_applied": _atr_sl_clamp_applied,
+        "sl_tightened_for_rr": _sl_tightened_for_rr,
         "rr_required": _rr_required,
         "rr_actual": round(_exec_rr, 4),
         "rr_passed": _rr_passed,
@@ -5402,14 +5667,15 @@ class NakedEngine:
 
         multipliers = config.CONFIG.get("NAKED_ENGINE", {}).get("zone_multipliers", {})
         buf = multipliers.get(regime.upper(), multipliers.get("RANGING", {"upper": 0.5, "lower": 1.2, "sl": 1.0}))
-        sl_mult = float(buf.get("sl", 1.0))
-        if bool(config.CONFIG.get("ENGINE_B_STRUCTURAL_SL_USE_STYLE_ATR_MULTS", False)):
-            _style_mults = (config.CONFIG.get("STYLE_ATR_MULTS") or {}).get(style.lower() or "intraday", {}) or {}
-            _asset_mults = _style_mults.get(asset_type.lower(), None)
-            if isinstance(_asset_mults, dict):
-                _style_sl = float(_asset_mults.get("sl", sl_mult))
-                _regime_scale = {"TRENDING": 1.00, "RANGING": 0.90, "HIGH_VOLATILITY": 1.20, "LOW_VOLATILITY": 0.85}.get(regime.upper(), 1.0)
-                sl_mult = _style_sl * _regime_scale
+        # sl_mult is the ATR buffer placed BEYOND the swing pivot, not a
+        # standalone stop distance — see _engine_b_structural_sl_pivot_buffer_atr
+        # for why the legacy zone_multipliers.sl values made the structural stop
+        # unselectable. Legacy path stays available for A/B backtests.
+        if bool(config.CONFIG.get("ENGINE_B_STRUCTURAL_SL_PIVOT_BUFFER_ENABLED", True)):
+            sl_mult, sl_mult_source = _engine_b_structural_sl_pivot_buffer_atr(regime)
+        else:
+            sl_mult = float(buf.get("sl", 1.0))
+            sl_mult_source = "zone_multipliers_legacy"
         structural_tp_buffer_mult = _engine_b_structural_tp_buffer_atr_mult()
 
         # SL with sweep override
@@ -5683,6 +5949,14 @@ class NakedEngine:
             "h4_atr": h4_atr,
             "trigger_atr": trigger_atr,
             "trigger_atr_tf": tfs["trigger"],
+            # Levels ATR provenance. STYLE_ATR_MULTS is documented against an
+            # H4 (intraday) / D1 (swing) ATR reference, but Engine B feeds the
+            # policy structure rung (H1 intraday / H4 swing). Emitting the TF
+            # that actually produced `atr` makes the effective multiple
+            # measurable instead of inferred from stale comments.
+            "levels_atr_tf": tfs["atr"],
+            "structural_sl_buffer_atr_mult": round(float(sl_mult), 4),
+            "structural_sl_buffer_source": sl_mult_source,
             "trigger_atr_period": precompute.get("trigger_atr_period"),
             "trigger_tf_calibration": precompute.get("trigger_tf_calibration"),
             "bos_confirmed": bos_confirmed,
@@ -7019,6 +7293,14 @@ class NakedEngine:
             "structural_rr": _exec_lvl["structural_rr"],
             "structural_sl_valid": _exec_lvl.get("structural_sl_valid"),
             "structural_tp_available": _exec_lvl.get("structural_tp_available"),
+            # SL/TP geometry provenance — lets a backtest attribute stop width to
+            # the pivot buffer, the ATR clamp, or the RR-tighten path, and shows
+            # which timeframe's ATR the STYLE_ATR_MULTS multiple was applied to.
+            "levels_atr_tf": res.get("levels_atr_tf"),
+            "structural_sl_buffer_atr_mult": res.get("structural_sl_buffer_atr_mult"),
+            "structural_sl_buffer_source": res.get("structural_sl_buffer_source"),
+            "atr_sl_clamp_applied": _exec_lvl.get("atr_sl_clamp_applied"),
+            "sl_tightened_for_rr": _exec_lvl.get("sl_tightened_for_rr"),
             "execution_sl": _exec_lvl["execution_sl"],
             "execution_tp": _exec_lvl["execution_tp"],
             "execution_tp1": _exec_lvl.get("execution_tp1"),
