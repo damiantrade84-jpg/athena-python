@@ -17,8 +17,10 @@ _MAX_ABS_TICK_TZ_SECONDS = 14 * 3600
 _TICK_TZ_DST_BAND_HOURS = 1
 
 # Small active-feed history gaps can occur while MT5 lazily synchronizes a
-# symbol after terminal/server startup. Three M15 buckets is only 45 minutes;
-# weekend/closed feeds remain excluded by the independent fresh-tick check.
+# symbol after terminal/server startup. M15/M30 keep the existing three-bucket
+# cap. M5 may need to recover the full gap after a service outage; the
+# independent fresh-tick check excludes closed/frozen feeds, and the caller
+# still applies the normal freshness gate after this single read-only retry.
 _MAX_ACTIVE_LOWER_TF_RETRY_LAG = 3
 
 # If the newest MT5 bar predates wall clock by this much, assume illiquid/stale —
@@ -71,17 +73,19 @@ def should_refetch_active_lower_tf(
     tick_epoch_utc: float | None,
     max_tick_age_sec: float,
 ) -> tuple[bool, int]:
-    """Return whether an active MT5 M15/M30 feed warrants one read-only retry.
+    """Return whether an active MT5 M5/M15/M30 feed warrants one read-only retry.
 
-    A small multi-bucket lag can be a transient MT5 history-sync omission while
-    a symbol is lazily synchronized after terminal/server startup. Closed/frozen
-    markets must not retry: the normalized broker tick has to satisfy the same
-    per-asset age limit as the live-quote gate. The caller still applies the
-    normal freshness gate if the retry stays stale, so this helper cannot turn
-    stale data into an executable signal.
+    A lag can be a transient MT5 history-sync omission while a symbol is lazily
+    synchronized after terminal/server startup. M5 accepts any positive lag so
+    conditional-M5 forex policies can recover after a longer service outage;
+    M15/M30 retain the existing bounded small-gap retry. Closed/frozen markets
+    must not retry: the normalized broker tick has to satisfy the same per-asset
+    age limit as the live-quote gate. The caller still applies the normal
+    freshness gate if the retry stays stale, so this helper cannot turn stale
+    data into an executable signal.
     """
     tf_upper = str(timeframe or "").upper()
-    if tf_upper not in {"M15", "M30"}:
+    if tf_upper not in {"M5", "M15", "M30"}:
         return False, 0
 
     try:
@@ -102,6 +106,8 @@ def should_refetch_active_lower_tf(
     current_bucket = int(now // tf_sec) * tf_sec
     newest_bucket = int(newest // tf_sec) * tf_sec
     lag = max(0, int((current_bucket - newest_bucket) // tf_sec))
+    if tf_upper == "M5":
+        return lag >= 1, lag
     return 1 <= lag <= _MAX_ACTIVE_LOWER_TF_RETRY_LAG, lag
 
 

@@ -190,6 +190,31 @@ def test_active_m15_small_multi_bucket_lag_with_fresh_tick_retries():
     assert (should, lag) == (False, 4)
 
 
+def test_active_m5_long_outage_lag_with_fresh_tick_retries():
+    now = 1_781_034_014.0
+    current_bucket = int(now // 300) * 300
+    should, lag = should_refetch_active_lower_tf(
+        "M5",
+        now,
+        current_bucket - (24 * 300),
+        now - 10,
+        60,
+    )
+    assert (should, lag) == (True, 24)
+
+
+def test_closed_m5_feed_with_stale_tick_does_not_retry():
+    now = 1_781_034_014.0
+    current_bucket = int(now // 300) * 300
+    assert should_refetch_active_lower_tf(
+        "M5",
+        now,
+        current_bucket - (24 * 300),
+        now - 17 * 3600,
+        90,
+    ) == (False, 0)
+
+
 def test_active_m15_current_bucket_does_not_retry():
     now = 1_781_034_014.0
     current_bucket = int(now // 900) * 900
@@ -214,7 +239,7 @@ def test_closed_m15_feed_with_stale_tick_does_not_retry():
     ) == (False, 0)
 
 
-def test_active_lower_tf_retry_is_limited_to_m15_m30():
+def test_active_lower_tf_retry_is_limited_to_m5_m15_m30():
     now = 1_781_034_014.0
     assert should_refetch_active_lower_tf(
         "H1",

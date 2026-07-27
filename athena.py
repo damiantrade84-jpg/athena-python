@@ -3198,12 +3198,15 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
             stale_unshifted_age_sec=get_mt5_fetch_stale_unshifted_age_sec(),
         )
 
-        # MT5 can briefly omit the current M15/M30 history bucket even while
-        # current ticks are arriving. Retry once only when the normalized tick
-        # is fresh under the same per-asset threshold as the live-quote gate.
-        # Closed/frozen markets (for example US equities before the cash open)
-        # do not retry, and a still-stale retry remains blocked downstream.
-        if tf in ("M15", "M30"):
+        # MT5 can briefly omit the current M15/M30 history bucket, or an M5
+        # forex bucket after terminal/service recovery, even while current
+        # ticks are arriving. Retry once only when the normalized tick is fresh
+        # under the same per-asset threshold as the live-quote gate.
+        # Closed/frozen markets do not retry, and a still-stale retry remains
+        # blocked downstream.
+        if tf in ("M15", "M30") or (
+            tf == "M5" and str(pair.get("type") or "").strip().lower() == "forex"
+        ):
             try:
                 _asset_type = str(pair.get("type") or "").strip().lower()
                 _threshold_type = "etf" if _asset_type == "etf_bond" else _asset_type
