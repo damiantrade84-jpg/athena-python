@@ -2224,17 +2224,18 @@ def _fetch_eodhd_volume_only(
 ) -> dict:
     """Best-effort EODHD volume fetch for MT5-routed symbols only.
 
-    Priority order for live scans (cache_only=True path):
-      1. In-memory TTL cache (always checked first - zero latency)
-      2. CandleBuilder WS bars (US stocks M1/M5/M15: near-real-time exchange volume)
-      3. EODHD Intraday Historical REST (all TFs: finalized 2-3h after close - fallback)
-
-    Backtest callers pass cache_only=False which skips the WS path and goes straight
-    to REST so backtests continue to use the same historical data as before.
+    Live scoring callers pass ``cache_only=True`` and accept only session-fresh
+    CandleBuilder US-stock bars (EODHD WebSocket or Live-v2 volume deltas).
+    They never read the EODHD intraday-history cache. Backtest callers pass
+    ``cache_only=False`` and may use cached or REST historical volume.
     This never changes OHLC routing. It is used only to overlay `vol`.
     """
     tf_key = str(tf or "").upper()
-    cached = _get_cached_eodhd_volume_only(pair, tf_key, limit, grid_offset_seconds)
+    # Live scoring must never reuse delayed EODHD intraday-history cache entries.
+    # ``cache_only`` callers accept only the session-fresh CandleBuilder path below.
+    cached = None if cache_only else _get_cached_eodhd_volume_only(
+        pair, tf_key, limit, grid_offset_seconds
+    )
     if cached is not None:
         return cached
 
@@ -2512,7 +2513,11 @@ def _overlay_mt5_candles_with_eodhd_volume(pair: dict, tf: str, mt5_resp: dict) 
     # or exact-timestamp matching never succeeds on H4.
     grid_offset_seconds = _infer_eodhd_grid_offset_seconds(candles, tf_key)
     volume_resp = _fetch_eodhd_volume_only(
-        pair, tf_key, len(candles), grid_offset_seconds=grid_offset_seconds
+        pair,
+        tf_key,
+        len(candles),
+        cache_only=True,
+        grid_offset_seconds=grid_offset_seconds,
     )
     volume_candles = _extract_candles(volume_resp)
     if not volume_candles:

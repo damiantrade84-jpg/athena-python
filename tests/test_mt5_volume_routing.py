@@ -171,6 +171,44 @@ def test_stock_live_still_uses_eodhd_overlay_in_scalp(monkeypatch):
     assert out[0]["open"] == base[0]["open"]
 
 
+def test_stock_live_rejects_eodhd_intraday_history_for_scalp(monkeypatch):
+    class _FakeRt:
+        def fetch_eodhd_volume_only(self, *args, **kwargs):
+            return {
+                "volume_source": "eodhd_5m",
+                "candles": [
+                    {
+                        "time": "2026-03-31T08:00:00+00:00",
+                        "open": 1,
+                        "high": 1,
+                        "low": 1,
+                        "close": 1,
+                        "vol": 9999.0,
+                    }
+                ],
+            }
+
+    monkeypatch.setitem(
+        scalp_engine.CONFIG,
+        "SCALP_ENGINE",
+        {
+            **scalp_engine.CONFIG.get("SCALP_ENGINE", {}),
+            "EODHD_VOLUME_OVERLAY_LIVE_ENABLED": True,
+            "EODHD_VOLUME_OVERLAY_LIVE_ASSET_TYPES": ["stock"],
+            "EODHD_STOCK_EXCHANGE_SUFFIX_MAP": {"AAPL": ".US"},
+        },
+    )
+    monkeypatch.setitem(sys.modules, "athena_runtime", types.SimpleNamespace(rt=lambda: _FakeRt()))
+
+    base = _candles(1, vol=42.0)
+    out, source = scalp_engine._overlay_eodhd_volume_for_scalp(
+        "AAPL", "stock", "M15", list(base), live=True
+    )
+
+    assert source == "mt5_tick"
+    assert out == base
+
+
 def test_backtest_commodity_still_uses_eodhd(monkeypatch):
     calls = []
 

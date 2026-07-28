@@ -484,6 +484,13 @@ def _overlay_eodhd_volume_for_scalp(
         )
         vol_source = (volume_resp or {}).get("volume_source", "mt5_tick") if isinstance(volume_resp, dict) else "mt5_tick"
         volume_candles = (volume_resp or {}).get("candles") if isinstance(volume_resp, dict) else None
+        if live and str(vol_source).startswith("eodhd_"):
+            log.warning(
+                "[SCALP-DATA] %s %s rejected delayed EODHD intraday volume for live scoring",
+                display,
+                tf,
+            )
+            return candles, "mt5_tick"
         if not volume_candles:
             # Check if real volume is required for this asset type.
             asset_lower = str(asset_type or "").lower()
