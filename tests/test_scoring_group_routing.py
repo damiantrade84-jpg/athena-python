@@ -173,32 +173,48 @@ def test_engine_b_base_style_profiles_keep_min_score_contract():
     assert float(swing["fallback_rr"]) == 2.5
 
 
-def test_engine_b_auto_preserves_intraday_while_explicit_styles_remain_available():
-    athena_root = _load_root_athena_module()
+def test_engine_b_auto_matches_engine_a_pair_aware_style():
+    from engine_b_snapshot import resolve_engine_b_style_profile
+    from style_resolver import resolve_auto_style
+
     cases = [
         ({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}, "intraday"),
         ({"display": "USD/ZAR", "symbol": "USDZAR", "type": "forex"}, "swing"),
         ({"display": "AAVE/USDT", "symbol": "AAVEUSDT", "type": "crypto"}, "swing"),
+        # XAU/ZAR and France 40 are per-symbol intraday opt-ins (see
+        # style_resolver._INTRADAY_AUTO_SYMBOLS): they were added with
+        # intraday-speed ladders that the swing overlay would flatten.
+        ({"display": "XAU/ZAR", "symbol": "XAUZAR", "type": "commodity"}, "intraday"),
+        ({"display": "Brent Oil", "symbol": "BRENT", "type": "commodity"}, "swing"),
+        ({"display": "France 40", "symbol": "FRA40", "type": "index"}, "intraday"),
         ({"display": "MSFT", "symbol": "MSFT", "type": "stock"}, "swing"),
+        ({"display": "BRKb", "symbol": "BRKb", "type": "stock"}, "swing"),
     ]
 
     for pair, expected in cases:
         score_group = get_pair_score_group(pair)
-        engine_a_style = athena_root.resolve_auto_style("auto", pair)
-        engine_b_style, _profile = athena_root._naked_scan_style_profile(
+        engine_a_style = resolve_auto_style(
+            "auto",
+            pair,
+            score_group=score_group,
+            asset_type=pair["type"],
+        )
+        engine_b_style, _profile = resolve_engine_b_style_profile(
             "auto",
             score_group=score_group,
             asset_type=pair["type"],
             symbol=pair["display"],
+            config=CONFIG,
         )
         assert engine_a_style == expected
-        assert engine_b_style == "intraday"
+        assert engine_b_style == expected
 
-    explicit_swing, swing_profile = athena_root._naked_scan_style_profile(
+    explicit_swing, swing_profile = resolve_engine_b_style_profile(
         "swing",
         score_group="us_stock_single",
         asset_type="stock",
         symbol="MSFT",
+        config=CONFIG,
     )
     assert explicit_swing == "swing"
     assert swing_profile["entry_tf"] == "H1"

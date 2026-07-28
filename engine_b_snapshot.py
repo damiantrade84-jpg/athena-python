@@ -21,6 +21,7 @@ from market_structure import (
     resolve_engine_b_h4_snap,
     resolve_engine_b_tfs,
 )
+from style_resolver import resolve_auto_style
 
 ENGINE_B_SNAPSHOT_CONTRACT_VERSION = "1.0.0"
 
@@ -239,12 +240,17 @@ def resolve_engine_b_style_profile(
     """Resolve the production Engine B numeric and timeframe profile."""
 
     cfg = config if isinstance(config, Mapping) else CONFIG
+    tf_asset = str(asset_type or "forex").lower()
     resolved = str(style or "auto").strip().lower()
     if resolved not in {"auto", "scalp", "intraday", "swing"}:
         resolved = "auto"
     if resolved == "auto":
-        resolved = "intraday"
-    tf_asset = str(asset_type or "forex").lower()
+        resolved = resolve_auto_style(
+            "auto",
+            {"type": tf_asset, "display": symbol},
+            score_group=score_group,
+            asset_type=tf_asset,
+        )
     tf_by_style = {
         selected: resolve_engine_b_tfs(
             tf_asset,
