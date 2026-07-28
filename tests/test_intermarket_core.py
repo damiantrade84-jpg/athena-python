@@ -9,6 +9,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from intermarket import (
+    _composite_proxy_series,
     _daily_macro_aligned_return_frame,
     _macro_daily_min_overlap,
     apply_confirmation_to_score,
@@ -60,6 +61,62 @@ def test_build_aligned_return_frame_aligns_inner_overlap():
     assert aligned["ok"] is True
     assert len(aligned["frame"]) >= 100
     assert list(aligned["frame"].columns) == ["A", "B"]
+
+
+def _store_entry(start, bars, *, hours=4, seed=0.004):
+    idx = pd.date_range(start=start, periods=bars, freq=f"{hours}h", tz="UTC")
+    returns = pd.Series(
+        [seed if i % 2 == 0 else -seed * 0.8 for i in range(bars)],
+        index=idx,
+    )
+    return {
+        "returns": returns,
+        "close": returns.cumsum().apply(math.exp) * 100.0,
+        "meta": {},
+    }
+
+
+def test_composite_proxy_survives_one_dead_member():
+    """USO's MT5 history stops months before the other energy/metal legs.
+
+    An inner join makes every member a veto, so that one dead feed emptied the
+    frame and nulled COMMODITY_BASKET_PROXY on every scan.
+    """
+    fresh_start = datetime(2026, 5, 19, 1, tzinfo=timezone.utc)
+    store = {
+        "XAU/USD": _store_entry(fresh_start, 300, seed=0.004),
+        "XAG/USD": _store_entry(fresh_start, 300, seed=0.006),
+        "WTI Oil": _store_entry(fresh_start, 300, seed=0.009),
+        "USO": _store_entry(datetime(2025, 7, 30, 16, tzinfo=timezone.utc), 300),
+    }
+    labels = ["XAU/USD", "XAG/USD", "WTI Oil", "USO"]
+
+    naive = pd.concat(
+        {label: store[label]["returns"] for label in labels}, axis=1, join="inner"
+    ).dropna()
+    assert naive.empty, "fixture must reproduce the empty-intersection case"
+
+    composite = _composite_proxy_series(labels, store, "COMMODITY_BASKET_PROXY")
+
+    assert composite is not None
+    assert composite["meta"]["droppedMembers"] == ["USO"]
+    assert composite["meta"]["constituents"] == ["WTI Oil", "XAG/USD", "XAU/USD"]
+    assert composite["meta"]["validBars"] >= 20
+
+
+def test_composite_proxy_keeps_a_member_that_merely_lags_a_session():
+    """Only dead feeds get dropped — a session's lag (DAX vs SPY) must stay in."""
+    start = datetime(2026, 5, 19, 1, tzinfo=timezone.utc)
+    store = {
+        "SPY": _store_entry(start, 300, seed=0.004),
+        "DAX 40": _store_entry(start - timedelta(hours=8), 300, seed=0.005),
+    }
+
+    composite = _composite_proxy_series(["SPY", "DAX 40"], store, "RISK_SENTIMENT_PROXY")
+
+    assert composite is not None
+    assert composite["meta"]["droppedMembers"] == []
+    assert composite["meta"]["constituents"] == ["DAX 40", "SPY"]
 
 
 def test_build_aligned_return_frame_recovers_phase_offset_grids():

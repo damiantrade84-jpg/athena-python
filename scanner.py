@@ -2129,13 +2129,22 @@ def run_full_scan(
             log.error(f"BTC err: {e}")
 
         _scan_limits = scan_candle_limits()
+        # Resolved ahead of the intermarket preload so that fan-out can reuse the
+        # same bounded pool size as the scan itself.
+        _max_workers = get_optimal_workers(
+            configured_max=int(CONFIG.get("SCAN_MAX_WORKERS", 8) or 8),
+            conservative=True
+        )
+        _scan_timeout = int(CONFIG.get("SCAN_TIMEOUT_SEC", 45) or 45)
+
         intermarket_snapshot = None
         _im_cfg = CONFIG.get("INTERMARKET_CONFIRMATION", {}) or {}
         if bool(_im_cfg.get("enabled")) and bool(_im_cfg.get("full_scan_time_matrix", True)):
             try:
                 _im_h4_limit = max(int(_scan_limits["H4"]), 220)
                 _im_preloaded_h4 = {}
-                for _pair in active_pairs:
+
+                def _preload_intermarket_h4(_pair):
                     # Route crypto pairs through the same Bybit/Binance resolver the
                     # per-pair scoring path uses so intermarket H4 context is built on
                     # the same provider Engine A scores. Non-crypto / binance-feed
@@ -2144,8 +2153,32 @@ def run_full_scan(
                         r, _pair, "H4", _im_h4_limit,
                         force_refresh=refresh_market_data,
                     )
-                    if _candles:
-                        _im_preloaded_h4[_pair["display"]] = _candles
+                    return _pair["display"], _candles
+
+                # These fetches used to run one at a time on the critical path,
+                # before the scan pool started — the single largest cost of
+                # enabling intermarket. Same per-pair fan-out the scan already
+                # does, so no new concurrency is introduced against the feeds.
+                with ThreadPoolExecutor(max_workers=_max_workers) as _im_pool:
+                    _im_futures = {
+                        _im_pool.submit(_preload_intermarket_h4, _pair): _pair
+                        for _pair in active_pairs
+                    }
+                    for _im_fut in as_completed(_im_futures):
+                        _im_pair = _im_futures[_im_fut]
+                        try:
+                            _display, _candles = _im_fut.result(timeout=_scan_timeout)
+                        except Exception as _im_fetch_err:
+                            # One bad symbol must not cost the whole snapshot; an
+                            # absent preload just falls back to fetch_candles.
+                            log.debug(
+                                "[SCAN] %s intermarket H4 preload failed: %s",
+                                _im_pair.get("display", "?"),
+                                _im_fetch_err,
+                            )
+                            continue
+                        if _candles:
+                            _im_preloaded_h4[_display] = _candles
                 intermarket_snapshot = build_scan_snapshot(
                     r.ALL_PAIRS,
                     disabled_pairs=r.disabled_pairs,
@@ -2166,11 +2199,6 @@ def run_full_scan(
 
         _engine_b = NakedEngine()
         _regime_context = make_regime_smoothing_context()
-        _max_workers = get_optimal_workers(
-            configured_max=int(CONFIG.get("SCAN_MAX_WORKERS", 8) or 8),
-            conservative=True
-        )
-        _scan_timeout = int(CONFIG.get("SCAN_TIMEOUT_SEC", 45) or 45)
 
         def _analyse(pair):
             try:

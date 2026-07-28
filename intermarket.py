@@ -537,6 +537,19 @@ def _grid_aligned_return_frame(
             "meta": meta_map,
         }
 
+    # Regridding cannot rescue series whose date ranges do not overlap at all
+    # (a dead feed like USO against live legs). Bail before the resample so the
+    # O(n^2) matrix does not pay for a retry that is guaranteed to fail.
+    latest_start = max(close.index[0] for close in closes.values())
+    earliest_end = min(close.index[-1] for close in closes.values())
+    if latest_start >= earliest_end:
+        return {
+            "ok": False,
+            "reason": "insufficient_overlap",
+            "frame": pd.DataFrame(),
+            "meta": meta_map,
+        }
+
     step_seconds = max(steps)
     returns_map: dict[str, pd.Series] = {}
     for label, close in closes.items():
@@ -643,14 +656,53 @@ def _corr_value(series_a: pd.Series, series_b: pd.Series, method: str) -> float:
 
 
 def _count_sign_flips(series: pd.Series) -> int:
-    if series is None or series.empty:
+    # Called once per (pair, window) across the whole O(n^2) matrix on a series
+    # of ~10 values; the pandas round-trip (replace/dropna/shift/notna) cost far
+    # more than the arithmetic. Same result, computed on the raw array.
+    if series is None or len(series) == 0:
         return 0
-    cleaned = series.replace(0, np.nan).dropna()
-    if len(cleaned) < 2:
+    values = np.asarray(series, dtype=float)
+    values = values[~np.isnan(values) & (values != 0.0)]
+    if len(values) < 2:
         return 0
-    signs = np.sign(cleaned.astype(float))
-    prev = signs.shift(1)
-    return int(((signs != prev) & prev.notna()).sum())
+    signs = np.sign(values)
+    return int(np.count_nonzero(signs[1:] != signs[:-1]))
+
+
+def _recent_rolling_corr(
+    frame: pd.DataFrame,
+    target_col: str,
+    driver_col: str,
+    window: int,
+    lookback: int,
+) -> pd.Series:
+    """Last ``lookback`` values of the rolling-``window`` correlation.
+
+    Only the tail is ever consumed (stability, sign persistence, flip count),
+    but the full-length series was being computed — ~250 rolling correlations
+    per pair per window, across every combination in the O(n^2) matrix. A
+    rolling correlation at position i depends only on rows [i-window+1, i], so
+    the tail can be computed from a slice.
+
+    Falls back to the full series whenever the slice cannot yield ``lookback``
+    non-null values (mid-series NaNs from zero-variance windows), which keeps
+    the result identical to computing over the whole frame.
+    """
+    needed = int(window) + int(lookback) - 1
+    if len(frame) > needed:
+        tail = frame.iloc[-needed:]
+        recent = (
+            tail[target_col].rolling(window).corr(tail[driver_col]).dropna()
+        )
+        if len(recent) >= lookback:
+            return recent.tail(lookback)
+    return (
+        frame[target_col]
+        .rolling(window)
+        .corr(frame[driver_col])
+        .dropna()
+        .tail(lookback)
+    )
 
 
 def _lead_lag_metrics(
@@ -767,8 +819,13 @@ def _window_metrics(
     )
     vol_adj = math.copysign(min(abs(beta), 3.0) / 3.0, corr) if corr else 0.0
 
-    corr_series = frame[target_col].rolling(window).corr(frame[driver_col]).dropna()
-    recent_corr = corr_series.tail(max(2, int(cfg.get("flip_lookback_bars", 10) or 10)))
+    recent_corr = _recent_rolling_corr(
+        frame,
+        target_col,
+        driver_col,
+        window,
+        max(2, int(cfg.get("flip_lookback_bars", 10) or 10)),
+    )
     if len(recent_corr) >= 2:
         std = float(recent_corr.std(ddof=0) or 0.0)
         stability = max(0.0, 1.0 - min(std / 0.75, 1.0))
@@ -1104,21 +1161,82 @@ def prepare_series_store(
     return store
 
 
+# A basket needs this many joined bars to be usable, and a member whose newest
+# bar trails the freshest member by more than this many steps is treated as a
+# dead feed rather than as a constraint on the basket's window.
+_COMPOSITE_MIN_BARS = 20
+
+
+def _drop_dead_composite_members(entries: dict[str, dict]) -> tuple[dict[str, dict], list[str]]:
+    """Split basket members into live ones and grossly stale ones.
+
+    An inner join makes every member a veto: one dead feed empties the whole
+    frame. USO's MT5 history stops months before the other energy/metal legs,
+    which silently nulled COMMODITY_BASKET_PROXY on every scan. Members that
+    merely lag by a session (DAX vs SPY) stay in — the horizon is deliberately
+    wide so this only removes feeds that cannot contribute at all.
+    """
+    latest = {
+        label: entry["returns"].index[-1]
+        for label, entry in entries.items()
+    }
+    if not latest:
+        return {}, []
+    steps = [
+        step
+        for step in (
+            _median_step_seconds(entry["returns"].index) for entry in entries.values()
+        )
+        if step
+    ]
+    step_ref = max(steps) if steps else 4 * 3600.0
+    horizon = pd.Timedelta(seconds=float(step_ref) * _COMPOSITE_MIN_BARS)
+    newest = max(latest.values())
+    live = {
+        label: entry
+        for label, entry in entries.items()
+        if newest - latest[label] <= horizon
+    }
+    dropped = sorted(set(entries) - set(live))
+    return live, dropped
+
+
 def _composite_proxy_series(
     labels: list[str],
     series_store: dict[str, dict],
     proxy_name: str,
 ) -> dict | None:
-    series_map = {
-        label: series_store[label]["returns"]
+    entries = {
+        label: series_store[label]
         for label in labels
         if label in series_store
         and isinstance(series_store[label].get("returns"), pd.Series)
+        and not series_store[label]["returns"].empty
     }
-    if not series_map:
+    if not entries:
         return None
-    frame = pd.concat(series_map, axis=1, join="inner").dropna()
-    if frame.empty or len(frame) < 20:
+
+    live, dropped = _drop_dead_composite_members(entries)
+    if not live:
+        return None
+    if dropped:
+        log.debug(
+            "[INTERMARKET] %s dropped stale members: %s",
+            proxy_name,
+            ", ".join(dropped),
+        )
+
+    frame = pd.concat(
+        {label: entry["returns"] for label, entry in live.items()},
+        axis=1,
+        join="inner",
+    ).dropna()
+    if len(frame) < _COMPOSITE_MIN_BARS and len(live) > 1:
+        # Surviving members can still sit on different bar phases.
+        regridded = _grid_aligned_return_frame(live, min_overlap_bars=_COMPOSITE_MIN_BARS)
+        if regridded.get("ok"):
+            frame = regridded["frame"]
+    if frame.empty or len(frame) < _COMPOSITE_MIN_BARS:
         return None
     composite = frame.mean(axis=1)
     meta = {
@@ -1129,6 +1247,8 @@ def _composite_proxy_series(
         "monotonic": bool(frame.index.is_monotonic_increasing),
         "latestTs": frame.index[-1].isoformat(),
         "stepSeconds": _median_step_seconds(frame.index),
+        "constituents": sorted(live),
+        "droppedMembers": dropped,
     }
     return {
         "pair": {
