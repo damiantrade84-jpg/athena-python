@@ -10,21 +10,25 @@ from typing import Any, Iterator
 from .constants import CATALOG_SCHEMA_VERSION
 from .hashing import canonical_json
 from .models import utc_now_iso
-from .paths import ensure_runtime_layout
+from .paths import ensure_runtime_layout, runtime_layout
 
 
 class BacktestCatalog:
     """SQLite metadata catalog for immutable datasets and durable jobs."""
 
     def __init__(self, path: Path | None = None):
-        layout = ensure_runtime_layout()
-        self.path = (path or layout["catalog"]).resolve()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = (path or runtime_layout()["catalog"]).resolve()
         self._migration_lock = threading.Lock()
-        self.initialize()
+        self._initialized = False
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
+    def _raw_connect(self) -> Iterator[sqlite3.Connection]:
+        """Open a connection without running the schema migration.
+
+        Only ``initialize`` may use this; every other caller goes through
+        ``connect`` so the schema is guaranteed to exist.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(str(self.path), timeout=30.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
@@ -34,8 +38,32 @@ class BacktestCatalog:
         finally:
             connection.close()
 
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        self.initialize()
+        with self._raw_connect() as connection:
+            yield connection
+
     def initialize(self) -> None:
-        with self._migration_lock, self.connect() as connection:
+        """Create the runtime layout and schema, once, on first use.
+
+        Deliberately lazy.  athena.py builds a BacktestingV2Service at module
+        scope, so an eager __init__ opened a SQLite database and created five
+        directories merely by importing athena — which
+        tests/test_import_safety.py exists to forbid.  Callers that want the
+        old eager behaviour can still call this directly.
+        """
+        if self._initialized:
+            return
+        with self._migration_lock:
+            if self._initialized:
+                return
+            ensure_runtime_layout()
+            self._initialize_locked()
+            self._initialized = True
+
+    def _initialize_locked(self) -> None:
+        with self._raw_connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(
                 """

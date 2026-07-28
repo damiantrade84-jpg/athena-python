@@ -306,15 +306,27 @@ def test_crypto_engine_a_scan_threshold_resolves_to_score_group_floor():
 
 
 def test_forex_engine_a_scan_thresholds_are_explicit_strict_floor():
-    pairs = [
-        {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"},
-        {"display": "EUR/CHF", "symbol": "EURCHF", "type": "forex"},
-        {"display": "AUD/CHF", "symbol": "AUDCHF", "type": "forex"},
-        {"display": "EUR/NOK", "symbol": "EURNOK", "type": "forex"},
+    """Every forex pair resolves to an explicit group floor, never a default.
+
+    The floor is per group, not a single number: majors and the forex_other
+    fallback sit at 2.1 while crosses sit at 1.9. EUR/CHF and AUD/CHF have been
+    forex_crosses since before policy v4, so asserting 2.1 for them was testing
+    a value the config has never held.
+    """
+    cases = [
+        ({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}, "forex_majors", 2.1),
+        ({"display": "EUR/CHF", "symbol": "EURCHF", "type": "forex"}, "forex_crosses", 1.9),
+        ({"display": "AUD/CHF", "symbol": "AUDCHF", "type": "forex"}, "forex_crosses", 1.9),
+        # Not in any routing table — exercises the forex_other fallback.
+        ({"display": "EUR/NOK", "symbol": "EURNOK", "type": "forex"}, "forex_other", 2.1),
     ]
 
-    for pair in pairs:
-        assert get_score_threshold(pair) == 2.1
+    thresholds = CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"]
+    for pair, expected_group, expected_floor in cases:
+        assert get_pair_score_group(pair) == expected_group, pair["display"]
+        assert get_score_threshold(pair) == expected_floor, pair["display"]
+        # Explicit means the group has its own entry, not a "default" fallback.
+        assert thresholds[expected_group] == expected_floor
 
 
 def test_equity_and_commodity_groups_use_explicit_stable_floor():

@@ -21,9 +21,14 @@ def runtime_root() -> Path:
     return (Path(local_app_data) / "Athena" / "backtesting_v2").resolve()
 
 
-def ensure_runtime_layout(root: Path | None = None) -> dict[str, Path]:
+def runtime_layout(root: Path | None = None) -> dict[str, Path]:
+    """Return the runtime paths without touching the filesystem.
+
+    Use this when you only need to know where something lives — creating the
+    directories is a side effect that must not happen at import time.
+    """
     base = (root or runtime_root()).resolve()
-    layout = {
+    return {
         "root": base,
         "catalog": base / "catalog.sqlite3",
         "datasets": base / "datasets",
@@ -31,6 +36,10 @@ def ensure_runtime_layout(root: Path | None = None) -> dict[str, Path]:
         "exports": base / "exports",
         "logs": base / "logs",
     }
+
+
+def ensure_runtime_layout(root: Path | None = None) -> dict[str, Path]:
+    layout = runtime_layout(root)
     for key in ("root", "datasets", "runs", "exports", "logs"):
         layout[key].mkdir(parents=True, exist_ok=True)
     return layout
