@@ -231,7 +231,9 @@
       "Bash(netstat -ano)",
       "Bash(netstat -ano -p tcp)",
       "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK .venv/Scripts/python.exe scripts/timeframe_feed_audit.py --probe-mt5 --out-dir reports/tf_audit)",
-      "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK .venv/Scripts/python.exe -m pytest tests/test_engine_b_diagnostic_trigger_tf.py -q)"
+      "Bash(ATHENA_REAL_ORDERS_CONFIRM=I_UNDERSTAND_REAL_ORDER_RISK .venv/Scripts/python.exe -m pytest tests/test_engine_b_diagnostic_trigger_tf.py -q)",
+      "WebSearch",
+      "Bash(./.venv/Scripts/python.exe -c ' *)"
     ]
   },
   "disabledMcpjsonServers": [
@@ -247,5 +249,12 @@
     "**/AGENTS.md",
     "**/.agents/**",
     "**/.cursor/**"
-  ]
+  ],
+  "enabledPlugins": {
+    "andrej-karpathy-skills@karpathy-skills": false
+  },
+  "skillOverrides": {
+    "audit-playbook": "off",
+    "edge-commodity-filter": "off"
+  }
 }
