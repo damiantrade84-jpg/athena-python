@@ -51,8 +51,30 @@ _MAJOR_FOREX = {"EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD"
 _FOREX_CROSSES = {
     "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "GBP/AUD",
     "EUR/CHF", "USD/SGD", "AUD/CHF", "AUD/NZD",
+    # 2026-07-28 ATFX additions. G10 broad crosses land on the crosses_broad
+    # ladder (D1/H4/H4/H1/M30) via TIMEFRAME_POLICY_GROUP_ALIASES; the three
+    # yen crosses and the two Scandi USD pairs carry symbol overrides in
+    # timeframe_policy for the liquid ladder, matching EUR/JPY and AUD/JPY.
+    "AUD/CAD", "CAD/CHF", "EUR/CAD", "EUR/NZD", "GBP/CAD", "GBP/CHF",
+    "GBP/NZD", "NZD/CAD", "NZD/CHF",
+    "CAD/JPY", "CHF/JPY", "NZD/JPY",
+    "USD/NOK", "USD/SEK",
+    # USD/DKK is a managed EUR proxy, not a liquid USD major: the crosses_broad
+    # ladder is deliberate (see timeframe_policy notes).
+    "USD/DKK",
+    # USD/CNH is managed but liquid and already an Engine B Asian-active
+    # currency; crosses keeps it on the intraday auto style its symbol
+    # override needs. Exotics would force swing and discard the M15 trigger.
+    "USD/CNH",
 }
-_FOREX_EXOTICS = {"USD/ZAR", "USD/MXN", "USD/BRL", "USD/INR"}
+_FOREX_EXOTICS = {
+    "USD/ZAR", "USD/MXN", "USD/BRL", "USD/INR",
+    # 2026-07-28 ATFX additions. CEE crosses inherit forex_exotics_liquid
+    # (D1/H4/H4/H1/M30, SLOW baseline); the ZAR crosses and the pegged USD/HKD
+    # carry restricted symbol overrides pinning a confirmed H1 trigger.
+    "EUR/HUF", "EUR/PLN", "USD/CZK", "USD/HUF", "USD/PLN",
+    "EUR/ZAR", "GBP/ZAR", "USD/HKD",
+}
 _ALTCOIN_MAJORS = {
     "SOL/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "POL/USDT", "BNB/USDT",
     "DOT/USDT", "LTC/USDT", "SUI/USDT", "NEAR/USDT", "APT/USDT", "INJ/USDT",
@@ -68,8 +90,11 @@ _ENERGY_OIL = {"WTI OIL", "BRENT OIL", "USO", "XLE"}
 _BASE_METALS = {"ALUMINIUM", "LEAD", "NICKEL", "ZINC"}
 _SOFTS = {"CATTLE", "COCOA", "COFFEE", "CORN", "COTTON", "SOYBEANS", "SUGAR", "WHEAT"}
 _US_INDICES_TRACKERS = {"NASDAQ-100", "S&P 500", "DOW JONES", "SPY", "QQQ", "DIA", "SOXX"}
-_EU_INDICES = {"DAX", "DAX 40", "UK100", "FTSE 100"}
-_ASIAN_INDICES = {"ASX 200", "NIKKEI 225", "HANG SENG"}
+# 2026-07-28 ATFX additions: SPAIN 35 / FRANCE 40 / ITALY 40 join the EU cash
+# indices, CHINA A50 the Asian set. Both groups alias to equity_index_standard;
+# CHI50 carries a symbol override for the slower broad-index ladder.
+_EU_INDICES = {"DAX", "DAX 40", "UK100", "FTSE 100", "SPAIN 35", "FRANCE 40", "ITALY 40"}
+_ASIAN_INDICES = {"ASX 200", "NIKKEI 225", "HANG SENG", "CHINA A50"}
 _CURRENCY_INDICES = {"USDX", "EURX", "JPYX"}
 _US_STOCKS = {
     "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOG", "GOOGL", "AVGO",
@@ -231,14 +256,52 @@ _TF_MAJORS_STANDARD = {"EUR/USD", "USD/CHF", "AUD/USD", "NZD/USD", "USD/CAD"}
 _TF_MAJORS_FAST = {"GBP/USD", "USD/JPY"}
 _TF_CROSSES_BROAD = {
     "EUR/GBP", "AUD/NZD", "EUR/CHF", "AUD/CHF", "EUR/AUD", "GBP/AUD", "USD/SGD",
+    "AUD/CAD", "CAD/CHF", "EUR/CAD", "EUR/NZD", "GBP/CAD", "GBP/CHF",
+    "GBP/NZD", "NZD/CAD", "NZD/CHF", "USD/DKK",
 }
-_TF_CROSSES_LIQUID = {"EUR/JPY", "AUD/JPY", "GBP/JPY"}
-_TF_EXOTICS_LIQUID = {"USD/ZAR", "USD/MXN"}
-_TF_EXOTICS_RESTRICTED = {"USD/BRL", "USD/INR"}
+_TF_CROSSES_LIQUID = {
+    "EUR/JPY", "AUD/JPY", "GBP/JPY",
+    "CAD/JPY", "CHF/JPY", "NZD/JPY", "USD/NOK", "USD/SEK", "USD/CNH",
+}
+_TF_EXOTICS_LIQUID = {
+    "USD/ZAR", "USD/MXN",
+    "EUR/HUF", "EUR/PLN", "USD/CZK", "USD/HUF", "USD/PLN",
+}
+_TF_EXOTICS_RESTRICTED = {"USD/BRL", "USD/INR", "EUR/ZAR", "GBP/ZAR", "USD/HKD"}
 _TF_CRYPTO_FAST = {"BTC/USDT", "ETH/USDT", "SOL/USDT"}
 _TF_LIQUID_METALS = {"XAU/USD", "XAG/USD", "GLD", "SLV", "GDX"}
 _TF_INDEX_FAST = {"NASDAQ-100", "DOW JONES", "DAX", "DAX 40"}
 _TF_BOND_SMALLCAP_EM = {"TLT", "IWM", "EEM"}
+
+# ── Cash-equity region taxonomy (ATFX share CFDs, 2026-07-28) ────────────────
+# Region drives session handling only. It is metadata today: the core-session
+# calendars it will key into (TF_POLICY_SESSION_CALENDARS) are still empty, so
+# nothing consumes this beyond diagnostics and tests. Hong Kong is derived from
+# the HK<number> broker ticker form; the European set is explicit because those
+# tickers are indistinguishable from US ones by shape alone.
+CASH_EQUITY_EUROPE_TICKERS = frozenset({
+    "ADS", "ALV", "BAS", "BAYN", "BEI", "BMW", "CBK", "DAI", "DB1", "DBK",
+    "DPW", "DTE", "EON", "FME", "IFX", "LHA", "MUV2", "RWE", "SAP", "SIE",
+    "VOW", "AIR", "AIRP", "AXAF", "BNPP", "BOUY", "DANO", "HRMS", "LVMH",
+    "MICP", "OREP", "TTEF",
+})
+
+
+def resolve_cash_equity_region(ticker: str | None) -> str:
+    """Map an ATFX share ticker to its underlying listing region.
+
+    Case is preserved by the caller; comparison is case-insensitive so BRKb
+    resolves the same as BRKB without rewriting the broker ticker.
+    """
+    raw = str(ticker or "").strip().lstrip("#")
+    if not raw:
+        return "unknown"
+    upper = raw.upper()
+    if upper.startswith("HK") and upper[2:].isdigit():
+        return "CASH_EQUITY_HONG_KONG"
+    if upper in CASH_EQUITY_EUROPE_TICKERS:
+        return "CASH_EQUITY_EUROPE"
+    return "CASH_EQUITY_US"
 
 
 def resolve_timeframe_policy_group(pair: dict) -> str:

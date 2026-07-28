@@ -712,6 +712,13 @@ def _key(value: Any) -> str:
         if text.startswith(prefix):
             text = text[len(prefix):]
     text = text.replace("=X", "").replace(".US", "")
+    # ATFX quotes every symbol with a ".s" suffix (AUDCAD.s, XAUZAR.s, FRA40.s).
+    # Production never hands a broker symbol to this layer — callers pass
+    # pair["display"] — but tolerating the suffix keeps diagnostics and ad-hoc
+    # lookups from silently resolving to a different canonical identity.
+    # Stripped after ".US" so SPY.US is not truncated to SPY.U.
+    if text.endswith(".S"):
+        text = text[:-2]
     return "".join(ch for ch in text if ch.isalnum())
 
 
@@ -756,6 +763,20 @@ for _canonical, _values in {
     "USDMXN": ("USD/MXN", "USDMXN=X"),
     "USDBRL": ("USD/BRL", "USDBRL=X"),
     "USDINR": ("USD/INR", "USDINR=X"),
+    # 2026-07-28 ATFX additions that need a non-default ladder. Symbols whose
+    # score group already resolves to the intended template (the nine G10 broad
+    # crosses, the five CEE crosses, XAU/ZAR, Spain 35, Italy 40, France 40)
+    # are deliberately absent: an alias without an override adds no policy.
+    "CADJPY": ("CAD/JPY", "CADJPY=X"),
+    "CHFJPY": ("CHF/JPY", "CHFJPY=X"),
+    "NZDJPY": ("NZD/JPY", "NZDJPY=X"),
+    "USDNOK": ("USD/NOK", "USDNOK=X"),
+    "USDSEK": ("USD/SEK", "USDSEK=X"),
+    "USDCNH": ("USD/CNH", "USDCNH=X"),
+    "USDHKD": ("USD/HKD", "USDHKD=X"),
+    "EURZAR": ("EUR/ZAR", "EURZAR=X"),
+    "GBPZAR": ("GBP/ZAR", "GBPZAR=X"),
+    "CHI50": ("China A50",),
     "XAUUSD": ("XAU/USD", "GC=F"),
     "XAGUSD": ("XAG/USD", "SI=F"),
     "XPTUSD": ("XPT/USD", "PL=F"),
@@ -824,6 +845,29 @@ _SYMBOL_OVERRIDES: dict[str, dict[str, Any]] = {
     "USDMXN": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_LIQUID"},
     "USDBRL": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
     "USDINR": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
+    # ── 2026-07-28 ATFX additions ────────────────────────────────────────────
+    # Yen crosses and Scandi USD pairs: liquid-cross ladder, matching EUR/JPY
+    # and AUD/JPY. Their forex_crosses score group aliases to crosses_broad, so
+    # without these patches they would sit a rung slow on structure and trigger.
+    "CADJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
+    "CHFJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
+    "NZDJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
+    "USDNOK": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_SCANDI_USD"},
+    "USDSEK": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_SCANDI_USD"},
+    # USD/CNH: managed float. Liquid ladder, but M5 stays disabled so no
+    # eligibility path can promote the trigger past M15 on a policy-driven rate.
+    "USDCNH": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_MANAGED_ASIA"},
+    # USD/HKD: band-pegged 7.75-7.85. Restricted ladder pins a confirmed H1
+    # trigger, mirroring USD/BRL and USD/INR. This stops standard trending
+    # handling from acting on band noise; it is NOT a peg-aware model.
+    "USDHKD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_MANAGED_PEGGED_RESTRICTED"},
+    # ZAR crosses: thinner and wider-spread than USD/ZAR, which already sits on
+    # exotics_liquid. Restricted H1 trigger, no M30/M15/M5 promotion.
+    "EURZAR": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
+    "GBPZAR": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
+    # China A50: broad-index ladder (H4 structure, M30 trigger). The CFD quotes
+    # for extended hours, which must not be read as cash-index liquidity.
+    "CHI50": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "EQUITY_INDEX_BROAD"},
     # Metals — XAU conditional M5 (M15 setup); XAG stays M15; XPT/XPD H4 structure.
     "XAUUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "XAU_CONDITIONAL_M5"},
     "XAGUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "LIQUID_METALS"},
@@ -1317,6 +1361,82 @@ def resolve_timeframe_policy(
         execution_mode=selected.execution_mode,
         m5_policy=m5_policy,
     )
+
+
+def describe_symbol_policy(
+    pair: Mapping[str, Any],
+    *,
+    engine_id: str = "engine_a",
+    style: str | None = None,
+) -> dict[str, Any]:
+    """Return a flat, deterministic description of how one pair resolves.
+
+    Read-only: it calls the same resolvers production uses and adds no state.
+    ``style`` defaults to the pair-aware auto style, which is what a live scan
+    selects, so the reported ladder is the one the pair actually runs on.
+    """
+    from engine_a_groups import (
+        resolve_cash_equity_region,
+        resolve_score_group_by_type,
+        resolve_timeframe_policy_group,
+    )
+    from style_resolver import resolve_auto_style
+
+    display = str(pair.get("display") or pair.get("symbol") or "")
+    asset_type = str(pair.get("type") or pair.get("asset_type") or "")
+    score_group = resolve_score_group_by_type(pair)
+    resolved_style = style or resolve_auto_style(
+        "auto", dict(pair), score_group=score_group, asset_type=asset_type
+    )
+    policy = resolve_timeframe_policy(
+        display, asset_type, score_group, resolved_style, engine_id=engine_id
+    )
+    ladder_index = TIMEFRAME_LADDER.index(policy.trigger_tf)
+    disabled = [
+        tf.value for tf in TIMEFRAME_LADDER[ladder_index + 1:]
+        if not (tf is Timeframe.M5 and policy.m5_policy is M5Policy.CONDITIONAL)
+    ]
+    return {
+        "inputSymbol": display,
+        "canonicalSymbol": policy.canonical_symbol,
+        "assetClass": asset_type or "unknown",
+        "regionalGroup": (
+            resolve_cash_equity_region(pair.get("symbol") or display)
+            if asset_type == "stock" else None
+        ),
+        "scoreGroup": score_group,
+        "timeframePolicyGroup": resolve_timeframe_policy_group(pair),
+        "selectedProfile": policy.profile,
+        "profileResolutionSource": policy.policy_source.value,
+        "engineId": policy.engine_id,
+        "style": policy.style,
+        "regimeTf": policy.regime_tf.value,
+        "biasTf": policy.bias_tf.value,
+        "structureTf": policy.structure_tf.value,
+        "setupTf": policy.setup_tf.value,
+        "triggerTf": policy.trigger_tf.value,
+        "executionTf": policy.execution_tf.value,
+        "executionMode": policy.execution_mode.value,
+        "requiredClosedTfs": [tf.value for tf in policy.required_closed_tfs],
+        "formingTf": policy.forming_tf.value if policy.forming_tf else None,
+        "allowedRefinementTfs": (
+            [Timeframe.M5.value] if policy.m5_policy is M5Policy.CONDITIONAL else []
+        ),
+        "disabledTfs": disabled,
+        "m5Policy": policy.m5_policy.value,
+        "m5Role": policy.m5_role.value,
+        "executionPrerequisiteTf": (
+            policy.execution_prerequisite_tf.value
+            if policy.execution_prerequisite_tf else None
+        ),
+        "baselineSpeedClass": policy.baseline_speed_class.value,
+        "symbolOverrideApplied": policy.diagnostics.symbol_override_applied,
+        "symbolOverridePatchedRoles": list(
+            policy.diagnostics.symbol_override_patched_roles
+        ),
+        "policyKey": policy.policy_key,
+        "policyVersion": policy.policy_version,
+    }
 
 
 def speed_class_for_percentile(
