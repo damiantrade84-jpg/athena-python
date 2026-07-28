@@ -62,6 +62,21 @@ def test_direction_conflict_demotes_via_classify(monkeypatch):
     assert "conflict" in reason.lower() or "direction" in reason.lower()
 
 
+def test_pending_entry_readiness_demotes_v3_trade_to_watchlist(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", False)
+    signal = _v3_trade_signal(
+        entryReadiness="PENDING",
+        entryReadinessReason="confirmed trigger condition not met",
+        triggerConfirmed=False,
+    )
+    pair = {"display": "EUR/USD", "type": "forex", "enabled": True}
+
+    tier, reason = classify_engine_a_v3_signal(signal, pair)
+
+    assert tier == "watchlist"
+    assert reason == "Engine A entry pending: confirmed trigger condition not met"
+
+
 @pytest.mark.parametrize(
     ("risk_field", "risk_payload", "expected_reason"),
     [

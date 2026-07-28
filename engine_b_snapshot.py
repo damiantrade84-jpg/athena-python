@@ -390,6 +390,7 @@ def evaluate_engine_b_snapshot(
     h4_snapshot: Mapping[str, Any] | None = None,
     dxy_h4_closes: list[float] | None = None,
     learning_context: Mapping[str, Any] | None = None,
+    confidence_entry_candles: list[dict[str, Any]] | None = None,
     engine: NakedEngine | None = None,
     context_mode: str = "historical",
     precomputed_structure: dict[str, Any] | None = None,
@@ -402,7 +403,9 @@ def evaluate_engine_b_snapshot(
 
     ``context_mode='historical'`` disables mutable zone registries and live trade
     buckets.  Live callers may supply ``context_mode='live'`` and a fresh engine
-    instance to preserve the production registry contract.
+    instance to preserve the production registry contract. ``role_candles`` is
+    authoritative for trigger detection; ``confidence_entry_candles`` may carry
+    a forming bar for freshness and advisory confidence context only.
     """
 
     asset_type = str(pair.get("type") or pair.get("asset_type") or "")
@@ -584,7 +587,11 @@ def evaluate_engine_b_snapshot(
             continue
         entry_tf = str(resolved_profile.get("entry_tf") or "H1").upper()
         confidence_kwargs = {
-            "entry_candles": list(role_candles.get(entry_tf) or []),
+            "entry_candles": list(
+                confidence_entry_candles
+                if confidence_entry_candles is not None
+                else role_candles.get(entry_tf) or []
+            ),
             "style_profile": resolved_profile,
         }
         if learning_context:

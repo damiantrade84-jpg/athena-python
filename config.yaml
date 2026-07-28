@@ -2453,10 +2453,10 @@ SIGNAL_EXECUTABLE_FALSE_WHEN_FRESHNESS_BLOCKS: true
 # Engine B forming-bar policy (intentional split — not a bug):
 # - ENGINE_B_STRIP_FORMING_STRUCT: strips the live/forming bar from structure TF candles
 #   (BOS/CHoCH/sequence) via market_structure._engine_b_confirmed_only_struct_candles.
-# - ENGINE_B_USE_FORMING_FOR_TRIGGER: when true, include the live forming bar in trigger
-#   candle series passed to calculate_confidence (default true). Trigger pattern
-#   detection inside analyze_structure remains confirmed-bar only. Gate current_price always
-#   uses the structure entry close (engine_b_gate_current_price) — same basis as full scan.
+# - ENGINE_B_USE_FORMING_FOR_TRIGGER: when true, include the live forming bar in
+#   freshness/advisory entry context. Production trigger-pattern detection still
+#   receives the separate confirmed-only series. Gate current_price remains
+#   live-quote based and independently freshness-checked.
 # - ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY: when true, follow-through/trap scoring drops the
 #   newest (forming) bar even if trigger series includes it — confirmed-only FT policy.
 # - ENGINE_B_USE_FORMING_FOR_STRUCTURE: chart-overlay label only (routes_market_data); does NOT
@@ -4054,12 +4054,9 @@ ENGINE_B_ZONE_PERSISTENCE: false
 # See ENGINE_B_STRIP_FORMING_STRUCT (above) for structure vs trigger forming-bar split.
 ENGINE_B_USE_FORMING_FOR_STRUCTURE: false
 
-# 2026-07-10 audit note: this flag does NOT affect trigger-pattern detection —
-# the trigger series inside precompute_structure_data comes from the canonical
-# confirmed-only candles. The forming series it enables is only passed as
-# calculate_confidence entry_candles (follow-through / research-lab gates,
-# where ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY strips the forming bar again)
-# and as a current-price fallback. Live and backtest trigger evaluation agree.
+# The forming series is used for lower-TF freshness and advisory confidence
+# context. Trigger-pattern detection receives a separate confirmed-only map so
+# a forming candle cannot create a scan/execute trade-signal flip.
 ENGINE_B_USE_FORMING_FOR_TRIGGER: true
 
 # Trigger/setup TF only (M5/M15/M30): faster ATR/ADX periods + candle thresholds.

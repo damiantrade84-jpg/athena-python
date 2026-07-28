@@ -7856,14 +7856,11 @@ def _compute_naked_analysis(
             "d1_candles": d1,
             "h4_candles": h4,
             "h1_candles": h1,
-            # Must be the same series the non-probe branch scores with
-            # (``trigger_candles``, forming-inclusive per
-            # ENGINE_B_USE_FORMING_FOR_TRIGGER). The probe overwrites
-            # role_candles[entry_tf] with this list, so passing the
-            # confirmed-only series made the probe detect triggers on a
-            # different bar set than the direct path — and the probe result is
-            # reused as the final result whenever the direction matches.
-            "entry_candles": trigger_candles,
+            # Trigger detection consumes only the confirmed series. The
+            # forming-inclusive series remains separate for freshness and
+            # advisory confidence context.
+            "entry_candles": structure_entry_candles,
+            "confidence_entry_candles": trigger_candles,
             "current_price": current_price,
             "atr": atr,
             "regime_label": regime_label,
@@ -7875,7 +7872,7 @@ def _compute_naked_analysis(
             "dxy_h4_closes": _dxy_h4_closes_b,
             # Detect triggers on the policy-owned Engine B trigger TF so
             # execute-time/naked re-scan matches discovery.
-            "role_candles": _trigger_tf_map,
+            "role_candles": _tf_map,
         }
         if direction is None:
             direction, _probe_res, _probe_conf, _direction_source, _dir_resolve_err = (
@@ -7928,7 +7925,7 @@ def _compute_naked_analysis(
                 pair=pair_obj,
                 dxy_h4_closes=_dxy_h4_closes_b,
                 # Detect triggers on the policy-owned Engine B trigger TF.
-                **engine_b_live_trigger_kwargs(style_profile, _trigger_tf_map),
+                **engine_b_live_trigger_kwargs(style_profile, _tf_map),
             )
 
         try:
@@ -9017,7 +9014,7 @@ def api_scan_naked():
                     style=resolved_style,
                     pair=pair,
                     dxy_h4_closes=_dxy_h4_closes_b,
-                    **engine_b_live_trigger_kwargs(style_profile, _tf_trigger_map),
+                    **engine_b_live_trigger_kwargs(style_profile, _tf_map),
                 )
 
                 verdict = res.get("structural_verdict", "NONE")

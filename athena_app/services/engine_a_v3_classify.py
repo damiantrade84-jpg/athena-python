@@ -30,6 +30,18 @@ def classify_engine_a_v3_signal(signal: dict[str, Any], pair: dict[str, Any]) ->
         return "skip", reason or "V3 signal is not trade-qualified"
     if signal.get("engineATradeEnabled") is not True:
         return "watchlist", reason or "V3 execution eligibility is disabled"
+    readiness_value = signal.get("entryReadiness")
+    if readiness_value is not None:
+        readiness = str(readiness_value).strip().upper() or "UNAVAILABLE"
+        if readiness != "READY":
+            readiness_reason = str(
+                signal.get("entryReadinessReason")
+                or "execution timing is not ready"
+            ).strip()
+            return (
+                "watchlist",
+                f"Engine A entry {readiness.lower()}: {readiness_reason}",
+            )
     if not pair.get("enabled", True):
         return "watchlist", reason or "Pair is disabled"
     if signal.get("exchangeClosed"):

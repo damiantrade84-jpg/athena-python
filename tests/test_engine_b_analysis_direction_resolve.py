@@ -14,6 +14,7 @@ from athena_app.services.engine_b_direction import (
     normalize_caller_direction,
     resolve_analysis_direction,
 )
+from engine_b_snapshot import evaluate_engine_b_snapshot
 from engine_b_subsystems import engine_b_pick_directional_candidate
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +94,93 @@ def test_api_scan_naked_passes_canonical_d1_h4_h1_to_analyze_structure():
     assert "h4_candles = _tf_map.get(\"H4\", [])" in body
     assert "h1_candles = _tf_map.get(\"H1\", [])" in body
     assert "resolve_engine_b_h4_snap" in body
+
+
+def test_engine_b_live_paths_separate_confirmed_trigger_from_forming_context():
+    athena_src = (REPO_ROOT / "athena.py").read_text(encoding="utf-8")
+    scanner_src = (REPO_ROOT / "scanner.py").read_text(encoding="utf-8")
+    snapshot_src = (REPO_ROOT / "engine_b_snapshot.py").read_text(encoding="utf-8")
+
+    compute_body = athena_src.split("def _compute_naked_analysis(", 1)[1].split(
+        '@app.route("/api/naked-analysis"', 1
+    )[0]
+    scan_start = athena_src.index("def api_scan_naked(")
+    scan_end = athena_src.index("\ndef ", scan_start + 1)
+    scan_body = athena_src[scan_start:scan_end]
+    full_scan_body = scanner_src.split("def run_full_scan(", 1)[1]
+
+    assert '"entry_candles": structure_entry_candles' in compute_body
+    assert '"confidence_entry_candles": trigger_candles' in compute_body
+    assert '"role_candles": _tf_map' in compute_body
+    assert "engine_b_live_trigger_kwargs(style_profile, _tf_map)" in compute_body
+    assert "engine_b_live_trigger_kwargs(style_profile, _tf_map)" in scan_body
+
+    assert "_tf_map_b[_tf] = _confirmed" in full_scan_body
+    assert "_tf_active_map_b[_tf] = _active" in full_scan_body
+    assert "entry_candles=entry_candles_b" in full_scan_body
+    assert "confidence_entry_candles=active_entry_candles_b" in full_scan_body
+    assert "role_candles=_tf_map_b" in full_scan_body
+
+    assert "confidence_entry_candles: list[dict[str, Any]] | None = None" in snapshot_src
+    assert "else role_candles.get(entry_tf) or []" in snapshot_src
+
+
+def test_engine_b_snapshot_uses_confirmed_trigger_and_active_confidence_series():
+    confirmed = [{"time": 1, "close": 100.0}]
+    forming = {"time": 2, "close": 101.0}
+    active = [*confirmed, forming]
+
+    class CaptureEngine:
+        def __init__(self):
+            self.trigger_role_candles = None
+            self.confidence_entry_candles = None
+
+        def precompute_structure_data(self, *_args, **kwargs):
+            self.trigger_role_candles = kwargs["role_candles"]
+            return {}
+
+        def analyze_structure_direction(self, _precompute, _price, _direction):
+            return {"structural_verdict": "CLEAR"}
+
+        def calculate_confidence(self, _structure, _price, _direction, **kwargs):
+            self.confidence_entry_candles = kwargs["entry_candles"]
+            return {
+                "score": 4.0,
+                "max_possible": 5.0,
+                "lifecycle_state": "triggered",
+            }
+
+    engine = CaptureEngine()
+    role_candles = {
+        "D1": confirmed,
+        "H4": confirmed,
+        "H1": confirmed,
+        "M15": confirmed,
+    }
+    evaluate_engine_b_snapshot(
+        {"display": "TEST", "symbol": "TEST", "type": "forex"},
+        role_candles,
+        current_price=100.0,
+        style="intraday",
+        atr_override=1.0,
+        style_profile={
+            "entry_tf": "M15",
+            "trigger_tf": "M15",
+            "structure_tf": "H1",
+            "zone_tf": "H1",
+            "atr_tf": "H1",
+        },
+        regime_label="TRENDING",
+        d1_snapshot={},
+        h4_snapshot={},
+        confidence_entry_candles=active,
+        engine=engine,
+        gate_fn=lambda *_args, **_kwargs: (True, 0.0),
+        picker_fn=lambda candidates, **_kwargs: candidates[0],
+    )
+
+    assert engine.trigger_role_candles["M15"] == confirmed
+    assert engine.confidence_entry_candles == active
 
 
 def test_engine_b_direction_alignment_labels():

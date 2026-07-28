@@ -1282,6 +1282,7 @@ def _engine_b_independent_direction_probe(
     asset_type: str,
     d1_snap: dict | None,
     h4_snap: dict | None,
+    confidence_entry_candles: list | None = None,
     role_candles: dict[str, list] | None = None,
     dxy_h4_closes: list | None = None,
 ) -> tuple[str | None, dict | None, dict | None]:
@@ -1320,6 +1321,11 @@ def _engine_b_independent_direction_probe(
         d1_snapshot=d1_snap,
         h4_snapshot=h4_snap,
         dxy_h4_closes=dxy_h4_closes,
+        confidence_entry_candles=(
+            list(confidence_entry_candles)
+            if confidence_entry_candles is not None
+            else list(entry_candles or [])
+        ),
         engine=engine,
         context_mode="live",
         gate_fn=_gate,
@@ -2702,6 +2708,7 @@ def run_full_scan(
 
                     sig_a["engine_b_evaluated"] = True
                     _tf_map_b = {"D1": d1 or [], "H4": h4 or [], "H1": h1 or []}
+                    _tf_active_map_b = dict(_tf_map_b)
                     for _tf in _live_entry_tfs:
                         _state = preloaded_market_state.get(_tf)
                         if not isinstance(_state, dict):
@@ -2719,15 +2726,23 @@ def run_full_scan(
                                 )
                             except Exception:
                                 _state = {}
-                        _active = list((_state or {}).get("confirmed") or [])
-                        if (_state or {}).get("forming"):
+                        _confirmed = list((_state or {}).get("confirmed") or [])
+                        _active = list(_confirmed)
+                        if (
+                            bool(CONFIG.get("ENGINE_B_USE_FORMING_FOR_TRIGGER", True))
+                            and (_state or {}).get("forming")
+                        ):
                             _active.append(_state["forming"])
-                        _tf_map_b[_tf] = _active
+                        _tf_map_b[_tf] = _confirmed
+                        _tf_active_map_b[_tf] = _active
                     _zone_tf_b = str(style_profile_b.get("zone_tf", "H4")).upper()
                     _entry_tf_b = str(style_profile_b.get("entry_tf", "H1")).upper()
                     _atr_tf_b = str(style_profile_b.get("atr_tf", "H4")).upper()
                     zone_candles_b = _select_engine_b_tf_candles(_zone_tf_b, _tf_map_b)
                     entry_candles_b = _select_engine_b_tf_candles(_entry_tf_b, _tf_map_b)
+                    active_entry_candles_b = _select_engine_b_tf_candles(
+                        _entry_tf_b, _tf_active_map_b
+                    )
                     atr_candles_b = _select_engine_b_tf_candles(_atr_tf_b, _tf_map_b)
 
                     _eb_funnel_extras["candles_tf_ok"] = bool(
@@ -2739,7 +2754,7 @@ def run_full_scan(
                     # to clear the same freshness bar as the trigger.
                     _active_lower_tfs_b: dict[str, list] = {}
                     if _entry_tf_b not in {"D1", "H4", "H1"}:
-                        _active_lower_tfs_b[_entry_tf_b] = entry_candles_b
+                        _active_lower_tfs_b[_entry_tf_b] = active_entry_candles_b
                     _m5_prereq_tf_b = str(
                         style_profile_b.get("execution_prerequisite_tf")
                         or style_profile_b.get("setup_tf")
@@ -2752,7 +2767,7 @@ def run_full_scan(
                         and _m5_prereq_tf_b not in {"D1", "H4", "H1"}
                     ):
                         _active_lower_tfs_b[_m5_prereq_tf_b] = _select_engine_b_tf_candles(
-                            _m5_prereq_tf_b, _tf_map_b
+                            _m5_prereq_tf_b, _tf_active_map_b
                         )
 
                     if zone_candles_b and entry_candles_b and atr_candles_b:
@@ -2938,6 +2953,7 @@ def run_full_scan(
                                         h4_candles=h4 or [],
                                         h1_candles=h1 or [],
                                         entry_candles=entry_candles_b,
+                                        confidence_entry_candles=active_entry_candles_b,
                                         current_price=current_price,
                                         atr=atr,
                                         regime_label=regime_label,
@@ -3006,7 +3022,11 @@ def run_full_scan(
                                             res_b,
                                             current_price,
                                             _b_direction_for_analysis,
-                                            entry_candles=entry_candles_b or zone_candles_b,
+                                            entry_candles=(
+                                                active_entry_candles_b
+                                                or entry_candles_b
+                                                or zone_candles_b
+                                            ),
                                             style_profile=style_profile_b,
                                         )
                                     _engine_b_direction_used = _b_direction_for_analysis
