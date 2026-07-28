@@ -96,3 +96,33 @@ def test_atfx_availability_disables_configured_pairs_and_commodities():
     assert by_display["GLD"]["enabled"] is True
     assert "auto_enable" not in by_display["GLD"]
     assert by_display["BTC/USDT"]["enabled"] is True
+
+
+def test_default_naked_scan_skips_only_explicitly_closed_mt5_equity_markets():
+    athena_path = Path(__file__).resolve().parents[1] / "athena.py"
+    tree = ast.parse(athena_path.read_text(encoding="utf-8"), filename=str(athena_path))
+    function_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_naked_scan_market_closed_pair"
+    )
+    isolated_module = ast.Module(body=[function_node], type_ignores=[])
+    ast.fix_missing_locations(isolated_module)
+    namespace: dict[str, object] = {}
+    exec(compile(isolated_module, str(athena_path), "exec"), namespace)
+    is_closed = namespace["_naked_scan_market_closed_pair"]
+
+    closed_aapl = {"AAPL": {"source": "mt5", "market_state": "closed"}}
+    assert is_closed({"display": "AAPL", "source": "mt5", "type": "stock"}, closed_aapl)
+    assert is_closed({"display": "NAS100", "source": "mt5", "type": "index"}, {
+        "NAS100": {"source": "mt5", "market_state": "closed"}
+    })
+    assert not is_closed(
+        {"display": "AAPL", "source": "mt5", "type": "stock"},
+        {"AAPL": {"source": "mt5", "market_state": "unavailable"}},
+    )
+    assert not is_closed(
+        {"display": "EUR/USD", "source": "mt5", "type": "forex"},
+        {"EUR/USD": {"source": "mt5", "market_state": "closed"}},
+    )

@@ -218,6 +218,39 @@ def _engine_b_cache_clear_analysis() -> None:
             _engine_b_cache.pop(key, None)
 
 
+def _naked_scan_market_closed_pair(pair: dict, live_prices: dict) -> bool:
+    """Return whether a default naked scan can skip a known-closed MT5 market.
+
+    This is deliberately an optimization only: an explicit symbol scan and any
+    missing or ambiguous market state still reach Engine B's normal fail-closed
+    candle and broker-tick freshness gates.
+    """
+    if str(pair.get("source") or "").lower() != "mt5":
+        return False
+    if str(pair.get("type") or "").lower() not in {
+        "stock", "etf", "etf_bond", "index",
+    }:
+        return False
+
+    def _key(value) -> str:
+        return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+    wanted = {
+        _key(pair.get("display")),
+        _key(pair.get("symbol")),
+        _key(pair.get("pair")),
+    }
+    wanted.discard("")
+    for raw_key, raw_entry in (live_prices or {}).items():
+        if _key(raw_key) not in wanted or not isinstance(raw_entry, dict):
+            continue
+        return (
+            str(raw_entry.get("source") or "").lower() == "mt5"
+            and str(raw_entry.get("market_state") or "").lower() == "closed"
+        )
+    return False
+
+
 from candle_feeds import (  # noqa: E402
     BinanceCandleWS,
     BinanceLivePriceWS,
@@ -8604,6 +8637,25 @@ def api_scan_naked():
                 continue
         candidate_pairs.append(p)
 
+    # A broad portfolio scan should not spend its worker budget fetching
+    # candles for share/index markets the MT5 poller has explicitly reported
+    # as closed. Keep explicit symbol scans diagnostic: they retain the normal
+    # fail-closed Engine B freshness result instead of silently disappearing.
+    session_closed_pairs = []
+    if symbol_scope is None:
+        with _live_prices_lock:
+            _naked_scan_live_prices = dict(_live_prices)
+        session_closed_pairs = [
+            pair
+            for pair in candidate_pairs
+            if _naked_scan_market_closed_pair(pair, _naked_scan_live_prices)
+        ]
+        if session_closed_pairs:
+            _closed_displays = {id(pair) for pair in session_closed_pairs}
+            candidate_pairs = [
+                pair for pair in candidate_pairs if id(pair) not in _closed_displays
+            ]
+
     results = []
     _best_per_pair = {}
 
@@ -8617,7 +8669,8 @@ def api_scan_naked():
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     engine_b_funnel = {
-        "total": len(candidate_pairs),
+        "total": len(candidate_pairs) + len(session_closed_pairs),
+        "market_closed": len(session_closed_pairs),
         "passed": 0,
         "insufficient_candles": 0,
         "freshness_gate": 0,
@@ -9587,7 +9640,12 @@ def api_scan_naked():
     debug_rows = []
     rejected_diagnostics = []
 
-    log.info(f"[DEBUG] Starting scan with {len(candidate_pairs)} candidate pairs, debug_mode={debug_mode}")
+    log.info(
+        "[DEBUG] Starting scan with %d candidate pairs; skipped %d known-closed MT5 market(s), debug_mode=%s",
+        len(candidate_pairs),
+        len(session_closed_pairs),
+        debug_mode,
+    )
     from athena_app.services.naked_scan_service import iter_naked_scan_rows
 
     with ThreadPoolExecutor(max_workers=_max_workers) as pool:
@@ -9723,11 +9781,11 @@ def api_scan_naked():
         for k, v in engine_b_funnel.items()
         if k != "total" and isinstance(v, (int, float))
     )
-    if _funnel_sum != len(candidate_pairs):
+    if _funnel_sum != engine_b_funnel["total"]:
         log.warning(
             "[NAKED SCAN] funnel row count %s != candidate pairs %s (report if reproducible)",
             _funnel_sum,
-            len(candidate_pairs),
+            engine_b_funnel["total"],
         )
 
     if debug_mode:
@@ -9736,6 +9794,7 @@ def api_scan_naked():
         print("REGRESSION CHECK - ENGINE B SCAN FUNNEL")
         print("=" * 80)
         print(f"Total pairs scanned: {engine_b_funnel['total']}")
+        print(f"Market closed (skipped): {engine_b_funnel['market_closed']}")
         print(f"Passed: {engine_b_funnel['passed']}")
         print(f"Insufficient candles: {engine_b_funnel['insufficient_candles']}")
         print(f"Bybit ATR unavailable: {engine_b_funnel['bybit_atr_unavailable']}")
@@ -9757,8 +9816,9 @@ def api_scan_naked():
             "debugRows": debug_rows,
             "rejectedDiagnostics": rejected_diagnostics,
             "scanFunnel": engine_b_funnel,
-            "totalPairs": len(candidate_pairs),
+            "totalPairs": engine_b_funnel["total"],
             "activePairs": len(candidate_pairs),
+            "skippedSessionPairs": [pair.get("display") for pair in session_closed_pairs],
             "marketDataRefreshed": refresh_market_data,
         }))
 
@@ -9774,8 +9834,9 @@ def api_scan_naked():
         "signals": results,
         "rejectedDiagnostics": rejected_diagnostics,
         "scanFunnel": engine_b_funnel,
-        "totalPairs": len(candidate_pairs),
+        "totalPairs": engine_b_funnel["total"],
         "activePairs": len(candidate_pairs),
+        "skippedSessionPairs": [pair.get("display") for pair in session_closed_pairs],
         "marketDataRefreshed": refresh_market_data,
     }))
 
