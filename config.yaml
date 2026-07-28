@@ -154,6 +154,16 @@ ENGINE_A_V3_MEAN_REVERSION:
   Z_ENTRY: 1.5
   EFF_MAX: 0.35
   LOOKBACK: 20
+  # MR fade stop geometry (build_mean_reversion_levels). SL_BUFFER_ATR is the
+  # buffer beyond the local swing; MIN_RISK_ATR floors the TOTAL stop distance
+  # (0.0 = legacy swing+buffer only). 2026-07-28: forex floor 1.0x ATR — the
+  # bare ~0.5x ATR buffer on the M30 setup rung put the stop inside the ATFX
+  # spread band, and the spread-to-SL gate blocked every fade. Wider stops
+  # shrink rr2, so min_rr 1.0 still decides which fades are worth taking.
+  SL_BUFFER_ATR: 0.5
+  MIN_RISK_ATR: 0.0
+  BY_ASSET:
+    forex: { MIN_RISK_ATR: 1.0 }
   # The MR regime switch reads ADX + Bollinger state from the entry/setup rung and
   # then overrides the multi-timeframe consensus direction outright. Require the
   # momentum-anchor rung to be non-trending too, so a low-ADX pocket on a fast rung
@@ -226,11 +236,14 @@ ENGINE_A_V3_STRUCTURAL_GEOMETRY:
   TP1_RR: 1.0
   LEVELS_ATR_TF: entry
   BY_ASSET:
-    # 2026-07-28 (UNVALIDATED judgment value, not outcome-backed): TP1 1.0R ->
+    # 2026-07-28 (UNVALIDATED judgment values, not outcome-backed): TP1 1.0R ->
     # 1.5R for forex now that live regime gating keeps trend trades out of
     # ranging markets; continuation regimes support a further first target.
-    # Reversible: remove this block to restore the global TP1_RR 1.0.
-    forex: { TP1_RR: 1.5 }
+    # SL_MIN 0.8 -> 1.2x ATR: the 0.8x floor put pullback-entry stops inside the
+    # ATFX spread band on the M30 setup rung (spread-to-SL gate blocked the
+    # whole class); pairs with the raised MAX_EXECUTION_SPREAD_TO_SL_RATIO
+    # forex 0.20. Reversible: remove this block to restore the globals.
+    forex: { TP1_RR: 1.5, SL_MIN_ATR_MULT: 1.2 }
 # Port selected V2 expectancy filters into V3 (multipliers / WATCH demotion).
 # BLOCKED_TREND_STATES only demotes when ENGINE_A_BLOCKED_TREND_STATES explicitly
 # configures a "live" scope. A flat list stays backtest-only (research contract in
@@ -2443,7 +2456,16 @@ MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL:
 # vs the prior M1 close. Tightened 0.15 -> 0.10 same day: several ATFX pairs
 # rest near their spread caps (NZDUSD 0.87x, XAGUSD 0.75x, NATGAS ~0.85%
 # absolute), so a 15% allowance still opened trades materially in the red.
-MAX_EXECUTION_SPREAD_TO_SL_RATIO: 0.10
+# 2026-07-28: dict form — the scalar 0.10 was calibrated for wide structural
+# stops. The forex regime fixes (MR fades, pullback entries) produce tight
+# stops (~0.5-1.2x ATR on the M30 setup rung) that a 10% cap blocks across the
+# whole forex universe on ATFX spreads. forex: 0.20 pairs with the raised stop
+# floors (MR MIN_RISK_ATR 1.0, structural SL_MIN_ATR_MULT 1.2 for forex) so
+# cost-per-risk improves instead of the cap simply loosening. Other classes
+# keep 0.10. UNVALIDATED judgment value; reversible (restore scalar 0.10).
+MAX_EXECUTION_SPREAD_TO_SL_RATIO:
+  default: 0.10
+  forex: 0.20
 
 # ── Signal-to-execution drift cap (GAP-7) ───────────────────────────────────
 # Per-asset-type ceiling on |broker_price - signal_price| / signal_price.

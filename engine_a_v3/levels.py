@@ -177,6 +177,7 @@ def build_mean_reversion_levels(
     swing_lookback: int = 6,
     sl_buffer_atr: float = 0.5,
     min_rr: float = 1.0,
+    min_risk_atr: float = 0.0,
     atr_period: int = 14,
     ema_period: int = 20,
     current_price: float | None = None,
@@ -187,6 +188,11 @@ def build_mean_reversion_levels(
     at the EMA mean (TP2). Opposite geometry to build_structural_levels — reward
     shrinks toward the mean. Returns None if the resulting reward:risk to the mean
     is below min_rr (degenerate fade — skip rather than take poor geometry).
+
+    ``min_risk_atr`` floors the total stop distance (default 0.0 = legacy
+    behaviour). On fast rungs with real spreads, a bare swing+buffer stop is a
+    fraction of the spread cost; the floor keeps the fade's risk meaningful
+    while rr/min_rr still decides whether the geometry is worth taking.
     """
     if len(primary) < 20 or direction not in {"LONG", "SHORT"}:
         return None
@@ -213,6 +219,9 @@ def build_mean_reversion_levels(
         if not (invalidation > current > mean):
             return None
         risk = invalidation - current
+        if min_risk_atr > 0 and risk < min_risk_atr * atr:
+            invalidation = current + min_risk_atr * atr
+            risk = min_risk_atr * atr
         rr2 = (current - mean) / risk
         if rr2 < min_rr:
             return None
@@ -227,6 +236,9 @@ def build_mean_reversion_levels(
         if not (invalidation < current < mean):
             return None
         risk = current - invalidation
+        if min_risk_atr > 0 and risk < min_risk_atr * atr:
+            invalidation = current - min_risk_atr * atr
+            risk = min_risk_atr * atr
         rr2 = (mean - current) / risk
         if rr2 < min_rr:
             return None

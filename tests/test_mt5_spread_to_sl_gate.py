@@ -210,3 +210,52 @@ def test_scan_gate_does_not_block_when_spread_ratio_passes():
     assert signal["executionSpreadGate"]["entryPrice"] == 0.81951
     assert signal["executionSpreadGate"]["atrTimeframe"] == "M30"
     assert "executionBlockReason" not in signal
+
+
+# ── Per-asset ratio cap (2026-07-28 dict form) ───────────────────────────────
+
+
+def test_ratio_cap_dict_resolves_per_asset(monkeypatch):
+    monkeypatch.setitem(
+        mt5_executor.CONFIG,
+        "MAX_EXECUTION_SPREAD_TO_SL_RATIO",
+        {"default": 0.10, "forex": 0.20},
+    )
+    assert mt5_executor._mt5_max_spread_to_sl_ratio("forex") == 0.20
+    assert mt5_executor._mt5_max_spread_to_sl_ratio("crypto") == 0.10
+    assert mt5_executor._mt5_max_spread_to_sl_ratio(None) == 0.10
+    assert mt5_executor._mt5_max_spread_to_sl_ratio("FOREX") == 0.20
+
+
+def test_ratio_cap_scalar_still_global(monkeypatch):
+    monkeypatch.setitem(
+        mt5_executor.CONFIG, "MAX_EXECUTION_SPREAD_TO_SL_RATIO", 0.15
+    )
+    assert mt5_executor._mt5_max_spread_to_sl_ratio("forex") == 0.15
+    assert mt5_executor._mt5_max_spread_to_sl_ratio("crypto") == 0.15
+
+
+def test_scan_gate_applies_per_asset_cap(monkeypatch):
+    from athena_app.services import engine_b_market_state
+
+    monkeypatch.setattr(
+        engine_b_market_state,
+        "fresh_live_gate_quote",
+        lambda pair, live_prices, config, time_now=None: (None, {"matchedKey": "k"}),
+    )
+    # 0.1% absolute spread vs 0.75% stop distance -> ratio ~0.133:
+    # over the 0.10 default, under the 0.20 forex ceiling.
+    live_prices = {"k": {"source": "mt5", "ask": 1.1010, "bid": 1.1000}}
+    base = {"display": "EUR/USD", "pair": "EUR/USD", "direction": "LONG", "sl": 1.0935}
+    forex_signal = {**base, "type": "forex", "engine": "ENGINE_A_V3"}
+    crypto_signal = {**base, "type": "crypto", "engine": "ENGINE_A_V3"}
+    annotated = mt5_executor.apply_mt5_spread_to_sl_scan_gate(
+        [forex_signal, crypto_signal],
+        live_prices,
+        config={"MAX_EXECUTION_SPREAD_TO_SL_RATIO": {"default": 0.10, "forex": 0.20}},
+    )
+    assert annotated == 2
+    assert forex_signal.get("executable") is not False
+    assert forex_signal["spreadToSlRatioExceeded"] is False
+    assert crypto_signal["executable"] is False
+    assert crypto_signal["spreadToSlBlockReason"] == "SPREAD_TOO_WIDE_FOR_SL"

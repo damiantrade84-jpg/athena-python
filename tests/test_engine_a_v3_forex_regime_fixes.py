@@ -325,3 +325,67 @@ def test_blocked_trend_state_demotes_trend_quant_trade(monkeypatch):
     )
     assert signal.decision == "WATCH"
     assert "blocked_trend_state" in signal.rejectionReasons
+
+
+# ── MR stop floor + per-asset spread geometry (2026-07-28) ───────────────────
+
+
+def _mr_fade_primary():
+    closes = [100.0] * 25 + [100.2, 100.4, 100.6, 100.8, 101.0]
+    return _series(closes, bar_hours=1)
+
+
+def test_mr_levels_min_risk_atr_floors_stop_distance():
+    from engine_a_v3.levels import build_mean_reversion_levels
+    from engine_a_v3.setups import atr_for_levels
+
+    primary = _mr_fade_primary()
+    atr = atr_for_levels(primary, 14)
+    base = build_mean_reversion_levels(primary, direction="SHORT", min_rr=1.0)
+    floored = build_mean_reversion_levels(
+        primary, direction="SHORT", min_rr=1.0, min_risk_atr=1.0
+    )
+    assert base is not None and floored is not None
+    base_risk = base.invalidation - 101.0
+    floored_risk = floored.invalidation - 101.0
+    assert base_risk < atr  # legacy swing+buffer is tighter than 1x ATR here
+    assert floored_risk >= 1.0 * atr - 1e-9
+    assert floored_risk > base_risk
+    # The floor widens the stop; rr2 shrinks but still clears min_rr.
+    assert floored.targets[-1].rr < base.targets[-1].rr
+    assert floored.targets[-1].rr >= 1.0
+
+
+def test_mr_min_risk_resolves_per_asset(monkeypatch):
+    from engine_a_v3.evaluator import _build_levels
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_V3_MEAN_REVERSION",
+        {
+            "SL_BUFFER_ATR": 0.5,
+            "MIN_RISK_ATR": 0.0,
+            "BY_ASSET": {"forex": {"MIN_RISK_ATR": 1.0}},
+        },
+    )
+    primary = _mr_fade_primary()
+    forex = _build_levels(
+        primary, direction="SHORT", level_style="mean_reversion", asset_type="forex"
+    )
+    crypto = _build_levels(
+        primary, direction="SHORT", level_style="mean_reversion", asset_type="crypto"
+    )
+    assert forex is not None and crypto is not None
+    assert (forex.invalidation - 101.0) > (crypto.invalidation - 101.0)
+
+
+def test_forex_structural_geometry_checked_in_values():
+    from engine_a_v3.levels import resolve_structural_geometry
+
+    forex = resolve_structural_geometry("forex")
+    assert forex["sl_min_atr_mult"] == 1.2
+    assert forex["tp1_rr"] == 1.5
+    # Other classes keep the historical globals.
+    crypto = resolve_structural_geometry("crypto")
+    assert crypto["sl_min_atr_mult"] == 0.8
+    assert crypto["tp1_rr"] == 1.0

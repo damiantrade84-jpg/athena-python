@@ -125,9 +125,19 @@ def _mt5_max_spread_pct(signal: dict) -> float | None:
     return None
 
 
-def _mt5_max_spread_to_sl_ratio() -> float | None:
-    """Return the spread-to-stop-distance ceiling (fraction of SL distance); None disables."""
+def _mt5_max_spread_to_sl_ratio(asset_type: str | None = None) -> float | None:
+    """Return the spread-to-stop-distance ceiling (fraction of SL distance); None disables.
+
+    Scalar config preserves historical behavior; a dict resolves per asset type
+    ({default: x, forex: y}) so tight-stop forex setups can carry a class-aware
+    ceiling while every other class keeps the global one.
+    """
     raw = CONFIG.get("MAX_EXECUTION_SPREAD_TO_SL_RATIO")
+    if isinstance(raw, dict):
+        keyed = raw.get(str(asset_type or "").strip().lower())
+        if keyed is None:
+            keyed = raw.get("default")
+        raw = keyed
     if isinstance(raw, (int, float)) and raw > 0:
         return float(raw)
     return None
@@ -242,15 +252,31 @@ def apply_mt5_spread_to_sl_scan_gate(
 ) -> int:
     """Mark fresh MT5 scan rows non-executable when spread exceeds the SL ratio."""
     config_map = config if isinstance(config, dict) else CONFIG
-    if ratio_cap is None:
+    explicit_cap = ratio_cap
+    if explicit_cap is None:
         raw_cap = config_map.get("MAX_EXECUTION_SPREAD_TO_SL_RATIO")
-        ratio_cap = raw_cap if isinstance(raw_cap, (int, float)) else None
-    try:
-        cap = float(ratio_cap or 0)
-    except (TypeError, ValueError):
+        if not isinstance(raw_cap, (dict, int, float)):
+            return 0
+    elif not isinstance(explicit_cap, (int, float)):
         return 0
-    if cap <= 0 or not isinstance(signals, list):
+    if not isinstance(signals, list):
         return 0
+
+    def _cap_for(asset_type) -> float:
+        if explicit_cap is not None:
+            try:
+                return float(explicit_cap)
+            except (TypeError, ValueError):
+                return 0.0
+        raw_cap = config_map.get("MAX_EXECUTION_SPREAD_TO_SL_RATIO")
+        if isinstance(raw_cap, dict):
+            raw_cap = raw_cap.get(
+                str(asset_type or "").strip().lower(), raw_cap.get("default")
+            )
+        try:
+            return float(raw_cap or 0)
+        except (TypeError, ValueError):
+            return 0.0
 
     from athena_app.services.engine_b_market_state import fresh_live_gate_quote
 
@@ -264,6 +290,9 @@ def apply_mt5_spread_to_sl_scan_gate(
             "symbol": signal.get("symbol"),
             "type": signal.get("type") or signal.get("asset_type"),
         }
+        cap = _cap_for(pair.get("type"))
+        if cap <= 0:
+            continue
         try:
             _, quote_diagnostics = fresh_live_gate_quote(
                 pair, live_prices, config_map, time_now=time_now
@@ -2056,7 +2085,9 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     # Wide-spread brokers (ATFX resting quotes) make a market fill start a large
     # fraction of the stop distance in the red even when the absolute spread cap
     # passes. Ratio-based, so it self-scales across asset classes and TFs.
-    _spread_sl_cap = _mt5_max_spread_to_sl_ratio()
+    _spread_sl_cap = _mt5_max_spread_to_sl_ratio(
+        signal.get("type") or signal.get("asset_type")
+    )
     if _spread_sl_cap is not None:
         _spread_sl_rejection = _mt5_spread_to_sl_rejection(
             signal, tick, price, sl, _spread_sl_cap

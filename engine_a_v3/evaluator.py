@@ -338,14 +338,32 @@ def _build_levels(
         return None
     if level_style == "mean_reversion":
         _mr_min_rr = 1.0
+        _mr_sl_buffer = 0.5
+        _mr_min_risk = 0.0
         try:
             from config import CONFIG
             from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
 
             if tp_sl_rr_gates_disabled(CONFIG):
                 _mr_min_rr = 0.0
+            _mr_cfg = CONFIG.get("ENGINE_A_V3_MEAN_REVERSION") or {}
+            _mr_sl_buffer = float(_mr_cfg.get("SL_BUFFER_ATR", 0.5))
+            _mr_min_risk = float(_mr_cfg.get("MIN_RISK_ATR", 0.0))
+            _mr_by_asset = _mr_cfg.get("BY_ASSET")
+            _mr_asset_cfg = (
+                _mr_by_asset.get(str(asset_type or "").strip().lower())
+                if isinstance(_mr_by_asset, dict)
+                else None
+            )
+            if isinstance(_mr_asset_cfg, dict):
+                if _mr_asset_cfg.get("SL_BUFFER_ATR") is not None:
+                    _mr_sl_buffer = float(_mr_asset_cfg["SL_BUFFER_ATR"])
+                if _mr_asset_cfg.get("MIN_RISK_ATR") is not None:
+                    _mr_min_risk = float(_mr_asset_cfg["MIN_RISK_ATR"])
         except Exception:
             _mr_min_rr = 1.0
+            _mr_sl_buffer = 0.5
+            _mr_min_risk = 0.0
         return build_mean_reversion_levels(
             primary,
             direction=direction,
@@ -353,6 +371,8 @@ def _build_levels(
             ema_period=ema_period,
             current_price=current_price,
             min_rr=_mr_min_rr,
+            sl_buffer_atr=_mr_sl_buffer,
+            min_risk_atr=_mr_min_risk,
             series_cache=series_cache,
             primary_timeframe=primary_timeframe,
         )

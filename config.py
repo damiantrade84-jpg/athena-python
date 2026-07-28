@@ -1953,6 +1953,12 @@ CONFIG: dict = {
         "Z_ENTRY": 1.5,
         "EFF_MAX": 0.35,
         "LOOKBACK": 20,
+        # MR fade stop geometry: buffer beyond the local swing and a floor on
+        # total stop distance (ATR multiples; 0.0 = legacy swing+buffer only).
+        # BY_ASSET resolves per asset type (evaluator._build_levels).
+        "SL_BUFFER_ATR": 0.5,
+        "MIN_RISK_ATR": 0.0,
+        "BY_ASSET": {},
     },
     "ENGINE_A_V3_DIRECTIONAL_RAMP": {
         "ENABLED": True,
