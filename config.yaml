@@ -3227,6 +3227,11 @@ INTERMARKET_CONFIRMATION:
 
   min_overlap_bars: 100
 
+  # Daily-resampled macro priors (FRED real yield) get their own floor: the H4
+  # store spans ~45 calendar days, so they can never reach min_overlap_bars.
+  # At 30 only the 20-bar window resolves; raising it needs a bigger H4 fetch.
+  macro_daily_min_overlap_bars: 30
+
   max_lag_bars: 5
 
   lead_lag_enabled: false

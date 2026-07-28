@@ -9,6 +9,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from intermarket import (
+    _daily_macro_aligned_return_frame,
+    _macro_daily_min_overlap,
     apply_confirmation_to_score,
     build_aligned_return_frame,
     build_public_matrix_payload,
@@ -58,6 +60,77 @@ def test_build_aligned_return_frame_aligns_inner_overlap():
     assert aligned["ok"] is True
     assert len(aligned["frame"]) >= 100
     assert list(aligned["frame"].columns) == ["A", "B"]
+
+
+def test_build_aligned_return_frame_recovers_phase_offset_grids():
+    """MT5 H4 (01:00/05:00/... UTC) vs a yfinance 4h resample (00:00/04:00/...).
+
+    The two indexes intersect nowhere, so the raw inner join produced zero rows
+    and every DXY-driven macro prior resolved as insufficient_overlap.
+    """
+    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    mt5_grid = _bars_from_returns([0.01, -0.008] * 100, start=base + timedelta(hours=1))
+    yf_grid = _bars_from_returns([0.009, -0.007] * 100, start=base)
+
+    raw_overlap = set(b["time"] for b in mt5_grid) & set(b["time"] for b in yf_grid)
+    assert raw_overlap == set(), "fixture must reproduce the zero-intersection case"
+
+    aligned = build_aligned_return_frame(
+        {"XAU/USD": mt5_grid, "DXY": yf_grid},
+        min_overlap_bars=100,
+    )
+
+    assert aligned["ok"] is True
+    assert aligned.get("gridAligned") is True
+    assert len(aligned["frame"]) >= 100
+    assert sorted(aligned["frame"].columns) == ["DXY", "XAU/USD"]
+
+
+def test_grid_realignment_still_rejects_a_stale_feed():
+    """Regridding must not launder a stale driver into a usable overlap."""
+    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    fresh = _bars_from_returns([0.01, -0.008] * 100, start=base + timedelta(hours=1))
+    stale = _bars_from_returns([0.009, -0.007] * 100, start=base - timedelta(days=30))
+
+    aligned = build_aligned_return_frame(
+        {"XAU/USD": fresh, "DXY": stale},
+        min_overlap_bars=100,
+    )
+
+    assert aligned["ok"] is False
+    assert aligned["reason"] in ("insufficient_overlap", "lagged_candles")
+
+
+def test_daily_macro_prior_clears_its_own_overlap_floor():
+    """~45 calendar days of H4 resamples to ~45 daily rows — under the H4 floor.
+
+    The daily macro path must use macro_daily_min_overlap_bars, not the 100-bar
+    H4 floor, or the FRED real-yield prior fails on every scan.
+    """
+    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    h4_target = _bars_from_returns([0.004, -0.003] * 135, start=base)  # 270 H4 bars
+    daily_driver = _bars_from_returns([0.002, -0.001] * 60, start=base, hours=24)
+
+    floor = _macro_daily_min_overlap({})
+    assert floor < 100
+    # Loosens the H4 floor, but never tightens past an explicit lower setting
+    # (still subject to the pre-existing absolute floor of 5).
+    assert _macro_daily_min_overlap({"min_overlap_bars": 3}) == 5
+    assert _macro_daily_min_overlap({"min_overlap_bars": 20}) == 20
+
+    blocked = _daily_macro_aligned_return_frame(
+        "XAU/USD", h4_target, "US10Y_REAL_YIELD_PROXY", daily_driver,
+        min_overlap_bars=100,
+    )
+    assert blocked["ok"] is False
+    assert blocked["reason"] == "insufficient_overlap"
+
+    allowed = _daily_macro_aligned_return_frame(
+        "XAU/USD", h4_target, "US10Y_REAL_YIELD_PROXY", daily_driver,
+        min_overlap_bars=floor,
+    )
+    assert allowed["ok"] is True
+    assert allowed["alignmentFrequency"] == "daily"
 
 
 def test_build_aligned_return_frame_rejects_lagged_candles():

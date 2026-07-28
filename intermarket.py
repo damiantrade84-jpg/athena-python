@@ -30,6 +30,10 @@ _DEFAULT_CFG = {
     "analysis_tf": "H4",
     "windows": [20, 50, 90],
     "min_overlap_bars": 100,
+    # Daily-aligned macro priors (FRED real yield) resample the H4 store down to
+    # one bar per day, so they can never reach min_overlap_bars on an intraday
+    # fetch window. They get their own floor.
+    "macro_daily_min_overlap_bars": 30,
     "max_lag_bars": 5,
     "lead_lag_enabled": False,
     "full_scan_time_matrix": True,
@@ -405,6 +409,24 @@ def _is_daily_series(entry: Any) -> bool:
         return False
 
 
+def _macro_daily_min_overlap(cfg: dict) -> int:
+    """Overlap floor for daily-resampled macro priors.
+
+    Loosens the H4 floor (bars there are 4h, here they are days) but never
+    tightens past it, so an operator who deliberately lowers min_overlap_bars
+    still gets the value they asked for.
+    """
+    try:
+        general = max(5, int(cfg.get("min_overlap_bars", 100) or 100))
+    except (TypeError, ValueError):
+        general = 100
+    try:
+        daily = max(5, int(cfg.get("macro_daily_min_overlap_bars", 30) or 30))
+    except (TypeError, ValueError):
+        daily = 30
+    return min(general, daily)
+
+
 def _daily_macro_aligned_return_frame(
     target_label: str,
     target_entry: dict,
@@ -443,6 +465,117 @@ def _daily_macro_aligned_return_frame(
     }
 
 
+def _has_lagged_candles(meta_map: dict[str, dict]) -> bool:
+    """True when one feed's newest bar trails another's by more than 1.5 steps."""
+    latest_ts = []
+    step_candidates = []
+    for meta in meta_map.values():
+        ts = meta.get("latestTs")
+        if ts:
+            latest_ts.append(pd.Timestamp(ts))
+        step = meta.get("stepSeconds")
+        if step:
+            step_candidates.append(float(step))
+    if len(latest_ts) < 2 or not step_candidates:
+        return False
+    max_lag = abs((max(latest_ts) - min(latest_ts)).total_seconds())
+    step_ref = max(1.0, min(step_candidates))
+    return max_lag > step_ref * 1.5
+
+
+def _resample_close_to_step(close: pd.Series, step_seconds: float) -> pd.Series | None:
+    """Bucket a close series onto a fixed step without shifting any close value."""
+    if close is None or len(close) < 2 or not step_seconds or step_seconds <= 0:
+        return None
+    resampled = (
+        close.astype(float)
+        .resample(pd.Timedelta(seconds=float(step_seconds)))
+        .last()
+        .dropna()
+    )
+    return resampled if len(resampled) >= 2 else None
+
+
+def _grid_aligned_return_frame(
+    series_by_symbol: dict[str, Any],
+    *,
+    min_overlap_bars: int,
+) -> dict:
+    """Snap intraday closes onto one shared bar grid, then join.
+
+    Providers publish the same timeframe on different phases: MT5 H4 lands on
+    the broker-time grid (01:00/05:00/... UTC at UTC+3) while a yfinance 1h ->
+    4h resample lands on 00:00/04:00/... UTC. A raw inner join of those two
+    indexes intersects nowhere, so every DXY-driven macro prior resolved as
+    ``insufficient_overlap``. Bucketing both onto the coarsest common step
+    recovers the overlap; each bucket still holds exactly one native bar, so no
+    close is moved or blended.
+    """
+    closes: dict[str, pd.Series] = {}
+    meta_map: dict[str, dict] = {}
+    steps: list[float] = []
+    for label, item in (series_by_symbol or {}).items():
+        close, meta = _coerce_close_series(item, label)
+        meta_map[label] = meta
+        if close is None or len(close) < 2:
+            return {
+                "ok": False,
+                "reason": "missing_returns",
+                "frame": pd.DataFrame(),
+                "meta": meta_map,
+            }
+        closes[label] = close
+        step = meta.get("stepSeconds") or _median_step_seconds(close.index)
+        if step:
+            steps.append(float(step))
+
+    if len(closes) < 2 or not steps:
+        return {
+            "ok": False,
+            "reason": "insufficient_overlap",
+            "frame": pd.DataFrame(),
+            "meta": meta_map,
+        }
+
+    step_seconds = max(steps)
+    returns_map: dict[str, pd.Series] = {}
+    for label, close in closes.items():
+        resampled = _resample_close_to_step(close, step_seconds)
+        if resampled is None:
+            return {
+                "ok": False,
+                "reason": "insufficient_overlap",
+                "frame": pd.DataFrame(),
+                "meta": meta_map,
+            }
+        returns_map[label] = np.log(resampled).diff().dropna()
+
+    frame = pd.concat(returns_map, axis=1, join="inner").dropna()
+    if frame.empty or len(frame) < int(min_overlap_bars):
+        return {
+            "ok": False,
+            "reason": "insufficient_overlap",
+            "frame": frame,
+            "meta": meta_map,
+        }
+    # Regridding must not launder a stale feed into a fresh-looking overlap.
+    if _has_lagged_candles(meta_map):
+        return {
+            "ok": False,
+            "reason": "lagged_candles",
+            "frame": frame,
+            "meta": meta_map,
+        }
+    return {
+        "ok": True,
+        "reason": None,
+        "frame": frame.sort_index(),
+        "meta": meta_map,
+        "alignmentFrequency": f"{int(step_seconds)}s",
+        "gridAligned": True,
+    }
+
+
 def build_aligned_return_frame(
     series_by_symbol: dict[str, Any],
     *,
@@ -466,6 +599,16 @@ def build_aligned_return_frame(
 
     frame = pd.concat(returns_map, axis=1, join="inner").dropna()
     if frame.empty or len(frame) < int(min_overlap_bars):
+        # Same-provider series already share a grid and land here only when the
+        # history is genuinely short. Cross-provider series (MT5 vs yfinance)
+        # land here because their bar phases never intersect — retry on a
+        # shared grid before declaring the relationship unmeasurable.
+        regridded = _grid_aligned_return_frame(
+            series_by_symbol,
+            min_overlap_bars=min_overlap_bars,
+        )
+        if regridded.get("ok"):
+            return regridded
         return {
             "ok": False,
             "reason": "insufficient_overlap",
@@ -473,25 +616,13 @@ def build_aligned_return_frame(
             "meta": meta_map,
         }
 
-    latest_ts = []
-    step_candidates = []
-    for meta in meta_map.values():
-        ts = meta.get("latestTs")
-        if ts:
-            latest_ts.append(pd.Timestamp(ts))
-        step = meta.get("stepSeconds")
-        if step:
-            step_candidates.append(float(step))
-    if len(latest_ts) >= 2 and step_candidates:
-        max_lag = abs((max(latest_ts) - min(latest_ts)).total_seconds())
-        step_ref = max(1.0, min(step_candidates))
-        if max_lag > step_ref * 1.5:
-            return {
-                "ok": False,
-                "reason": "lagged_candles",
-                "frame": frame,
-                "meta": meta_map,
-            }
+    if _has_lagged_candles(meta_map):
+        return {
+            "ok": False,
+            "reason": "lagged_candles",
+            "frame": frame,
+            "meta": meta_map,
+        }
 
     return {
         "ok": True,
@@ -1208,12 +1339,15 @@ def build_symbol_context(
             driver_series = resolved.get("series")
             min_overlap = max(5, int(cfg.get("min_overlap_bars", 100) or 100))
             if _is_daily_series(driver_series):
+                # The intraday store holds ~45 calendar days of H4, so daily
+                # resampling can never reach the H4 min_overlap_bars floor.
+                # Use the daily-specific floor instead of failing every time.
                 aligned = _daily_macro_aligned_return_frame(
                     target_label,
                     target_series,
                     driver_label,
                     driver_series,
-                    min_overlap_bars=min_overlap,
+                    min_overlap_bars=_macro_daily_min_overlap(cfg),
                 )
             else:
                 aligned = build_aligned_return_frame(
