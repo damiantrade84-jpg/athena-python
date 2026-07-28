@@ -441,6 +441,44 @@ FOREX_PAIRS = [
     },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
 ]
 
+# ATFX Market Watch verification (2026-07-28): these tradeable FX crosses and
+# exotics are available with the local .s suffix mappings in config.local.yaml.
+FOREX_PAIRS.extend(
+    {
+        "symbol": f"{broker_symbol}=X",
+        "type": "forex",
+        "display": display,
+        "source": "mt5",
+        "enabled": True,
+    }
+    for display, broker_symbol in (
+        ("AUD/CAD", "AUDCAD"),
+        ("CAD/CHF", "CADCHF"),
+        ("CAD/JPY", "CADJPY"),
+        ("CHF/JPY", "CHFJPY"),
+        ("EUR/CAD", "EURCAD"),
+        ("EUR/NZD", "EURNZD"),
+        ("GBP/CAD", "GBPCAD"),
+        ("GBP/CHF", "GBPCHF"),
+        ("GBP/NZD", "GBPNZD"),
+        ("NZD/CAD", "NZDCAD"),
+        ("NZD/CHF", "NZDCHF"),
+        ("NZD/JPY", "NZDJPY"),
+        ("EUR/HUF", "EURHUF"),
+        ("EUR/PLN", "EURPLN"),
+        ("EUR/ZAR", "EURZAR"),
+        ("GBP/ZAR", "GBPZAR"),
+        ("USD/CNH", "USDCNH"),
+        ("USD/HKD", "USDHKD"),
+        ("USD/CZK", "USDCZK"),
+        ("USD/DKK", "USDDKK"),
+        ("USD/NOK", "USDNOK"),
+        ("USD/HUF", "USDHUF"),
+        ("USD/PLN", "USDPLN"),
+        ("USD/SEK", "USDSEK"),
+    )
+)
+
 COMMODITY_PAIRS = [
     {
         "symbol": "GC=F",
@@ -449,6 +487,13 @@ COMMODITY_PAIRS = [
         "source": "mt5",
         "enabled": True,
     },  # SQN +1.92, WR 64.7%, 17 trades (2026-03-15 ATR-fix confirmed)
+    {
+        "symbol": "XAUZAR=X",
+        "type": "commodity",
+        "display": "XAU/ZAR",
+        "source": "mt5",
+        "enabled": True,
+    },
     {
         "symbol": "SI=F",
         "type": "commodity",
@@ -680,6 +725,25 @@ INDEX_PAIRS = [
     },  # Pepperstone MT5 verified 2026-04-03; Athena edge not yet audited
 ]
 
+# Additional tradeable ATFX cash-index CFDs verified from Market Watch on
+# 2026-07-28. Existing display names cover the other ten ATFX index symbols.
+INDEX_PAIRS.extend(
+    {
+        "symbol": broker_symbol,
+        "type": "index",
+        "display": display,
+        "source": "mt5",
+        "enabled": True,
+        "ws": False,
+    }
+    for display, broker_symbol in (
+        ("China A50", "CHI50"),
+        ("Spain 35", "ESP35"),
+        ("France 40", "FRA40"),
+        ("Italy 40", "IT40"),
+    )
+)
+
 US_STOCK_PAIRS = [
     {
         "symbol": "AAPL.US",
@@ -836,6 +900,34 @@ US_STOCK_PAIRS = [
         "enabled": True,
     },  # Pepperstone CFD
 ]
+
+
+def _configured_atfx_share_pairs() -> list[dict]:
+    """Build the local ATFX share expansion without duplicating broker symbols."""
+    raw_tickers = CONFIG.get("MT5_ATFX_SHARE_TICKERS") or []
+    if not isinstance(raw_tickers, (list, tuple, set)):
+        return []
+
+    known_displays = {str(pair.get("display") or "").casefold() for pair in US_STOCK_PAIRS}
+    additions: list[dict] = []
+    for raw_ticker in raw_tickers:
+        ticker = str(raw_ticker or "").strip().lstrip("#")
+        if not ticker or not ticker.isalnum() or ticker.casefold() in known_displays:
+            continue
+        additions.append(
+            {
+                "symbol": ticker,
+                "type": "stock",
+                "display": ticker,
+                "source": "mt5",
+                "enabled": True,
+            }
+        )
+        known_displays.add(ticker.casefold())
+    return additions
+
+
+US_STOCK_PAIRS.extend(_configured_atfx_share_pairs())
 
 ETF_PAIRS = [
     {

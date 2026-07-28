@@ -835,6 +835,17 @@ def mt5_map_symbol(athena_display: str) -> str | None:
     if mt5_sym:
         return mt5_sym
 
+    # ATFX share CFDs use a # prefix (including market-specific tickers such as
+    # HK0001 and the case-sensitive BRKb). Keep this broker-specific expansion
+    # explicitly opt-in through the local ATFX catalog configuration.
+    atfx_share_tickers = CONFIG.get("MT5_ATFX_SHARE_TICKERS") or []
+    if isinstance(atfx_share_tickers, (list, tuple, set)):
+        display_key = str(athena_display or "").strip().lstrip("#").casefold()
+        for raw_ticker in atfx_share_tickers:
+            ticker = str(raw_ticker or "").strip().lstrip("#")
+            if ticker and ticker.isalnum() and ticker.casefold() == display_key:
+                return f"#{ticker}"
+
     # Fallback: try stripping / and whitespace
 
     stripped = athena_display.replace("/", "").replace(" ", "")

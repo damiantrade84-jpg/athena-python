@@ -41,6 +41,14 @@ def test_effective_symbol_map_supports_position_reverse_mapping(monkeypatch):
     assert reverse["#FB"] == "META"
 
 
+def test_atfx_share_catalog_maps_exact_broker_tickers(monkeypatch):
+    monkeypatch.setitem(mt5_executor.CONFIG, "MT5_SYMBOL_OVERRIDES", {})
+    monkeypatch.setitem(mt5_executor.CONFIG, "MT5_ATFX_SHARE_TICKERS", ["BRKb", "HK0001"])
+
+    assert mt5_executor.mt5_map_symbol("BRKb") == "#BRKb"
+    assert mt5_executor.mt5_map_symbol("HK0001") == "#HK0001"
+
+
 def test_atfx_availability_disables_configured_pairs_and_commodities():
     athena_path = Path(__file__).resolve().parents[1] / "athena.py"
     tree = ast.parse(athena_path.read_text(encoding="utf-8"), filename=str(athena_path))
