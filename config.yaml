@@ -127,6 +127,13 @@ ENGINE_A_V3_LEGACY_SHADOW_ENABLED: true
 ENGINE_A_V3_FOREX_THESIS: trend
 # Forex setup selector: "trend" (breakout/pullback) or "london_open" (Asian IB breakout).
 ENGINE_A_V3_FOREX_SETUP: trend
+# Adds the range-fade specialist (fx_range_mean_reversion) to the forex setup
+# candidates alongside the trend specialists (2026-07-28). The fade can only fire
+# in a ranging regime (low efficiency + momentum-anchor ADX below the class gate)
+# — exactly the regime where good-scoring forex trend signals systematically
+# lost. Direction opposition stays blocked by ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD.
+# Reversible: false.
+ENGINE_A_V3_FOREX_MR_OVERLAY_ENABLED: true
 # V3 setup overlay may only upgrade WATCH -> TRADE; when a setup fires TRADE in the
 # OPPOSITE direction of the quant scorer, fall back to the quant path instead of
 # flipping direction (rejection reason: setup_direction_conflicts_quant).
@@ -134,6 +141,12 @@ ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD: true
 ENGINE_A_V3_SETUP_UPGRADE:
   ENABLED: true
   MIN_CONFLUENCE_FRAC: 0.75
+  # Mean-reversion upgrades are exempt from the quant confluence floor (2026-07-28):
+  # the fade only exists in ranging regimes, where the trend-aligned quant score
+  # is structurally near zero, so a trend-side floor can never be met. Directional
+  # opposition is still blocked by ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD.
+  # Raise toward 0.75 to re-tighten without a code change.
+  MR_MIN_CONFLUENCE_FRAC: 0.0
 ENGINE_A_V3_SESSION_SCORING:
   ENABLED: true
   MIN_SCORE: 0.40  # raised with quant session gate (was 0.35)
@@ -212,7 +225,12 @@ ENGINE_A_V3_STRUCTURAL_GEOMETRY:
   SL_MIN_ATR_MULT: 0.8
   TP1_RR: 1.0
   LEVELS_ATR_TF: entry
-  BY_ASSET: {}
+  BY_ASSET:
+    # 2026-07-28 (UNVALIDATED judgment value, not outcome-backed): TP1 1.0R ->
+    # 1.5R for forex now that live regime gating keeps trend trades out of
+    # ranging markets; continuation regimes support a further first target.
+    # Reversible: remove this block to restore the global TP1_RR 1.0.
+    forex: { TP1_RR: 1.5 }
 # Port selected V2 expectancy filters into V3 (multipliers / WATCH demotion).
 # BLOCKED_TREND_STATES only demotes when ENGINE_A_BLOCKED_TREND_STATES explicitly
 # configures a "live" scope. A flat list stays backtest-only (research contract in
@@ -458,6 +476,16 @@ ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING:
   MAX_ABS_SCORE_BONUS: 0.04
 
 ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE: true
+
+# Engine B forex ranging-regime entry-style gate (2026-07-28 audit B2). When the
+# ADX-derived forex regime is RANGING (d1/h4 ADX < 20), BOS-continuation evidence
+# (breakout location path, BOS leg of trend-pullback, MTF-BOS structure rescue in
+# the both-sequences-oppose case) no longer satisfies the structure/location
+# gates — those entries bought the range extreme and systematically lost. Only
+# reversal evidence (direction-aligned sweep / CHoCH) may carry an entry there,
+# and sweep-aligned fades are exempt from the hard-counter score penalty.
+# Reversible: false.
+ENGINE_B_FOREX_RANGING_CONTINUATION_BLOCK_ENABLED: true
 ENGINE_B_RR_CAN_SATISFY_SPACE_GATE:
   default: false
   forex: true
@@ -1816,11 +1844,18 @@ ENGINE_B_BT_EXIT: *engine_bt_exit_defaults
 
 #         forex: ["DEAD RANGING"]
 
+# Scoped form (scoring.get_blocked_trend_states): "backtest" keeps the historical
+# research list unchanged; "live" is per asset type. 2026-07-28: forex gains a
+# live scope (DEAD RANGING + RANGING == momentum-anchor ADX < 20) so V3 trend
+# signals demote to WATCH in ranging regimes — the regime where good-scoring
+# forex trend signals systematically lost. Mean-reversion signals are exempt
+# (regime-appropriate there; see engine_a_v3.legacy_filters level_style).
+# Other classes keep the previous live behaviour (nothing blocked). Reversible:
+# restore the flat list ["DEAD RANGING", "DEVELOPING"] (flat = backtest-only).
 ENGINE_A_BLOCKED_TREND_STATES:
-
-  - "DEAD RANGING"
-
-  - "DEVELOPING"
+  backtest: ["DEAD RANGING", "DEVELOPING"]
+  live:
+    forex: ["DEAD RANGING", "RANGING"]
 
 
 # ── Engine A Regime-Dependent Dynamic Thresholds ────────────────────────────
@@ -4003,6 +4038,19 @@ ENGINE_B_REGIME_MULTIPLIERS:
   # 2026-07-02 audit: was 0.90. No min_score discount in low-vol chop — that is
   # where false BOS and doji-noise triggers cluster. Mirrors engine_b_config.yaml.
   LOW_VOLATILITY: 1.0
+
+  # 2026-07-28 (UNVALIDATED judgment value, not outcome-backed): per-asset
+  # override for forex — RANGING only. x1.25 makes the intraday score floor
+  # bind (4.5 x 1.25 = 5.63 -> ceil 5.7 > 5.0 gate floor), so a passing forex
+  # signal in ranging regimes must show real quality beyond gate completion —
+  # the regime where unfiltered BOS-continuation entries systematically lost.
+  # TRENDING/HIGH_VOLATILITY/LOW_VOLATILITY keep the flat-table values.
+  # Reversible: delete this forex block.
+  forex:
+    TRENDING: 0.95
+    RANGING: 1.25
+    HIGH_VOLATILITY: 1.10
+    LOW_VOLATILITY: 1.0
 
 ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED: true
 # NOTE (2026-07-25 audit): these floors are compared against confidence.score

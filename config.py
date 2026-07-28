@@ -1444,6 +1444,11 @@ CONFIG: dict = {
     # when enabled, valid execution RR can satisfy the "room/rr" gate comment
     # without changing non-forex assets.
     "ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE": False,
+    # Forex ranging-regime entry-style gate (market_structure.calculate_confidence):
+    # when the ADX-derived regime is RANGING, BOS-continuation evidence no longer
+    # satisfies the structure/location gates; only aligned sweep/CHoCH (reversal)
+    # evidence may carry an entry. Default preserves historical behavior.
+    "ENGINE_B_FOREX_RANGING_CONTINUATION_BLOCK_ENABLED": False,
     # Asset-scoped version of the same correction. Defaults preserve historical
     # behavior; config.yaml enables paper-test assets explicitly.
     "ENGINE_B_RR_CAN_SATISFY_SPACE_GATE": {
@@ -1931,9 +1936,18 @@ CONFIG: dict = {
     # trend-pullback/breakout setups; "mean_reversion" swaps in the range-fade
     # (counter-trend) specialist. Reversible; default preserves existing behavior.
     "ENGINE_A_V3_FOREX_THESIS": "trend",
+    # Adds the range-fade specialist (fx_range_mean_reversion) to the forex setup
+    # candidates alongside the trend specialists (detect_setup). Reversible;
+    # default preserves existing behavior.
+    "ENGINE_A_V3_FOREX_MR_OVERLAY_ENABLED": False,
     "ENGINE_A_V3_SETUP_UPGRADE": {
         "ENABLED": True,
         "MIN_CONFLUENCE_FRAC": 0.75,
+        # Mean-reversion upgrades are exempt from the trend-side confluence floor:
+        # the fade only exists in ranging regimes where the trend-aligned quant
+        # score is structurally near zero. Opposition stays guarded by
+        # ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD.
+        "MR_MIN_CONFLUENCE_FRAC": 0.0,
     },
     "ENGINE_A_V3_MEAN_REVERSION": {
         "Z_ENTRY": 1.5,

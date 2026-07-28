@@ -800,6 +800,9 @@ ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE = "structural_tp_too_close"
 ENGINE_B_REASON_AGGTRADE_REQUIRED = "aggtrade_required_for_crypto"
 ENGINE_B_REASON_AGGTRADE_CVD_OPPOSED = "aggtrade_cvd_opposed"
 ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE = "tp1_blocked_by_opposing_zone"
+# Emitted when the forex ranging-regime entry-style gate leaves only reversal
+# evidence (aligned sweep/CHoCH) eligible for the structure/location gates.
+ENGINE_B_REASON_FOREX_RANGING_CONTINUATION_BLOCKED = "forex_ranging_continuation_blocked"
 
 
 def _float_cfg(key: str, default: float) -> float:
@@ -6250,8 +6253,46 @@ class NakedEngine:
         _sweep_aligned = bool(res.get("liquidity_sweep", False)) and (
             _sweep_dir is None or _sweep_dir == direction
         )
+        # Forex ADX is exposed as a diagnostic (engine_b_overlay / Marcus Reid /
+        # tests) but no longer gates structure_ok. Consumers can use it as a
+        # soft conviction signal. Computed ahead of the structure gate so the
+        # ranging entry-style gate below can read the derived regime.
+        _engine_b_adx_val = None
+        if asset_type_lower == "forex":
+            _adx_val = res.get("d1_adx")
+            if _adx_val is None:
+                _adx_val = res.get("h4_adx")
+            if _adx_val is not None:
+                try:
+                    _adx_val = float(_adx_val)
+                except (TypeError, ValueError):
+                    _adx_val = 0.0
+                _engine_b_adx_val = _adx_val
+                if _adx_val >= 30:
+                    res["_adx_derived_regime"] = "TRENDING"
+                elif _adx_val >= 20:
+                    res["_adx_derived_regime"] = "NORMAL"
+                else:
+                    res["_adx_derived_regime"] = "RANGING"
+        # Forex ranging-regime entry-style gate (2026-07-28 audit B2): in the
+        # ADX-derived RANGING regime, BOS-continuation entries bought the range
+        # extreme and systematically lost. Only reversal evidence (aligned sweep
+        # or CHoCH) may satisfy the structure/location gates there, and
+        # sweep-aligned fades are exempt from the hard-counter penalty below.
+        # Reversible: ENGINE_B_FOREX_RANGING_CONTINUATION_BLOCK_ENABLED: false.
+        _forex_ranging_continuation_blocked = bool(
+            config.CONFIG.get("ENGINE_B_FOREX_RANGING_CONTINUATION_BLOCK_ENABLED", False)
+        ) and asset_type_lower == "forex" and str(
+            res.get("_adx_derived_regime") or ""
+        ).upper() == "RANGING"
         if _require_align_or_mtf and _both_oppose:
-            structure_ok = (not _hard_counter_veto) and bos_mtf_aligned
+            if _forex_ranging_continuation_blocked:
+                # Continuation evidence (MTF BOS) is regime-inappropriate in a
+                # ranging forex market; only an aligned sweep may carry a
+                # counter-sequence entry.
+                structure_ok = (not _hard_counter_veto) and _sweep_aligned
+            else:
+                structure_ok = (not _hard_counter_veto) and bos_mtf_aligned
         else:
             structure_ok = (not _hard_counter_veto) and (
                 micro_aligned
@@ -6322,23 +6363,8 @@ class NakedEngine:
             _aggtrade_cvd_direction in ("LONG", "SHORT")
             and _aggtrade_cvd_direction != direction
         )
-        _engine_b_adx_val = None
-        if str(res.get("asset_type") or "").lower() == "forex":
-            _adx_val = res.get("d1_adx")
-            if _adx_val is None:
-                _adx_val = res.get("h4_adx")
-            if _adx_val is not None:
-                try:
-                    _adx_val = float(_adx_val)
-                except (TypeError, ValueError):
-                    _adx_val = 0.0
-                _engine_b_adx_val = _adx_val
-                if _adx_val >= 30:
-                    res["_adx_derived_regime"] = "TRENDING"
-                elif _adx_val >= 20:
-                    res["_adx_derived_regime"] = "NORMAL"
-                else:
-                    res["_adx_derived_regime"] = "RANGING"
+        # (_engine_b_adx_val / _adx_derived_regime now computed ahead of the
+        # structure gate — the ranging entry-style gate reads it there.)
 
         # Stage 2.3 (commit 8c26a078): commodity swing requires macro alignment.
         # Default True for back-compat / safety — commodities are macro-driven.
@@ -6426,15 +6452,30 @@ class NakedEngine:
                 ) <= atr_val * _bos_prox
             except (TypeError, ValueError):
                 _near_bos_level = False
+        _trend_pullback_legs = (
+            (
+                bool(res.get("bos_confirmed"))
+                and not _forex_ranging_continuation_blocked
+            )
+            or bool(res.get("choch_confirmed"))
+            or bool(res.get("liquidity_sweep"))
+        )
         _trend_pullback = (
-            (bool(res.get("bos_confirmed"))
-             or bool(res.get("choch_confirmed"))
-             or bool(res.get("liquidity_sweep")))
+            _trend_pullback_legs
             and trigger_ok
             and (zone_ok or _near_bos_level)
         )
 
-        location_ok = zone_ok or ob_at_zone or (allow_breakout_entry and breakout_ok) or _trend_pullback
+        location_ok = (
+            zone_ok
+            or ob_at_zone
+            or (
+                allow_breakout_entry
+                and breakout_ok
+                and not _forex_ranging_continuation_blocked
+            )
+            or _trend_pullback
+        )
         location_mode = (
             "trend_pullback"
             if _trend_pullback and not zone_ok and not ob_at_zone
@@ -7060,7 +7101,14 @@ class NakedEngine:
         # it while forcing structure_ok=True is inconsistent.
         _hard_counter_penalty = (
             _hard_counter_penalty_cfg
-            if (hard_counter and _hard_counter_mode != "veto" and not structure_gate_disabled)
+            if (
+                hard_counter
+                and _hard_counter_mode != "veto"
+                and not structure_gate_disabled
+                # Sweep-aligned fades are regime-appropriate in ranging forex;
+                # penalizing them as counter-trend undoes the entry-style gate.
+                and not (_forex_ranging_continuation_blocked and _sweep_aligned)
+            )
             else 0.0
         )
         total_score = max(0.0, total_score - _hard_counter_penalty)
@@ -7161,6 +7209,12 @@ class NakedEngine:
 
         if hard_counter:
             _diag_codes.append(ENGINE_B_REASON_SEQUENCE_COUNTER_TREND)
+        if _forex_ranging_continuation_blocked and (
+            res.get("bos_confirmed") or breakout_ok
+        ):
+            # Continuation evidence existed but is regime-ineligible here; only
+            # reversal evidence (aligned sweep/CHoCH) can carry the entry.
+            _diag_codes.append(ENGINE_B_REASON_FOREX_RANGING_CONTINUATION_BLOCKED)
         if not dxy_ok and dxy_gate_reason:
             _diag_codes.append(dxy_gate_reason)
         if not trigger_ok and not breakout_ok:

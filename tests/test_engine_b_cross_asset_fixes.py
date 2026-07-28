@@ -172,17 +172,19 @@ def test_scanner_engine_b_alignment_uses_final_score_gate():
         "forex",
     )
 
-    assert scaled_min == pytest.approx(5.5)
+    # 5.0 x forex-RANGING 1.25 (2026-07-28 per-asset override) -> 6.3
+    assert scaled_min == pytest.approx(6.3)
     assert gate_ok is False
     assert signal["enginesAligned"] is False
-    assert signal["engine_b_min_score_scaled"] == pytest.approx(5.5)
+    assert signal["engine_b_min_score_scaled"] == pytest.approx(6.3)
     assert conf_b["passed"] is False
-    assert conf_b["min_score_scaled"] == pytest.approx(5.5)
+    assert conf_b["min_score_scaled"] == pytest.approx(6.3)
 
 
 def test_scanner_engine_b_score_floor_accepts_mandatory_gate_baseline():
     signal = {}
-    conf_b = {"passed": True, "score": 5.5}
+    # Floor is 6.3 for forex RANGING (5.0 x 1.25); baseline-at-floor passes.
+    conf_b = {"passed": True, "score": 6.3}
 
     gate_ok, scaled_min = scanner._apply_engine_b_scan_confidence_gate(
         signal,
@@ -192,12 +194,12 @@ def test_scanner_engine_b_score_floor_accepts_mandatory_gate_baseline():
         "forex",
     )
 
-    assert scaled_min == pytest.approx(5.5)
+    assert scaled_min == pytest.approx(6.3)
     assert gate_ok is True
     assert signal["enginesAligned"] is True
-    assert signal["engine_b_min_score_scaled"] == pytest.approx(5.5)
+    assert signal["engine_b_min_score_scaled"] == pytest.approx(6.3)
     assert conf_b["passed"] is True
-    assert conf_b["min_score_scaled"] == pytest.approx(5.5)
+    assert conf_b["min_score_scaled"] == pytest.approx(6.3)
 
 
 def test_checked_in_engine_b_thresholds_match_reachable_gate_baseline():

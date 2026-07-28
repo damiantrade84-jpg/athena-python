@@ -1534,6 +1534,7 @@ def score_pair(
         mom_diag=mom_diag,
         entry_tf=entry_tf,
         series_cache=series_cache,
+        level_style=level_style,
     )
     confluence = _clamp(float(confluence), 0.0, MAX_SCORE)
     # After multiplier, re-tier if score fell below threshold (never upgrade).

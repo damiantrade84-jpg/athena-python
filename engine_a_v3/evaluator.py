@@ -680,9 +680,15 @@ def evaluate_engine_a_v3(
             setup_diagnostics["directionConflictBlocked"] = True
             setup_diagnostics["quantDirection"] = quant.direction
 
-    # Blocked trend states (legacy filter) also suppress setup upgrades.
+    # Blocked trend states (legacy filter) also suppress setup upgrades — except
+    # mean-reversion setups, which are regime-appropriate in blocked (ranging)
+    # states; the block targets trend-continuation upgrades.
     legacy_pre = (quant.factor_diagnostics or {}).get("legacyFilters") or {}
-    if use_setup and legacy_pre.get("trendStateBlocked"):
+    if (
+        use_setup
+        and legacy_pre.get("trendStateBlocked")
+        and setup.level_style != "mean_reversion"
+    ):
         use_setup = False
         setup_diagnostics["trendStateBlockedUpgrade"] = True
 
@@ -696,6 +702,12 @@ def evaluate_engine_a_v3(
             upgrade_cfg = CONFIG.get("ENGINE_A_V3_SETUP_UPGRADE") or {}
             if upgrade_cfg.get("ENABLED", True):
                 frac = float(upgrade_cfg.get("MIN_CONFLUENCE_FRAC", 0.75))
+                if setup.level_style == "mean_reversion":
+                    # The fade only exists in ranging regimes, where the
+                    # trend-aligned quant score is structurally near zero and a
+                    # trend-side confluence floor can never be met. Opposition
+                    # is already blocked by the direction-conflict guard above.
+                    frac = float(upgrade_cfg.get("MR_MIN_CONFLUENCE_FRAC", 0.0))
                 floor = frac * quant.threshold
                 if quant.confluence_score < floor:
                     use_setup = False
@@ -715,7 +727,10 @@ def evaluate_engine_a_v3(
             if session_cfg.get("ENABLED"):
                 min_score = float(session_cfg.get("MIN_SCORE", 0.35))
                 if not session_score_passes(
-                    primary, direction=setup.direction, min_score=min_score
+                    primary,
+                    direction=setup.direction,
+                    min_score=min_score,
+                    level_style=setup.level_style,
                 ):
                     use_setup = False
                     setup_diagnostics["sessionGateBlocked"] = True
@@ -801,7 +816,10 @@ def evaluate_engine_a_v3(
             if q_sess.get("ENABLED", True):
                 min_score = float(q_sess.get("MIN_SCORE", 0.40))
                 if not session_score_passes(
-                    primary, direction=direction, min_score=min_score
+                    primary,
+                    direction=direction,
+                    min_score=min_score,
+                    level_style=level_style,
                 ):
                     decision = "WATCH"
                     quant_session_blocked = True
@@ -855,10 +873,13 @@ def evaluate_engine_a_v3(
     if (quant.factor_diagnostics or {}).get("minDirectionalFailed"):
         rejection_reasons.append("min_directional_failed")
     legacy = (quant.factor_diagnostics or {}).get("legacyFilters") or {}
-    if legacy.get("trendStateBlocked") and decision == "TRADE":
+    # Blocked (ranging) trend states demote trend-continuation signals only;
+    # mean-reversion signals are regime-appropriate there and stay executable.
+    trend_state_demote = bool(legacy.get("trendStateBlocked")) and level_style != "mean_reversion"
+    if trend_state_demote and decision == "TRADE":
         decision = "WATCH"
         rejection_reasons.append("blocked_trend_state")
-    elif legacy.get("trendStateBlocked"):
+    elif trend_state_demote:
         rejection_reasons.append("blocked_trend_state")
     if (quant.factor_diagnostics or {}).get("equityVolumeBlocked") and decision == "TRADE":
         decision = "WATCH"

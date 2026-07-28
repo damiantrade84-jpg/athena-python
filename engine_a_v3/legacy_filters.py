@@ -80,8 +80,14 @@ def apply_legacy_filters(
     mom_diag: Mapping[str, Any],
     entry_tf: str,
     series_cache=None,
+    level_style: str = "trend",
 ) -> tuple[float, str, dict[str, Any]]:
-    """Return (confluence, decision, diagnostics) after optional V2 filter ports."""
+    """Return (confluence, decision, diagnostics) after optional V2 filter ports.
+
+    ``level_style`` "mean_reversion" exempts the signal from blocked-trend-state
+    demotion: range fades are regime-appropriate in the ranging states the block
+    targets, and demoting them would disable the only counter-trend path.
+    """
     diag: dict[str, Any] = {
         "legacyFiltersEnabled": legacy_filters_enabled(),
         "forexEmaClusterMult": 1.0,
@@ -194,8 +200,11 @@ def apply_legacy_filters(
     if _flag("BLOCKED_TREND_STATES", True) and decision == "TRADE":
         blocked = _blocked_states_for_v3(asset_type)
         if trend_state.upper() in blocked:
-            decision = "WATCH"
-            diag["trendStateBlocked"] = True
+            if str(level_style or "").strip().lower() == "mean_reversion":
+                diag["trendStateBlockedExempt"] = "mean_reversion"
+            else:
+                decision = "WATCH"
+                diag["trendStateBlocked"] = True
 
     # Re-check TRADE after confluence mult
     return confluence, decision, diag

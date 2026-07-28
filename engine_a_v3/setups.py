@@ -1024,6 +1024,20 @@ def detect_setup(
                     context_tf=context_tf,
                 ),
             )
+            if bool(CONFIG.get("ENGINE_A_V3_FOREX_MR_OVERLAY_ENABLED", False)):
+                mr = CONFIG.get("ENGINE_A_V3_MEAN_REVERSION") or {}
+                candidates = candidates + (
+                    _mean_reversion_candidate(
+                        "fx_range_mean_reversion",
+                        primary,
+                        z_entry=float(mr.get("Z_ENTRY", 1.5)),
+                        eff_max=float(mr.get("EFF_MAX", 0.35)),
+                        lookback=int(mr.get("LOOKBACK", 20)),
+                        periods=periods,
+                        series_cache=series_cache,
+                        primary_tf=primary_tf,
+                    ),
+                )
     elif route.family == "crypto":
         candidates = (
             _breakout_retest_candidate(
