@@ -647,6 +647,20 @@ def build_aligned_return_frame(
 
 def _corr_value(series_a: pd.Series, series_b: pd.Series, method: str) -> float:
     try:
+        # A flat input (closed/illiquid market over the window, so every return
+        # is identical) leaves the correlation undefined. pandas returns NaN,
+        # which is already mapped to 0.0 below, but numpy/scipy log a
+        # divide-by-zero / ConstantInputWarning on the way there. Detect it up
+        # front so the log stays clean; the returned value is unchanged.
+        a = np.asarray(series_a, dtype=float)
+        b = np.asarray(series_b, dtype=float)
+        if a.shape == b.shape:
+            paired = ~(np.isnan(a) | np.isnan(b))
+            if paired.sum() < 2:
+                return 0.0
+            a, b = a[paired], b[paired]
+            if a.min() == a.max() or b.min() == b.max():
+                return 0.0
         val = series_a.corr(series_b, method=method)
         if val is None or math.isnan(float(val)):
             return 0.0
