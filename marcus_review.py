@@ -38,7 +38,16 @@ _ENGINE_C_OUTPUT_ADDON = (
 _MARCUS_PLAYBOOK_AUTHORITY = (
     "\n\nPLAYBOOK AUTHORITY:\n"
     "The ATHENA TRADE PLAYBOOKS block in the user message is authoritative for entry models, "
-    "mustRejectIf rules, and invalidations. Apply them strictly (advisory only)."
+    "mustRejectIf rules, and invalidations. Apply them strictly (advisory only).\n"
+    "PLAYBOOK FIELD NAMES: the playbooks were authored against the chart-review payload and "
+    "cite dotted object paths (engineAContext.*, engineBContext.*, riskGeometry.*, "
+    "atrDiagnostics.*, indicatorParity, vwapExtended). This is the TEXT review surface: the "
+    "same evidence arrives under the === SECTION === headings and snake_case field names in "
+    "the user message. Apply the playbook LOGIC and resolve each field by meaning. A dotted "
+    "playbook path that does not appear verbatim is a naming difference, NOT missing data — "
+    "never report it as unavailable and never downgrade for it.\n"
+    "The playbooks' requiredOutputFields apply to the chart surface only. On this surface, "
+    "emit exactly the JSON contract given above."
 )
 
 _MARCUS_STAGE1_PROMPT = (
@@ -180,11 +189,21 @@ def bind_marcus_selected_style(result: dict[str, Any], style: str) -> dict[str, 
         if selected_row.get("riskLevel") is not None:
             result["riskLevel"] = selected_row["riskLevel"]
     elif isinstance(ratings, dict) and ratings:
-        # Never borrow a populated non-selected style's headline.
+        # Never borrow a populated non-selected style's headline. The neutral
+        # placeholder below is required to keep the response schema valid, so
+        # flag it as a placeholder rather than letting it read as a real rating.
         result["grade"] = "C"
         result["edgeProbability"] = 50.0
         result["riskLevel"] = "Medium"
         result["selectedStyleGrade"] = "C"
+        result["selectedStyleRatingAvailable"] = False
+        result["selectedStyleRatingSource"] = "placeholder_no_rating_for_selected_style"
+        if not result.get("evidenceStatus"):
+            result["evidenceStatus"] = "INSUFFICIENT_DATA"
+        _warnings = list(result.get("warnings") or [])
+        if "SELECTED_STYLE_RATING_UNAVAILABLE" not in _warnings:
+            _warnings.append("SELECTED_STYLE_RATING_UNAVAILABLE")
+            result["warnings"] = _warnings
     else:
         result["selectedStyleGrade"] = result.get("grade")
     return result

@@ -3802,10 +3802,12 @@ INPUT SECTIONS:
 === AI CALIBRATION CONTEXT === (engine source, asset type, style, raw score %, thresholds, dashboard confluence labels, Style min RR config)
 === SIGNAL === (pair, direction, score/maxScore, conviction, regime, style)
 === ENGINE C CONSENSUS === (only when reviewing Engine C rows: decision_state, conviction, tier, A/B normalized components, sizing_override)
-=== FACTOR DIAGNOSTICS === (per-factor scores with weights, directional vs nondirectional breakdown, confidence multiplier, trend coherence, optional coverage)
-=== CONFIDENCE ENGINE === (confidence value and component breakdown)
+=== FACTOR DIAGNOSTICS === (Engine A only: V3 components with signal/quality/weight/contribution/available, scoring timeframe roles, conviction/scoreNorm, trend coherence, reachable ceiling, trigger confirmation, setup overlay, scoring blocks). The `[w=?]` marker on a factorScores line means the legacy factorWeights map was not supplied — the authoritative weight is the `weight` field on the matching V3 component. Legacy directionalScore / nondirectionalScore / directionalConfidenceMultiplier / optionalFactorCoverage / activeDirectionalFactors / activeNondirectionalFactors / insufficientFactors are not emitted by Engine A V3; their absence is expected and is never a data gap.
+=== ENGINE B SCORING DIAGNOSTICS === (Engine B only: mandatory gate flags, gateScore vs qualityScore/qualityComponents, score/max_possible, timeframe roles, space gate, TP1 path, structural vs execution SL)
+=== CONFIDENCE ENGINE === (legacy, usually absent: confidence value and component breakdown. Use V3 conviction/scoreNorm instead; do not report this section as missing data)
 === ENGINE B === (naked market structure - swing sequence, BOS, CHoCH, order blocks, FVGs, zones)
-=== TECHNICALS === (individual voted indicators + z-scores)
+=== TECHNICALS === (individual voted indicators + z-scores. For an Engine B primary review this is headed OPTIONAL TECHNICALS and is not Engine B scoring input)
+=== RAW H4 TREND-LAYER REFERENCE === (Engine A per-group EMA/RSI/MACD/ADX/ATR on H4 only — trend-layer reference, never policy setup/trigger evidence, and never Engine B scoring input)
 === LEVELS === (entry, SL, TP1, TP2 with R-multiples, ATR, fib levels)
 === WARNINGS === (penalties already applied - these are FACTS not opinions)
 === CONTEXT === (NOT scored - news, DXY, yield curve, backtest stats, learning history)
@@ -3816,6 +3818,7 @@ Step 1: Read AI CALIBRATION CONTEXT first. Identify the Engine source, Asset Typ
 Step 1B: If Engine source is Engine B naked market structure, use ENGINE B (NAKED MARKET STRUCTURE), ENGINE B SCORING DIAGNOSTICS, LEVELS, and CANDLE DATA FRESHNESS as the primary deterministic setup context. Engine A FACTOR DIAGNOSTICS and Engine A technical indicators may be absent; do not call them weak or bearish unless actual values are supplied.
 Step 1C: If Engine source is Engine C consensus, use ENGINE C CONSENSUS as the primary deterministic setup context. Engine A and Engine B sections are child diagnostics. Do not call the whole setup weak solely because one child diagnostic has missing optional fields; still flag genuine missing levels, stale data, direction conflict, or blocked/watchlist decision_state. Disagreement between engines is not automatic rejection and must not suppress either engine's card.
 Step 2: Read FACTOR DIAGNOSTICS when present (Engine A V3: factorScores trend/momentum plus factorScores.ortho location/volume and factorDiagnostics.components). Use component contribution/weight/quality exactly as supplied and the actual entryTimeframe. Which components are active? Does direction match? Apply the FACTOR DUPLICATION RULE before treating agreement as independent confirmation. If minDirectionalFailed is true or activeEntryGate.passed=false, treat direction/timing eligibility as failed. Do not require legacy directionalScore/activeDirectionalFactors unless supplied. For Engine B primary, skip this step and use the canonical structure/location/entry/space/RR gates plus gateScore and qualityComponents.
+Step 2B: Read Engine A reachability before judging the score as weak. "V3 reachable ceiling" gives maxAttainableScore and score-vs-attainable %; judge the score against the attainable ceiling, not the nominal maxScore. THRESHOLD UNREACHABLE means components are missing/unavailable, so the signal cannot reach its threshold — that is a DATA limitation: set evidenceStatus=INSUFFICIENT_DATA and say so, do not grade it as a weak setup. "Unavailable components" were excluded from scoring, not scored as zero — do not treat them as bearish. Entry trigger confirmation, setup overlay, promotion, V3 scoring blocks, and V3 multipliers are deterministic outcomes already applied by Python: cite them, never re-derive or re-apply them.
 Step 3: Check trendCoherence. How many timeframes agree? If coherence_ratio < 0.5, signal is fragmented; 0.5-0.7 mixed; >0.7 aligned.
 Step 4: Read regime. Explain follow-through and chop risk from the data. Do not auto-downgrade purely from regime label.
 Step 5: Read LEVELS — advisory levels review (does NOT override Python gates):
@@ -3842,17 +3845,29 @@ RR vs Style min RR (config): informational only — note in warnings if below co
 
 A grade must cite specific evidence. "Score is X%" alone is not sufficient rationale.
 
-edgeProbability (0-100) - derive from input with this rubric (do not mirror rawScorePct mechanically):
+edgeProbability (0-100) - derive from input with this rubric (do not mirror rawScorePct mechanically). Use the rubric that matches the Engine source; never score an Engine B review on the Engine A rubric.
+
+ENGINE A / ENGINE C rubric:
 - Base from trendCoherence: take coherence_ratio from FACTOR DIAGNOSTICS (0-1). Add min(40, coherence_ratio * 40) points.
 - Confidence metric: use Engine A V3 conviction/scoreNorm when supplied, otherwise directionalConfidenceMultiplier. Add min(30, value * 30); if neither is available, use neutral 0.5 and do NOT treat missing as 0.
 - ENGINE B context: if structural_verdict is CLEAR and direction matches the reviewed engine direction, +15; if ENGINE B absent/neutral, +0; if UNCLEAR or direction conflicts, -10. This adjusts advisory edge only and does not rewrite deterministic Engine A fields.
 - Regime label from SIGNAL: TRENDING or strong trend labels +10; RANGING/chop near neutral +0; DEAD RANGING or explicit dead chop + (-10).
 - RR: for Engine B scale-out, if RR1 meets Engine B TP1 minimum RR +5; if RR2 / rrUsedForGate meets Style min RR (config) +5; if below the relevant configured min -5 (informational only). Do not penalize RR1 solely for being below style min RR when scaleOutActive=true and tp1PathClear=true.
-Sum, clamp to 5-95. Round to integer for the JSON field.
 
-STRUCTURED SCORE OUTPUT:
-- Component max scores: trend 20, structure 20, momentum 15, liquidity 10, risk 15, confirmation 20.
-- total_score is the sum of those components, clamped 0-100.
+ENGINE B PRIMARY rubric (trendCoherence and conviction/scoreNorm are Engine A constructs and are NOT inputs here; their absence is not a penalty):
+- Base from graded structure quality: take Engine B score/max_possible from ENGINE B SCORING DIAGNOSTICS as a 0-1 ratio. Add min(40, ratio * 40) points. Never use gate_pct for this — it is 100 for every emitted signal.
+- Structural confirmation stack: +10 for each of BOS confirmed and aligned with direction, order block / FVG at the entry zone, and a liquidity sweep preceding entry (max +30). Count only what is actually supplied.
+- Location and space: spaceGateOk=true with tp1PathClear=true +15; spaceGateOk=true with TP1 clamped to the opposing zone +8; room to the opposing zone thin or tp1PathClear=false -10.
+- Timeframe integrity: trigger_timeframe_gate_ok=true with structure/setup/trigger rungs all present +10; any required rung missing, stale, or substituted -15.
+- Regime label from SIGNAL: TRENDING or strong trend +10; RANGING/chop +0; DEAD RANGING or explicit dead chop -10.
+- RR: if rrUsedForGate meets the Engine B rr_required / Style min RR +5; below it -5 (informational only). Do NOT penalize RR1 for being below style min RR when scaleOutActive=true and tp1PathClear=true — TP1 is gated on Engine B TP1 minimum RR, not style min.
+
+Sum, clamp to 5-95. Round to integer for the JSON field. edgeProbability must be consistent with the grade band; a value far outside the band is clamped by Python to the nearest band edge, so make the two agree yourself.
+
+STRUCTURED SCORE OUTPUT (Engine A / Engine C reviews only — Engine B primary uses the EngineB JSON contract and must not fabricate these):
+- Component max scores: trend 20, structure 20, momentum 15, liquidity 10, risk 15, confirmation 20. These are absolute point caps, NOT percentages: emit each component on its own 0-cap scale, never on 0-100.
+- total_score is the sum of those components, clamped 0-100. Python records a COMPONENT_SCORE_SUM_MISMATCH / COMPONENT_SCORE_ABOVE_CAP warning if the set is out of contract.
+- total_score is an advisory summary only. It does NOT set advisory_rule_trade_allowed — that is derived from Engine A's own confluence score against its threshold.
 - risk_score means risk quality: higher is cleaner/safer, lower is worse.
 - ai_action is advisory only. ATHENA Python hard rules decide advisory_rule_trade_allowed after parsing.
 - Use blocking_reasons for data-supported blockers only: NO_STOP_LOSS, RR_BELOW_MIN (only when the relevant configured RR gate failed — RR2/style min for scale-out, not RR1 alone), DAILY_LOSS_LIMIT_HIT, HIGH_IMPACT_NEWS_NEARBY, or DATA_UNAVAILABLE.
@@ -5112,6 +5127,12 @@ def _build_signal_message(
                 f"long={_ema_long_p} rsi={_rsi_p} atr={_atr_p} adx={_adx_p}. "
                 "Do not use this H4-only block to verify policy setup/location or trigger/momentum."
             )
+            if is_primary_engine_b:
+                lines.append(
+                    "NOTE: these indicators use Engine A per-group periods and are reference "
+                    "only. They are NOT Engine B scoring inputs — do not grade Engine B on "
+                    "them, and their absence or disagreement is not Engine B evidence."
+                )
             lines.append(
                 f"Bar | Time | Open | High | Low | Close | Vol | EMA{_ema_trend_p} | "
                 f"EMA{_ema_mom_p} | RSI{_rsi_p} | MACD | MACD_Sig | ADX{_adx_p} | "
@@ -5208,6 +5229,89 @@ def _build_signal_message(
             lines.append(
                 f"  V3 confluence: score={signal.get('confluenceScore')} "
                 f"threshold={signal.get('confluenceThreshold') or signal.get('threshold')}"
+            )
+        # Reachability: score% above is measured against the fixed maxScore, so a
+        # pair whose components are partly unavailable looks weak when it is
+        # really under-instrumented. Supply the attainable ceiling explicitly.
+        _max_attainable = _fd.get("maxAttainableScore")
+        if _max_attainable is not None:
+            _attain_pct = None
+            try:
+                if float(_max_attainable) > 0:
+                    _attain_pct = round(
+                        _num(signal.get("confluenceScore"), 0.0) / float(_max_attainable) * 100
+                    )
+            except (TypeError, ValueError):
+                _attain_pct = None
+            lines.append(
+                f"  V3 reachable ceiling: maxAttainableScore={_max_attainable} "
+                f"(of maxScore={signal.get('maxScore')}); score vs attainable="
+                f"{_attain_pct if _attain_pct is not None else '?'}%"
+            )
+        if _fd.get("thresholdUnreachable"):
+            lines.append(
+                "  ** THRESHOLD UNREACHABLE - components are missing/unavailable, so this "
+                "signal cannot reach its threshold. This is a DATA limitation, not bearish "
+                "evidence: report it as INSUFFICIENT_DATA, do not grade it as a weak setup. **"
+            )
+        if _fd.get("unavailableComponents"):
+            lines.append(
+                "  Unavailable components (excluded from scoring, not scored as zero): "
+                + ", ".join(str(x) for x in (_fd.get("unavailableComponents") or []))
+            )
+        _trigger_conf = _fd.get("triggerConfirmation")
+        if isinstance(_trigger_conf, dict) and _trigger_conf:
+            lines.append(
+                "  Entry trigger confirmation: "
+                f"confirmed={_trigger_conf.get('confirmed')} "
+                f"timeframe={_trigger_conf.get('timeframe')} "
+                f"prerequisite_tf={_trigger_conf.get('prerequisiteTimeframe') or _trigger_conf.get('prerequisite_tf')} "
+                f"reason={_trigger_conf.get('reason')}"
+            )
+        _setup_overlay = _fd.get("setupOverlay")
+        if isinstance(_setup_overlay, dict) and _setup_overlay:
+            lines.append(
+                "  Setup overlay: "
+                f"applied={_setup_overlay.get('applied')} "
+                f"timeframe={_setup_overlay.get('timeframe')} "
+                f"reason={_setup_overlay.get('reason')}"
+            )
+        _promotion = _fd.get("promotion")
+        if isinstance(_promotion, dict) and _promotion:
+            lines.append(
+                f"  Promotion: state={_promotion.get('state')} reason={_promotion.get('reason')}"
+            )
+        _v3_blocks = [
+            _label
+            for _key, _label in (
+                ("quantSessionGateBlocked", "quant session gate"),
+                ("equityVolumeBlocked", "equity volume"),
+                ("cryptoDerivBlocked", "crypto derivatives"),
+                ("mrOppositionBlocked", "mean-reversion opposition"),
+            )
+            if _fd.get(_key)
+        ]
+        if _v3_blocks:
+            lines.append(
+                "  ** V3 scoring blocks active (deterministic, already applied): "
+                + ", ".join(_v3_blocks)
+                + " **"
+            )
+        _v3_mults = [
+            f"{_label}={_fd.get(_key)}"
+            for _key, _label in (
+                ("directionalRampMult", "directional_ramp"),
+                ("volatilityMult", "volatility"),
+                ("dirSum", "dir_sum"),
+            )
+            if _fd.get(_key) is not None
+        ]
+        if _v3_mults:
+            lines.append("  V3 multipliers: " + " ".join(_v3_mults))
+        if _fd.get("entryBarCount") is not None or _fd.get("entryLastClose") is not None:
+            lines.append(
+                f"  V3 entry series: bars={_fd.get('entryBarCount')} "
+                f"last_close={_fd.get('entryLastClose')}"
             )
         if _fd.get("directionalScore") is not None:
             lines.append(f"  Directional score (weighted): {_fd['directionalScore']:.4f}")
@@ -6106,10 +6210,12 @@ def run_ai(
             from ai_schemas import (
                 enforce_marcus_grade_edge_consistency,
                 evaluate_marcus_advisory_rules,
+                flag_marcus_component_score_contract,
                 normalize_marcus_advisory_levels,
             )
 
             normalize_marcus_advisory_levels(result)
+            flag_marcus_component_score_contract(result)
             _response_model = marcus_response_model(_marcus_engine_source)
             enforce_marcus_grade_edge_consistency(result)
             _response_model.model_validate(result)
@@ -6192,7 +6298,14 @@ def run_ai(
                 candle_freshness_status=(
                     (signal.get("dataFreshness") or {}).get("reason") or "unknown"
                 ),
-                engine_a_state=signal.get("confluenceScore"),
+                # For Engine B primary rows _normalize_ai_analyze_signal() has
+                # already mirrored the Engine B score into top-level
+                # confluenceScore, so it is not Engine A state.
+                engine_a_state=(
+                    None
+                    if _marcus_engine_source == "engine_b"
+                    else signal.get("confluenceScore")
+                ),
                 engine_b_state=signal.get("engine_b", {}).get("score") if isinstance(signal.get("engine_b"), dict) else None,
                 engine_c_state=None,
                 engine_d_state=extract_engine_d_audit_state(signal),

@@ -85,6 +85,13 @@ def resolve_ai_review_min_rr(signal: Dict[str, Any], resolved_style: str) -> flo
         return float(defaults.get(style_key, 1.5))
 
 
+# Shared scale for "confluence relative to threshold" → 0-100. A signal sitting
+# exactly on its threshold maps here, not to 100: it has only just qualified.
+# ai_schemas imports this so the advisory band and the dashboard confluence label
+# cannot disagree about the same ratio.
+ENGINE_A_THRESHOLD_PROGRESS_SCALE = 67.0
+
+
 def derive_engine_b_score_pct(engine_b: Dict[str, Any] | None) -> float:
     """Return Engine B graded score percent (total score / max headroom).
 
@@ -257,7 +264,14 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         try:
             threshold_value = float(live_threshold)
             threshold_progress_pct = (
-                max(0.0, min(100.0, (confluence_score / threshold_value) * 67.0))
+                max(
+                    0.0,
+                    min(
+                        100.0,
+                        (confluence_score / threshold_value)
+                        * ENGINE_A_THRESHOLD_PROGRESS_SCALE,
+                    ),
+                )
                 if threshold_value > 0
                 else 0.0
             )

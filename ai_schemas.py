@@ -143,6 +143,51 @@ def normalize_marcus_advisory_levels(result: dict[str, Any]) -> None:
             result[key] = _coerce_optional_str(result.get(key))
 
 
+_MARCUS_COMPONENT_CAPS: dict[str, float] = {
+    "trend_score": 20.0,
+    "structure_score": 20.0,
+    "momentum_score": 15.0,
+    "liquidity_score": 10.0,
+    "risk_score": 15.0,
+    "confirmation_score": 20.0,
+}
+
+
+def flag_marcus_component_score_contract(result: dict[str, Any]) -> None:
+    """Record when Marcus's component scores breach their documented contract.
+
+    The prompt caps the components at 20/20/15/10/15/20 summing to total_score,
+    while the schema only bounds each at 0-100. Values are left untouched (the
+    model may legitimately be reporting on a 0-100 scale) but the breach is
+    recorded so total_score is never read as a validated quantity.
+    """
+    if not isinstance(result, dict):
+        return
+    values: dict[str, float] = {}
+    for key in _MARCUS_COMPONENT_CAPS:
+        number = _coerce_float(result.get(key))
+        if number is not None:
+            values[key] = number
+    if not values:
+        return
+
+    warnings = list(result.get("warnings") or [])
+    if any(value > _MARCUS_COMPONENT_CAPS[key] for key, value in values.items()):
+        if "COMPONENT_SCORE_ABOVE_CAP" not in warnings:
+            warnings.append("COMPONENT_SCORE_ABOVE_CAP")
+
+    if len(values) == len(_MARCUS_COMPONENT_CAPS):
+        component_sum = round(sum(values.values()), 2)
+        result["componentScoreSum"] = component_sum
+        total = _coerce_float(result.get("total_score"))
+        if total is not None and abs(component_sum - total) > 5.0:
+            if "COMPONENT_SCORE_SUM_MISMATCH" not in warnings:
+                warnings.append("COMPONENT_SCORE_SUM_MISMATCH")
+
+    if warnings != list(result.get("warnings") or []):
+        result["warnings"] = warnings
+
+
 def _first_number(*values: Any) -> float | None:
     for value in values:
         number = _coerce_float(value)
@@ -257,6 +302,26 @@ def _high_impact_news_nearby(signal: dict, news_ctx: dict | None) -> bool:
     return bool(ctx.get("forexEvents") or ctx.get("highImpactEvents"))
 
 
+def _engine_a_evidence_score(signal: dict) -> float | None:
+    """Deterministic Engine A quality percent from the engine's own scoring."""
+    from ai_context import ENGINE_A_THRESHOLD_PROGRESS_SCALE
+
+    max_score = _coerce_float(signal.get("maxScore")) or 0.0
+    confluence = _coerce_float(signal.get("confluenceScore"))
+    if confluence is None:
+        return None
+    if max_score > 0:
+        return max(0.0, min(100.0, confluence / max_score * 100.0))
+    threshold = _coerce_float(signal.get("confluenceThreshold") or signal.get("threshold"))
+    if threshold is not None and threshold > 0:
+        # Same threshold-progress scale ai_context uses, so the advisory band and
+        # the dashboard confluence label cannot disagree about the same ratio.
+        return max(
+            0.0, min(100.0, (confluence / threshold) * ENGINE_A_THRESHOLD_PROGRESS_SCALE)
+        )
+    return None
+
+
 def evaluate_engine_a_ai_advisory_rules(
     ai_result: dict,
     signal: dict,
@@ -270,24 +335,20 @@ def evaluate_engine_a_ai_advisory_rules(
     This does not replace live risk gates and must not be treated as permission
     to execute. It creates machine-checkable review fields for UI/audit use.
     """
-    score = _first_number(
+    # advisory_rule_trade_allowed is consumed downstream as a gate flag, so the
+    # bucket must be driven by Engine A's own scoring. The model's self-reported
+    # total_score is recorded but only used when no engine evidence is supplied.
+    engine_score = _engine_a_evidence_score(signal)
+    ai_score = _first_number(
         ai_result.get("total_score"),
         ai_result.get("edgeProbability"),
     )
-    if score is None:
-        # V3 / Engine A: prefer confluenceScore vs maxScore, else vs confluenceThreshold.
-        max_score = _coerce_float(signal.get("maxScore")) or 0.0
-        confluence = _coerce_float(signal.get("confluenceScore"))
-        if confluence is not None and max_score > 0:
-            score = max(0.0, min(100.0, confluence / max_score * 100.0))
-        elif confluence is not None:
-            threshold = _coerce_float(
-                signal.get("confluenceThreshold") or signal.get("threshold")
-            )
-            if threshold is not None and threshold > 0:
-                # Map confluence relative to threshold onto a 0-100 advisory band
-                # (100% of threshold ≈ 75 mid-band; capped at 100).
-                score = max(0.0, min(100.0, (confluence / threshold) * 75.0))
+    score = engine_score if engine_score is not None else ai_score
+    score_source = (
+        "engine_a_confluence"
+        if engine_score is not None
+        else ("ai_total_score" if ai_score is not None else None)
+    )
 
     blocking_reasons: list[str] = []
     action = "review_incomplete"
@@ -331,6 +392,8 @@ def evaluate_engine_a_ai_advisory_rules(
         ),
         "advisory_rule_action": action,
         "advisory_rule_score": round(score, 2) if score is not None else None,
+        "advisory_rule_score_source": score_source,
+        "advisory_ai_score": round(ai_score, 2) if ai_score is not None else None,
         "advisory_rule_bucket": bucket,
         "advisory_blocking_reasons": blocking_reasons,
         "advisory_min_rr": min_rr,
@@ -361,8 +424,10 @@ def _clamp_edge_to_grade_band(grade: str, edge: float) -> tuple[float, bool]:
     low, high = band
     if low <= edge <= high:
         return edge, False
-    midpoint = (low + high) // 2
-    return float(midpoint), True
+    # Clamp to the nearest band edge. Snapping to the midpoint discarded the
+    # model's magnitude entirely and made edgeProbability a pure function of the
+    # letter grade — worst for Engine B, whose edge rubric already has less range.
+    return float(low if edge < low else high), True
 
 
 def enforce_marcus_grade_edge_consistency(result: dict) -> dict:
@@ -402,10 +467,20 @@ def enforce_marcus_grade_edge_consistency(result: dict) -> dict:
     return result
 
 
-def _engine_b_gate_score(signal: dict) -> float | None:
+def _engine_b_payload(signal: dict) -> dict:
     naked = signal.get("naked_data") if isinstance(signal.get("naked_data"), dict) else {}
     engine_b = signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {}
-    data = naked or engine_b
+    return naked or engine_b or {}
+
+
+def _engine_b_gate_score(signal: dict) -> float | None:
+    """Mandatory-gate completion percent.
+
+    Saturates at 100 for every emitted signal (a signal is only emitted once all
+    mandatory gates pass), so this is a gate-completion measure only — never the
+    headline or ranking score. Use _engine_b_graded_score for that.
+    """
+    data = _engine_b_payload(signal)
     if not data:
         return None
 
@@ -413,20 +488,65 @@ def _engine_b_gate_score(signal: dict) -> float | None:
     if gate_pct is not None:
         return max(0.0, min(100.0, gate_pct))
 
-    score = _coerce_float(data.get("score"))
-    max_score = _coerce_float(data.get("max_possible")) or _coerce_float(data.get("maxScore"))
-    score_pct = _coerce_float(data.get("score_pct"))
-    if score is not None and max_score and max_score > 0:
-        return max(0.0, min(100.0, score / max_score * 100.0))
-    if score_pct is not None:
-        return max(0.0, min(100.0, score_pct))
+    gate_score = _coerce_float(data.get("gate_score"))
+    gate_max = _coerce_float(data.get("gate_max_possible"))
+    if gate_score is not None and gate_max and gate_max > 0:
+        return max(0.0, min(100.0, gate_score / gate_max * 100.0))
     return None
 
 
+def _engine_b_graded_score(signal: dict) -> float | None:
+    """Graded Engine B total (score / max_possible), never the saturated gate_pct.
+
+    Single source of truth is ai_context.derive_engine_b_score_pct; this wrapper
+    only adds a "no scoring evidence at all" guard so the caller can distinguish
+    absent from zero.
+    """
+    data = _engine_b_payload(signal)
+    if not data:
+        return None
+    if all(
+        _coerce_float(data.get(key)) is None
+        for key in ("score", "score_pct", "pct", "max_possible")
+    ):
+        return None
+
+    from ai_context import derive_engine_b_score_pct
+
+    return max(0.0, min(100.0, float(derive_engine_b_score_pct(data))))
+
+
+def _engine_b_rr_state(signal: dict, style_min_rr: float) -> tuple[float | None, float, bool | None]:
+    """Return (rr_value, min_rr_applied, engine_gate_passed) for an Engine B payload.
+
+    Engine B runs its own RR gate before emitting, and under a scale-out plan the
+    style min RR applies to the full-target leg while TP1 is gated on tp1_min_rr.
+    Comparing execution_rr1 (the TP1 partial) against the style min is a unit
+    mismatch that rejects every scale-out signal, so prefer the engine's own
+    gate result and the RR/threshold pair it actually used.
+    """
+    data = _engine_b_payload(signal)
+    if not data:
+        return _signal_rr(signal), style_min_rr, None
+
+    gate_passed = data.get("rr_passed")
+    if gate_passed is None:
+        gate_passed = data.get("rr_ok")
+    gate_passed = bool(gate_passed) if isinstance(gate_passed, bool) else None
+
+    rr = _nested_first_number(data, ("rr_used_for_gate", "rr_actual", "execution_rr", "rr"))
+    if rr is None and bool(data.get("scale_out_active")):
+        rr = _nested_first_number(data, ("execution_rr2", "rr2"))
+    if rr is None:
+        rr = _signal_rr(signal)
+
+    required = _coerce_float(data.get("rr_required"))
+    min_applied = required if required is not None and required > 0 else style_min_rr
+    return rr, min_applied, gate_passed
+
+
 def _engine_b_structural_bucket(signal: dict) -> tuple[str, str, float | None]:
-    naked = signal.get("naked_data") if isinstance(signal.get("naked_data"), dict) else {}
-    engine_b = signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {}
-    data = naked or engine_b
+    data = _engine_b_payload(signal)
 
     verdict = str(data.get("structural_verdict") or "").upper()
     gate_flags = [
@@ -437,13 +557,21 @@ def _engine_b_structural_bucket(signal: dict) -> tuple[str, str, float | None]:
         data.get("room_ok"),
     ]
     failed_gates = sum(1 for flag in gate_flags if flag is False)
-    score = _engine_b_gate_score(signal)
+    # Gate completion decides the bucket (verdict + failed_gates already carry
+    # that dimension); the reported score is the graded total, which is the only
+    # part that actually varies between emitted signals.
+    gate_score = _engine_b_gate_score(signal)
+    score = _engine_b_graded_score(signal)
 
-    if verdict == "CLEAR" and failed_gates == 0 and (score is None or score >= 75):
+    if verdict == "CLEAR" and failed_gates == 0 and (gate_score is None or gate_score >= 75):
         return "high_quality_review", "engine_b_clear_gates_pass", score
-    if verdict in {"CLEAR", "CAUTION"} and failed_gates <= 1 and (score is None or score >= 65):
+    if (
+        verdict in {"CLEAR", "CAUTION"}
+        and failed_gates <= 1
+        and (gate_score is None or gate_score >= 65)
+    ):
         return "needs_confirmation", "engine_b_mixed_gates", score
-    if score is not None and score >= 50:
+    if gate_score is not None and gate_score >= 50:
         return "watchlist_only", "engine_b_partial_gates", score
     return "ignore", "engine_b_weak_structure", score
 
@@ -490,14 +618,10 @@ def evaluate_marcus_advisory_rules(
 
     if source == "engine_b":
         action, bucket, score = _engine_b_structural_bucket(signal)
-        edge = _coerce_float(ai_result.get("edgeProbability"))
-        if score is None and edge is not None:
-            score = edge
+        score_source = "engine_b_graded"
     elif source == "engine_c":
         action, bucket, score = _engine_c_consensus_bucket(signal)
-        edge = _coerce_float(ai_result.get("edgeProbability"))
-        if score is None and edge is not None:
-            score = edge
+        score_source = "engine_c_conviction"
     else:
         return evaluate_engine_a_ai_advisory_rules(
             ai_result,
@@ -506,15 +630,37 @@ def evaluate_marcus_advisory_rules(
             min_rr=min_rr,
         )
 
+    if score is None:
+        # No deterministic engine evidence — fall back to the model's own edge,
+        # and say so rather than labelling it as engine-derived.
+        edge = _coerce_float(ai_result.get("edgeProbability"))
+        if edge is not None:
+            score = edge
+            score_source = "ai_edge_probability"
+        else:
+            score_source = None
+
     blocking_reasons: list[str] = []
     if _signal_stop_loss(signal) is None:
         blocking_reasons.append("NO_STOP_LOSS")
 
-    rr = _signal_rr(signal)
-    if rr is None:
-        blocking_reasons.append("RR_UNAVAILABLE")
-    elif rr < min_rr:
-        blocking_reasons.append("RR_BELOW_MIN")
+    if source == "engine_b":
+        rr, min_rr_applied, engine_rr_passed = _engine_b_rr_state(signal, min_rr)
+        if engine_rr_passed is False:
+            blocking_reasons.append("RR_BELOW_MIN")
+        elif engine_rr_passed is None:
+            # No engine RR verdict supplied — fall back to the numeric comparison,
+            # against the threshold Engine B itself applied.
+            if rr is None:
+                blocking_reasons.append("RR_UNAVAILABLE")
+            elif rr < min_rr_applied:
+                blocking_reasons.append("RR_BELOW_MIN")
+    else:
+        rr, min_rr_applied = _signal_rr(signal), min_rr
+        if rr is None:
+            blocking_reasons.append("RR_UNAVAILABLE")
+        elif rr < min_rr_applied:
+            blocking_reasons.append("RR_BELOW_MIN")
 
     if _daily_loss_limit_hit(signal):
         blocking_reasons.append("DAILY_LOSS_LIMIT_HIT")
@@ -531,9 +677,12 @@ def evaluate_marcus_advisory_rules(
         ),
         "advisory_rule_action": action,
         "advisory_rule_score": round(score, 2) if score is not None else None,
+        "advisory_rule_score_source": score_source,
         "advisory_rule_bucket": bucket,
         "advisory_blocking_reasons": blocking_reasons,
-        "advisory_min_rr": min_rr,
+        "advisory_min_rr": min_rr_applied,
+        "advisory_rr_value": round(rr, 3) if rr is not None else None,
+        "advisory_gate_pct": _engine_b_gate_score(signal) if source == "engine_b" else None,
     }
 
 
