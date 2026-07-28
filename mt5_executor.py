@@ -133,6 +133,53 @@ def _mt5_max_spread_to_sl_ratio() -> float | None:
     return None
 
 
+def _mt5_quote_value(tick, key: str):
+    return tick.get(key) if isinstance(tick, dict) else getattr(tick, key, None)
+
+
+def _mt5_spread_to_sl_details(
+    signal: dict,
+    tick,
+    price: float,
+    sl: float,
+    ratio: float,
+    ratio_cap: float,
+    stage: str,
+) -> dict:
+    ask = float(_mt5_quote_value(tick, "ask"))
+    bid = float(_mt5_quote_value(tick, "bid"))
+    atr_diagnostics = signal.get("atrDiagnostics")
+    atr_diagnostics = atr_diagnostics if isinstance(atr_diagnostics, dict) else {}
+    nested = {}
+    for key in ("naked_data", "engine_b_status", "engine_b"):
+        if isinstance(signal.get(key), dict):
+            nested = signal[key]
+            break
+
+    return {
+        "bid": bid,
+        "ask": ask,
+        "entryPrice": float(price),
+        "stopLoss": float(sl),
+        "stopDistance": abs(float(price) - float(sl)),
+        "spread": ask - bid,
+        "spreadToSlRatio": round(float(ratio), 4),
+        "spreadToSlRatioCap": float(ratio_cap),
+        "spreadToSlRatioExceeded": float(ratio) > float(ratio_cap),
+        "spreadGateStage": stage,
+        "pair": signal.get("pair") or signal.get("display") or signal.get("symbol"),
+        "engine": signal.get("engine") or signal.get("source_engine"),
+        "direction": signal.get("direction"),
+        "levelSource": signal.get("level_source") or signal.get("levelSource"),
+        "slMethod": signal.get("sl_method") or nested.get("sl_method"),
+        "atrValue": signal.get("atr") or nested.get("atr"),
+        "atrTimeframe": signal.get("atr_tf") or atr_diagnostics.get("atr_tf") or nested.get("atr_tf"),
+        "structureTimeframe": signal.get("structureTf") or nested.get("structureTf") or nested.get("zone_tf"),
+        "triggerTimeframe": signal.get("triggerTf") or nested.get("triggerTf") or nested.get("entry_tf"),
+        "executionTimeframe": signal.get("executionTf") or nested.get("executionTf"),
+    }
+
+
 def _mt5_spread_to_sl_exceeded(
     tick, price: float, sl: float, ratio_cap: float
 ) -> tuple[bool, float | None]:
@@ -145,20 +192,133 @@ def _mt5_spread_to_sl_exceeded(
     and SL validation gates remain the backstop for malformed inputs.
     """
     try:
-        ask = float(getattr(tick, "ask", 0) or 0)
-        bid = float(getattr(tick, "bid", 0) or 0)
-        px = float(price or 0)
+        ask = float(_mt5_quote_value(tick, "ask") or 0)
+        bid = float(_mt5_quote_value(tick, "bid") or 0)
+        entry = float(price or 0)
         stop = float(sl or 0)
         cap = float(ratio_cap)
     except (TypeError, ValueError):
         return False, None
-    if ask <= 0 or bid <= 0 or ask < bid or px <= 0 or stop <= 0 or cap <= 0:
+    if ask <= 0 or bid <= 0 or ask < bid or entry <= 0 or stop <= 0 or cap <= 0:
         return False, None
-    sl_dist = abs(px - stop)
-    if sl_dist <= 0:
+    stop_distance = abs(entry - stop)
+    if stop_distance <= 0:
         return False, None
-    ratio = (ask - bid) / sl_dist
+    ratio = (ask - bid) / stop_distance
     return ratio > cap, ratio
+
+
+def _mt5_spread_to_sl_rejection(
+    signal: dict,
+    tick,
+    price: float,
+    sl: float,
+    ratio_cap: float,
+) -> dict | None:
+    exceeded, ratio = _mt5_spread_to_sl_exceeded(
+        tick, price, sl, ratio_cap
+    )
+    if not exceeded or ratio is None:
+        return None
+    return {
+        "success": False,
+        "error": (
+            f"SPREAD_TOO_WIDE_FOR_SL: spread is {ratio:.1%} of "
+            f"SL distance (max {ratio_cap:.0%})"
+        ),
+        **_mt5_spread_to_sl_details(
+            signal, tick, price, sl, ratio, ratio_cap, "broker_execute"
+        ),
+    }
+
+
+def apply_mt5_spread_to_sl_scan_gate(
+    signals: list,
+    live_prices: dict | None,
+    *,
+    ratio_cap: float | None = None,
+    config: dict | None = None,
+    time_now: float | None = None,
+) -> int:
+    """Mark fresh MT5 scan rows non-executable when spread exceeds the SL ratio."""
+    config_map = config if isinstance(config, dict) else CONFIG
+    if ratio_cap is None:
+        raw_cap = config_map.get("MAX_EXECUTION_SPREAD_TO_SL_RATIO")
+        ratio_cap = raw_cap if isinstance(raw_cap, (int, float)) else None
+    try:
+        cap = float(ratio_cap or 0)
+    except (TypeError, ValueError):
+        return 0
+    if cap <= 0 or not isinstance(signals, list):
+        return 0
+
+    from athena_app.services.engine_b_market_state import fresh_live_gate_quote
+
+    annotated = 0
+    for signal in signals:
+        if not isinstance(signal, dict):
+            continue
+        pair = {
+            "display": signal.get("display") or signal.get("pair"),
+            "pair": signal.get("pair") or signal.get("display"),
+            "symbol": signal.get("symbol"),
+            "type": signal.get("type") or signal.get("asset_type"),
+        }
+        try:
+            _, quote_diagnostics = fresh_live_gate_quote(
+                pair, live_prices, config_map, time_now=time_now
+            )
+        except ValueError:
+            continue
+        quote = (
+            live_prices.get(quote_diagnostics.get("matchedKey"))
+            if isinstance(live_prices, dict)
+            else None
+        )
+        if (
+            not isinstance(quote, dict)
+            or str(quote.get("source") or "").strip().lower() != "mt5"
+        ):
+            continue
+        direction = str(signal.get("direction") or "").strip().upper()
+        entry_key = {"LONG": "ask", "SHORT": "bid"}.get(direction)
+        price = quote.get(entry_key) if entry_key else 0
+        exceeded, ratio = _mt5_spread_to_sl_exceeded(
+            quote, price, signal.get("sl"), cap
+        )
+        if ratio is None:
+            continue
+        diagnostics = _mt5_spread_to_sl_details(
+            signal,
+            quote,
+            price,
+            signal.get("sl"),
+            ratio,
+            cap,
+            "scan_classification",
+        )
+        signal["executionSpreadGate"] = diagnostics
+        for key in (
+            "spreadToSlRatio",
+            "spreadToSlRatioCap",
+            "spreadToSlRatioExceeded",
+        ):
+            signal[key] = diagnostics[key]
+        annotated += 1
+        if exceeded:
+            signal["executable"] = False
+            signal["spreadToSlBlockReason"] = "SPREAD_TOO_WIDE_FOR_SL"
+            signal.setdefault("executionBlockReason", "SPREAD_TOO_WIDE_FOR_SL")
+            diagnostics["reason"] = "SPREAD_TOO_WIDE_FOR_SL"
+            log.info(
+                "[SCAN][MT5] %s %s spread is %.1f%% of SL distance "
+                "(cap %.1f%%); marked non-executable",
+                signal.get("pair") or signal.get("display") or "?",
+                signal.get("engine") or signal.get("source_engine") or "?",
+                float(diagnostics["spreadToSlRatio"]) * 100.0,
+                cap * 100.0,
+            )
+    return annotated
 
 
 def _mt5_tick_age_seconds(tick) -> float | None:
@@ -1887,24 +2047,17 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
     # passes. Ratio-based, so it self-scales across asset classes and TFs.
     _spread_sl_cap = _mt5_max_spread_to_sl_ratio()
     if _spread_sl_cap is not None:
-        _sl_exceeded, _spread_sl_ratio = _mt5_spread_to_sl_exceeded(
-            tick, price, sl, _spread_sl_cap
+        _spread_sl_rejection = _mt5_spread_to_sl_rejection(
+            signal, tick, price, sl, _spread_sl_cap
         )
-        if _sl_exceeded:
+        if _spread_sl_rejection is not None:
+            _spread_sl_ratio = float(_spread_sl_rejection["spreadToSlRatio"])
             log.warning(
                 f"[MT5] {mt5_symbol}: spread {tick.ask - tick.bid:.{digits}f} is "
                 f"{_spread_sl_ratio:.1%} of SL distance {abs(price - sl):.{digits}f} "
                 f"(cap {_spread_sl_cap:.0%}) — rejecting"
             )
-            return {
-                "success": False,
-                "error": (
-                    f"SPREAD_TOO_WIDE_FOR_SL: spread is {_spread_sl_ratio:.1%} of "
-                    f"SL distance (max {_spread_sl_cap:.0%})"
-                ),
-                "spreadToSlRatio": round(_spread_sl_ratio, 4),
-                "spreadToSlRatioCap": _spread_sl_cap,
-            }
+            return _spread_sl_rejection
 
     # ── Multi-Target Volume Splitting ──────────────────────────────────────
     # To prevent orphaned pending TP2 orders, we split the total approved volume

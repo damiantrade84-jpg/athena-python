@@ -9562,6 +9562,23 @@ def api_scan_naked():
             reverse=True,
         )
 
+    try:
+        from mt5_executor import apply_mt5_spread_to_sl_scan_gate
+
+        with _live_prices_lock:
+            _spread_gate_live_prices = dict(_live_prices)
+        apply_mt5_spread_to_sl_scan_gate(
+            results,
+            _spread_gate_live_prices,
+            config=CONFIG,
+        )
+    except Exception as _spread_gate_err:
+        # The broker executor retains the same final fail-closed gate.
+        log.warning(
+            "[NAKED SCAN][MT5] spread-to-SL classification unavailable: %s",
+            _spread_gate_err,
+        )
+
     # Warm the Engine B cache so the Live Cockpit snapshot reflects this universe
     # scan (the snapshot reads _engine_b_cache_get(display); see
     # routes_live_dashboard._ld_build_engine_b_row). Diagnostic/advisory only -

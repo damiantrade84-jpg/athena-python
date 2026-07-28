@@ -3813,6 +3813,22 @@ def run_full_scan(
             },
         }
         try:
+            from mt5_executor import apply_mt5_spread_to_sl_scan_gate
+
+            with r.live_prices_lock:
+                _spread_gate_live_prices = dict(r.live_prices)
+            apply_mt5_spread_to_sl_scan_gate(
+                results + watchlist,
+                _spread_gate_live_prices,
+                config=CONFIG,
+            )
+        except Exception as _spread_gate_err:
+            # The broker executor retains the same final fail-closed gate.
+            log.warning(
+                "[SCAN][MT5] spread-to-SL classification unavailable: %s",
+                _spread_gate_err,
+            )
+        try:
             from athena_app.diagnostics.engine_b_gate_funnel_persist import (
                 scheduled_engine_b_scan_gate_funnel_meta,
             )

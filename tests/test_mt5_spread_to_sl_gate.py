@@ -82,3 +82,131 @@ def test_malformed_inputs_fail_open_to_other_gates():
     assert mt5_executor._mt5_spread_to_sl_exceeded(
         good_tick, price=0.57110, sl=0.57110, ratio_cap=0.15
     ) == (False, None)
+
+
+def test_rejection_reports_engine_levels_and_timeframe_provenance():
+    tick = SimpleNamespace(ask=0.81971, bid=0.81951)
+    signal = {
+        "pair": "USD/CHF",
+        "engine": "engine_b",
+        "direction": "LONG",
+        "level_source": "engine_b_execution",
+        "sl_method": "structural",
+        "atr": 0.0008937265,
+        "structureTf": "H1",
+        "triggerTf": "M15",
+        "executionTf": "M15",
+        "naked_data": {
+            "atr_tf": "H1",
+            "zone_tf": "H1",
+            "entry_tf": "M15",
+        },
+    }
+
+    rejection = mt5_executor._mt5_spread_to_sl_rejection(
+        signal,
+        tick,
+        price=0.81971,
+        sl=0.81823,
+        ratio_cap=0.10,
+    )
+
+    assert rejection is not None
+    assert rejection["success"] is False
+    assert rejection["spreadToSlRatio"] == 0.1351
+    assert rejection["spreadToSlRatioExceeded"] is True
+    assert rejection["engine"] == "engine_b"
+    assert rejection["entryPrice"] == 0.81971
+    assert rejection["stopLoss"] == 0.81823
+    assert abs(rejection["spread"] - 0.00020) < 1e-12
+    assert abs(rejection["stopDistance"] - 0.00148) < 1e-12
+    assert rejection["levelSource"] == "engine_b_execution"
+    assert rejection["slMethod"] == "structural"
+    assert rejection["atrTimeframe"] == "H1"
+    assert rejection["structureTimeframe"] == "H1"
+    assert rejection["triggerTimeframe"] == "M15"
+    assert rejection["executionTimeframe"] == "M15"
+    assert rejection["spreadGateStage"] == "broker_execute"
+
+
+def test_scan_gate_marks_fresh_mt5_signal_non_executable_before_quick_execute():
+    signal = {
+        "pair": "USD/CHF",
+        "display": "USD/CHF",
+        "symbol": "USDCHF.s",
+        "type": "forex",
+        "engine": "engine_b",
+        "direction": "LONG",
+        "price": 0.81961,
+        "sl": 0.81823,
+        "atr": 0.0008937265,
+        "atr_tf": "H1",
+        "structureTf": "H1",
+        "triggerTf": "M15",
+        "executionTf": "M15",
+        "executable": True,
+    }
+    live_prices = {
+        "USD/CHF": {
+            "price": 0.81961,
+            "bid": 0.81951,
+            "ask": 0.81971,
+            "source": "mt5",
+            "broker_ts": 995.0,
+        }
+    }
+
+    annotated = mt5_executor.apply_mt5_spread_to_sl_scan_gate(
+        [signal],
+        live_prices,
+        ratio_cap=0.10,
+        config={"LIVE_PRICE_MAX_AGE_SEC": {"forex": 30}},
+        time_now=1000.0,
+    )
+
+    assert annotated == 1
+    assert signal["executable"] is False
+    assert signal["executionBlockReason"] == "SPREAD_TOO_WIDE_FOR_SL"
+    assert signal["spreadToSlBlockReason"] == "SPREAD_TOO_WIDE_FOR_SL"
+    assert signal["spreadToSlRatio"] == 0.1351
+    assert signal["spreadToSlRatioExceeded"] is True
+    assert signal["executionSpreadGate"]["entryPrice"] == 0.81971
+    assert signal["executionSpreadGate"]["atrTimeframe"] == "H1"
+    assert signal["executionSpreadGate"]["spreadGateStage"] == "scan_classification"
+
+
+def test_scan_gate_does_not_block_when_spread_ratio_passes():
+    signal = {
+        "pair": "USD/CHF",
+        "display": "USD/CHF",
+        "type": "forex",
+        "engine": "ENGINE_A_V3",
+        "direction": "SHORT",
+        "sl": 0.82551,
+        "atrDiagnostics": {"atr_tf": "M30"},
+        "executable": True,
+    }
+    live_prices = {
+        "USD/CHF": {
+            "price": 0.81961,
+            "bid": 0.81951,
+            "ask": 0.81971,
+            "source": "mt5",
+            "broker_ts": 995.0,
+        }
+    }
+
+    annotated = mt5_executor.apply_mt5_spread_to_sl_scan_gate(
+        [signal],
+        live_prices,
+        ratio_cap=0.10,
+        config={"LIVE_PRICE_MAX_AGE_SEC": {"forex": 30}},
+        time_now=1000.0,
+    )
+
+    assert annotated == 1
+    assert signal["executable"] is True
+    assert signal["spreadToSlRatioExceeded"] is False
+    assert signal["executionSpreadGate"]["entryPrice"] == 0.81951
+    assert signal["executionSpreadGate"]["atrTimeframe"] == "M30"
+    assert "executionBlockReason" not in signal
