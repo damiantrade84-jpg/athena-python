@@ -1730,10 +1730,18 @@ def risk_check(
     is_crypto = asset_type == "crypto"
     is_stock = asset_type == "stock"
     is_commodity = asset_type == "commodity"
-    _decimals = 6 if is_crypto else (0 if is_stock else 2)
     _default_step = 0.001 if is_crypto else (1.0 if is_stock else 0.01)
-    vol_step = (
-        symbol_info.get("volume_step", _default_step) if symbol_info else _default_step
+    try:
+        vol_step = float(
+            symbol_info.get("volume_step", _default_step)
+            if symbol_info
+            else _default_step
+        )
+    except (TypeError, ValueError):
+        vol_step = _default_step
+    _decimals = _volume_step_decimals(
+        vol_step,
+        6 if is_crypto else (0 if is_stock else 2),
     )
 
     effective_mode = resolve_volume_mode(volume_mode, execution_context, signal)

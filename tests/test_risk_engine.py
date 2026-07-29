@@ -1077,6 +1077,35 @@ class TestVolumeMode:
         assert result.volume == pytest.approx(0.5, abs=1e-9)
         assert result.volume_mode == "calculated"
 
+    def test_calculated_commodity_preserves_broker_sub_cent_lot_step(self, monkeypatch):
+        monkeypatch.setattr(risk_engine, "_calc_volume", lambda *args, **kwargs: 0.008)
+        result = risk_check(
+            _make_signal(
+                pair="XAU/USD",
+                type="commodity",
+                direction="SHORT",
+                price=4018.09,
+                sl=4044.33,
+                tp1=3991.85,
+                tp2=3991.85,
+                executionConvictionEffective=0.25,
+            ),
+            50037.19,
+            50037.19,
+            [],
+            symbol_info={
+                "volume_min": 0.001,
+                "volume_step": 0.001,
+                "volume_max": 100.0,
+                "trade_tick_size": 0.01,
+                "trade_tick_value": 1.0,
+            },
+            volume_mode="calculated",
+        )
+
+        assert result.approved is True
+        assert result.volume == pytest.approx(0.002)
+
     def test_resolve_min_lot_volume_helper(self):
         assert resolve_min_lot_volume(
             {"volume_min": 0.01, "volume_step": 0.01, "volume_max": 100},
