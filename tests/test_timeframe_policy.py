@@ -638,6 +638,43 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     assert eng_a_swing.m5_policy == M5Policy.DISABLED
 
 
+def test_engine_a_broad_thin_groups_use_fixed_h4_h1_m15_ladder() -> None:
+    slow = SpeedState(
+        live_speed_class=SpeedClass.SLOW,
+        speed_percentile=20.0,
+        history_ready=True,
+        liquidity_class=LiquidityClass.NORMAL,
+        thin_liquidity=False,
+        m5_quality_acceptable=True,
+    )
+    groups = (
+        ("EUR/GBP", "forex", "forex_crosses_broad"),
+        ("USD/ZAR", "forex", "forex_exotics_liquid"),
+        ("USD/BRL", "forex", "forex_exotics_restricted"),
+        ("XPT/USD", "commodity", "thin_metals_base_softs"),
+        ("DOGE/USDT", "crypto", "crypto_other_thin"),
+    )
+    for symbol, asset_type, score_group in groups:
+        for style in ("intraday", "swing", "scalp"):
+            policy = resolve_timeframe_policy(
+                symbol, asset_type, score_group, style, slow, engine_id="engine_a"
+            )
+            assert policy.regime_tf == Timeframe.D1
+            assert policy.bias_tf == Timeframe.H4
+            assert policy.structure_tf == Timeframe.H4
+            assert policy.setup_tf == Timeframe.H1
+            assert policy.trigger_tf == Timeframe.M15
+            assert policy.execution_tf == Timeframe.M15
+            assert policy.m5_policy == M5Policy.DISABLED
+
+    auto_exotic = resolve_timeframe_policy(
+        "USD/ZAR", "forex", "forex_exotics_liquid", "auto", slow, engine_id="engine_a"
+    )
+    assert auto_exotic.style == "intraday"
+    assert auto_exotic.bias_tf == Timeframe.H4
+    assert auto_exotic.trigger_tf == Timeframe.M15
+
+
 def test_auto_policy_preserves_legacy_intraday_default() -> None:
     major = resolve_timeframe_policy(
         "EUR/USD", "forex", "forex_majors", "auto", engine_id="engine_a"

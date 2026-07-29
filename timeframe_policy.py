@@ -1101,6 +1101,17 @@ def _clamp_adaptive_roles(
     return clamped[0], clamped[1]
 
 
+_ENGINE_A_H4_PRIMARY_GROUP_PROFILES = frozenset(
+    {
+        "FOREX_CROSSES_BROAD",
+        "FOREX_EXOTICS_LIQUID",
+        "FOREX_EXOTICS_RESTRICTED",
+        "THIN_METALS_BASE_SOFTS",
+        "CRYPTO_OTHER_THIN",
+    }
+)
+
+
 def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
     if engine_id == "engine_d":
         # Engine D native scalp contract: H1 context/regime, M15 confirmed
@@ -1168,7 +1179,24 @@ def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
             baseline_speed=base.baseline_speed,
             m15_confirmation_required_for_m5=True,
         )
-    # Engine A intraday keeps the instrument profile unchanged.  Swing is a
+    if engine_id == "engine_a" and base.profile in _ENGINE_A_H4_PRIMARY_GROUP_PROFILES:
+        # Broad/thin/exotic Engine A groups use one fixed hierarchy across
+        # intraday, swing, and explicit scalp styles. Live speed classification
+        # records diagnostics but does not demote their requested M15 trigger.
+        return replace(
+            base,
+            profile=f"ENGINE_A_H4_PRIMARY_{style.upper()}_{base.profile}",
+            regime=Timeframe.D1,
+            bias=Timeframe.H4,
+            structure=Timeframe.H4,
+            setup=Timeframe.H1,
+            trigger=Timeframe.M15,
+            execution=Timeframe.M15,
+            m5_role=M5Role.DISABLED,
+            m5_policy=M5Policy.DISABLED,
+            m15_confirmation_required_for_m5=False,
+        )
+    # Engine A intraday keeps the instrument profile unchanged. Swing is a
     # full slow overlay: D1 regime/bias, H4 structure, H1 setup, H1 confirmed
     # trigger, M5 disabled.
     if engine_id == "engine_a" and style == "swing":
@@ -1271,7 +1299,10 @@ def resolve_timeframe_policy(
 
     if not adaptation_ready:
         messages.append("INSUFFICIENT_HISTORY: baseline policy retained")
-    elif effective_speed == SpeedClass.SLOW:
+    elif (
+        effective_speed == SpeedClass.SLOW
+        and not selected.profile.startswith("ENGINE_A_H4_PRIMARY_")
+    ):
         # Speed adaptation may modify setup and trigger ONLY — never
         # regime/bias/structure, never execution.
         setup = _adjacent(setup, faster=False)
