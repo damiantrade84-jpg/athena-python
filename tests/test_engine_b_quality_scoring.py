@@ -112,6 +112,8 @@ def test_weighted_scoring_populates_quality_fields(monkeypatch):
     assert out["weighted_scoring_enabled"] is True
     assert out["quality_components"]
     assert "volume_confirmation" not in out["quality_components"]
+    assert out["profile_context"]["enabled"] is False
+    assert "profile_reaction" not in out["quality_components"]
     assert out["volume_scoring_applicable"] is False
     assert out["quality_max_possible"] > 0
     # Quality percent is the only Engine B score with a usable range on a pass:
@@ -350,6 +352,7 @@ def test_inapplicable_components_are_pruned_not_scored_zero():
         "active_zone_distance": 0.4,
     }
     stock = compute_confluence_subscores(dict(res), "LONG", 1.0, asset_type="stock")
+    assert "volume_confirmation" not in stock
     assert "orderflow" not in stock
     assert "session_context" not in stock
 
@@ -360,6 +363,36 @@ def test_inapplicable_components_are_pruned_not_scored_zero():
         asset_type="stock",
     )
     assert "session_context" in with_session
+
+
+def test_profile_and_volume_components_follow_source_applicability():
+    res = {
+        "atr": 1.0,
+        "current_swing_sequence": "HH_HL",
+        "macro_swing_sequence": "HH_HL",
+        "bos_confirmed": True,
+        "ob_at_zone": False,
+        "fvg_overlap": False,
+        "active_zone_distance": 0.4,
+        "bos_volume_source_applicable": False,
+        "profile_context": {"enabled": False, "trusted": False},
+    }
+    unavailable = compute_confluence_subscores(res, "LONG", 1.0, asset_type="crypto")
+    assert "volume_confirmation" not in unavailable
+    assert "profile_reaction" not in unavailable
+
+    available = compute_confluence_subscores(
+        {
+            **res,
+            "bos_volume_source_applicable": True,
+            "profile_context": {"enabled": True, "trusted": True},
+        },
+        "LONG",
+        1.0,
+        asset_type="crypto",
+    )
+    assert "volume_confirmation" in available
+    assert "profile_reaction" in available
 
 
 def test_opposing_only_order_blocks_score_zero_confluence():

@@ -544,11 +544,20 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     engine_b_swing = resolve_engine_b_tfs(
         "forex", "swing", symbol="EUR/USD", score_group="forex_majors"
     )
+    engine_b_thin_swing = resolve_timeframe_policy(
+        "USD/BRL", "forex", "forex_exotics_restricted", "swing", engine_id="engine_b"
+    )
     engine_b_fast = resolve_timeframe_policy(
         "GBP/USD", "forex", "forex_majors", "intraday", engine_id="engine_b"
     )
     engine_b_cross = resolve_timeframe_policy(
         "EUR/GBP", "forex", "forex_crosses", "intraday", engine_id="engine_b"
+    )
+    engine_b_exotic_liquid = resolve_timeframe_policy(
+        "USD/ZAR", "forex", "forex_exotics_liquid", "intraday", engine_id="engine_b"
+    )
+    engine_b_exotic_restricted = resolve_timeframe_policy(
+        "USD/BRL", "forex", "forex_exotics_restricted", "intraday", engine_id="engine_b"
     )
     engine_b_scalp = resolve_timeframe_policy(
         "EUR/USD", "forex", "forex_majors", "scalp", engine_id="engine_b"
@@ -557,20 +566,23 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
 
     assert equity.structure_tf == Timeframe.H1
     assert engine_b_intraday["bias"] == "H4"
-    assert engine_b_intraday["struct"] == "H1"
-    # Zone walls track structure TF (intraday H1 / swing H4). Bias stays one
-    # rung higher for MTF context only.
-    assert engine_b_intraday["zone"] == "H1"
+    assert engine_b_intraday["struct"] == "H4"
+    # Zone walls and structural ATR track the H4 primary structure horizon;
+    # H1 is setup/refinement only.
+    assert engine_b_intraday["zone"] == "H4"
     assert engine_b_intraday["zone"] == engine_b_intraday["struct"]
-    assert engine_b_intraday["setup"] == "M30"
+    assert engine_b_intraday["setup"] == "H1"
     assert engine_b_intraday["trigger"] == "M15"
     assert engine_b_intraday["execution"] == "M15"
-    assert engine_b_intraday["atr"] == "H1"
+    assert engine_b_intraday["atr"] == "H4"
     assert engine_b_swing["struct"] == "H4"
     assert engine_b_swing["zone"] == "H4"
     assert engine_b_swing["zone"] == engine_b_swing["struct"]
     assert engine_b_swing["bias"] == "D1"
     assert engine_b_swing["trigger"] == "H1"
+    assert engine_b_thin_swing.structure_tf == Timeframe.H4
+    assert engine_b_thin_swing.setup_tf == Timeframe.H1
+    assert engine_b_thin_swing.trigger_tf == Timeframe.H1
     assert engine_b_fast.execution_tf == Timeframe.M15
     assert engine_b_fast.trigger_tf == Timeframe.M15
     assert engine_b_fast.m5_role == M5Role.REFINEMENT
@@ -580,13 +592,19 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     assert engine_b_cross.trigger_tf == Timeframe.M30
     assert engine_b_cross.m5_role == M5Role.DISABLED
     assert engine_b_cross.m5_policy == M5Policy.DISABLED
-    # Scalp chain H1/M15/M15/M5/M1: H1 is context only, H4 is not a gate.
-    assert engine_b_scalp.regime_tf == Timeframe.H1
-    assert engine_b_scalp.bias_tf == Timeframe.M15
-    assert engine_b_scalp.structure_tf == Timeframe.M15
-    assert engine_b_scalp.setup_tf == Timeframe.M5
-    assert engine_b_scalp.trigger_tf == Timeframe.M1
-    assert engine_b_scalp.execution_tf == Timeframe.M1
+    for exotic in (engine_b_exotic_liquid, engine_b_exotic_restricted):
+        assert exotic.structure_tf == Timeframe.H4
+        assert exotic.setup_tf == Timeframe.H1
+        assert exotic.trigger_tf == Timeframe.M15
+        assert exotic.execution_tf == Timeframe.M15
+        assert exotic.m5_policy == M5Policy.DISABLED
+    # Engine B scalp retains H4 primary structure; M5 is refinement only.
+    assert engine_b_scalp.regime_tf == Timeframe.D1
+    assert engine_b_scalp.bias_tf == Timeframe.H4
+    assert engine_b_scalp.structure_tf == Timeframe.H4
+    assert engine_b_scalp.setup_tf == Timeframe.H1
+    assert engine_b_scalp.trigger_tf == Timeframe.M15
+    assert engine_b_scalp.execution_tf == Timeframe.M15
     assert engine_b_scalp.m5_policy == M5Policy.CONDITIONAL
     assert engine_b_scalp.execution_mode == ExecutionMode.LIVE_QUOTE
     # Engine D native: H1 context, M15 confirmed structure/bias, M5 setup, M1
