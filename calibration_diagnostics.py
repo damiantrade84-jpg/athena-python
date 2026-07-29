@@ -217,6 +217,31 @@ def build_engine_b_calibration_row(
     failed = list(conf.get("failed_gate_names") or ctx.get("failed_gate_names") or [])
     base_min_score = _safe_float(profile.get("min_score"), 0.0) or 0.0
     regime_multiplier = _engine_b_regime_multiplier(regime_label, asset_type)
+    style = ctx.get("style") or profile.get("style")
+    style_key = str(style or "").strip().lower()
+    basis = str(
+        conf.get("min_score_basis")
+        or CONFIG.get("ENGINE_B_MIN_SCORE_BASIS", "total")
+        or "total"
+    ).strip().lower()
+    if basis not in {"total", "quality_ratio"}:
+        basis = "total"
+    quality_pct = _safe_float(conf.get("quality_pct"))
+    quality_ratio = quality_pct / 100.0 if quality_pct is not None else None
+    configured_ratios = CONFIG.get("ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE", {}) or {}
+    configured_ratio = (
+        _safe_float(configured_ratios.get(style_key), 0.0)
+        if isinstance(configured_ratios, dict)
+        else 0.0
+    ) or 0.0
+    quality_ratio_threshold = max(0.0, min(1.0, configured_ratio))
+    quality_ratio_would_pass = bool(
+        quality_ratio_threshold <= 0.0
+        or (
+            quality_ratio is not None
+            and quality_ratio >= quality_ratio_threshold
+        )
+    )
     if passed is False and not failed:
         try:
             score = float(conf.get("score", 0.0) or 0.0)
@@ -233,7 +258,7 @@ def build_engine_b_calibration_row(
         "asset_class": ctx.get("asset_class") or ctx.get("asset_type") or asset_type,
         "score_group": ctx.get("score_group") or profile.get("score_group"),
         "regime": regime_label,
-        "style": ctx.get("style") or profile.get("style"),
+        "style": style,
         "raw_score": _safe_float(conf.get("score"), 0.0),
         "threshold": _safe_float(scaled_min_score),
         "passed": bool(passed),
@@ -264,6 +289,15 @@ def build_engine_b_calibration_row(
         "macro_ok": _safe_bool(conf.get("macro_ok")),
         "checklist_score": _safe_float(conf.get("gate_score")),
         "bonus_points": _safe_float(conf.get("bonus_points")),
+        "quality_score": _safe_float(conf.get("quality_score")),
+        "quality_max_possible": _safe_float(conf.get("quality_max_possible")),
+        "quality_pct": quality_pct,
+        "quality_ratio": quality_ratio,
+        "min_score_basis": basis,
+        "min_score_floor_binding": _safe_bool(conf.get("min_score_floor_binding")),
+        "quality_ratio_threshold": quality_ratio_threshold,
+        "quality_ratio_would_pass": quality_ratio_would_pass,
+        "quality_ratio_gate_active": basis == "quality_ratio",
     }
 
 

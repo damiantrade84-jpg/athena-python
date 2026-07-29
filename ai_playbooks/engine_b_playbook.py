@@ -16,7 +16,7 @@ def get_engine_b_playbook() -> dict:
             "Engine B is a zone-retest engine: retest/rejection at the active zone (support for LONG, resistance for SHORT) is the intended setup when locationOk=true.",
             "Do not downgrade entry timing as a reflex because nearestResistance or nearestSupport exists — check locationOk, entryOk, and spaceGateOk first.",
             "Distinguish direction valid from entry timing poor — a passing Engine B score does not imply ENTRY_NOW.",
-            "Judge zone location on zoneTf and entry triggers on triggerTf from server-supplied engineBContext. Timeframe roles are symbol-, style-, and speed-aware; never substitute a static matrix. Macro swing sequence is always H4.",
+            "Judge zone location on zoneTf and entry triggers on triggerTf from server-supplied engineBContext. Timeframe roles are symbol-, style-, and speed-aware; never substitute a static matrix. Macro swing sequence comes from the server-supplied biasTf role, never a hardcoded H4.",
             "Chart screenshot timeframe may differ from zone_tf — do not reject H4/D1 zone quality using only a lower-TF chart image.",
             "Assess liquidity pools, supply/demand, support/resistance.",
             "Evaluate sweep/reclaim and whether structure supports direction.",
@@ -26,7 +26,7 @@ def get_engine_b_playbook() -> dict:
             "Engine B score/gates are deterministic; AI is advisory and must never mutate or override them.",
         ],
         "timeframeContract": {
-            "macroSwing": "H4 (always, separate from structTf)",
+            "macroSwing": "Use server-supplied biasTf for the resolved macro swing sequence; it is separate from structTf and is not hardcoded to H4.",
             "authority": "Use server-supplied engineBContext regimeTf/biasTf/structTf/zoneTf/setupTf/triggerTf/executionTf/atrTf for this exact signal.",
             "adaptation": "Roles may differ by symbol profile, style, speed class, and liquidity state. Missing role provenance blocks timeframe-specific AI claims; it never authorizes a legacy fallback.",
             "resolved_profile": "timeframeProfile — the resolved policy profile name stamped on the signal.",

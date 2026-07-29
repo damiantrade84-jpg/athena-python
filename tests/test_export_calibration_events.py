@@ -6,11 +6,59 @@ import json
 
 import pytest
 
+import calibration_diagnostics
 from calibration_diagnostics import build_engine_a_calibration_row, build_engine_b_calibration_row
 
 
 def _write_jsonl(path, rows):
     path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+
+
+def test_engine_b_quality_floor_is_recorded_as_shadow_when_total_basis_is_active(
+    monkeypatch,
+):
+    monkeypatch.setitem(
+        calibration_diagnostics.CONFIG,
+        "ENGINE_B_MIN_SCORE_BASIS",
+        "total",
+    )
+    monkeypatch.setitem(
+        calibration_diagnostics.CONFIG,
+        "ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE",
+        {"intraday": 0.35},
+    )
+    monkeypatch.setattr(
+        calibration_diagnostics,
+        "_engine_b_regime_multiplier",
+        lambda *_args, **_kwargs: 1.0,
+    )
+    monkeypatch.setattr(
+        calibration_diagnostics,
+        "_engine_b_level_cohort",
+        lambda value: str(value or "unknown"),
+    )
+
+    row = build_engine_b_calibration_row(
+        conf={
+            "score": 5.2,
+            "passed": True,
+            "quality_score": 0.34,
+            "quality_max_possible": 1.0,
+            "quality_pct": 34.0,
+        },
+        style_profile={"style": "intraday", "min_score": 4.5},
+        regime_label="RANGING",
+        asset_type="forex",
+        scaled_min_score=4.5,
+        passed=True,
+    )
+
+    assert row["passed"] is True
+    assert row["min_score_basis"] == "total"
+    assert row["quality_ratio"] == pytest.approx(0.34)
+    assert row["quality_ratio_threshold"] == pytest.approx(0.35)
+    assert row["quality_ratio_would_pass"] is False
+    assert row["quality_ratio_gate_active"] is False
 
 
 def test_valid_jsonl_converts(tmp_path):

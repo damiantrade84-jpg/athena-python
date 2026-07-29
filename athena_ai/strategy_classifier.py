@@ -126,7 +126,9 @@ def classify_strategy(
         evaluation_style = None
     evaluation_timeframe = str(timeframe or "").strip().upper() or None
 
-    engines_present: set[str] = {"A"}
+    engines_present: set[str] = set()
+    if isinstance(engine_a_summary, dict) and engine_a_summary.get("available", True):
+        engines_present.add("A")
     if isinstance(engine_b_summary, dict) and engine_b_summary.get("available", True):
         engines_present.add("B")
     if isinstance(engine_d_summary, dict) and engine_d_summary.get("available", True):

@@ -603,6 +603,7 @@ def _opening_range_gap_candidate(
     context: list[dict],
     route: SpecialistRoute,
     *,
+    opening_range_h1: list[dict] | None = None,
     periods: SetupPeriods | None = None,
     display: str | None = None,
     series_cache: "SetupSeriesCache | None" = None,
@@ -615,9 +616,14 @@ def _opening_range_gap_candidate(
     )
     start_hour, end_hour, label = _session_window(route, display)
     current_time = _parse_time(primary[-1].get("time") or primary[-1].get("datetime"))
+    # The setup was defined on the first two confirmed H1 cash-session bars.
+    # Policy setup/entry adaptation may move ``primary`` to M15/M30, but it
+    # must not silently shrink the structural opening range.
+    range_source = primary if opening_range_h1 is None else opening_range_h1
+    range_tf = primary_tf if opening_range_h1 is None else "H1"
     session_rows: list[tuple[datetime, dict]] = []
     if current_time is not None:
-        for candle in primary:
+        for candle in range_source:
             candle_time = _parse_time(candle.get("time") or candle.get("datetime"))
             if (
                 candle_time is not None
@@ -625,7 +631,12 @@ def _opening_range_gap_candidate(
                 and start_hour <= candle_time.hour < end_hour
             ):
                 session_rows.append((candle_time, candle))
-    has_history = direction is not None and len(primary) >= 60 and len(session_rows) >= 2
+    has_history = (
+        direction is not None
+        and len(primary) >= 60
+        and len(range_source) >= 60
+        and len(session_rows) >= 2
+    )
     predicates = context_predicates + (
         _predicate(
             "opening_range_history",
@@ -642,7 +653,7 @@ def _opening_range_gap_candidate(
     opening_start = opening_rows[0][0]
     prior_rows = [
         candle
-        for candle in primary
+        for candle in range_source
         if (_parse_time(candle.get("time") or candle.get("datetime")) or opening_start)
         < opening_start
     ]
@@ -656,7 +667,12 @@ def _opening_range_gap_candidate(
             ("prior_session_close_missing",),
         )
 
-    atr = _atr(primary, periods.atr, series_cache=series_cache, timeframe=primary_tf)
+    atr = _atr(
+        range_source,
+        periods.atr,
+        series_cache=series_cache,
+        timeframe=range_tf,
+    )
     opening_high = max(float(candle["high"]) for _, candle in opening_rows)
     opening_low = min(float(candle["low"]) for _, candle in opening_rows)
     first_open = float(opening_rows[0][1]["open"])
@@ -1121,6 +1137,7 @@ def detect_setup(
                     primary,
                     context,
                     route,
+                    opening_range_h1=candles.get("H1") or [],
                     periods=periods,
                     display=display,
                     series_cache=series_cache,

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import engine_a_v3.evaluator as evaluator_module
+import engine_a_v3.setups as setups_module
 from engine_a_v3.backtest import run_v3_backtest
 from engine_a_v3.contract import CONTRACT_VERSION, EngineASetupSignal, PriceZone, Target
 from engine_a_v3.evaluator import evaluate_engine_a_v3
@@ -519,6 +520,104 @@ def test_specialists_expose_market_specific_predicates():
         item for item in commodity.predicates if item.name == "breakout_close"
     )
     assert "12-bar" in breakout.expected
+
+
+def test_opening_range_stays_on_two_h1_bars_with_m15_entry(monkeypatch):
+    monkeypatch.setattr(
+        setups_module,
+        "_trend_direction",
+        lambda *_args, **_kwargs: ("LONG", ()),
+    )
+    route = route_specialist(REPRESENTATIVE_PAIRS["us_stock_single"])
+    historic_h1 = _candles(
+        count=60,
+        start=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        step=timedelta(hours=1),
+        base=99.0,
+        slope=0.0,
+    )
+    h1 = historic_h1 + [
+        {
+            "time": "2026-07-29T12:00:00+00:00",
+            "open": 100.0,
+            "high": 100.5,
+            "low": 99.5,
+            "close": 100.0,
+            "vol": 1_000,
+        },
+        {
+            "time": "2026-07-29T13:00:00+00:00",
+            "open": 100.0,
+            "high": 110.0,
+            "low": 99.0,
+            "close": 109.0,
+            "vol": 1_000,
+        },
+        {
+            "time": "2026-07-29T14:00:00+00:00",
+            "open": 109.0,
+            "high": 111.0,
+            "low": 108.0,
+            "close": 110.0,
+            "vol": 1_000,
+        },
+    ]
+    historic_m15 = _candles(
+        count=60,
+        start=datetime(2026, 7, 27, tzinfo=timezone.utc),
+        step=timedelta(minutes=15),
+        base=100.0,
+        slope=0.0,
+    )
+    m15 = historic_m15 + [
+        {
+            "time": "2026-07-29T13:00:00+00:00",
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "vol": 1_000,
+        },
+        {
+            "time": "2026-07-29T13:15:00+00:00",
+            "open": 100.5,
+            "high": 101.5,
+            "low": 100.0,
+            "close": 101.0,
+            "vol": 1_000,
+        },
+        {
+            "time": "2026-07-29T15:15:00+00:00",
+            "open": 104.0,
+            "high": 106.0,
+            "low": 103.5,
+            "close": 105.0,
+            "vol": 1_000,
+        },
+    ]
+
+    candidate = setups_module._opening_range_gap_candidate(
+        "us_opening_range",
+        m15,
+        [],
+        route,
+        opening_range_h1=h1,
+        primary_tf="M15",
+    )
+    breakout = next(
+        predicate
+        for predicate in candidate.predicates
+        if predicate.name == "opening_range_breakout"
+    )
+    history = next(
+        predicate
+        for predicate in candidate.predicates
+        if predicate.name == "opening_range_history"
+    )
+
+    assert breakout.passed is False
+    assert "confirmed H1 bars" in history.expected
+    assert candidate.decision == "NO_SIGNAL"
 
 
 def test_timezone_naive_parsing(monkeypatch):

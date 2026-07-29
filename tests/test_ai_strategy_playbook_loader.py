@@ -52,6 +52,18 @@ def test_loaded_playbook_ids_returns_tuple_of_strings() -> None:
     assert "TREND_CONTINUATION_PULLBACK" in ids
 
 
+def test_engine_a_b_playbooks_keep_deterministic_levels_authoritative() -> None:
+    for playbook in load_strategy_playbooks():
+        engines = {str(engine).upper() for engine in playbook["engines"]}
+        if not engines.intersection({"A", "B"}) or playbook["id"] == "BALANCE_CHOP_NO_TRADE":
+            continue
+        level_rules = " ".join(
+            (playbook["invalidation_logic"], playbook["target_logic"])
+        ).lower()
+        assert "server-emitted deterministic" in level_rules
+        assert "authoritative" in level_rules
+
+
 def test_missing_required_field_raises_with_id(tmp_path: Path) -> None:
     path = _write_yaml(
         tmp_path,

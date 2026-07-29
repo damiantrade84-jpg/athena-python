@@ -4112,8 +4112,10 @@ ENGINE_B_STYLE_MIN_SCORE_BY_STYLE:
 #                   confidence.score (currently non-binding, see note above).
 #   quality_ratio — compare confidence.quality_pct/100 against
 #                   ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE.
-# The quality ratios below are PLACEHOLDERS, not calibrated values. Do not switch
-# the basis to quality_ratio until they are backed by outcome evidence.
+# The quality ratios below are PLACEHOLDERS, not calibrated values. While the
+# basis remains total, calibration diagnostics record whether each signal would
+# pass them as a non-gating shadow. Do not switch the basis to quality_ratio
+# until they are backed by outcome evidence.
 ENGINE_B_MIN_SCORE_BASIS: total
 ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE:
   scalp: 0.30
@@ -4364,8 +4366,8 @@ ENGINE_B_SPACE_GATE_ENABLED: true
 # false = Engine B min-RR (rr_ok) is non-blocking at scan; risk_engine also
 # skips RR_BELOW_MINIMUM for Engine B execution signals. SL/TP must still exist.
 ENGINE_B_RR_GATE_ENABLED: true
-# false = risk_engine skips RR_BELOW_MINIMUM for non-Engine-B (Engine A) signals.
-ENGINE_A_RR_GATE_ENABLED: false
+# true = risk_engine enforces RR_BELOW_MINIMUM for non-Engine-B (Engine A) signals.
+ENGINE_A_RR_GATE_ENABLED: true
 # Diagnostic-only: retarget Engine B trigger detection onto style_profile.entry_tf
 # (H1/M30/M15/M5) when true. Default false — production trigger stays matrix H1.
 # Does not change struct/zone TFs. Experiment harness bypasses this flag.

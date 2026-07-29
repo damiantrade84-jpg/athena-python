@@ -73,13 +73,13 @@ def test_engine_a_playbook_uses_v3_factor_score_keys() -> None:
     assert "diagnostics.trendScore" not in pb["indicatorUsage"]
 
 
-def test_engine_playbooks_surface_live_entry_timeframe_contract() -> None:
+def test_engine_playbooks_surface_resolved_timeframe_contract() -> None:
     a_pb = get_engine_a_playbook()
     b_pb = get_engine_b_playbook()
 
-    assert a_pb["timeframeContract"]["liveEntryTfByStyle"]["intraday"]["forex"] == "M30"
-    assert b_pb["liveTriggerOverrides"]["intraday"]["forex"] == "M30"
+    assert "setupTf" in a_pb["timeframeContract"]["authoritativeFields"]
     assert "server" in b_pb["timeframeAuthority"].lower()
+    assert "biasTf" in b_pb["timeframeContract"]["authority"]
 
 
 def test_engine_b_playbook_documents_ob_fvg_and_gates() -> None:
@@ -92,17 +92,12 @@ def test_engine_b_playbook_documents_ob_fvg_and_gates() -> None:
     assert "FVG_FILL_CONTINUATION" in pb["entryModels"]
 
 
-def test_engine_b_playbook_has_timeframe_matrix() -> None:
+def test_engine_b_playbook_uses_resolved_policy_timeframes() -> None:
     pb = get_engine_b_playbook()
-    matrix = pb["timeframeMatrix"]
-    for style in ("scalp", "intraday", "swing"):
-        assert style in matrix
-        roles = matrix[style]
-        assert roles["struct"]
-        assert roles["zone"]
-        assert roles["trigger"]
-        assert roles["atr"]
-    assert "H4" in str(matrix.get("macroSwing", ""))
+    assert "timeframeMatrix" not in pb
+    macro_contract = pb["timeframeContract"]["macroSwing"]
+    assert "biasTf" in macro_contract
+    assert "not hardcoded to H4" in macro_contract
 
 
 def test_engine_b_playbook_zone_retest_principles() -> None:
@@ -128,10 +123,10 @@ def test_engine_b_playbook_strategy_mapping() -> None:
     assert "obAtZone" in mapping["ORDER_BLOCK_REJECTION"]
 
 
-def test_engine_b_rendered_prompt_includes_timeframe_matrix() -> None:
+def test_engine_b_rendered_prompt_uses_resolved_policy_roles() -> None:
     text = render_playbook_prompt_block([get_engine_b_playbook()])
-    assert "timeframeMatrix" in text
-    assert '"zone": "H4"' in text or '"zone":"H4"' in text
+    assert "server-supplied biasTf" in text
+    assert "hardcoded H4" in text
     assert "zone-retest" in text.lower() or "zone-retest engine" in text.lower()
 
 

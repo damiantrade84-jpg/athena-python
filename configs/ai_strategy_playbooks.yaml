@@ -37,12 +37,14 @@ playbooks:
       - higher_low_broken_on_long_or_lower_high_broken_on_short
       - trend_state_flips_during_pullback
     invalidation_logic: >
-      Hard invalidation at the swing point that defined the pullback
-      (most recent HL on long / LH on short). SL should sit one ATR
-      beyond that swing, not at the pullback level itself.
+      Reference invalidation is the swing point that defined the pullback
+      (most recent HL on long / LH on short). For Engine A or B, the
+      server-emitted deterministic SL is authoritative; assess it against this
+      structural rationale, but never replace or move it.
     target_logic: >
-      TP1 = prior swing high (long) / low (short). TP2 = measured
-      move equal to the impulse that preceded the pullback.
+      Reference targets are the prior swing high/low and the measured impulse
+      extension. For Engine A or B, server-emitted deterministic TP1/TP2 are
+      authoritative; never replace or recompute them from this reference.
     ai_review_rule: >
       Only valid if BOTH trend alignment AND a meaningful pullback level are
       present. A high Engine A score without a defined pullback level is NOT
@@ -66,12 +68,14 @@ playbooks:
       - price_reclaims_broken_level_in_original_break_direction
       - no_clear_level (level inferred not visible)
     invalidation_logic: >
-      Hard invalidation if price closes back through the broken level
-      in the original breakout direction. SL one ATR beyond the failed
-      breakout extreme.
+      Reference invalidation is a close back through the broken level in the
+      original breakout direction. For Engine A or B, the server-emitted
+      deterministic SL is authoritative; assess its structural validity, but
+      never replace or move it.
     target_logic: >
-      TP1 = midpoint of the prior range (or POC if available).
-      TP2 = opposite side of the prior range.
+      Reference targets are the prior-range midpoint/POC and opposite range
+      edge. For Engine A or B, server-emitted deterministic TP1/TP2 are
+      authoritative; never replace or recompute them from this reference.
     ai_review_rule: >
       A breakout that closed back inside is NOT a continuation setup. Reject
       any TREND_CONTINUATION classification if the most recent move is a
@@ -96,11 +100,13 @@ playbooks:
       - price_continues_through_pool_without_closing_back
       - pool_definition_unclear
     invalidation_logic: >
-      Hard invalidation at the sweep extreme + 0.25 ATR. If price
-      revisits and exceeds the sweep extreme, the sweep failed.
+      Reference invalidation is beyond the sweep extreme; a revisit through
+      that extreme invalidates the sweep. For Engine A or B, the server-emitted
+      deterministic SL is authoritative; never replace or move it.
     target_logic: >
-      TP1 = opposite side of pre-sweep range or nearest internal liquidity.
-      TP2 = next liquidity cluster on the opposite side.
+      Reference targets are internal liquidity/opposite pre-sweep range and the
+      next opposing liquidity cluster. For Engine A or B, server-emitted
+      deterministic TP1/TP2 are authoritative; never replace or recompute them.
     ai_review_rule: >
       Requires a NAMED liquidity pool. A wick at random mid-range price
       is not a liquidity sweep — reject if the pool cannot be pointed to.
@@ -122,10 +128,13 @@ playbooks:
       - no_key_level_in_proximity (wick in mid-range)
       - next_candle_closes_back_through_wick_extreme
     invalidation_logic: >
-      Hard invalidation 0.25 ATR beyond the wick extreme.
+      Reference invalidation is beyond the wick extreme. For Engine A or B,
+      the server-emitted deterministic SL is authoritative; assess it against
+      the wick structure, but never replace or move it.
     target_logic: >
-      TP1 = nearest structural level in rejection direction.
-      TP2 = midpoint of the broader range / opposite VA edge.
+      Reference targets are the nearest structural level and the broader-range
+      midpoint/opposite value-area edge. For Engine A or B, server-emitted
+      deterministic TP1/TP2 are authoritative; never replace or recompute them.
     ai_review_rule: >
       A wick is only a rejection if it occurred AT a level. Wicks in the
       middle of a range or chop are noise — reject this playbook if no
@@ -149,10 +158,13 @@ playbooks:
       - regime_trending (strong directional regime invalidates mean reversion)
       - price_breaks_value_area_in_opposite_direction
     invalidation_logic: >
-      Hard invalidation if price extends another 0.5 ATR beyond the
-      VA extreme it was rejecting from.
+      Reference invalidation is continued extension beyond the rejected value
+      area extreme. For Engine A, the server-emitted deterministic SL is
+      authoritative; assess it against this rationale, but never replace it.
     target_logic: >
-      TP1 = POC. TP2 = opposite VA edge if momentum carries.
+      Reference targets are POC and the opposite value-area edge. For Engine A,
+      server-emitted deterministic TP1/TP2 are authoritative; never replace or
+      recompute them from this reference.
     ai_review_rule: >
       Do not classify as RETURN_TO_POC in a strong trending regime, even
       if POC is overhead/underneath. Trending regimes resolve through POC

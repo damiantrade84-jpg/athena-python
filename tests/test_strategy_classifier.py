@@ -170,6 +170,17 @@ def test_engines_considered_reflects_provided_summaries() -> None:
     assert "D" not in out["engines_considered"]
 
 
+def test_b_only_review_does_not_claim_engine_a_context() -> None:
+    out = classify_strategy(
+        price_action_facts=_facts(),
+        engine_a_summary=None,
+        engine_b_summary={"available": True, "verdict": "CLEAR"},
+        asset_group="crypto",
+    )
+
+    assert out["engines_considered"] == ["B"]
+
+
 def test_classifier_does_not_mutate_inputs() -> None:
     facts = _facts()
     snapshot = {k: dict(v) if isinstance(v, dict) else v for k, v in facts.items()}
