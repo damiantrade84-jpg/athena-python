@@ -3,7 +3,8 @@
 Covers:
   * M15 remains authoritative across every conditional-M5 asset group
   * M5 refinement data cannot block or veto an M15 trigger
-  * Engine B swing is group-aware (thin groups step one rung slower)
+  * Engine B swing keeps H4 as primary structure across score groups
+  * Snapshot scoring profile preserves the policy structural/zone/ATR roles
   * volatility bands are compared on an H4-equivalent ATR%
   * macro sequence is not double-counted when bias TF == structure TF
 """
@@ -18,6 +19,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import config
+from engine_b_snapshot import resolve_engine_b_style_profile
 from engine_b_quality import (
     compute_structure_alignment_score,
     macro_sequence_is_independent,
@@ -113,6 +115,20 @@ def test_resolve_engine_b_tfs_exposes_m5_policy_and_prerequisite(monkeypatch):
     assert standard["execution_prerequisite"] is None
 
 
+def test_snapshot_profile_uses_h4_for_structural_scoring_zone_and_atr():
+    """The pure snapshot scorer must consume the same H4 roles as live scans."""
+    style, profile = resolve_engine_b_style_profile(
+        "swing", "forex_exotics_restricted", "forex", symbol="USD/ZAR"
+    )
+    assert style == "swing"
+    assert profile["bias_tf"] == "D1"
+    assert profile["structure_tf"] == "H4"
+    assert profile["zone_tf"] == "H4"
+    assert profile["atr_tf"] == "H4"
+    assert profile["setup_tf"] == "H1"
+    assert profile["entry_tf"] == "H1"
+
+
 # ── conditional M5 prerequisite ──────────────────────────────────────────────
 
 def _run_m15_with_optional_m5(monkeypatch, role_candles):
@@ -173,8 +189,8 @@ def test_missing_authoritative_m15_trigger_still_fails_closed(monkeypatch):
     assert pre.get("_error") == "missing_required_trigger_timeframe:M15"
 
 
-def test_structure_timeframe_below_h1_fails_closed_not_substituted(monkeypatch):
-    """Engine B scalp resolves an M15 structure rung; H1 must not stand in."""
+def test_missing_authoritative_m15_trigger_fails_closed_not_substituted(monkeypatch):
+    """Engine B scalp keeps H4 structure; H1 must not replace its M15 trigger."""
     monkeypatch.setitem(config.CONFIG, "TF_POLICY_MODE", "enforced_demo")
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRIP_FORMING_STRUCT", False)
     pre = NakedEngine().precompute_structure_data(
@@ -188,7 +204,7 @@ def test_structure_timeframe_below_h1_fails_closed_not_substituted(monkeypatch):
         pair={"display": "GBP/USD", "type": "forex", "source": "mt5"},
         enable_zone_registry=False,
     )
-    assert pre.get("_error") == "missing_required_structure_timeframe:M15"
+    assert pre.get("_error") == "missing_required_trigger_timeframe:M15"
 
 
 # ── group-aware swing ────────────────────────────────────────────────────────
@@ -200,10 +216,11 @@ def test_structure_timeframe_below_h1_fails_closed_not_substituted(monkeypatch):
         ("XAU/USD", "commodity", "H4", "H1"),
         ("NASDAQ-100", "index", "H4", "H1"),
         ("BTC/USDT", "crypto", "H4", "H1"),
-        ("EUR/GBP", "forex", "D1", "H4"),
-        ("USD/ZAR", "forex", "D1", "H4"),
-        ("XPT/USD", "commodity", "D1", "H4"),
-        ("DOGE/USDT", "crypto", "D1", "H4"),
+        # Engine B swing is now H4-primary for every group; D1 is bias only.
+        ("EUR/GBP", "forex", "H4", "H1"),
+        ("USD/ZAR", "forex", "H4", "H1"),
+        ("XPT/USD", "commodity", "H4", "H1"),
+        ("DOGE/USDT", "crypto", "H4", "H1"),
     ],
 )
 def test_engine_b_swing_is_group_aware(symbol, asset, structure, trigger):

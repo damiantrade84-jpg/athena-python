@@ -453,7 +453,7 @@ def test_simulator_fills_next_open_and_resolves_same_bar_stop_first():
 def test_engine_b_feature_cache_refreshes_trigger_without_rebuilding_structure():
     class FakeEngine:
         @staticmethod
-        def _compute_atr_from_candles(rows, fallback):
+        def _compute_atr_from_candles(rows, period=14, fallback=None):
             return float(len(rows)) if rows else float(fallback)
 
     def rows(tf: str, count: int):
