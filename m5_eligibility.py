@@ -51,6 +51,28 @@ class M5Policy(str, Enum):
     CONDITIONAL = "conditional"
 
 
+class M5ValidationStatus(str, Enum):
+    """Evidence state for promoting an instrument group to an M5 trigger.
+
+    This is an evidence gate, not a data-quality check: the other conditions
+    all describe the current bar, whereas this one records whether frozen
+    out-of-sample work has ever shown M5 refinement to help for this group.
+
+    Only APPROVED permits promotion.  UNVALIDATED is the default so a new
+    instrument or group can never inherit M5 by omission, and RESEARCH_ONLY
+    marks a group under active study whose results are not yet promotable.
+    Runtime never sets these — they are recorded by a human after research.
+    """
+
+    UNVALIDATED = "unvalidated"
+    RESEARCH_ONLY = "research_only"
+    APPROVED = "approved"
+    DISABLED = "disabled"
+
+
+_M5_PROMOTABLE_VALIDATION = frozenset({M5ValidationStatus.APPROVED})
+
+
 # Machine-readable reason codes (one per failed check, or the passing event).
 REASON_M5_POLICY_DISABLED = "m5_policy_disabled"
 REASON_M5_POLICY_MISSING = "m5_policy_missing"
@@ -67,6 +89,7 @@ REASON_RR_BELOW_MIN = "structural_rr_below_min"
 REASON_RR_MISSING = "structural_rr_missing"
 REASON_QUOTE_INSIDE_OPPOSING_ZONE = "quote_inside_opposing_zone"
 REASON_LTF_DIRECTION_CONFLICT = "ltf_direction_conflict"
+REASON_M5_VALIDATION_NOT_APPROVED = "m5_validation_not_approved"
 
 # Failures that invalidate the entry on every timeframe: with no HTF setup or
 # an expired trigger there is no trade at all, so no trigger-TF fallback.
@@ -106,6 +129,9 @@ class M5EligibilityContext:
     quote_inside_opposing_zone: bool
     ltf_direction_agrees_with_thesis: bool
     fallback_trigger_tf: Optional[str] = None
+    # Frozen out-of-sample evidence state for this instrument's group.
+    # Defaults to UNVALIDATED so an omitted value can never permit promotion.
+    m5_validation_status: Optional[Union[M5ValidationStatus, str]] = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +161,25 @@ def _normalise_policy(value: Optional[Union[M5Policy, str]]) -> Optional[M5Polic
     return None
 
 
+def _normalise_validation(
+    value: Optional[Union[M5ValidationStatus, str]],
+) -> Optional[M5ValidationStatus]:
+    """Coerce a validation status; unknown or missing values return None.
+
+    None is deliberately not mapped to UNVALIDATED — both fail the gate, and
+    keeping them distinct means a typo cannot silently read as a real state.
+    """
+    if isinstance(value, M5ValidationStatus):
+        return value
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    try:
+        return M5ValidationStatus(text)
+    except ValueError:
+        return None
+
+
 def _normalise_event(value: Optional[Union[M5EntryEvent, str]]) -> Optional[M5EntryEvent]:
     if isinstance(value, M5EntryEvent):
         return value
@@ -160,6 +205,11 @@ def evaluate_m5_eligibility(context: M5EligibilityContext) -> M5Eligibility:
         return _ineligible(context, [REASON_M5_POLICY_MISSING])
     if policy is M5Policy.DISABLED:
         return _ineligible(context, [REASON_M5_POLICY_DISABLED])
+    # Evidence gate. Checked before the per-bar conditions because no amount of
+    # favourable current state substitutes for never having validated that M5
+    # refinement helps this group. Unrecognised or absent values fail closed.
+    if _normalise_validation(context.m5_validation_status) not in _M5_PROMOTABLE_VALIDATION:
+        return _ineligible(context, [REASON_M5_VALIDATION_NOT_APPROVED])
 
     reasons: list[str] = []
 

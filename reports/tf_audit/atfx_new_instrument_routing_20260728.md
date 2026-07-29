@@ -51,18 +51,18 @@ Generated read-only from `timeframe_policy.describe_symbol_policy`. `auto` is th
 
 | symbol | class | score_group | region | profile | source | R/B/S/Se/Tr | m5 | speed | disabled |
 |---|---|---|---|---|---|---|---|---|---|
-| AA | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
-| AAL | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
-| ABNB | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
-| ABT | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
-| ADBE | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
-| AI | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
-| AIG | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
-| AKAM | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
-| ALL | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
-| AMC | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
-| ANF | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
-| ATHM | stock | stock_other | CASH_EQUITY_US | ENGINE_A_SWING_US_STOCK_SINGLE | SCORE_GROUP_OVERRIDE | D1/D1/H4/H1/H1 | disabled | NORMAL | M30,M15,M5,M1 |
+| AA | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
+| AAL | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
+| ABNB | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
+| ABT | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
+| ADBE | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
+| AI | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
+| AIG | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
+| AKAM | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
+| ALL | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
+| AMC | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
+| ANF | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
+| ATHM | stock | stock_other | CASH_EQUITY_US | CASH_EQUITY_STANDARD_DYNAMIC | SCORE_GROUP_OVERRIDE | D1/D1/H1/M30/M15 | disabled | NORMAL | M5,M1 |
 
 ### Share region totals
 
@@ -73,4 +73,4 @@ Generated read-only from `timeframe_policy.describe_symbol_policy`. `auto` is th
 
 ### Distinct share resolutions
 
-- `stock_other` / `ENGINE_A_SWING_US_STOCK_SINGLE` / D1/D1/H4/H1/H1 / m5=disabled — **220 symbols**
+- `stock_other` / `CASH_EQUITY_STANDARD_DYNAMIC` / D1/D1/H1/M30/M15 / m5=disabled — **220 symbols**

@@ -29,6 +29,16 @@ _INTRADAY_AUTO_DISPLAYS = frozenset({
     "CHINAA50", "SPAIN35", "FRANCE40", "ITALY40",
 })
 
+# Score groups that opt out of the swing asset-class default wholesale.
+#
+# stock_other is the ATFX share CFDs (219 active) plus the 14 JSE pairs, and
+# every JSE pair is enabled=False in athena.py — so no live instrument outside
+# the ATFX set is affected. Their policy group (cash_equity_standard_dynamic)
+# is a D1/D1/H1/M30/M15 intraday ladder with M5 disabled; leaving them on the
+# swing overlay flattened all 219 to a uniform D1/D1/H4/H1/H1 and made that
+# template inert. Re-enabling a JSE pair would move it onto this ladder too.
+_INTRADAY_AUTO_GROUPS = frozenset({"stock_other"})
+
 
 def _symbol_key(value: object) -> str:
     """Normalize a display or broker symbol to a comparable key.
@@ -85,6 +95,8 @@ def resolve_auto_style(
 
     if group in _SWING_ONLY_AUTO_GROUPS:
         return "swing"
+    if group in _INTRADAY_AUTO_GROUPS:
+        return "intraday"
 
     ptype = str(
         asset_type

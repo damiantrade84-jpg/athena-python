@@ -674,6 +674,20 @@ _US_STOCK_SINGLE = _group_template(
     trigger=Timeframe.M5,
     m5_policy=M5Policy.CONDITIONAL,
 )
+# Cash-equity share CFDs (ATFX). Same D1-bias shape as the named US singles but
+# one rung slower on setup/trigger and with M5 off: these 219 instruments have
+# no trade history in Athena and no frozen out-of-sample evidence, so the
+# conditional-M5 promotion that us_stock_single carries is not justified for
+# them. Flip m5_policy to CONDITIONAL only when m5_validation_status reaches
+# APPROVED for the region group.
+_CASH_EQUITY_STANDARD_DYNAMIC = _group_template(
+    "CASH_EQUITY_STANDARD_DYNAMIC",
+    bias=Timeframe.D1,
+    structure=Timeframe.H1,
+    setup=Timeframe.M30,
+    trigger=Timeframe.M15,
+    m5_policy=M5Policy.DISABLED,
+)
 _BOND_TLT_SMALLCAP_EM_ETF = _group_template(
     "BOND_TLT_SMALLCAP_EM_ETF",
     bias=Timeframe.D1,
@@ -943,6 +957,7 @@ _GROUP_OVERRIDES: dict[str, _Template] = {
     "equity_index_fast": _EQUITY_INDEX_FAST,
     "equity_index_standard": _EQUITY_INDEX_STANDARD,
     "us_stock_single": _US_STOCK_SINGLE,
+    "cash_equity_standard_dynamic": _CASH_EQUITY_STANDARD_DYNAMIC,
     "bond_tlt_smallcap_em_etf": _BOND_TLT_SMALLCAP_EM_ETF,
     "crypto_majors_fast": _CRYPTO_MAJORS_FAST,
     "crypto_alt_majors": _CRYPTO_ALT_MAJORS,
@@ -2486,6 +2501,32 @@ def _stamp_trigger_lifecycle(
         return
 
 
+def _resolve_m5_validation_status(
+    m5_cfg: Mapping[str, Any], policy: TimeframePolicy
+) -> str:
+    """Resolve the frozen-evidence state for this policy's score group.
+
+    Per-group entry wins, then the configured default, then "unvalidated".
+    Every miss lands on a value the eligibility gate rejects, so a group that
+    was never recorded cannot acquire an M5 trigger by omission.
+    """
+    by_group = m5_cfg.get("VALIDATION_STATUS_BY_SCORE_GROUP")
+    group = str(policy.diagnostics.score_group or "").strip().lower()
+    if isinstance(by_group, Mapping) and group:
+        # PolicyDiagnostics.score_group holds the *normalized* policy group
+        # ("forex_majors_standard"), not the scoring group ("forex_majors"),
+        # despite the field name. Normalize the config keys the same way so an
+        # entry written with either name matches instead of silently missing
+        # and leaving the group unvalidated.
+        for raw_key, recorded in by_group.items():
+            if not recorded:
+                continue
+            key = str(raw_key or "").strip().lower()
+            if key == group or _normalize_group_name(key) == group:
+                return str(recorded)
+    return str(m5_cfg.get("VALIDATION_STATUS_DEFAULT") or "unvalidated")
+
+
 def _stamp_m5_eligibility(
     signal: dict[str, Any],
     policy: TimeframePolicy,
@@ -2551,6 +2592,7 @@ def _stamp_m5_eligibility(
                 signal, "ltfDirectionAgrees", "ltf_direction_agrees", "m5DirectionAgrees", "m5_direction_agrees"
             ),
             fallback_trigger_tf=policy.trigger_tf.value,
+            m5_validation_status=_resolve_m5_validation_status(m5_cfg, policy),
         )
         result = evaluate_m5_eligibility(context)
         signal["m5Eligible"] = bool(result.eligible)

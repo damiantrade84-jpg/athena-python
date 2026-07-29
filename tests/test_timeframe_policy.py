@@ -251,7 +251,7 @@ def test_timeframe_policy_group_taxonomy_routing() -> None:
         resolve_timeframe_policy_group,
     )
 
-    assert len(ENGINE_A_TIMEFRAME_POLICY_GROUPS) == 17
+    assert len(ENGINE_A_TIMEFRAME_POLICY_GROUPS) == 18
     cases = {
         ("EUR/USD", "forex"): "forex_majors_standard",
         ("GBP/USD", "forex"): "forex_majors_fast",
@@ -1426,6 +1426,21 @@ def test_attach_stamps_m5_ineligible_with_policy_reason_when_policy_disabled() -
     assert "triggerExpiry" not in signal
 
 
+def _m5_approved_config(score_group: str = "forex_majors") -> dict:
+    """CONFIG marking one score group as having frozen out-of-sample evidence.
+
+    The evidence gate runs before every per-bar condition, so tests that want
+    to exercise those conditions must supply an approved group; otherwise the
+    only reason reported is m5_validation_not_approved.
+    """
+    return {
+        "M5_ELIGIBILITY": {
+            "VALIDATION_STATUS_DEFAULT": "unvalidated",
+            "VALIDATION_STATUS_BY_SCORE_GROUP": {score_group: "approved"},
+        }
+    }
+
+
 def test_attach_stamps_m5_eligible_when_all_conditional_inputs_present() -> None:
     signal = {
         "score": 2.5,
@@ -1450,7 +1465,8 @@ def test_attach_stamps_m5_eligible_when_all_conditional_inputs_present() -> None
     }
 
     policy = attach_timeframe_policy_payload(
-        signal, _gbpusd_pair(), "intraday", market_states=_closed_states()
+        signal, _gbpusd_pair(), "intraday", market_states=_closed_states(),
+        config=_m5_approved_config(),
     )
 
     assert policy.m5_policy == M5Policy.CONDITIONAL
@@ -1464,7 +1480,8 @@ def test_attach_m5_eligibility_fail_closed_on_missing_inputs() -> None:
     signal = {"score": 2.5, "direction": "LONG", "price": 1.3}
 
     attach_timeframe_policy_payload(
-        signal, _gbpusd_pair(), "intraday", market_states=_closed_states()
+        signal, _gbpusd_pair(), "intraday", market_states=_closed_states(),
+        config=_m5_approved_config(),
     )
 
     assert signal["m5Policy"] == M5Policy.CONDITIONAL.value
@@ -1538,7 +1555,10 @@ def test_attach_trigger_lifecycle_expires_stale_record_on_restamp() -> None:
         "setupZone": [1.29, 1.30],
         "triggerLevel": 1.301,
     }
-    attach_timeframe_policy_payload(armed, pair, "intraday", market_states=states)
+    attach_timeframe_policy_payload(
+        armed, pair, "intraday", market_states=states,
+        config=_m5_approved_config(),
+    )
     assert armed["triggerState"] == "ARMED"
 
     # Same signal id re-stamped 5h later: past both TTL bounds (8 x M5 bars =
@@ -1546,7 +1566,10 @@ def test_attach_trigger_lifecycle_expires_stale_record_on_restamp() -> None:
     restamped = dict(armed)
     restamped["signalId"] = armed["signalId"]
     restamped["timestamp"] = "2026-07-13T18:00:00Z"
-    attach_timeframe_policy_payload(restamped, pair, "intraday", market_states=states)
+    attach_timeframe_policy_payload(
+        restamped, pair, "intraday", market_states=states,
+        config=_m5_approved_config(),
+    )
 
     assert restamped["signalId"] == armed["signalId"]
     assert restamped["triggerState"] == "EXPIRED"

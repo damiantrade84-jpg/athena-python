@@ -2462,6 +2462,18 @@ CONFIG: dict = {
     },
     "TF_POLICY_SESSION_CALENDARS": {},
     "TF_POLICY_UNDERLYING_EXCHANGE_CALENDARS": {},
+    # Conditional-M5 promotion evidence gate (m5_eligibility.M5ValidationStatus).
+    # Only "approved" permits an M5 trigger. Everything defaults to
+    # "unvalidated": no instrument group in Athena has frozen out-of-sample
+    # evidence that M5 refinement improves outcomes, so none may inherit M5 by
+    # omission. Record a group here only after research supports it.
+    # Note the sibling threshold keys this block would also carry
+    # (SPREAD_THRESHOLD / MAX_DISPLACEMENT_ATR / MIN_RR) are deliberately
+    # absent: unset means the corresponding checks fail closed as *_missing.
+    "M5_ELIGIBILITY": {
+        "VALIDATION_STATUS_DEFAULT": "unvalidated",
+        "VALIDATION_STATUS_BY_SCORE_GROUP": {},
+    },
     "AUTO_TRADE_ENABLED": False,  # Master toggle (also togglable via UI/API)
     "AUTO_TRADE_MIN_SCORE": {  # Informational scan floor; live gate is AUTO_TRADE_MIN_CONVICTION
         "crypto": 2.0,

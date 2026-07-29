@@ -23,6 +23,8 @@ from m5_eligibility import (
     REASON_SPREAD_EXCEEDS_THRESHOLD,
     REASON_SPREAD_MISSING,
     REASON_TRIGGER_EXPIRED,
+    REASON_M5_VALIDATION_NOT_APPROVED,
+    M5ValidationStatus,
     evaluate_m5_eligibility,
 )
 
@@ -45,9 +47,70 @@ def _ok_context(**overrides) -> M5EligibilityContext:
         quote_inside_opposing_zone=False,
         ltf_direction_agrees_with_thesis=True,
         fallback_trigger_tf="M15",
+        # The evidence gate is checked before every per-bar condition, so the
+        # "everything else is fine" fixture has to be an approved group for the
+        # downstream checks to be reachable at all.
+        m5_validation_status=M5ValidationStatus.APPROVED,
     )
     base.update(overrides)
     return M5EligibilityContext(**base)
+
+
+# ── Frozen out-of-sample evidence gate ───────────────────────────────────────
+
+def test_validation_status_defaults_to_blocking() -> None:
+    """An omitted status must never permit promotion."""
+    context = _ok_context(m5_validation_status=None)
+    result = evaluate_m5_eligibility(context)
+    assert result.eligible is False
+    assert REASON_M5_VALIDATION_NOT_APPROVED in result.reasons
+
+
+@pytest.mark.parametrize("status", [
+    M5ValidationStatus.UNVALIDATED,
+    M5ValidationStatus.RESEARCH_ONLY,
+    M5ValidationStatus.DISABLED,
+    "unvalidated",
+    "research_only",
+    "disabled",
+])
+def test_only_approved_permits_promotion(status) -> None:
+    result = evaluate_m5_eligibility(_ok_context(m5_validation_status=status))
+    assert result.eligible is False
+    assert REASON_M5_VALIDATION_NOT_APPROVED in result.reasons
+
+
+@pytest.mark.parametrize("status", [M5ValidationStatus.APPROVED, "approved", "APPROVED"])
+def test_approved_status_allows_the_other_checks_to_run(status) -> None:
+    result = evaluate_m5_eligibility(_ok_context(m5_validation_status=status))
+    assert result.eligible is True
+
+
+def test_unrecognised_status_fails_closed() -> None:
+    """A typo must not read as a real state."""
+    for bogus in ("aproved", "APPROVED_", "yes", "true", "1", ""):
+        result = evaluate_m5_eligibility(_ok_context(m5_validation_status=bogus))
+        assert result.eligible is False, bogus
+        assert REASON_M5_VALIDATION_NOT_APPROVED in result.reasons, bogus
+
+
+def test_validation_gate_precedes_per_bar_conditions() -> None:
+    """An unapproved group reports the evidence gap, not incidental bar state."""
+    result = evaluate_m5_eligibility(_ok_context(
+        m5_validation_status=M5ValidationStatus.UNVALIDATED,
+        setup_armed=False,
+        current_spread=99.0,
+    ))
+    assert result.reasons == [REASON_M5_VALIDATION_NOT_APPROVED]
+
+
+def test_disabled_policy_still_reported_before_the_evidence_gate() -> None:
+    """Policy disabled is a stronger statement than missing evidence."""
+    result = evaluate_m5_eligibility(_ok_context(
+        m5_policy=M5Policy.DISABLED,
+        m5_validation_status=M5ValidationStatus.APPROVED,
+    ))
+    assert result.reasons == [REASON_M5_POLICY_DISABLED]
 
 
 def test_all_checks_pass_is_eligible() -> None:

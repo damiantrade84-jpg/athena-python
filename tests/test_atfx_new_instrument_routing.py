@@ -469,6 +469,47 @@ def test_opt_in_does_not_leak_to_similar_symbols():
         score_group="forex_exotics") == "swing"
 
 
+# ── Cash-equity share CFDs ───────────────────────────────────────────────────
+
+def test_share_cfds_use_the_cash_equity_ladder_not_us_stock_single():
+    """The 219 ATFX shares get an M15 trigger with M5 off, not us_stock_single.
+
+    us_stock_single carries an M15 setup and a conditional M5 trigger calibrated
+    on the named US singles. These share CFDs have no trade history in Athena,
+    so they route to their own template instead of inheriting that promotion.
+    """
+    for ticker in ("BABA", "LVMH", "HK0700", "BRKb", "AA"):
+        pair = {"display": ticker, "symbol": ticker, "type": "stock"}
+        group = resolve_score_group_by_type(pair)
+        assert group == "stock_other", ticker
+        style = resolve_auto_style("auto", pair, score_group=group, asset_type="stock")
+        assert style == "intraday", ticker
+        policy = resolve_timeframe_policy(ticker, "stock", group, style)
+        assert policy.profile == "CASH_EQUITY_STANDARD_DYNAMIC", ticker
+        assert (policy.regime_tf, policy.bias_tf, policy.structure_tf,
+                policy.setup_tf, policy.trigger_tf) == (D1, D1, H1, M30, M15), ticker
+        assert policy.m5_policy.value == "disabled", ticker
+
+
+def test_named_us_singles_keep_us_stock_single():
+    """AAPL and friends must not be dragged onto the share-CFD template."""
+    for ticker, symbol in (("AAPL", "AAPL.US"), ("MSFT", "MSFT.US"), ("TSLA", "TSLA.US")):
+        pair = {"display": ticker, "symbol": symbol, "type": "stock"}
+        assert resolve_score_group_by_type(pair) == "us_stock_single", ticker
+        assert resolve_auto_style(
+            "auto", pair, score_group="us_stock_single", asset_type="stock") == "swing", ticker
+
+
+def test_etfs_are_not_swept_into_the_share_cfd_group():
+    for display, ptype, expected in (
+        ("TLT", "etf_bond", "bond_tlt"), ("IWM", "etf", "smallcap_em_etf"),
+        ("EEM", "etf", "smallcap_em_etf"), ("GLD", "etf", "precious_trackers"),
+        ("SPY", "stock", "us_indices_trackers"),
+    ):
+        pair = {"display": display, "symbol": display, "type": ptype}
+        assert resolve_score_group_by_type(pair) == expected, display
+
+
 # ── Non-regression on the pre-existing book ──────────────────────────────────
 
 PRE_EXISTING = {

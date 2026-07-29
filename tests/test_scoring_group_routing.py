@@ -188,7 +188,9 @@ def test_engine_b_auto_matches_engine_a_pair_aware_style():
         ({"display": "Brent Oil", "symbol": "BRENT", "type": "commodity"}, "swing"),
         ({"display": "France 40", "symbol": "FRA40", "type": "index"}, "intraday"),
         ({"display": "MSFT", "symbol": "MSFT", "type": "stock"}, "swing"),
-        ({"display": "BRKb", "symbol": "BRKb", "type": "stock"}, "swing"),
+        # BRKb is an ATFX share CFD, so stock_other — which routes intraday onto
+        # the cash_equity_standard_dynamic ladder. MSFT stays us_stock_single.
+        ({"display": "BRKb", "symbol": "BRKb", "type": "stock"}, "intraday"),
     ]
 
     for pair, expected in cases:
