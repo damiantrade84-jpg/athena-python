@@ -385,7 +385,7 @@ export default function GuardianPanel() {
         {/* Boot Checks */}
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+            <CardTitle className="panel-title flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-primary" />
               Boot Checks
             </CardTitle>
@@ -421,7 +421,7 @@ export default function GuardianPanel() {
         {/* Circuit Breaker */}
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+            <CardTitle className="panel-title flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-primary" />
               Circuit Breaker
             </CardTitle>
@@ -454,7 +454,7 @@ export default function GuardianPanel() {
       {/* Divergence Monitor */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+          <CardTitle className="panel-title flex items-center gap-2">
             <Activity className="w-4 h-4 text-primary" />
             Divergence Monitor
           </CardTitle>
@@ -514,7 +514,7 @@ export default function GuardianPanel() {
       {/* Feed Health */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+          <CardTitle className="panel-title flex items-center gap-2">
             <Wifi className="w-4 h-4 text-primary" />
             Feed Health
           </CardTitle>
@@ -570,7 +570,7 @@ export default function GuardianPanel() {
       {/* Forensics */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Forensics Summary</CardTitle>
+          <CardTitle className="panel-title flex items-center gap-2">Forensics Summary</CardTitle>
         </CardHeader>
         <CardContent>
           {forensicsLoading ? (

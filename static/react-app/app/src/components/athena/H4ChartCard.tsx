@@ -313,7 +313,7 @@ export default function H4ChartCard({ signal }: Props) {
       <CardHeader className="pb-2">
         <CardTitle
           className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider"
-          style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}
+         
         >
           <span className="flex items-center gap-2">
             <BarChart2 className="w-4 h-4 text-primary" />

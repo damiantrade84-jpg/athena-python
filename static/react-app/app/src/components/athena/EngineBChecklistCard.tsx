@@ -1,8 +1,7 @@
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Check, X, AlertTriangle, Info } from 'lucide-react';
 import { cn, fmtNum } from '@/lib/utils';
 import { fmtLiveQuoteMeta, fmtPrice, engineBScoreBreakdown } from '@/lib/athenaFormat';
+import { Chip, Details, DirectionChip, KeyValue, Metric } from '@/components/shared/primitives';
 import {
   executableLevels,
   readEngineBCanonicalGatesFromNaked,
@@ -28,14 +27,19 @@ function firstFiniteNumber(...values: unknown[]): number | undefined {
   return undefined;
 }
 
-export default function EngineBChecklistCard({ data, pair, type, livePrice, livePriceAgeSec, livePriceSource, compact }: Props) {
+export default function EngineBChecklistCard({
+  data,
+  pair,
+  type,
+  livePrice,
+  livePriceAgeSec,
+  livePriceSource,
+}: Props) {
   if (!data) {
     return (
-      <Card className="border-border/60 bg-card/50">
-        <CardContent className="p-4 text-xs text-muted-foreground text-center">
-          No Engine B result yet — run the Engine B scan.
-        </CardContent>
-      </Card>
+      <div className="rounded-lg border border-border bg-card p-6 text-center text-xs text-muted-foreground">
+        No Engine B result yet — run the Engine B scan.
+      </div>
     );
   }
 
@@ -53,8 +57,6 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
   const tp1MinRr = firstFiniteNumber(conf.tp1_min_rr, data.tp1_min_rr);
   const runnerMinRr = firstFiniteNumber(conf.rr_required, data.rr_required, data.min_rr);
   const verdict = data.structural_verdict || '—';
-  const dirBg =
-    data.direction === 'LONG' ? 'bg-long/20 text-long' : data.direction === 'SHORT' ? 'bg-short/20 text-short' : 'bg-muted/40 text-muted-foreground';
 
   const gates = readEngineBCanonicalGatesFromNaked(data)!;
   const levels = executableLevels(data, gates, pair, type);
@@ -81,151 +83,135 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
   const profileUnavailable = profileCtx?.trusted === false;
   const profileActive = Boolean(profileCtx?.enabled);
 
-  const confidenceBadgeClass =
+  const confidenceTone =
     gates.confidenceDisplayLabel === 'CONFIDENCE PASSED'
-      ? 'bg-long/20 text-long'
+      ? 'long'
       : gates.confidenceDisplayLabel === 'SCORE PASSED / GATE FAILED'
-        ? 'bg-warning/20 text-warning'
-        : 'bg-short/20 text-short';
+        ? 'warning'
+        : 'short';
+
+  const gateRows: Array<{ label: string; ok: boolean; dangerLabel?: string }> = [
+    { label: 'Structure', ok: gates.canonicalStructureOk },
+    { label: 'Location', ok: gates.canonicalLocationOk },
+    { label: 'Entry / Trigger', ok: gates.canonicalTriggerOk },
+    { label: 'Room / RR', ok: gates.canonicalRoomRrOk },
+  ];
+  if (checklist.macro_ok != null) gateRows.push({ label: 'Macro', ok: macro_ok });
+  if (d1_conflict != null) {
+    gateRows.push({
+      label: 'D1 Conflict',
+      ok: !d1_conflict || d1_conflict === 'no_conflict',
+      dangerLabel: typeof d1_conflict === 'string' ? d1_conflict : 'CONFLICT',
+    });
+  }
+
+  const hasReasons =
+    Boolean(gates.canonicalPrimaryRejectReason)
+    || gates.canonicalSecondaryRejectReasons.length > 0
+    || canonicalReasons.length > 0
+    || hardFails.length > 0
+    || softWarns.length > 0
+    || diagNotes.length > 0;
 
   return (
-    <Card className="border-border/60 bg-card/50">
-      <CardContent className={compact ? 'p-3 space-y-2' : 'p-4 space-y-3'}>
-        {/* Header */}
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-2">
-            <Badge className={cn('text-[10px]', confidenceBadgeClass)}>
-              {gates.confidenceDisplayLabel}
-            </Badge>
-            {!gates.canonicalTradeOk && (
-              <Badge variant="outline" className="text-[10px] bg-short/10 text-short border-short/30">
-                NO ENTRY
-              </Badge>
-            )}
-            {data.direction && <Badge className={cn('text-[10px]', dirBg)}>{data.direction}</Badge>}
-            {data.style && (
-              <Badge variant="outline" className="text-[10px]">
-                {data.style}
-              </Badge>
-            )}
-            {profileActive && profileOk && typeof profilePoints === 'number' && profilePoints > 0 && (
-              <Badge variant="outline" className="text-[10px] bg-long/10 text-long border-long/30">
-                Profile +{fmtNum(profilePoints, 2)}
-              </Badge>
-            )}
-            {gates.canonicalStatus && (
-              <Badge
-                variant="outline"
-                className={cn(
-                  'text-[10px]',
-                  gates.canonicalTradeOk ? 'bg-long/10 text-long border-long/30' : 'bg-short/10 text-short border-short/30',
-                )}
-              >
-                {gates.canonicalStatus}
-              </Badge>
-            )}
-          </div>
-          <div className="text-[10px] text-muted-foreground font-mono text-right">
-            <div>
-              Gate {fmtNum(score, 2)} / {fmtNum(max, 2)}
-            </div>
-            {totalScore != null && (
-              <div className="text-[9px]">
-                Total {fmtNum(totalScore, 2)} / {fmtNum(totalMax, 2)}
-                {minScore != null && <span> (min {fmtNum(minScore, 2)})</span>}
-                {breakdown?.bonusPoints != null && breakdown.bonusPoints !== 0 && (
-                  <span> · bonus {breakdown.bonusPoints >= 0 ? '+' : ''}{fmtNum(breakdown.bonusPoints, 2)}</span>
-                )}
-              </div>
-            )}
-            {breakdown?.scoreFloorPasses && !breakdown.confidencePasses && (
-              <div className="text-[9px] text-warning">
-                Total clears the score floor; one or more mandatory gates failed.
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Structural verdict + sequences */}
-        <div className="grid grid-cols-3 gap-2">
-          <SmallStat label="Structural Verdict" value={String(verdict)} />
-          <SmallStat label="Swing Seq" value={String(data.current_swing_sequence || '—')} />
-          <SmallStat label="Macro Seq" value={String(data.macro_swing_sequence || '—')} />
-        </div>
-
-        {profileUnavailable && (
-          <div className="text-[10px] text-muted-foreground border border-border/40 rounded-md p-2 leading-snug">
-            Volume profile (POC/VAH/VAL) not used for this asset — unreliable volume feed.
-          </div>
+    <div className="rounded-lg border border-border bg-card">
+      {/* ── Verdict header ── */}
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-2">
+        <Chip tone={confidenceTone}>{gates.confidenceDisplayLabel}</Chip>
+        {!gates.canonicalTradeOk && <Chip tone="short">NO ENTRY</Chip>}
+        {data.direction && <DirectionChip direction={data.direction} />}
+        {data.style && <Chip>{data.style}</Chip>}
+        {gates.canonicalStatus && (
+          <Chip tone={gates.canonicalTradeOk ? 'long' : 'short'}>{gates.canonicalStatus}</Chip>
         )}
+        {profileActive && profileOk && typeof profilePoints === 'number' && profilePoints > 0 && (
+          <Chip tone="long">Profile +{fmtNum(profilePoints, 2)}</Chip>
+        )}
+        <span className="readout ml-auto shrink-0 text-[11px] text-muted-foreground">
+          Gate {fmtNum(score, 2)} / {fmtNum(max, 2)}
+        </span>
+      </div>
 
-        {/* Checklist gates — canonical only */}
-        <div className="grid grid-cols-2 gap-2">
-          <Gate label="Structure" ok={gates.canonicalStructureOk} />
-          <Gate label="Location" ok={gates.canonicalLocationOk} />
-          <Gate label="Entry / Trigger" ok={gates.canonicalTriggerOk} />
-          <Gate label="Room / RR" ok={gates.canonicalRoomRrOk} />
-          {checklist.macro_ok != null && <Gate label="Macro" ok={macro_ok} />}
-          {d1_conflict != null && (
-            <Gate
-              label="D1 Conflict"
-              ok={!d1_conflict || d1_conflict === 'no_conflict'}
-              dangerLabel={typeof d1_conflict === 'string' ? d1_conflict : 'CONFLICT'}
-            />
-          )}
+      <div className="space-y-3 p-3">
+        {/* ── The four canonical gates: the primary read ── */}
+        <div className="grid grid-cols-2 gap-1.5">
+          {gateRows.map(g => (
+            <Gate key={g.label} label={g.label} ok={g.ok} dangerLabel={g.dangerLabel} />
+          ))}
         </div>
 
-        {/* Levels */}
-        <div className="grid grid-cols-4 gap-2">
-          <SmallStat label="Live" value={fmtPrice(livePrice, pair, type)} accent="primary" meta={fmtLiveQuoteMeta(livePriceAgeSec, livePriceSource)} />
-          <SmallStat
+        {/* ── Executable levels ── */}
+        <div className="grid grid-cols-4 gap-3">
+          <Metric
+            label="Live"
+            value={fmtPrice(livePrice, pair, type)}
+            tone="accent"
+            meta={fmtLiveQuoteMeta(livePriceAgeSec, livePriceSource)}
+          />
+          <Metric
             label="Entry"
             value={levels.showExecutable ? fmtPrice(levels.entry, pair, type) : '—'}
           />
-          <SmallStat
+          <Metric
             label="SL"
             value={levels.showExecutable ? fmtPrice(levels.sl, pair, type) : '—'}
-            accent="short"
+            tone="short"
           />
-          <SmallStat
+          <Metric
             label="TP"
             value={levels.showExecutable ? fmtPrice(levels.tp, pair, type) : '—'}
-            accent="long"
+            tone="long"
           />
-          <SmallStat
-            label="TP1 R:R"
-            value={levels.showExecutable ? fmtNum(tp1Rr, 2) : '—'}
-            accent={
-              levels.showExecutable
-              && tp1Rr != null
-              && (tp1MinRr == null || tp1Rr >= tp1MinRr)
-                ? 'long'
-                : 'muted'
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Chip
+            tone={
+              levels.showExecutable && tp1Rr != null && (tp1MinRr == null || tp1Rr >= tp1MinRr)
+                ? 'long' : 'default'
             }
-            meta={tp1MinRr != null ? `min ${fmtNum(tp1MinRr, 2)}` : undefined}
-          />
-          <SmallStat
-            label="Runner R:R"
-            value={levels.showExecutable ? fmtNum(runnerRr, 2) : '—'}
-            accent={
-              levels.showExecutable
-              && runnerRr != null
-              && (runnerMinRr == null || runnerRr >= runnerMinRr)
-                ? 'long'
-                : 'muted'
+          >
+            TP1 R:R {levels.showExecutable ? fmtNum(tp1Rr, 2) : '—'}
+            {tp1MinRr != null ? ` ≥ ${fmtNum(tp1MinRr, 2)}` : ''}
+          </Chip>
+          <Chip
+            tone={
+              levels.showExecutable && runnerRr != null && (runnerMinRr == null || runnerRr >= runnerMinRr)
+                ? 'long' : 'default'
             }
-            meta={runnerMinRr != null ? `min ${fmtNum(runnerMinRr, 2)}` : undefined}
-          />
+          >
+            Runner R:R {levels.showExecutable ? fmtNum(runnerRr, 2) : '—'}
+            {runnerMinRr != null ? ` ≥ ${fmtNum(runnerMinRr, 2)}` : ''}
+          </Chip>
           {rrUsedForGate != null && rrUsedForGate !== runnerRr && (
-            <SmallStat label="Gate R:R" value={fmtNum(rrUsedForGate, 2)} />
+            <Chip>Gate R:R {fmtNum(rrUsedForGate, 2)}</Chip>
           )}
         </div>
 
+        {/* ── State that changes what you do stays uncollapsed ── */}
+        {breakdown?.scoreFloorPasses && !breakdown.confidencePasses && (
+          <p className="note text-warning">
+            Total clears the score floor; one or more mandatory gates failed.
+          </p>
+        )}
+        {gates.canonicalPrimaryRejectReason && (
+          <ReasonBlock
+            icon={<X className="h-3 w-3" />}
+            tone="short"
+            label="Primary reject"
+            items={[gates.canonicalPrimaryRejectReason]}
+          />
+        )}
+        {data.no_trigger_classification && (
+          <p className="note text-warning">
+            No-trigger classification: <span className="readout">{data.no_trigger_classification}</span>
+          </p>
+        )}
         {!levels.showExecutable
           && (levels.diagnosticEntry != null || levels.diagnosticSl != null || levels.diagnosticTp != null) && (
-          <div className="text-[10px] text-muted-foreground border border-border/40 rounded-md p-2 space-y-1">
-            <p className="uppercase font-semibold text-warning">Rejected diagnostic levels — not executable</p>
-            <p className="font-mono">
+          <div className="rounded border border-warning/30 bg-warning/5 p-2">
+            <p className="label mb-1 text-warning">Rejected diagnostic levels — not executable</p>
+            <p className="readout text-[11px] text-muted-foreground">
               Entry {fmtPrice(levels.diagnosticEntry, pair, type)}
               {' · '}SL {fmtPrice(levels.diagnosticSl, pair, type)}
               {' · '}TP {fmtPrice(levels.diagnosticTp, pair, type)}
@@ -233,113 +219,148 @@ export default function EngineBChecklistCard({ data, pair, type, livePrice, live
           </div>
         )}
 
-        {/* Active FVGs */}
-        {data.active_fvgs && data.active_fvgs.length > 0 && (
-          <div className="space-y-1">
-            <p className="text-[10px] uppercase text-muted-foreground">Active FVGs</p>
-            <div className="space-y-1">
-              {data.active_fvgs.slice(0, 4).map((f, i) => (
-                <div key={i} className="flex items-center justify-between text-[10px] font-mono p-2 rounded-md bg-muted/30">
-                  <span>
-                    {f.direction || ''} [{fmtPrice(f.bottom, pair, type)} → {fmtPrice(f.top, pair, type)}]
-                  </span>
-                  <span className="text-muted-foreground">strength {fmtNum(f.strength, 2)}{f.mitigated ? ' · MITIGATED' : ''}</span>
-                </div>
-              ))}
+        {/* ══ Structure detail, score composition, and the reason lists ══ */}
+        <Details summary="Details" className="border-t border-border pt-0.5">
+          <div className="space-y-3">
+            <div className="space-y-0.5">
+              <KeyValue label="Structural verdict" value={String(verdict)} />
+              <KeyValue label="Swing sequence" value={String(data.current_swing_sequence || '—')} />
+              <KeyValue label="Macro sequence" value={String(data.macro_swing_sequence || '—')} />
             </div>
-          </div>
-        )}
 
-        {/* Hard fail / soft warn / diagnostic */}
-        {gates.canonicalPrimaryRejectReason && (
-          <ReasonRow
-            icon={<X className="w-3 h-3" />}
-            className="text-short bg-short/10"
-            label="Primary reject"
-            items={[gates.canonicalPrimaryRejectReason]}
-          />
-        )}
-        {gates.canonicalSecondaryRejectReasons.length > 0 && (
-          <ReasonRow
-            icon={<X className="w-3 h-3" />}
-            className="text-short/80 bg-short/5"
-            label="Secondary rejects"
-            items={gates.canonicalSecondaryRejectReasons}
-          />
-        )}
-        {canonicalReasons.length > 0 && (
-          <ReasonRow
-            icon={<X className="w-3 h-3" />}
-            className="text-short bg-short/10"
-            label="Canonical rejection"
-            items={canonicalReasons}
-          />
-        )}
-        {hardFails.length > 0 && (
-          <ReasonRow icon={<X className="w-3 h-3" />} className="text-short bg-short/10" label="Hard fail" items={hardFails} />
-        )}
-        {softWarns.length > 0 && (
-          <ReasonRow icon={<AlertTriangle className="w-3 h-3" />} className="text-warning bg-warning/10" label="Soft warning" items={softWarns} />
-        )}
-        {diagNotes.length > 0 && (
-          <ReasonRow icon={<Info className="w-3 h-3" />} className="text-muted-foreground bg-muted/30" label="Diagnostic" items={diagNotes} />
-        )}
+            <div className="space-y-0.5">
+              <KeyValue label="Gate score" value={`${fmtNum(score, 2)} / ${fmtNum(max, 2)}`} />
+              {totalScore != null && (
+                <KeyValue
+                  label="Total score"
+                  value={`${fmtNum(totalScore, 2)} / ${fmtNum(totalMax, 2)}`}
+                  meta={minScore != null ? `min ${fmtNum(minScore, 2)}` : undefined}
+                />
+              )}
+              {breakdown?.bonusPoints != null && breakdown.bonusPoints !== 0 && (
+                <KeyValue
+                  label="Bonus"
+                  value={`${breakdown.bonusPoints >= 0 ? '+' : ''}${fmtNum(breakdown.bonusPoints, 2)}`}
+                  tone={breakdown.bonusPoints >= 0 ? 'long' : 'short'}
+                />
+              )}
+            </div>
 
-        {data.no_trigger_classification && (
-          <div className="text-[10px] text-warning">
-            No-trigger classification: <span className="font-mono">{data.no_trigger_classification}</span>
+            {profileUnavailable && (
+              <p className="note">
+                Volume profile (POC/VAH/VAL) not used for this asset — unreliable volume feed.
+              </p>
+            )}
+
+            {data.active_fvgs && data.active_fvgs.length > 0 && (
+              <div>
+                <p className="label mb-1">Active FVGs</p>
+                <div className="space-y-0.5">
+                  {data.active_fvgs.slice(0, 4).map((f, i) => (
+                    <KeyValue
+                      key={i}
+                      label={`${f.direction || ''} ${fmtPrice(f.bottom, pair, type)} → ${fmtPrice(f.top, pair, type)}`}
+                      value={fmtNum(f.strength, 2)}
+                      meta={f.mitigated ? 'mitigated' : undefined}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {hasReasons && (
+              <div className="space-y-2">
+                {gates.canonicalSecondaryRejectReasons.length > 0 && (
+                  <ReasonBlock
+                    icon={<X className="h-3 w-3" />}
+                    tone="short"
+                    label="Secondary rejects"
+                    items={gates.canonicalSecondaryRejectReasons}
+                  />
+                )}
+                {canonicalReasons.length > 0 && (
+                  <ReasonBlock
+                    icon={<X className="h-3 w-3" />}
+                    tone="short"
+                    label="Canonical rejection"
+                    items={canonicalReasons}
+                  />
+                )}
+                {hardFails.length > 0 && (
+                  <ReasonBlock
+                    icon={<X className="h-3 w-3" />}
+                    tone="short"
+                    label="Hard fail"
+                    items={hardFails}
+                  />
+                )}
+                {softWarns.length > 0 && (
+                  <ReasonBlock
+                    icon={<AlertTriangle className="h-3 w-3" />}
+                    tone="warning"
+                    label="Soft warning"
+                    items={softWarns}
+                  />
+                )}
+                {diagNotes.length > 0 && (
+                  <ReasonBlock
+                    icon={<Info className="h-3 w-3" />}
+                    tone="muted"
+                    label="Diagnostic"
+                    items={diagNotes}
+                  />
+                )}
+              </div>
+            )}
           </div>
-        )}
-      </CardContent>
-    </Card>
+        </Details>
+      </div>
+    </div>
   );
 }
 
+/**
+ * A pass/fail gate. Reads as a checklist line, not a filled colour block —
+ * the icon and the trailing state carry the signal, so six of them side by
+ * side no longer form a wall of green/red panels.
+ */
 function Gate({ label, ok, dangerLabel }: { label: string; ok: boolean; dangerLabel?: string }) {
   return (
-    <div
-      className={cn(
-        'flex items-center gap-2 p-2 rounded-md',
-        ok ? 'bg-long/10 text-long' : 'bg-short/10 text-short',
-      )}
-    >
-      {ok ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
-      <span className="text-xs font-medium flex-1">{label}</span>
-      <span className="text-[10px] font-mono">{ok ? 'OK' : dangerLabel || 'FAIL'}</span>
+    <div className="flex items-center gap-2 rounded border border-border px-2 py-1.5">
+      {ok
+        ? <Check className="h-3.5 w-3.5 shrink-0 text-long" />
+        : <X className="h-3.5 w-3.5 shrink-0 text-short" />}
+      <span className="flex-1 truncate text-xs text-foreground">{label}</span>
+      <span className={cn('readout shrink-0 text-[10px]', ok ? 'text-long' : 'text-short')}>
+        {ok ? 'OK' : dangerLabel || 'FAIL'}
+      </span>
     </div>
   );
 }
 
-function SmallStat({ label, value, accent, meta }: { label: string; value: string; accent?: 'short' | 'long' | 'muted' | 'primary'; meta?: string }) {
-  const fg = accent === 'long' ? 'text-long' : accent === 'short' ? 'text-short' : accent === 'primary' ? 'text-primary' : 'text-foreground';
-  return (
-    <div className="p-2 rounded-md bg-muted/30">
-      <p className="text-[10px] uppercase text-muted-foreground">{label}</p>
-      <p className={cn('text-xs font-mono font-bold', fg)}>{value}</p>
-      {meta && <p className="text-[9px] font-mono text-muted-foreground truncate">{meta}</p>}
-    </div>
-  );
-}
-
-function ReasonRow({
+function ReasonBlock({
   icon,
   label,
   items,
-  className,
+  tone,
 }: {
   icon: React.ReactNode;
   label: string;
   items: string[];
-  className: string;
+  tone: 'short' | 'warning' | 'muted';
 }) {
+  const toneClass =
+    tone === 'short' ? 'text-short' : tone === 'warning' ? 'text-warning' : 'text-muted-foreground';
   return (
-    <div className={cn('p-2 rounded-md', className)}>
-      <div className="flex items-center gap-1 text-[10px] uppercase font-semibold mb-1">
+    <div className="rounded border border-border p-2">
+      <div className={cn('label mb-1 flex items-center gap-1', toneClass)}>
         {icon} {label}
       </div>
-      <ul className="text-[10px] font-mono leading-relaxed list-disc pl-4">
+      <ul className="space-y-0.5">
         {items.slice(0, 6).map((it) => (
-          <li key={it}>{it}</li>
+          <li key={it} className="readout text-[11px] leading-relaxed text-muted-foreground">
+            {it}
+          </li>
         ))}
       </ul>
     </div>

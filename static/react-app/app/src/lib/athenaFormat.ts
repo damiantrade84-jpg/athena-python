@@ -209,6 +209,16 @@ export interface EngineBScoreBreakdown {
   scoreFloorPasses: boolean;
   confidencePasses: boolean;
   bonusPoints: number | null;
+  /**
+   * Earned quality points **net of penalties**, and the weight denominator they
+   * are scored against. `bonusPoints` is the pre-penalty figure, so on a signal
+   * carrying a hard-counter penalty the two disagree — e.g. DAI on 2026-07-29
+   * had bonus_points 0.34 but quality_points_net 0.089 against a 0.95
+   * denominator (9.4%). Display the net pair so the fraction and the percent
+   * can never contradict each other on the card.
+   */
+  qualityPointsNet: number | null;
+  qualityDenominator: number | null;
   /** Quality-layer percent (0-100). The only Engine B score that varies on pass. */
   qualityPct: number | null;
   /**
@@ -296,6 +306,9 @@ export function engineBScoreBreakdown(
   const bonusPoints = readSignalNumber(conf, 'bonus_points', 'bonusPoints');
   const resolvedBonus = Number.isFinite(bonusPoints) ? bonusPoints : null;
 
+  const qualityPointsNet = readSignalNumber(conf, 'quality_points_net', 'qualityPointsNet');
+  const qualityDenominator = readSignalNumber(conf, 'quality_denominator', 'qualityDenominator');
+
   const qualityPct = readSignalNumber(conf, 'quality_pct', 'qualityPct');
   const qualityPctFromTop = readSignalNumber(row, 'engine_b_quality_pct', 'quality_pct');
   const resolvedQualityPct = Number.isFinite(qualityPct) ? qualityPct : qualityPctFromTop;
@@ -332,6 +345,8 @@ export function engineBScoreBreakdown(
     scoreFloorPasses,
     confidencePasses,
     bonusPoints: resolvedBonus,
+    qualityPointsNet: Number.isFinite(qualityPointsNet) ? qualityPointsNet : null,
+    qualityDenominator: Number.isFinite(qualityDenominator) ? qualityDenominator : null,
     qualityPct: Number.isFinite(resolvedQualityPct) ? resolvedQualityPct : null,
     minScoreFloorBinding: resolvedFloorBinding,
   };

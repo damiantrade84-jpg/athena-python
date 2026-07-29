@@ -116,7 +116,7 @@ export default function ScreenerPanel() {
         <TabsContent value="screener" className="mt-2 space-y-4">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="panel-title flex items-center gap-2">
                 <Filter className="w-4 h-4 text-primary" />
                 Screener Filters
               </CardTitle>
@@ -158,7 +158,7 @@ export default function ScreenerPanel() {
 
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Results</CardTitle>
+              <CardTitle className="panel-title flex items-center gap-2">Results</CardTitle>
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[500px]">
@@ -200,7 +200,7 @@ export default function ScreenerPanel() {
         <TabsContent value="micro" className="mt-2">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="panel-title flex items-center gap-2">
                 <Activity className="w-4 h-4 text-primary" />
                 Microstructure Health
               </CardTitle>

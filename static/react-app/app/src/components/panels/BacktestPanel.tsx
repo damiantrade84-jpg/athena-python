@@ -385,7 +385,7 @@ function BacktestPanel() {
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <FlaskConical className="h-5 w-5 text-primary" />
-              <h1 className="font-[Cinzel] text-lg font-semibold tracking-[0.08em] text-foreground">A/B RESEARCH WORKSTATION</h1>
+              <h1 className="text-lg font-semibold tracking-[0.08em] text-foreground">A/B RESEARCH WORKSTATION</h1>
               <Badge variant="outline" className="border-violet-400/30 bg-violet-400/10 text-[10px] text-violet-200">V2 CANDIDATE</Badge>
             </div>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">

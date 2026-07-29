@@ -519,7 +519,7 @@ export default function EngineCPanel() {
       {/* Run scan */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+          <CardTitle className="panel-title flex items-center gap-2">
             <Play className="w-4 h-4 text-primary" />
             Run Consensus Scan
           </CardTitle>
@@ -584,7 +584,7 @@ export default function EngineCPanel() {
         <div className="grid grid-cols-5 gap-4">
           <Card className="col-span-3 border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="panel-title flex items-center justify-between">
                 <span>{BUCKET_LABELS[activeBucket]} ({buckets[activeBucket].length})</span>
               </CardTitle>
             </CardHeader>
@@ -630,7 +630,7 @@ export default function EngineCPanel() {
 
           <Card className="col-span-2 border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="panel-title flex items-center gap-2">
                 <Activity className="w-4 h-4 text-primary" />
                 Consensus Detail
               </CardTitle>
@@ -675,7 +675,7 @@ export default function EngineCPanel() {
       {/* Compare engines per pair */}
       <Card className="border-border/60 bg-card/50">
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+          <CardTitle className="panel-title flex items-center gap-2">
             <Eye className="w-4 h-4 text-primary" />
             Compare Engines (single pair)
           </CardTitle>

@@ -104,7 +104,7 @@ export default function PerformancePanel() {
       <div className="grid grid-cols-2 gap-5">
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+            <CardTitle className="panel-title flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-primary" />
               Equity Curve (Cumulative R)
             </CardTitle>
@@ -130,7 +130,7 @@ export default function PerformancePanel() {
 
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+            <CardTitle className="panel-title flex items-center gap-2">
               <BarChart3 className="w-4 h-4 text-primary" />
               Daily P&amp;L
             </CardTitle>
@@ -167,7 +167,7 @@ export default function PerformancePanel() {
       {byEngineEntries.length > 0 && (
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+            <CardTitle className="panel-title flex items-center gap-2">
               <PieChart className="w-4 h-4 text-primary" />
               By Engine
             </CardTitle>
@@ -204,7 +204,7 @@ export default function PerformancePanel() {
       <div className="grid grid-cols-2 gap-5">
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>By Regime</CardTitle>
+            <CardTitle className="panel-title flex items-center gap-2">By Regime</CardTitle>
           </CardHeader>
           <CardContent>
             {regimeRows.length > 0 ? (
@@ -234,7 +234,7 @@ export default function PerformancePanel() {
 
         <Card className="border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>By Asset Class</CardTitle>
+            <CardTitle className="panel-title flex items-center gap-2">By Asset Class</CardTitle>
           </CardHeader>
           <CardContent>
             {assetRows.length > 0 ? (

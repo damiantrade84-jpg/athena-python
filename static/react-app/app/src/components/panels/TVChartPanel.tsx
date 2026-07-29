@@ -126,19 +126,28 @@ const TF_UI_CODE_MAP: Record<string, string> = {
   W1: 'W',
 };
 
-// Indicator colors — chosen to be distinct and high-contrast on the dark chart background.
+// Indicator colors — drawn from the app's categorical chart ramp in fixed
+// order rather than ad-hoc hues, so a series keeps its identity everywhere.
+//
+// Two deliberate constraints:
+//  · Green and red are NOT used for any indicator. On a candlestick chart
+//    those two already mean "up bar" and "down bar"; reusing them for an EMA
+//    would overload the only colours that carry price direction.
+//  · With five overlays live at once no hue set fully separates under
+//    deuteranopia, so the legend's direct labels are the required secondary
+//    encoding — do not remove the legend chips.
 const INDICATOR_COLORS = {
-  ema20: 'hsl(200, 95%, 55%)',
-  ema21: 'hsl(190, 95%, 58%)',
-  ema50: 'hsl(45, 95%, 58%)',
-  ema200: 'hsl(280, 80%, 65%)',
-  dema200: 'hsl(15, 90%, 60%)',
-  vwap: 'hsl(120, 70%, 55%)',
-  rsi14: 'hsl(45, 95%, 58%)',
-  adx14: 'hsl(24, 95%, 58%)',
-  atr14: 'hsl(200, 95%, 55%)',
-  volume: 'hsl(210, 20%, 48%)',
-  volumeMa: 'hsl(340, 85%, 62%)',
+  ema20: 'hsl(211, 79%, 57%)',    // blue
+  ema21: 'hsl(174, 60%, 41%)',    // teal
+  ema50: 'hsl(36, 78%, 44%)',     // amber
+  ema200: 'hsl(270, 73%, 66%)',   // purple
+  dema200: 'hsl(270, 60%, 80%)',  // light purple — pairs with EMA200 by period
+  vwap: 'hsl(216, 12%, 78%)',     // neutral: a reference level, not a series
+  rsi14: 'hsl(36, 78%, 44%)',
+  adx14: 'hsl(270, 73%, 66%)',
+  atr14: 'hsl(211, 79%, 57%)',
+  volume: 'hsl(220, 8%, 38%)',
+  volumeMa: 'hsl(36, 78%, 44%)',
 } as const;
 
 type IndicatorKey = keyof typeof INDICATOR_COLORS;
@@ -3563,18 +3572,20 @@ export default function TVChartPanel() {
     const chart = createChart(container, {
       width: container.clientWidth,
       height: container.clientHeight || chartHeightPx,
+      // Neutral chart chrome: grid and scale borders are recessive hairlines in
+      // the panel border tone, not tinted washes. Axis text is the muted ink.
       layout: {
         background: { color: 'transparent' },
-        textColor: 'rgba(245, 240, 232, 0.65)',
-        fontFamily: "'IBM Plex Mono', monospace",
+        textColor: 'rgba(139, 144, 153, 1)',
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
       },
       grid: {
-        vertLines: { color: 'rgba(212, 160, 23, 0.06)' },
-        horzLines: { color: 'rgba(212, 160, 23, 0.06)' },
+        vertLines: { color: 'rgba(35, 38, 44, 0.9)' },
+        horzLines: { color: 'rgba(35, 38, 44, 0.9)' },
       },
-      rightPriceScale: { borderColor: 'rgba(212, 160, 23, 0.18)', minimumWidth: 80 },
+      rightPriceScale: { borderColor: 'rgba(35, 38, 44, 1)', minimumWidth: 80 },
       timeScale: {
-        borderColor: 'rgba(212, 160, 23, 0.18)',
+        borderColor: 'rgba(35, 38, 44, 1)',
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 3,
@@ -3587,13 +3598,15 @@ export default function TVChartPanel() {
     const pricePane = chart.panes()[0] as IPaneApi<Time>;
     pricePane.setStretchFactor(3);
 
+    // Candles use the same semantic long/short tokens as every direction chip
+    // and P&L figure in the app, so up/down reads identically everywhere.
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: 'hsl(160, 84%, 39%)',
-      downColor: 'hsl(343, 96%, 60%)',
-      borderUpColor: 'hsl(160, 84%, 39%)',
-      borderDownColor: 'hsl(343, 96%, 60%)',
-      wickUpColor: 'hsl(160, 84%, 39%)',
-      wickDownColor: 'hsl(343, 96%, 60%)',
+      upColor: 'hsl(148, 60%, 47%)',
+      downColor: 'hsl(358, 75%, 59%)',
+      borderUpColor: 'hsl(148, 60%, 47%)',
+      borderDownColor: 'hsl(358, 75%, 59%)',
+      wickUpColor: 'hsl(148, 60%, 47%)',
+      wickDownColor: 'hsl(358, 75%, 59%)',
       lastValueVisible: true,
       priceLineVisible: true,
       priceFormat: candlePriceFormat,

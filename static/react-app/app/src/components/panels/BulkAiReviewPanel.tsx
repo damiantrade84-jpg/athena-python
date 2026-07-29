@@ -261,7 +261,7 @@ export default function BulkAiReviewPanel() {
         <CardHeader className="pb-2">
           <CardTitle
             className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider"
-            style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}
+           
           >
             <Sparkles className="w-4 h-4 text-primary" />
             A / B Graded Signals

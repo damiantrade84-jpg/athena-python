@@ -30,20 +30,25 @@ interface EquityAreaChartProps {
   idSuffix?: string;
 }
 
-const DEFAULT_TOOLTIP_STYLE: React.CSSProperties = {
+const TOOLTIP_STYLE: React.CSSProperties = {
   background: 'hsl(var(--popover))',
-  border: '1px solid hsl(var(--gold) / 0.35)',
-  borderRadius: '0.6rem',
-  boxShadow: '0 8px 24px hsl(250 60% 3% / 0.6), 0 0 12px hsl(var(--gold) / 0.12)',
+  border: '1px solid hsl(var(--border))',
+  borderRadius: '6px',
+  boxShadow: '0 4px 16px rgb(0 0 0 / 0.5)',
   fontSize: 11,
   color: 'hsl(var(--foreground))',
+  padding: '6px 8px',
 };
 
 /**
- * Shared premium area chart used for equity curves across Athena panels.
- * Indigo→violet→azure gradient stroke with a soft glow, layered gradient
- * fill, subtle dashed grid, baseline reference line, and a glass tooltip.
- * Presentation-only — renders whatever data the caller provides.
+ * Shared equity curve.
+ *
+ * Single series, so no legend — the panel title names it. Deliberately
+ * plain per the house chart rules: one 2px stroke in a single accent hue
+ * (the previous three-stop indigo→violet→azure gradient implied a colour
+ * encoding that carried no data), a low-opacity fill for area weight only,
+ * no drop-shadow glow filter, and recessive gridlines. The crosshair
+ * tooltip is the interaction layer and is always on.
  */
 export default function EquityAreaChart({
   data,
@@ -56,39 +61,25 @@ export default function EquityAreaChart({
   baseline = 0,
   idSuffix = '',
 }: EquityAreaChartProps) {
-  const strokeId = `eqStroke${idSuffix}`;
   const fillId = `eqFill${idSuffix}`;
-  const glowId = `eqGlow${idSuffix}`;
 
   return (
     <div style={{ width: '100%', height }}>
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
+        <AreaChart data={data} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
           <defs>
-            <linearGradient id={strokeId} x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="hsl(250 72% 62%)" />
-              <stop offset="55%" stopColor="hsl(258 90% 70%)" />
-              <stop offset="100%" stopColor="hsl(199 92% 64%)" />
-            </linearGradient>
             <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="hsl(258 90% 68%)" stopOpacity={0.42} />
-              <stop offset="60%" stopColor="hsl(258 90% 68%)" stopOpacity={0.10} />
-              <stop offset="100%" stopColor="hsl(258 90% 68%)" stopOpacity={0} />
+              <stop offset="0%" stopColor="hsl(var(--chart-1))" stopOpacity={0.22} />
+              <stop offset="100%" stopColor="hsl(var(--chart-1))" stopOpacity={0} />
             </linearGradient>
-            <filter id={glowId} x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="3" result="blur" />
-              <feMerge>
-                <feMergeNode in="blur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
           </defs>
-          <CartesianGrid stroke="hsl(var(--border) / 0.5)" strokeDasharray="3 6" vertical={false} />
+          <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="2 4" vertical={false} />
           <XAxis
             dataKey={xKey}
             tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
             axisLine={false}
             tickLine={false}
+            minTickGap={24}
           />
           <YAxis
             domain={['auto', 'auto']}
@@ -99,21 +90,27 @@ export default function EquityAreaChart({
           />
           <ReferenceLine y={baseline} stroke="hsl(var(--border))" strokeDasharray="2 4" />
           <Tooltip
-            cursor={{ stroke: 'hsl(var(--gold) / 0.4)', strokeWidth: 1, strokeDasharray: '4 4' }}
-            contentStyle={DEFAULT_TOOLTIP_STYLE}
-            labelStyle={{ color: 'hsl(var(--muted-foreground))' }}
+            cursor={{ stroke: 'hsl(var(--muted-foreground))', strokeWidth: 1, strokeDasharray: '3 3' }}
+            contentStyle={TOOLTIP_STYLE}
+            labelStyle={{ color: 'hsl(var(--muted-foreground))', marginBottom: 2 }}
+            itemStyle={{ color: 'hsl(var(--foreground))' }}
             formatter={(v: number) => [valueFormatter(v), valueLabel]}
             {...(labelFormatter ? { labelFormatter } : {})}
           />
           <Area
             type="monotone"
             dataKey={dataKey}
-            stroke={`url(#${strokeId})`}
-            strokeWidth={2.5}
+            stroke="hsl(var(--chart-1))"
+            strokeWidth={2}
             fill={`url(#${fillId})`}
             dot={false}
-            activeDot={{ r: 4, fill: 'hsl(var(--gold-light))', stroke: 'hsl(var(--gold))', strokeWidth: 2 }}
-            style={{ filter: `url(#${glowId})` }}
+            activeDot={{
+              r: 4,
+              fill: 'hsl(var(--chart-1))',
+              // 2px surface ring keeps the marker legible over the fill
+              stroke: 'hsl(var(--card))',
+              strokeWidth: 2,
+            }}
           />
         </AreaChart>
       </ResponsiveContainer>

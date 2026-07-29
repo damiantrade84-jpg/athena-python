@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700&family=Hanken+Grotesk:wght@300;400;500;600;700&family=Spline+Sans+Mono:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,56 +6,73 @@
 
 @layer base {
   :root {
-    /* ════ AURORA — indigo obsidian, electric violet, platinum light ════ */
-    --background: 250 40% 4%;            /* indigo obsidian #06060b */
-    --foreground: 240 25% 94%;           /* soft platinum white #eceaf2 */
-    --card: 248 36% 6.5%;                /* #0a0a11 */
-    --card-foreground: 240 25% 94%;
-    --popover: 248 40% 6%;
-    --popover-foreground: 240 25% 94%;
+    /* ════════════════════════════════════════════════════════════════════
+       OBSIDIAN — neutral near-black, one cool accent, semantic P&L only.
+       Rules that keep this system honest:
+         · Blue (--primary / legacy --gold) is the ONLY decorative colour.
+         · Green/red are RESERVED for direction and P&L. Never decoration.
+         · No glows, no gradient fills, no backdrop blur, no noise texture.
+           Hierarchy comes from type scale, weight and space.
+       ════════════════════════════════════════════════════════════════════ */
 
-    /* ── PRIMARY: Electric Violet ── */
-    --primary: 258 90% 68%;             /* #a78bfa luminous violet */
-    --primary-foreground: 250 48% 6%;   /* deep ink on violet */
+    /* ── Surfaces: neutral, no colour cast ── */
+    --background: 220 12% 5%;            /* #0b0c0e page */
+    --foreground: 216 12% 92%;           /* #e8eaed primary ink */
+    --card: 220 14% 9%;                  /* #131519 panel */
+    --card-foreground: 216 12% 92%;
+    --popover: 220 14% 10%;
+    --popover-foreground: 216 12% 92%;
 
-    --secondary: 245 32% 10%;
-    --secondary-foreground: 240 18% 74%;
-    --muted: 246 30% 9.5%;
-    --muted-foreground: 240 12% 56%;    /* slate lavender grey */
-    --accent: 245 30% 12%;
-    --accent-foreground: 240 25% 94%;
-    --destructive: 350 85% 62%;         /* vivid rose */
+    /* ── Accent: single cool blue ── */
+    --primary: 211 100% 65%;             /* #4da3ff */
+    --primary-foreground: 220 30% 7%;
+
+    --secondary: 220 12% 12%;
+    --secondary-foreground: 219 8% 72%;
+    --muted: 220 12% 11%;
+    --muted-foreground: 219 6% 57%;      /* #8b9099 secondary ink */
+    --accent: 220 12% 14%;
+    --accent-foreground: 216 12% 92%;
+    --destructive: 358 75% 59%;
     --destructive-foreground: 0 0% 98%;
-    --border: 245 28% 14%;              /* indigo hairline */
-    --input: 245 28% 14%;
-    --ring: 258 90% 68%;                /* violet ring */
-    --radius: 0.8rem;                   /* modern, soft corners */
+    --border: 220 11% 16%;               /* #23262c hairline */
+    --input: 220 11% 16%;
+    --ring: 211 100% 65%;
+    --radius: 0.375rem;                  /* 6px — precise, not soft */
 
-    /* ── Directional ── */
-    --long: 156 72% 47%;               /* vivid emerald #2ed98c */
-    --short: 350 85% 64%;              /* coral rose #fb5e7d */
-    --warning: 38 95% 58%;             /* amber #fbb24a */
-    --info: 199 92% 60%;               /* azure sky #3ec5f5 — Engine B */
+    /* ── Semantic: direction and P&L ONLY ── */
+    --long: 148 60% 47%;                 /* #2fbf71 */
+    --short: 358 75% 59%;                /* #e5484d */
+    --warning: 38 85% 55%;               /* #eda426 */
+    --info: 211 100% 65%;                /* folded into the accent */
 
-    /* ── Aurora ramp (legacy --gold names retained: they now map to the
-         violet accent so every panel re-themes without code changes) ── */
-    --gold: 258 90% 68%;               /* electric violet */
-    --gold-light: 270 95% 82%;         /* periwinkle highlight #cdb6ff */
-    --gold-dark: 250 72% 52%;          /* deep indigo-violet #6d4ce0 */
-    --gold-muted: 255 42% 18%;         /* subtle violet-tinted bg */
+    /* ── Legacy `--gold*` token names remapped to the blue accent.
+         Panels not rebuilt by hand inherit the new theme through these. ── */
+    --gold: 211 100% 65%;
+    --gold-light: 211 100% 78%;
+    --gold-dark: 211 80% 48%;
+    --gold-muted: 214 30% 16%;
+    --platinum: 216 12% 88%;
 
-    /* ── Platinum (hairlines, engraved titles, logo) ── */
-    --platinum: 240 30% 83%;
+    /* ── Chart categorical ramp (fixed order, never cycled).
+         Validated: OKLCH L 0.48–0.67, chroma ≥ 0.10, adjacent CVD ΔE ≥ 8,
+         normal-vision ΔE ≥ 15, contrast ≥ 3:1 on the panel surface. ── */
+    --chart-1: 211 79% 57%;              /* blue   #3b8fe8 */
+    --chart-2: 36 78% 44%;               /* amber  #c58019 */
+    --chart-3: 174 60% 41%;              /* teal   #2aa79b */
+    --chart-4: 2 68% 62%;                /* salmon #e0605c */
+    --chart-5: 270 73% 66%;              /* purple #a96be8 */
+    --chart-6: 146 58% 39%;              /* green  #2a9d5c */
 
     /* ── Sidebar ── */
-    --sidebar-background: 251 42% 4.6%;
-    --sidebar-foreground: 240 14% 62%;
-    --sidebar-primary: 258 90% 68%;
-    --sidebar-primary-foreground: 250 48% 6%;
-    --sidebar-accent: 246 32% 9%;
-    --sidebar-accent-foreground: 240 14% 62%;
-    --sidebar-border: 248 30% 12%;
-    --sidebar-ring: 258 90% 68%;
+    --sidebar-background: 220 13% 7%;
+    --sidebar-foreground: 219 6% 62%;
+    --sidebar-primary: 211 100% 65%;
+    --sidebar-primary-foreground: 220 30% 7%;
+    --sidebar-accent: 220 12% 12%;
+    --sidebar-accent-foreground: 216 12% 92%;
+    --sidebar-border: 220 11% 14%;
+    --sidebar-ring: 211 100% 65%;
   }
 
   * {
@@ -64,210 +81,255 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: 'Hanken Grotesk', system-ui, sans-serif;
+    font-family: 'Inter', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-feature-settings: "ss01", "cv01", "tnum";
+    /* tnum keeps every price column aligned as digits change */
+    font-feature-settings: "tnum", "cv05";
   }
 
   code, .font-mono {
-    font-family: 'Spline Sans Mono', monospace;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-feature-settings: "tnum";
+  }
+
+  /* Numerals never reflow the layout as they tick */
+  .font-mono, .tabular {
+    font-variant-numeric: tabular-nums;
   }
 }
 
 @layer components {
-  /* ── App shell atmosphere: aurora gradient field + fine grain ── */
+  /* ════ Shell ════
+     Flat. The old build layered four radial gradients plus an SVG noise
+     texture here; both are gone — the accent has to be the brightest thing
+     on screen, and a lit background steals that. */
   .app-shell-bg {
     background-color: hsl(var(--background));
-    background-image:
-      radial-gradient(1200px 620px at 12% -12%, hsl(262 90% 60% / 0.16), transparent 60%),
-      radial-gradient(1000px 540px at 104% -6%, hsl(199 92% 58% / 0.10), transparent 55%),
-      radial-gradient(900px 600px at 78% 8%, hsl(326 85% 60% / 0.07), transparent 60%),
-      radial-gradient(1400px 920px at 50% 124%, hsl(250 60% 14% / 0.55), transparent 64%),
-      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
   }
 
-  /* ── Panel glass ── */
-  .panel-glass {
-    @apply bg-card/80 backdrop-blur-xl border border-border/60 rounded-lg;
+  /* ════ Surfaces ════ */
+  .panel-glass,
+  .surface-glass {
+    background-color: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
   }
 
-  /* ── Directional color helpers ── */
+  /* ════ Typography ════ */
+
+  /* Section/panel heading. Was engraved Cinzel serif — now a quiet grotesk
+     caption that recedes behind the data it labels. */
+  .panel-header-title,
+  .panel-title {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-weight: 600;
+    font-size: 0.6875rem;   /* 11px */
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* Field label above a value. The single approved "tiny text" style —
+     replaces the ad-hoc [9px]/[10px]/[11px] mix. */
+  .label {
+    font-size: 0.625rem;    /* 10px */
+    line-height: 1.3;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: hsl(var(--muted-foreground));
+    font-weight: 500;
+  }
+
+  /* Numeric readout. */
+  .readout {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+  }
+
+  /* Supporting prose — explanations, notes, block reasons. */
+  .note {
+    font-size: 0.6875rem;
+    line-height: 1.45;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* ════ Directional colour helpers ════ */
   .text-long  { color: hsl(var(--long)); }
   .text-short { color: hsl(var(--short)); }
-  .text-gold  { color: hsl(var(--gold)); }
+  .text-gold  { color: hsl(var(--primary)); }
 
-  .bg-long  { background-color: hsl(var(--long) / 0.15); }
-  .bg-short { background-color: hsl(var(--short) / 0.15); }
-  .bg-gold  { background-color: hsl(var(--gold) / 0.12); }
+  .bg-long  { background-color: hsl(var(--long) / 0.12); }
+  .bg-short { background-color: hsl(var(--short) / 0.12); }
+  .bg-gold  { background-color: hsl(var(--primary) / 0.10); }
 
-  .border-long  { border-color: hsl(var(--long) / 0.4); }
-  .border-short { border-color: hsl(var(--short) / 0.4); }
-  .border-gold  { border-color: hsl(var(--gold) / 0.5); }
+  .border-long  { border-color: hsl(var(--long) / 0.35); }
+  .border-short { border-color: hsl(var(--short) / 0.35); }
+  .border-gold  { border-color: hsl(var(--primary) / 0.35); }
 
-  /* ── Direction badges ── */
-  .badge-long {
-    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-long text-long;
-    border: 1px solid hsl(var(--long) / 0.4);
-  }
-  .badge-short {
-    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-short text-short;
-    border: 1px solid hsl(var(--short) / 0.4);
-  }
-  .badge-gold {
-    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold;
-    background: hsl(var(--gold) / 0.15);
-    color: hsl(var(--gold-light));
-    border: 1px solid hsl(var(--gold) / 0.4);
-  }
-  .badge-neutral {
-    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold;
-    background: hsl(var(--muted) / 0.6);
+  /* ════ Chips / badges ════
+     One shape, one size. Colour carries meaning, never decoration. */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium leading-none;
+    border: 1px solid hsl(var(--border));
     color: hsl(var(--muted-foreground));
-    border: 1px solid hsl(var(--border) / 0.8);
+    white-space: nowrap;
+  }
+  .chip-long {
+    background: hsl(var(--long) / 0.12);
+    color: hsl(var(--long));
+    border-color: hsl(var(--long) / 0.30);
+  }
+  .chip-short {
+    background: hsl(var(--short) / 0.12);
+    color: hsl(var(--short));
+    border-color: hsl(var(--short) / 0.30);
+  }
+  .chip-accent {
+    background: hsl(var(--primary) / 0.10);
+    color: hsl(var(--primary));
+    border-color: hsl(var(--primary) / 0.30);
+  }
+  .chip-warning {
+    background: hsl(var(--warning) / 0.10);
+    color: hsl(var(--warning));
+    border-color: hsl(var(--warning) / 0.30);
   }
 
-  /* ── Scrollbar ── */
-  .scrollbar-thin {
-    scrollbar-width: thin;
-    scrollbar-color: hsl(var(--gold) / 0.28) transparent;
+  /* Legacy badge names kept so un-rebuilt panels re-theme for free */
+  .badge-long    { @apply chip chip-long; }
+  .badge-short   { @apply chip chip-short; }
+  .badge-gold    { @apply chip chip-accent; }
+  .badge-neutral { @apply chip; }
+
+  /* ════ Meter — the score / quality bar ════
+     Flat track, flat fill, optional threshold tick. No gradient, no glow:
+     the fill is a measurement, so it must read as a length, not a light. */
+  .meter {
+    position: relative;
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: hsl(var(--border));
+    overflow: hidden;
   }
-  .scrollbar-thin::-webkit-scrollbar       { width: 5px; }
+  .meter-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: hsl(var(--muted-foreground));
+    transition: width 200ms ease-out;
+  }
+  .meter-fill-pass { background: hsl(var(--long)); }
+  .meter-fill-accent { background: hsl(var(--primary)); }
+  .meter-tick {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 1px;
+    background: hsl(var(--foreground) / 0.55);
+  }
+
+  /* ════ Disclosure — progressive detail ════
+     Every card keeps its full diagnostic payload; it just starts closed. */
+  .disclosure > summary {
+    @apply flex cursor-pointer select-none items-center gap-1 py-1 text-[10px] font-medium uppercase tracking-[0.07em];
+    color: hsl(var(--muted-foreground));
+    list-style: none;
+    transition: color 120ms ease;
+  }
+  .disclosure > summary::-webkit-details-marker { display: none; }
+  .disclosure > summary:hover { color: hsl(var(--foreground)); }
+  .disclosure > summary::before {
+    content: '';
+    width: 0; height: 0;
+    border-left: 3.5px solid currentColor;
+    border-top: 3px solid transparent;
+    border-bottom: 3px solid transparent;
+    transition: transform 140ms ease;
+  }
+  .disclosure[open] > summary::before { transform: rotate(90deg); }
+
+  /* ════ Key/value grid ════ */
+  .data-grid { @apply grid gap-px rounded overflow-hidden; background: hsl(var(--border)); }
+  .data-grid > * { @apply bg-card p-2.5; }
+
+  /* ════ Scrollbar ════ */
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: hsl(var(--border)) transparent; }
+  .scrollbar-thin::-webkit-scrollbar       { width: 8px; height: 8px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--gold) / 0.28);
-    border-radius: 3px;
+    background-color: hsl(220 11% 22%);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
   }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover { background-color: hsl(220 11% 30%); }
 
-  /* ── Glow effects (violet) ── */
-  .glow-gold {
-    box-shadow:
-      0 0 14px hsl(var(--gold) / 0.24),
-      0 0 34px hsl(var(--gold) / 0.10);
-  }
-  .glow-gold-sm {
-    box-shadow: 0 0 9px hsl(var(--gold) / 0.34);
-  }
-  .glow-long-sm {
-    box-shadow: 0 0 9px hsl(var(--long) / 0.34);
-  }
-  .glow-short-sm {
-    box-shadow: 0 0 9px hsl(var(--short) / 0.34);
-  }
+  /* ════ Legacy glow classes — neutralised ════
+     Deliberately kept as no-ops so panels that still reference them lose the
+     glow without throwing missing-class errors or needing an edit. */
+  .glow-gold, .glow-gold-sm, .glow-long-sm, .glow-short-sm { box-shadow: none; }
 
-  /* ── Data grid ── */
-  .data-grid { @apply grid gap-px bg-border/40 rounded-lg overflow-hidden; }
-  .data-grid > * { @apply bg-card p-3; }
+  /* ════ Direction edge on signal cards ════ */
+  .signal-long-border  { box-shadow: inset 2px 0 0 hsl(var(--long)); }
+  .signal-short-border { box-shadow: inset 2px 0 0 hsl(var(--short)); }
 
-  /* ── Panel header: engraved serif, frost ink ── */
-  .panel-header-title {
-    font-family: 'Cinzel', serif;
-    font-weight: 600;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-    color: hsl(var(--platinum));
-  }
-
-  /* ── Stat card platinum crown line ── */
-  .stat-card-top-line::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-      transparent,
-      hsl(258 80% 62%),
-      hsl(270 92% 80%),
-      hsl(199 90% 64%),
-      transparent
-    );
-    opacity: 0.6;
-  }
-
-  /* ── Active nav violet left bar ── */
+  /* ════ Active nav marker ════ */
   .nav-active-bar::before {
     content: '';
     position: absolute;
     left: 0; top: 50%;
     transform: translateY(-50%);
-    width: 2px; height: 65%;
-    background: hsl(var(--gold));
+    width: 2px; height: 60%;
+    background: hsl(var(--primary));
     border-radius: 0 2px 2px 0;
-    box-shadow: 0 0 10px hsl(var(--gold) / 0.7), 0 0 4px hsl(var(--gold));
   }
 
-  /* ── Signal card direction left border ── */
-  .signal-long-border {
-    border-left: 3px solid hsl(var(--long));
-    box-shadow: inset 2px 0 8px hsl(var(--long) / 0.10);
+  /* ════ Legacy decorative rules — flattened ════ */
+  .stat-card-top-line::before { content: none; }
+  .header-gold-line::after    { content: none; }
+  .logo-platinum {
+    background: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
+    color: hsl(var(--foreground));
   }
-  .signal-short-border {
-    border-left: 3px solid hsl(var(--short));
-    box-shadow: inset 2px 0 8px hsl(var(--short) / 0.10);
-  }
-
-  /* ── Violet gradient progress bar override ── */
   .progress-gold [data-radix-progress-indicator],
   .progress-gold > div {
-    background: linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light))) !important;
+    background: hsl(var(--primary)) !important;
   }
 
-  /* ── Header platinum hairline ── */
-  .header-gold-line::after {
-    content: '';
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-      transparent 0%,
-      hsl(258 70% 52%) 18%,
-      hsl(270 92% 80%) 50%,
-      hsl(199 90% 62%) 82%,
-      transparent 100%
-    );
-    opacity: 0.45;
-  }
-
-  /* ── Logo: brushed platinum-to-violet gradient text ── */
-  .logo-platinum {
-    background: linear-gradient(115deg,
-      hsl(240 30% 94%) 0%,
-      hsl(270 90% 82%) 42%,
-      hsl(258 80% 68%) 72%,
-      hsl(199 85% 70%) 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-
-  /* ── Glass card surface (shared) ── */
-  .surface-glass {
-    background: linear-gradient(180deg, hsl(var(--card) / 0.92), hsl(var(--background) / 0.55));
-    backdrop-filter: blur(10px);
+  /* ════ Focus ════ */
+  .focus-ring:focus-visible {
+    outline: 2px solid hsl(var(--primary));
+    outline-offset: 1px;
   }
 }
 
-/* ── Animations ── */
-@keyframes glow-pulse-gold {
-  0%, 100% { box-shadow: 0 0 6px hsl(258 90% 68% / 0.38); }
-  50%       { box-shadow: 0 0 20px hsl(258 90% 68% / 0.64), 0 0 7px hsl(270 95% 82% / 0.32); }
-}
-@keyframes glow-pulse-long {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.5; }
-}
+/* ── Animations: only what communicates state ── */
 @keyframes slide-in-left {
-  from { opacity: 0; transform: translateX(-6px); }
+  from { opacity: 0; transform: translateX(-4px); }
   to   { opacity: 1; transform: translateX(0); }
 }
+.animate-slide-in { animation: slide-in-left 0.16s ease-out; }
 
-.animate-glow-gold { animation: glow-pulse-gold 2.5s ease-in-out infinite; }
+/* Legacy pulse hooks — reduced to a quiet opacity breath, no box-shadow */
+@keyframes glow-pulse-gold { 0%,100% { opacity: 1; } 50% { opacity: 0.72; } }
+@keyframes glow-pulse-long { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+.animate-glow-gold { animation: glow-pulse-gold 2.4s ease-in-out infinite; }
 .animate-glow-long { animation: glow-pulse-long 1.8s ease-in-out infinite; }
-.animate-slide-in  { animation: slide-in-left 0.2s ease-out; }
 
-/* ── Price ticker marquee ── */
+@media (prefers-reduced-motion: reduce) {
+  .animate-glow-gold, .animate-glow-long, .animate-slide-in, .ticker-track {
+    animation: none !important;
+  }
+  .meter-fill { transition: none; }
+}
+
+/* ── Price ticker ── */
 @keyframes ticker-scroll {
   0%   { transform: translateX(0); }
   100% { transform: translateX(-50%); }
@@ -276,38 +338,33 @@
   display: flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 1.75rem;
+  gap: 2rem;
   white-space: nowrap;
   animation: ticker-scroll linear infinite;
   animation-duration: var(--ticker-duration, 90s);
   will-change: transform;
 }
-.ticker-strip:hover .ticker-track {
-  animation-play-state: paused;
-}
+.ticker-strip:hover .ticker-track { animation-play-state: paused; }
 .ticker-strip {
   position: relative;
   overflow: hidden;
-  border-bottom: 1px solid hsl(var(--gold) / 0.15);
-  background: linear-gradient(180deg,
-    hsl(250 40% 5% / 0.95),
-    hsl(250 40% 4% / 0.95));
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--sidebar-background));
 }
 .ticker-strip::before,
 .ticker-strip::after {
   content: '';
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 28px;
+  top: 0; bottom: 0;
+  width: 32px;
   z-index: 2;
   pointer-events: none;
 }
 .ticker-strip::before {
   left: 0;
-  background: linear-gradient(90deg, hsl(250 40% 5%), transparent);
+  background: linear-gradient(90deg, hsl(var(--sidebar-background)), transparent);
 }
 .ticker-strip::after {
   right: 0;
-  background: linear-gradient(-90deg, hsl(250 40% 5%), transparent);
+  background: linear-gradient(-90deg, hsl(var(--sidebar-background)), transparent);
 }

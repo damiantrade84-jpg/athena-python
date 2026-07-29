@@ -275,7 +275,7 @@ export default function PairBrowserPanel() {
       {/* Left: pair list */}
       <Card className="w-[260px] shrink-0 border-border/60 bg-card/50 flex flex-col">
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Pairs ({pairs?.total ?? '—'})</CardTitle>
+          <CardTitle className="panel-title flex items-center gap-2">Pairs ({pairs?.total ?? '—'})</CardTitle>
           <div className="relative">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
             <Input
@@ -491,7 +491,7 @@ export default function PairBrowserPanel() {
             <TabsContent value="execute" className="mt-0 space-y-3">
               <Card className="border-border/60 bg-card/50">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+                  <CardTitle className="panel-title flex items-center gap-2">
                     <Activity className="w-4 h-4 text-primary" /> Manual Execute
                   </CardTitle>
                 </CardHeader>
@@ -513,7 +513,7 @@ export default function PairBrowserPanel() {
 
               <Card className="border-border/60 bg-card/50">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+                  <CardTitle className="panel-title flex items-center gap-2">
                     <ExternalLink className="w-4 h-4 text-primary" /> External Charts
                   </CardTitle>
                 </CardHeader>

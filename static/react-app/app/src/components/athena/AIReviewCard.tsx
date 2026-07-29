@@ -1,7 +1,6 @@
 import { Suspense, lazy, memo, useMemo } from 'react';
-import { Sparkles } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Chip, Details, KeyValue } from '@/components/shared/primitives';
+import type { Tone } from '@/components/shared/primitives';
 import AIReviewContextCompletenessPanel from '@/components/athena/AIReviewContextCompletenessPanel';
 import AIReviewEngineAVerdictPanel from '@/components/athena/AIReviewEngineAVerdictPanel';
 import AIReviewSummaryStrip from '@/components/athena/AIReviewSummaryStrip';
@@ -22,18 +21,20 @@ import type {
 
 const WhatIfReplayPanel = lazy(() => import('@/components/athena/WhatIfReplayPanel'));
 
-const CONCORDANCE_PILL: Record<AIChartReviewConcordanceState, string> = {
-  agree: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
-  partial: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
-  disagree: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
-  unknown: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
+/* Verdict and concordance are status states, so they use the reserved
+   status tones rather than raw Tailwind palette hues. */
+const CONCORDANCE_TONE: Record<AIChartReviewConcordanceState, Tone> = {
+  agree: 'long',
+  partial: 'warning',
+  disagree: 'short',
+  unknown: 'default',
 };
 
-const VERDICT_PILL: Record<string, string> = {
-  VALID: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
-  CAUTION: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
-  INVALID: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
-  NO_TRADE: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
+const VERDICT_TONE: Record<string, Tone> = {
+  VALID: 'long',
+  CAUTION: 'warning',
+  INVALID: 'short',
+  NO_TRADE: 'default',
 };
 
 function showList(items: unknown): string[] | null {
@@ -63,13 +64,11 @@ function AIReviewCardImpl({ response }: AIReviewCardProps) {
     : (response.engineAVerdictComparison ?? response.engine_a_verdict_comparison);
   if (!ai || !c) {
     return (
-      <Card className="border-border/60 bg-card/50">
-        <CardContent className="p-3">
-          <div className="text-[11px] text-warning border border-border/40 rounded-md p-2">
-            AI review response is incomplete (missing {[!ai ? 'ai_review' : null, !c ? 'concordance' : null].filter(Boolean).join(' and ')}).
-          </div>
-        </CardContent>
-      </Card>
+      <div className="rounded-lg border border-border bg-card p-3">
+        <p className="note text-warning">
+          AI review response is incomplete (missing {[!ai ? 'ai_review' : null, !c ? 'concordance' : null].filter(Boolean).join(' and ')}).
+        </p>
+      </div>
     );
   }
   const ts = response.timestamps;
@@ -80,8 +79,8 @@ function AIReviewCardImpl({ response }: AIReviewCardProps) {
   const summary = response.aiReviewSummary ?? response.ai_review_summary;
   const atrInfo = ctx && typeof ctx === 'object' ? (ctx as { atr?: Record<string, unknown> }).atr : undefined;
   const scanDelta = deltaSeconds(ts?.scan_timestamp, ts?.chart_captured_at);
-  const verdictClass = VERDICT_PILL[ai.verdict] ?? VERDICT_PILL.NO_TRADE;
-  const concordanceClass = CONCORDANCE_PILL[c.concordance] ?? CONCORDANCE_PILL.unknown;
+  const verdictTone = VERDICT_TONE[ai.verdict] ?? VERDICT_TONE.NO_TRADE;
+  const concordanceTone = CONCORDANCE_TONE[c.concordance] ?? CONCORDANCE_TONE.unknown;
 
   const supporting = showList(ai.supporting_reasons);
   const risks = showList(ai.risks);
@@ -145,54 +144,116 @@ function AIReviewCardImpl({ response }: AIReviewCardProps) {
   })();
 
   return (
-    <Card className="border-border/60 bg-card/50">
-      <CardContent className="p-3 space-y-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          <Sparkles className="w-4 h-4 text-primary" />
-          <span className="text-sm font-semibold">AI Chart Review</span>
-          <Badge className={`${verdictClass} text-[10px] border`}>
-            {ai.verdict}
-          </Badge>
-          <Badge variant="outline" className="text-[10px]">
-            confidence: {ai.confidence}
-          </Badge>
-          <Badge className={`${concordanceClass} text-[10px] border`}>
-            {c.concordance}
-          </Badge>
-          {c.divergence_type !== 'none' && (
-            <Badge variant="outline" className="text-[10px]">
-              divergence: {c.divergence_type.replace(/_/g, ' ')}
-            </Badge>
-          )}
-          <span className="text-[10px] text-muted-foreground font-mono ml-auto">
-            {response.provider}/{showReviewValue(response.model)}
-            {response.dedup_hit ? `${AI_REVIEW_SEP}cached` : ''}
-          </span>
-        </div>
+    <div className="rounded-lg border border-border bg-card">
+      {/* ── Verdict bar: the whole point of the review ── */}
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-2">
+        <span className="panel-title mr-1">AI Chart Review</span>
+        <Chip tone={verdictTone}>{ai.verdict}</Chip>
+        <Chip tone={concordanceTone}>{c.concordance}</Chip>
+        <Chip title="Model self-reported confidence">conf {ai.confidence}</Chip>
+        {c.divergence_type !== 'none' && (
+          <Chip tone="warning">{c.divergence_type.replace(/_/g, ' ')}</Chip>
+        )}
+        <span className="readout ml-auto shrink-0 text-[10px] text-muted-foreground">
+          {response.provider}/{showReviewValue(response.model)}
+          {response.dedup_hit ? `${AI_REVIEW_SEP}cached` : ''}
+        </span>
+      </div>
 
+      <div className="space-y-3 p-3">
+        {/* ── What the model actually said ── */}
         <AIReviewSummaryStrip summary={summary} />
 
-        <AIReviewEngineAVerdictPanel comparison={verdictComparison} primaryEngine={primaryEngine} />
+        {/* Warnings change what you do, so they never collapse */}
+        {warnings && (
+          <div className="rounded border border-warning/30 bg-warning/5 p-2">
+            <p className="label mb-1 text-warning">Mismatch warnings</p>
+            <ul className="space-y-0.5">
+              {warnings.map((w, i) => (
+                <li key={i} className="note">{w}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
-        <AIDisagreementVizPanel
-          verdicts={disagreementVerdicts}
-          claims={evidenceClaims}
-          sources={evidenceSources}
-        />
+        {/* ── Reasoning ── */}
+        <Details summary="Reasoning, risks and missing context" defaultOpen>
+          <ListBlock label="Supporting reasons" items={supporting} />
+          <ListBlock label="Risks" items={risks} />
+          <ListBlock label="Missing context" items={missing} />
+          {c.divergence_note && (
+            <div>
+              <p className="label mb-1">Concordance note</p>
+              <p className="note">{c.divergence_note}</p>
+            </div>
+          )}
+        </Details>
 
-        <EvidenceRefsPanel claims={evidenceClaims} sources={evidenceSources} />
+        {/* ── Assessment fields ── */}
+        <Details summary="Assessment detail">
+          <div className="grid grid-cols-1 gap-x-6 md:grid-cols-2">
+            <KeyValue label="Human action" value={showReviewValue(ai.human_action)} />
+            <KeyValue label="Setup type" value={showReviewValue(ai.setup_type)} />
+            <KeyValue label="Visual confirmation" value={showReviewValue(ai.visual_confirmation)} />
+            <KeyValue label="Visual contradiction" value={showReviewValue(ai.visual_contradiction)} />
+            <KeyValue
+              label="Engine alignment"
+              value={showReviewValue(
+                primaryEngine === 'B'
+                  ? (ai as { engine_b_alignment?: string }).engine_b_alignment
+                  : ai.engine_a_alignment,
+              )}
+            />
+            <KeyValue label="ATR / RR" value={showReviewValue(ai.atr_rr_assessment)} />
+            <KeyValue
+              label="Freshness"
+              value={ai.freshness_assessment ? ai.freshness_assessment : freshnessFallback}
+            />
+            <KeyValue label="Entry quality" value={showReviewValue(ai.entry_quality)} />
+          </div>
 
-        <Suspense fallback={null}>
-          <WhatIfReplayPanel baseContext={whatIfBaseContext} />
-        </Suspense>
+          <TradeSkillReviewPanel
+            skill={ai}
+            suggestedPlan={suggestedPlan}
+            variant={reviewVariant}
+            timeframeRoute={
+              (response as { timeframeRoute?: { route?: string } }).timeframeRoute?.route
+              ?? (response as { timeframe_route?: { route?: string } }).timeframe_route?.route
+              ?? null
+            }
+          />
 
-        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
-          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
-            {primaryEngine === 'B' ? 'Engine B context' : 'Engine A non-visual context'}
-          </summary>
-          <div className="mt-2">
+          <AIReviewEngineAVerdictPanel comparison={verdictComparison} primaryEngine={primaryEngine} />
+        </Details>
+
+        {/* ── Provenance and cross-checks ── */}
+        <Details summary="Evidence, context and provenance">
+          <AIDisagreementVizPanel
+            verdicts={disagreementVerdicts}
+            claims={evidenceClaims}
+            sources={evidenceSources}
+          />
+
+          <EvidenceRefsPanel claims={evidenceClaims} sources={evidenceSources} />
+
+          <Suspense fallback={null}>
+            <WhatIfReplayPanel baseContext={whatIfBaseContext} />
+          </Suspense>
+
+          <AIReviewContextCompletenessPanel
+            completeness={response.contextCompleteness}
+            detailed={response.missingContextDetailed}
+            fundingOi={response.fundingOi}
+            atrDiagnostics={response.atrDiagnostics}
+            resistanceMap={response.resistanceMap}
+          />
+
+          <div>
+            <p className="label mb-1">
+              {primaryEngine === 'B' ? 'Engine B context' : 'Engine A non-visual context'}
+            </p>
             {primaryEngine === 'B' ? (
-              <pre className="text-[10px] whitespace-pre-wrap break-words text-muted-foreground">
+              <pre className="readout whitespace-pre-wrap break-words text-[10px] text-muted-foreground">
                 {JSON.stringify(ctx?.structure_context ?? {}, null, 2)}
               </pre>
             ) : (
@@ -202,118 +263,18 @@ function AIReviewCardImpl({ response }: AIReviewCardProps) {
               />
             )}
           </div>
-        </details>
 
-        <TradeSkillReviewPanel
-          skill={ai}
-          suggestedPlan={suggestedPlan}
-          variant={reviewVariant}
-          timeframeRoute={
-            (response as { timeframeRoute?: { route?: string } }).timeframeRoute?.route
-            ?? (response as { timeframe_route?: { route?: string } }).timeframe_route?.route
-            ?? null
-          }
-        />
-
-        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
-          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
-            Context completeness and resistance map
-          </summary>
-          <div className="mt-2">
-            <AIReviewContextCompletenessPanel
-              completeness={response.contextCompleteness}
-              detailed={response.missingContextDetailed}
-              fundingOi={response.fundingOi}
-              atrDiagnostics={response.atrDiagnostics}
-              resistanceMap={response.resistanceMap}
+          <div className="space-y-0.5">
+            <KeyValue label="Chart captured" value={showReviewValue(ts.chart_captured_at)} />
+            <KeyValue
+              label="Scan timestamp"
+              value={showReviewValue(ts.scan_timestamp)}
+              meta={scanDelta == null ? undefined : `delta ${scanDelta}s`}
             />
+            <KeyValue label="Latest candle" value={showReviewValue(ts.latest_candle_ts)} />
           </div>
-        </details>
-
-        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
-          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
-            Review detail fields
-          </summary>
-          <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
-            <Row label="Human action" value={showReviewValue(ai.human_action)} />
-            <Row label="Setup type" value={showReviewValue(ai.setup_type)} />
-            <Row label="Visual confirmation" value={showReviewValue(ai.visual_confirmation)} />
-            <Row label="Visual contradiction" value={showReviewValue(ai.visual_contradiction)} />
-            <Row label="Engine alignment" value={showReviewValue(
-              primaryEngine === 'B' ? (ai as { engine_b_alignment?: string }).engine_b_alignment : ai.engine_a_alignment,
-            )} />
-            <Row label="ATR / RR assessment" value={showReviewValue(ai.atr_rr_assessment)} />
-            <Row
-              label="Freshness assessment"
-              value={ai.freshness_assessment ? ai.freshness_assessment : freshnessFallback}
-            />
-            <Row label="Entry quality" value={showReviewValue(ai.entry_quality)} />
-          </div>
-        </details>
-
-        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
-          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
-            Supporting reasons, risks, and missing context
-          </summary>
-          <div className="mt-2 space-y-2">
-            <ListBlock label="Supporting reasons" items={supporting} />
-            <ListBlock label="Risks" items={risks} />
-            <ListBlock label="Missing context" items={missing} />
-          </div>
-        </details>
-
-        <details className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5">
-          <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
-            Timestamps and warnings
-          </summary>
-          <div className="mt-2 space-y-2">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px] text-muted-foreground">
-              <KV label="chart captured" value={showReviewValue(ts.chart_captured_at)} />
-              <KV
-                label="scan timestamp"
-                value={`${showReviewValue(ts.scan_timestamp)}${
-                  scanDelta == null ? '' : ` (delta ${scanDelta}s)`
-                }`}
-              />
-              <KV label="latest candle" value={showReviewValue(ts.latest_candle_ts)} />
-            </div>
-            {warnings && (
-              <div className="text-[11px] text-warning border border-border/40 rounded-md p-2">
-                <div className="font-semibold mb-1">Mismatch warnings</div>
-                <ul className="list-disc list-inside space-y-0.5">
-                  {warnings.map((w, i) => (
-                    <li key={i}>{w}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {c.divergence_note && (
-              <div className="text-[11px] text-muted-foreground border border-border/40 rounded-md p-2">
-                <span className="font-semibold">Concordance note: </span>
-                {c.divergence_note}
-              </div>
-            )}
-          </div>
-        </details>
-      </CardContent>
-    </Card>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="border border-border/40 rounded-md px-2 py-1.5">
-      <div className="text-[10px] text-muted-foreground">{label}</div>
-      <div className="text-[11px] break-words">{value}</div>
-    </div>
-  );
-}
-
-function KV({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="font-mono break-words">
-      <span className="text-muted-foreground">{label}: </span>
-      <span>{value}</span>
+        </Details>
+      </div>
     </div>
   );
 }
@@ -327,11 +288,14 @@ function ListBlock({
 }) {
   if (!items) return null;
   return (
-    <div className="text-[11px]">
-      <div className="text-[10px] text-muted-foreground mb-1">{label}</div>
-      <ul className="list-disc list-inside space-y-0.5 break-words">
+    <div>
+      <p className="label mb-1">{label}</p>
+      <ul className="space-y-1">
         {items.map((it, i) => (
-          <li key={i}>{it}</li>
+          <li key={i} className="note flex gap-2 break-words">
+            <span className="select-none text-muted-foreground/50">—</span>
+            <span>{it}</span>
+          </li>
         ))}
       </ul>
     </div>

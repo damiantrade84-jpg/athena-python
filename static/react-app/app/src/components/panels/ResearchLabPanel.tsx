@@ -603,7 +603,7 @@ export default function ResearchLabPanel() {
         <TabsContent value="autopilot" className="mt-3 space-y-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="panel-title flex items-center gap-2">
                 <Rocket className="w-4 h-4 text-primary" />
                 One-Click Session Autopilot
               </CardTitle>
@@ -685,7 +685,7 @@ export default function ResearchLabPanel() {
         <TabsContent value="manual" className="mt-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="panel-title flex items-center gap-2">
                 <ListChecks className="w-4 h-4 text-primary" />
                 Manual Discovery Run
               </CardTitle>
@@ -722,7 +722,7 @@ export default function ResearchLabPanel() {
         <TabsContent value="runs" className="mt-3">
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="panel-title flex items-center gap-2">
                 <History className="w-4 h-4 text-primary" />
                 Run History
               </CardTitle>
@@ -774,7 +774,7 @@ export default function ResearchLabPanel() {
         <>
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="panel-title flex items-center justify-between">
                 <span>Run · <span className="font-mono text-xs">{currentRunId}</span></span>
                 <Badge className={`${statusBadge(runStatus?.status)} text-[10px]`}>{runStatus?.status || '—'}</Badge>
               </CardTitle>

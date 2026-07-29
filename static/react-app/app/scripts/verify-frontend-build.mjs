@@ -49,14 +49,27 @@ const { jsRefs, cssRefs, allRefs } = activeBundleRefs(html);
 const jsText = jsRefs.map(readBundleText).join('\n');
 const cssText = cssRefs.map(readBundleText).join('\n');
 
-const requiredCssMarkers = ['258 90% 68', 'app-shell-bg', 'panel-glass'];
+// Obsidian theme markers — proves the current design tokens and component
+// layer actually shipped, rather than a stale bundle being served.
+//   211 100% 65  → the single blue accent (--primary)
+//   148 60% 47   → the semantic long/direction token
+//   meter-fill   → the score/quality meter component class
+const requiredCssMarkers = [
+  '211 100% 65',
+  '148 60% 47',
+  'app-shell-bg',
+  'panel-glass',
+  'meter-fill',
+];
 for (const marker of requiredCssMarkers) {
   if (!cssText.includes(marker)) {
-    fail(`production CSS missing Aurora marker: ${marker}`);
+    fail(`production CSS missing Obsidian marker: ${marker}`);
   }
 }
 
-const requiredJsMarkers = ['EquityAreaChart', 'dashEquityStroke'];
+// eqFill is the shared equity chart's gradient id prefix; the Engine B string
+// proves the rebuilt signal card is in the bundle.
+const requiredJsMarkers = ['EquityAreaChart', 'eqFill', 'Engine B quality'];
 for (const marker of requiredJsMarkers) {
   if (!jsText.includes(marker)) {
     fail(`production JS missing redesign marker: ${marker}`);

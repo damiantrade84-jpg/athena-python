@@ -1,4 +1,3 @@
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
 interface EngineTagProps {
@@ -6,30 +5,39 @@ interface EngineTagProps {
   className?: string;
 }
 
-const engineColors: Record<string, string> = {
-  'A': 'bg-violet-500/20 text-violet-300 border-violet-500/40',
-  'B': 'bg-sky-500/20 text-sky-300 border-sky-500/40',
-  'C': 'bg-teal-500/20 text-teal-400 border-teal-500/40',
-  'D': 'bg-amber-500/20 text-amber-400 border-amber-500/40',
-  'Engine A': 'bg-violet-500/20 text-violet-300 border-violet-500/40',
-  'Engine B': 'bg-sky-500/20 text-sky-300 border-sky-500/40',
-  'Engine C': 'bg-teal-500/20 text-teal-400 border-teal-500/40',
-  'Engine D': 'bg-amber-500/20 text-amber-400 border-amber-500/40',
-  'engine_a': 'bg-violet-500/20 text-violet-300 border-violet-500/40',
-  'engine_b': 'bg-sky-500/20 text-sky-300 border-sky-500/40',
-  'engine_c': 'bg-teal-500/20 text-teal-400 border-teal-500/40',
-  'engine_d': 'bg-amber-500/20 text-amber-400 border-amber-500/40',
-  'scalp': 'bg-amber-500/20 text-amber-400 border-amber-500/40',
-  'scalp_vp': 'bg-amber-500/20 text-amber-400 border-amber-500/40',
-  'engine d': 'bg-amber-500/20 text-amber-400 border-amber-500/40',
-  'lottery': 'bg-pink-500/20 text-pink-400 border-pink-500/40',
+/**
+ * Engine identity is categorical, so it draws from the chart ramp in fixed
+ * order rather than from ad-hoc Tailwind hues. A 6px dot carries the hue and
+ * the label stays neutral ink — a full colour-filled pill per engine was
+ * competing with the direction chip sitting next to it.
+ */
+const ENGINE_HUE: Record<string, string> = {
+  a: 'var(--chart-1)',
+  b: 'var(--chart-3)',
+  c: 'var(--chart-5)',
+  d: 'var(--chart-2)',
+  scalp: 'var(--chart-2)',
+  lottery: 'var(--chart-4)',
 };
 
+function hueFor(engine: string): string | null {
+  const k = engine.trim().toLowerCase().replace(/^engine[_\s]*/, '');
+  if (ENGINE_HUE[k]) return ENGINE_HUE[k];
+  if (k.startsWith('scalp')) return ENGINE_HUE.scalp;
+  return null;
+}
+
 export default function EngineTag({ engine, className }: EngineTagProps) {
-  const colorClass = engineColors[engine] || 'bg-muted text-muted-foreground border-muted-foreground/40';
+  const hue = hueFor(engine);
   return (
-    <Badge variant="outline" className={cn('text-[10px]', colorClass, className)}>
+    <span className={cn('chip', className)}>
+      {hue && (
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{ background: `hsl(${hue})` }}
+        />
+      )}
       {engine}
-    </Badge>
+    </span>
   );
 }

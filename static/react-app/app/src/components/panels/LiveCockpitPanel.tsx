@@ -320,7 +320,7 @@ export default function LiveCockpitPanel() {
                 )}
                 <span className={cn('relative inline-flex rounded-full h-2 w-2', autoPoll ? 'bg-primary' : 'bg-muted-foreground')} />
               </span>
-              <span className="text-sm font-semibold tracking-wide" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.08em' }}>
+              <span className="text-sm font-semibold tracking-wide">
                 Live Cockpit
               </span>
               <Badge variant="outline" className="text-[9px] ml-0.5">{snapshot?.payloadVersion || 'v3'}</Badge>
@@ -553,7 +553,7 @@ export default function LiveCockpitPanel() {
           {/* Event feed */}
           <Card className="border-border/60 bg-card/50 shrink min-h-0 max-h-[38%] flex flex-col gap-0 py-3">
             <CardHeader className="pb-2 shrink-0">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+              <CardTitle className="panel-title flex items-center gap-2">
                 <Activity className="w-3.5 h-3.5 text-primary" /> Event Feed
                 {events.length > 0 && <span className="text-[9px] text-muted-foreground font-normal">({events.length})</span>}
               </CardTitle>
@@ -801,7 +801,7 @@ function CockpitDetail({
     <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
       <CardHeader className="pb-1 shrink-0">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+          <CardTitle className="panel-title flex items-center gap-2">
             <Radio className="w-4 h-4 text-primary" /> {row.symbol}
             <Badge variant="outline" className="text-[10px]">
               {row.asset_type || '—'}

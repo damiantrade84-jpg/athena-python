@@ -97,7 +97,7 @@ export default function MarketsPanel() {
         {/* Prices Table */}
         <Card className="col-span-2 border-border/60 bg-card/50">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+            <CardTitle className="panel-title flex items-center gap-2">
               <Activity className="w-4 h-4 text-primary" />
               Live Prices
             </CardTitle>
@@ -162,7 +162,7 @@ export default function MarketsPanel() {
           {/* Yield Curve */}
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Yield Curve</CardTitle>
+              <CardTitle className="panel-title flex items-center gap-2">Yield Curve</CardTitle>
             </CardHeader>
             <CardContent>
               {yieldLoading ? <Skeleton className="h-[180px] w-full" /> : yieldData.length > 0 ? (
@@ -185,7 +185,7 @@ export default function MarketsPanel() {
           {/* Regime Status */}
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>Regime Status</CardTitle>
+              <CardTitle className="panel-title flex items-center gap-2">Regime Status</CardTitle>
             </CardHeader>
             <CardContent>
               {regimeLoading ? <Skeleton className="h-20 w-full" /> : regime?.regimes ? (
@@ -206,7 +206,7 @@ export default function MarketsPanel() {
           {/* News Sentiment — /api/news-sentiment requires a per-pair symbol (see Pair Browser). */}
           <Card className="border-border/60 bg-card/50">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>News Sentiment</CardTitle>
+              <CardTitle className="panel-title flex items-center gap-2">News Sentiment</CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-muted-foreground text-xs leading-relaxed py-2">

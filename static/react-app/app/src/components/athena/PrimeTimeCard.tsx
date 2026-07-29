@@ -46,7 +46,7 @@ export default function PrimeTimeCard() {
     >
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}>
+          <CardTitle className="panel-title flex items-center gap-2">
             <Hourglass className="w-4 h-4 text-primary" /> Prime Execution Windows
           </CardTitle>
           <div
@@ -64,7 +64,7 @@ export default function PrimeTimeCard() {
         {/* Current window hero */}
         <div className="flex items-end justify-between gap-4 flex-wrap">
           <div className="min-w-0">
-            <p className="text-lg font-bold leading-tight" style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.06em', color: meta.color }}>
+            <p className="text-lg font-bold leading-tight" style={{ color: meta.color }}>
               {seg.label}
             </p>
             <p className="text-[11px] text-muted-foreground mt-0.5">{seg.markets}</p>

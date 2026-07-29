@@ -7,7 +7,6 @@ import type { PerformanceMetrics } from '@/types';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
 import { Separator } from '@/components/ui/separator';
-import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
 import {
@@ -101,26 +100,13 @@ export default function Sidebar() {
   }, [postAutoTrade, refreshAutoTrade, showToast]);
 
   return (
-    <aside className="w-[210px] shrink-0 h-full min-h-0 overflow-hidden border-r border-sidebar-border bg-sidebar flex flex-col">
+    <aside className="flex h-full min-h-0 w-[210px] shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar">
 
-      {/* ── Nav caption (logo lives in Header) ── */}
-      <div className="shrink-0 px-4 pt-3 pb-2 border-b border-sidebar-border/40">
-        <span
-          className="text-[10px] uppercase tracking-[0.2em]"
-          style={{
-            fontFamily: "'Cinzel', serif",
-            color: 'hsl(var(--muted-foreground))',
-          }}
-        >
-          Navigation
-        </span>
-      </div>
-
-      {/* ── Stats Bar ── */}
-      <div className="shrink-0 p-3 border-b border-sidebar-border/40">
-        <div className="grid grid-cols-2 gap-2">
+      {/* ── At-a-glance counters ── */}
+      <div className="shrink-0 border-b border-border px-3 py-2.5">
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2">
           {[
-            { label: 'Signals',   value: activeSignals },
+            { label: 'Signals', value: activeSignals },
             { label: 'Positions', value: openPositions },
             {
               label: 'Daily P&L',
@@ -132,14 +118,9 @@ export default function Sidebar() {
               value: winRate != null && totalTrades > 0 ? `${fmtNum(winRate, 1)}%` : '—',
             },
           ].map(({ label, value, valueClass }) => (
-            <div
-              key={label}
-              className="rounded-md p-2 relative overflow-hidden"
-              style={{ background: 'hsl(var(--gold) / 0.06)', border: '1px solid hsl(var(--gold) / 0.15)' }}
-            >
-              <div className="absolute left-0 top-0 bottom-0 w-0.5 rounded-r" style={{ background: 'hsl(var(--gold))' }} />
-              <div className="text-[10px] uppercase tracking-wider" style={{ color: 'hsl(var(--muted-foreground))' }}>{label}</div>
-              <div className={cn('text-sm font-mono font-bold leading-tight mt-0.5', valueClass || 'text-primary')}>
+            <div key={label} className="min-w-0">
+              <div className="label truncate">{label}</div>
+              <div className={cn('readout mt-0.5 truncate text-[13px]', valueClass || 'text-foreground')}>
                 {value}
               </div>
             </div>
@@ -147,24 +128,24 @@ export default function Sidebar() {
         </div>
       </div>
 
-      <Separator className="shrink-0 bg-sidebar-border/40" />
-
-      {/* ── Navigation ── */}
-      <ScrollArea className="flex-1 min-h-0 py-2">
-        <nav className="px-2 space-y-2">
+      {/* ── Navigation ──
+          Section badges (LIVE / NEW / AI / HOT …) were coloured chips on every
+          third row, which made the rail compete with the content. They are now
+          uniform muted micro-labels; only the live count badge gets the accent. */}
+      <ScrollArea className="min-h-0 flex-1 py-2">
+        <nav className="space-y-3 px-2">
           {navSections.map((section, sectionIndex) => (
-            <div key={section.title ?? `section-${sectionIndex}`} className="space-y-0.5">
+            <div key={section.title ?? `section-${sectionIndex}`} className="space-y-px">
               {section.title && (
-                <div
-                  className="px-3 pt-1 pb-0.5 text-[9px] uppercase tracking-[0.16em] text-muted-foreground/80"
-                  style={{ fontFamily: "'Cinzel', serif" }}
-                >
-                  {section.title}
-                </div>
+                <div className="label px-2.5 pb-1 pt-1">{section.title}</div>
               )}
               {section.items.map(item => {
                 const isActive = activePanel === item.id;
                 const Icon = item.icon;
+                const count =
+                  item.id === 'signals' ? activeSignals
+                  : item.id === 'trades' ? openPositions
+                  : 0;
                 return (
                   <button
                     key={item.id}
@@ -172,64 +153,42 @@ export default function Sidebar() {
                     title={item.title || item.label}
                     onClick={() => setActivePanel(item.id)}
                     className={cn(
-                      'w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-all duration-150 group relative',
+                      'group relative flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-xs transition-colors',
                       isActive
-                        ? 'nav-active-bar border'
-                        : 'text-sidebar-foreground/60 hover:text-sidebar-foreground border border-transparent'
+                        ? 'nav-active-bar bg-accent font-medium text-foreground'
+                        : 'text-sidebar-foreground hover:bg-accent/50 hover:text-foreground',
                     )}
-                    style={isActive ? {
-                      background: 'hsl(var(--gold) / 0.10)',
-                      borderColor: 'hsl(var(--gold) / 0.25)',
-                      color: 'hsl(var(--gold-light))',
-                    } : {
-                      background: 'transparent',
-                    }}
                   >
                     <Icon
-                      className={cn('w-4 h-4 shrink-0 transition-colors')}
-                      style={{ color: isActive ? 'hsl(var(--gold))' : undefined }}
+                      className={cn(
+                        'h-3.5 w-3.5 shrink-0',
+                        isActive ? 'text-primary' : 'text-muted-foreground',
+                      )}
                     />
-                    <span className="flex-1 text-left truncate">{item.label}</span>
+                    <span className="flex-1 truncate text-left">{item.label}</span>
 
                     {item.badge && (
-                      <Badge
-                        variant="outline"
-                        className="text-[9px] h-4 px-1 shrink-0"
-                        style={item.badge === 'LIVE'
-                          ? { borderColor: 'hsl(var(--gold) / 0.5)', color: 'hsl(var(--gold-light))', background: 'hsl(var(--gold) / 0.10)' }
-                          : item.badge === 'RESEARCH'
-                            ? { borderColor: 'hsl(var(--gold) / 0.35)', color: 'hsl(var(--gold-light))', background: 'hsl(var(--gold) / 0.08)' }
-                            : { borderColor: 'hsl(var(--info) / 0.5)', color: 'hsl(var(--info))', background: 'hsl(var(--info) / 0.08)' }
-                        }
-                      >
+                      <span className="shrink-0 text-[9px] uppercase tracking-wide text-muted-foreground/60">
                         {item.badge}
-                      </Badge>
+                      </span>
                     )}
 
-                    {item.id === 'signals' && activeSignals > 0 && (
-                      <span
-                        className="w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-mono shrink-0"
-                        style={{ background: 'hsl(var(--gold) / 0.20)', color: 'hsl(var(--gold-light))' }}
-                      >
-                        {activeSignals}
+                    {count > 0 && (
+                      <span className="readout shrink-0 rounded bg-primary/15 px-1 text-[10px] text-primary">
+                        {count}
                       </span>
                     )}
-                    {item.id === 'trades' && openPositions > 0 && (
-                      <span
-                        className="w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-mono shrink-0"
-                        style={{ background: 'hsl(var(--gold) / 0.20)', color: 'hsl(var(--gold-light))' }}
-                      >
-                        {openPositions}
-                      </span>
-                    )}
+
                     {item.id === 'suggestedTrades' && suggestedTradeRunner && (
-                      <Badge
-                        variant="outline"
-                        className={cn('text-[8px] h-4 px-1 shrink-0', runnerBadgeClass(suggestedTradeRunner))}
+                      <span
+                        className={cn(
+                          'shrink-0 text-[9px] uppercase tracking-wide',
+                          runnerBadgeClass(suggestedTradeRunner),
+                        )}
                         title={`Suggested trade runner: ${runnerBadgeLabel(suggestedTradeRunner)}`}
                       >
                         {runnerBadgeLabel(suggestedTradeRunner)}
-                      </Badge>
+                      </span>
                     )}
                   </button>
                 );
@@ -239,48 +198,58 @@ export default function Sidebar() {
         </nav>
       </ScrollArea>
 
-      <Separator className="shrink-0 bg-sidebar-border/40" />
+      <Separator className="shrink-0 bg-border" />
 
-      {/* ── Footer Controls ── */}
-      <div className="shrink-0 p-3 space-y-3">
-        {/* Risk block */}
-        <div className="rounded-md p-2.5 space-y-2" style={{ background: 'hsl(var(--gold) / 0.05)', border: '1px solid hsl(var(--gold) / 0.12)' }}>
+      {/* ── Footer: risk + toggles ── */}
+      <div className="shrink-0 space-y-3 p-3">
+        <div className="space-y-1.5">
           <div className="flex items-center justify-between">
-            <span className="text-[10px]" style={{ color: 'hsl(var(--muted-foreground))' }}>Circuit Breaker</span>
-            <div
-              className={`w-1.5 h-1.5 rounded-full ${guardian?.circuitBreaker ? 'bg-short animate-pulse' : 'bg-long'}`}
-              style={guardian?.circuitBreaker ? {} : { boxShadow: '0 0 5px hsl(var(--long) / 0.6)' }}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[10px]" style={{ color: 'hsl(var(--muted-foreground))' }}>Daily Risk</span>
-            <span className="text-[10px] font-mono" style={{ color: 'hsl(var(--foreground) / 0.80)' }}>
-              ${fmtNum(dailyLoss, 0, '0')}/${fmtNum(dailyLossLimit, 0, '0')}
+            <span className="label">Circuit Breaker</span>
+            <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span
+                className={cn(
+                  'h-1.5 w-1.5 rounded-full',
+                  guardian?.circuitBreaker ? 'animate-pulse bg-short' : 'bg-long',
+                )}
+              />
+              {guardian?.circuitBreaker ? 'tripped' : 'armed'}
             </span>
           </div>
-          {/* Gold gradient progress bar */}
-          <div className="w-full rounded-full h-1 overflow-hidden" style={{ background: 'hsl(var(--border) / 0.5)' }}>
+          <div className="flex items-center justify-between">
+            <span className="label">Daily Risk</span>
+            <span className="readout text-[11px] text-muted-foreground">
+              ${fmtNum(dailyLoss, 0, '0')} / ${fmtNum(dailyLossLimit, 0, '0')}
+            </span>
+          </div>
+          <div className="meter">
+            {/* Risk consumed is a warning quantity, not a good one — it uses the
+                short/red token once it is meaningfully drawn down. */}
             <div
-              className="h-full rounded-full transition-all duration-500"
+              className="meter-fill"
               style={{
                 width: `${riskPct}%`,
-                background: 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light)))',
+                background: riskPct >= 66 ? 'hsl(var(--short))' : riskPct >= 33 ? 'hsl(var(--warning))' : 'hsl(var(--muted-foreground))',
               }}
             />
           </div>
         </div>
 
-        {/* Toggles */}
-        <div className="flex items-center justify-between px-1">
-          <span className="text-[10px]" style={{ color: 'hsl(var(--muted-foreground))' }}>Auto-Trade</span>
-          <Switch checked={serverAutoTradeEnabled} onCheckedChange={handleAutoTradeToggle} disabled={togglingAutoTrade} />
-        </div>
-        <p className="px-1 text-[9px] text-muted-foreground">
-          Autotrade volume: Minimum (broker min)
-        </p>
-        <div className="flex items-center justify-between px-1">
-          <span className="text-[10px]" style={{ color: 'hsl(var(--muted-foreground))' }}>Test Mode</span>
-          <Switch checked={isTestMode} onCheckedChange={toggleTestMode} />
+        <div className="space-y-2 border-t border-border pt-2.5">
+          <div className="flex items-center justify-between">
+            <span className="label">Auto-Trade</span>
+            <Switch
+              checked={serverAutoTradeEnabled}
+              onCheckedChange={handleAutoTradeToggle}
+              disabled={togglingAutoTrade}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="label">Test Mode</span>
+            <Switch checked={isTestMode} onCheckedChange={toggleTestMode} />
+          </div>
+          <p className="text-[10px] leading-snug text-muted-foreground/70">
+            Autotrade volume: broker minimum
+          </p>
         </div>
       </div>
     </aside>

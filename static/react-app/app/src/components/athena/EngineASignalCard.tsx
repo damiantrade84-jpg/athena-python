@@ -1,8 +1,7 @@
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ArrowUpRight, Play } from 'lucide-react';
+import { Play } from 'lucide-react';
 import { cn, fmtNum, toNum } from '@/lib/utils';
+import { Chip, Details, DirectionChip, KeyValue, Metric, ScoreLine } from '@/components/shared/primitives';
 import {
   fmtPrice,
   fmtLiveQuoteMeta,
@@ -52,6 +51,41 @@ function firstFiniteNumber(...values: unknown[]): number | undefined {
   return undefined;
 }
 
+/** Card shell shared by both card variants: hairline border, direction edge. */
+function CardShell({
+  isLong,
+  isShort,
+  selected,
+  onClick,
+  children,
+}: {
+  isLong: boolean;
+  isShort: boolean;
+  selected?: boolean;
+  onClick?: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        'rounded-lg border bg-card transition-colors',
+        selected ? 'border-primary/60' : 'border-border hover:border-muted-foreground/25',
+        onClick && 'cursor-pointer',
+        isLong && 'signal-long-border',
+        isShort && 'signal-short-border',
+      )}
+      onClick={onClick}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Stops a disclosure toggle inside a selectable card from also selecting it. */
+function stopSelect(e: React.MouseEvent) {
+  e.stopPropagation();
+}
+
 export default function EngineASignalCard({
   signal,
   onExecute,
@@ -98,11 +132,6 @@ export default function EngineASignalCard({
   const engineABlockReason = String(raw.engine_a_block_reason ?? '').trim();
   const isLong  = signal.direction === 'LONG';
   const isShort = signal.direction === 'SHORT';
-  const dirStyle = isLong
-    ? { background: 'hsl(var(--long) / 0.18)', color: 'hsl(var(--long))' }
-    : isShort
-    ? { background: 'hsl(var(--short) / 0.18)', color: 'hsl(var(--short))' }
-    : { background: 'hsl(var(--muted) / 0.40)', color: 'hsl(var(--muted-foreground))' };
   const scoreBreakdown = engineAScoreBreakdown(signal);
   const bBreakdown = isEngineBOnly
     ? engineBScoreBreakdown(raw)
@@ -128,20 +157,36 @@ export default function EngineASignalCard({
   const nakedGatePct = isEngineBOnly
     ? toNum(raw.engine_b_gate_pct ?? engineBStatus.gate_pct ?? engineBResult.gate_pct, NaN)
     : NaN;
-  const conf = isEngineBOnly
-    ? (Number.isFinite(nakedQualityPct)
-        ? Math.max(0, Math.min(100, Math.round(nakedQualityPct)))
-        : Number.isFinite(nakedTotalPct)
-          ? Math.max(0, Math.min(100, Math.round(nakedTotalPct)))
-          : bBreakdown?.totalScore != null && bBreakdown.totalMax
-            ? Math.max(0, Math.min(100, Math.round((bBreakdown.totalScore / bBreakdown.totalMax) * 100)))
-            : Number.isFinite(nakedGatePct)
-              ? Math.max(0, Math.min(100, Math.round(nakedGatePct)))
-              : null)
-    : confluencePct(signal);
-  const confLabel = isEngineBOnly && Number.isFinite(nakedQualityPct)
-    ? 'quality'
-    : undefined;
+  // Resolve the Engine B headline number and its caption TOGETHER, so the label
+  // can never describe a different quantity than the one on screen.
+  //
+  // The fallbacks are not interchangeable with quality: `pct` floors near 83%
+  // (gate_score == gate_max for every passing signal) and `gate_pct` is 100 by
+  // definition. Presenting either under a "quality" caption would render a
+  // constant as if it were the earned, discriminating layer — so each fallback
+  // is labelled for what it actually is, and quality is shown as "—" when the
+  // backend did not compute it (e.g. a zero quality denominator).
+  const engineBHeadline = (() => {
+    const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
+    if (Number.isFinite(nakedQualityPct)) {
+      return { pct: clamp(nakedQualityPct), caption: 'Engine B quality', isQuality: true };
+    }
+    if (Number.isFinite(nakedTotalPct)) {
+      return { pct: clamp(nakedTotalPct), caption: 'Engine B total', isQuality: false };
+    }
+    if (bBreakdown?.totalScore != null && bBreakdown.totalMax) {
+      return {
+        pct: clamp((bBreakdown.totalScore / bBreakdown.totalMax) * 100),
+        caption: 'Engine B total',
+        isQuality: false,
+      };
+    }
+    if (Number.isFinite(nakedGatePct)) {
+      return { pct: clamp(nakedGatePct), caption: 'Engine B gates', isQuality: false };
+    }
+    return { pct: null as number | null, caption: 'Engine B quality', isQuality: true };
+  })();
+  const conf = isEngineBOnly ? engineBHeadline.pct : confluencePct(signal);
   const thresholdPct = isEngineBOnly ? null : confluenceThresholdPct(signal);
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
@@ -210,7 +255,6 @@ export default function EngineASignalCard({
   const type = signal.type;
   const livePrice = toNum(signal.livePrice, NaN);
   const livePriceMeta = fmtLiveQuoteMeta(signal.livePriceAgeSec, signal.livePriceSource);
-  const displayPrice = Number.isFinite(livePrice) ? livePrice : signal.entry ?? signal.price;
   const decimals = priceDecimals(pair, type);
   const intermarketEntries = intermarketConfirmationEntries(signal.intermarketConfirmation);
   const levelEntry = isEngineBOnly
@@ -240,298 +284,278 @@ export default function EngineASignalCard({
   const runnerMinRr = isEngineBOnly
     ? firstFiniteNumber(raw.engine_b_rr_required, engineBStatus.rr_required, engineBResult.rr_required, signal.min_rr)
     : undefined;
-  void displayPrice;
+
+  const hasFactorGrid = fs.trend != null || fs.momentum != null || fs.addon != null || hasOrthoScores;
+  const hasWarnings = Boolean(signal.warnings && signal.warnings.length > 0);
 
   return (
-    <Card
-      className={cn(
-        'transition-all duration-200',
-        isLong  ? 'signal-long-border'  : '',
-        isShort ? 'signal-short-border' : '',
-      )}
-      style={selected
-        ? { background: 'hsl(var(--card) / 0.70)', border: '1px solid hsl(var(--gold) / 0.45)', boxShadow: '0 0 12px hsl(var(--gold) / 0.18)' }
-        : { background: 'hsl(var(--card) / 0.50)', border: '1px solid hsl(var(--border) / 0.60)' }
-      }
-      onClick={() => onSelect?.(signal)}
+    <CardShell
+      isLong={isLong}
+      isShort={isShort}
+      selected={selected}
+      onClick={onSelect ? () => onSelect(signal) : undefined}
     >
-      <CardContent className={compact ? 'p-3 space-y-2' : 'p-4 space-y-3'}>
-        {/* Header */}
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm font-mono font-bold truncate">{pair}</span>
-            {/* Direction badge — pill */}
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={dirStyle}>
-              {signal.direction || '—'}
-            </span>
-            {signal.signalClass && (
-              <Badge variant="outline" className="text-[9px] uppercase">
-                {String(signal.signalClass)}
-              </Badge>
-            )}
-            {signal.style && (
-              <Badge variant="outline" className="text-[9px]">
-                {signal.style}
-              </Badge>
-            )}
-            {isResearchOnly && (
-              <Badge variant="outline" className="text-[9px] text-muted-foreground">
-                Research-only
-              </Badge>
-            )}
-          </div>
-          <div className="flex items-center gap-1 shrink-0">
-            <Badge variant="outline" className={cn('text-[10px] font-mono', convT.color)}>
-              {convT.tier}
-            </Badge>
-            {Number.isFinite(conv) && (
-              <span className="text-[10px] text-muted-foreground font-mono">{(conv * 100).toFixed(0)}%</span>
-            )}
-          </div>
+      {/* ── Identity ── */}
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="readout truncate text-sm font-semibold">{pair}</span>
+          <DirectionChip direction={signal.direction} />
         </div>
-
-        <TimeframePolicyLine signal={signal} compact={compact} />
-
-        {/* Score + threshold + bar */}
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-            <span>
-              {/* Engine B leads with the quality layer: gate_score/gate_max is
-                  5/5 for every executable row, so it belongs in the sub-line as
-                  a pass badge rather than as the headline number. */}
-              {isEngineBOnly ? 'Engine B quality' : 'Confluence'}{' '}
-              <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
-                {isEngineBOnly
-                  ? bBreakdown?.bonusPoints != null && bBreakdown.totalMax != null && bBreakdown.gateMax != null
-                    ? `${fmtNum(bBreakdown.bonusPoints, 2)}/${fmtNum(bBreakdown.totalMax - bBreakdown.gateMax, 2)}`
-                    : conf != null ? `${conf.toFixed(0)}%` : '—'
-                  : `${fmtNum(score, 2)}/${fmtNum(max, 2)}`}
-              </span>
-              {threshold != null && !isEngineBOnly ? (
-                <span className="ml-1">≥ {fmtNum(threshold, 2)}</span>
-              ) : null}
-            </span>
-            <span className="font-mono">
-              {conf != null ? `${conf.toFixed(0)}%` : '—'}
-              {confLabel ? <span className="ml-1 text-[9px] opacity-70">{confLabel}</span> : null}
-            </span>
-          </div>
-          {isEngineBOnly && bBreakdown?.totalScore != null && (
-            <p className="text-[9px] text-muted-foreground leading-snug">
-              Gates{' '}
-              <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
-                {fmtNum(bBreakdown.gateScore, 2)}/{fmtNum(bBreakdown.gateMax ?? max, 2)}
-              </span>
-              {' · total '}
-              <span className="font-mono text-foreground">
-                {fmtNum(bBreakdown.totalScore, 2)}/{fmtNum(bBreakdown.totalMax ?? max, 2)}
-              </span>
-              {bBreakdown.minScore != null && (
-                <span> ≥ {fmtNum(bBreakdown.minScore, 2)}</span>
-              )}
-              {bBreakdown.minScoreFloorBinding === false && (
-                <span className="opacity-70"> (floor non-binding)</span>
-              )}
-              {bBreakdown.scoreFloorPasses && !bBreakdown.confidencePasses && (
-                <span className="text-warning"> — score clears floor; one or more mandatory gates failed</span>
-              )}
-            </p>
-          )}
-          {!isEngineBOnly && scoreBreakdown?.hasAdjustments && (
-            <EngineAScoreAdjustmentNote breakdown={scoreBreakdown} />
-          )}
-          {/* Violet gradient bar — glows when score passes threshold. The axis is
-              score/max, so the threshold is drawn as a tick rather than by
-              rescaling the axis (which made groups incomparable). */}
-          <div className="relative w-full rounded-full h-2 overflow-hidden" style={{ background: 'hsl(var(--border) / 0.55)' }}>
-            <div
-              className={`h-full rounded-full transition-all duration-300 ${passed ? 'glow-gold-sm' : ''}`}
-              style={{
-                width: `${conf ?? 0}%`,
-                background: passed
-                  ? 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--long)))'
-                  : 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light)))',
-              }}
-            />
-            {thresholdPct != null && (
-              <div
-                className="absolute top-0 h-full"
-                style={{
-                  left: `${thresholdPct}%`,
-                  width: '2px',
-                  background: 'hsl(var(--foreground) / 0.65)',
-                }}
-                title={`Trade threshold ${fmtNum(threshold, 2)} of ${fmtNum(max, 2)}`}
-              />
-            )}
-          </div>
-          {isEngineBOnlyStub ? (
-            <p className="text-[9px] text-muted-foreground leading-snug">
-              Engine B-only watchlist. Engine A blocked: {engineABlockReason || 'no Engine A trade signal'}.
-            </p>
-          ) : isEngineBOnly ? (
-            <p className="text-[9px] text-muted-foreground leading-snug">
-              Engine B structure scan — confidence from Naked Engine gates (structure, location, trigger, RR).
-            </p>
-          ) : (
-            <p className="text-[9px] text-muted-foreground leading-snug">
-              Quality score (0–3.0): weighted multi-timeframe trend + momentum (RSI/MACD/DI·ADX),
-              entry location and volatility regime, plus intermarket, carry, COT, microstructure and
-              volume — each shown below. The bar fills to ~67% at this group&apos;s TRADE threshold.
-            </p>
-          )}
-          {trendAbortNote && (
-            <p className="text-[9px] text-muted-foreground leading-snug">{trendAbortNote}</p>
-          )}
-          {isResearchOnly && (
-            <p className="text-[9px] text-muted-foreground leading-snug">
-              Research-only: trend engine disabled for trade-ready status on this instrument.
-              {tradeGateReason ? ` ${tradeGateReason}` : ''}
-            </p>
-          )}
-          {showDiChain && (
-            <p className="text-[9px] text-muted-foreground leading-snug">
-              Score chain:{' '}
-              {Number.isFinite(diAlign) && (
-                <span className={diAlign <= 0.35 ? 'text-short font-medium' : 'text-foreground/80'}>
-                  DI×{fmtNum(diAlign, 2)}
-                </span>
-              )}
-              {Number.isFinite(adxMult) && (
-                <span>{Number.isFinite(diAlign) ? ' · ' : ''}ADX×{fmtNum(adxMult, 2)}</span>
-              )}
-              {Number.isFinite(dirRamp) && (
-                <span>{Number.isFinite(diAlign) || Number.isFinite(adxMult) ? ' · ' : ''}ramp×{fmtNum(dirRamp, 2)}</span>
-              )}
-              {Number.isFinite(diAlign) && diAlign <= 0.35 && (
-                <span className="text-short"> — +DI/-DI opposes EMA trend (main forex suppressor)</span>
-              )}
-            </p>
-          )}
-          {!isEngineBOnly && signal.engine_b != null && (
-            <p className="text-[9px] text-muted-foreground leading-snug border-t border-border/40 pt-1 mt-1">
-              Engine B attached — see detail panel
-            </p>
-          )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {signal.style && <Chip>{signal.style}</Chip>}
+          <Chip
+            tone={convT.tier === 'HIGH' ? 'accent' : 'default'}
+            title="Conviction tier"
+          >
+            {convT.tier}
+            {Number.isFinite(conv) ? ` ${(conv * 100).toFixed(0)}%` : ''}
+          </Chip>
         </div>
+      </div>
 
-        {/* Factor breakdown */}
-        {(fs.trend != null || fs.momentum != null || fs.addon != null || hasOrthoScores) && (
-          hasOrthoScores && orthoScores ? (
-            <div className="grid grid-cols-2 gap-1 text-center">
-              <FactorBox label="Trend" value={fs.trend} accent="long" />
-              <FactorBox label="Momentum" value={fs.momentum} accent="primary" />
-              {Object.entries(orthoScores).map(([name, v]) => (
-                <FactorBox
-                  key={name}
-                  label={ORTHO_LABELS[name] ?? name}
-                  value={v}
-                  accent={v >= 0 ? 'long' : 'short'}
-                />
-              ))}
-              <FactorBox label="Ortho Σ" value={fs.ortho_term} accent="warning" />
-            </div>
-          ) : (
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <FactorBox label="Trend" value={fs.trend} accent="long" />
-              <FactorBox label="Momentum" value={fs.momentum} accent="primary" />
-              <FactorBox label="Addon" value={fs.addon} accent="warning" />
-            </div>
-          )
-        )}
+      <div className="space-y-3 p-3">
+        {/* ── Headline score ── */}
+        <ScoreLine
+          caption={isEngineBOnly ? engineBHeadline.caption : 'Confluence'}
+          fraction={
+            isEngineBOnly
+              // Only show a fraction when it is the exact ratio the displayed
+              // percent came from. For quality that is net-of-penalty points
+              // over the weight denominator; bonus_points is pre-penalty and
+              // would print e.g. "0.34" beside "9%" on a penalised signal. For
+              // the total/gate fallbacks the percent is already the whole story.
+              ? engineBHeadline.isQuality
+                && bBreakdown?.qualityPointsNet != null
+                && bBreakdown.qualityDenominator
+                ? `${fmtNum(bBreakdown.qualityPointsNet, 2)}/${fmtNum(bBreakdown.qualityDenominator, 2)}`
+                : undefined
+              : `${fmtNum(score, 2)}/${fmtNum(max, 2)}`
+          }
+          pct={conf}
+          thresholdPct={thresholdPct}
+          passed={passed}
+          thresholdTitle={
+            threshold != null ? `Trade threshold ${fmtNum(threshold, 2)} of ${fmtNum(max, 2)}` : undefined
+          }
+        />
 
-        {!compact && intermarketEntries.length > 0 && (
-          <div className="rounded-md border border-border/50 bg-muted/20 p-2 space-y-1">
-            <p className="text-[10px] uppercase text-muted-foreground">Intermarket confirmation</p>
-            <div className="grid grid-cols-2 gap-1">
-              {intermarketEntries.map(([label, value]) => (
-                <div key={label} className="text-[10px] min-w-0">
-                  <span className="text-muted-foreground">{label}: </span>
-                  <span className="font-mono text-foreground break-words">{value}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Levels */}
-        <div className="grid grid-cols-4 gap-2">
-          <Level
+        {/* ── Levels: the numbers actually needed to take the trade ── */}
+        <div className="grid grid-cols-4 gap-3">
+          <Metric
             label="Live"
-            value={Number.isFinite(livePrice) ? livePrice : undefined}
-            pair={pair}
-            type={type}
-            accent="primary"
-            decimals={decimals}
-            meta={livePriceMeta}
+            value={Number.isFinite(livePrice) ? fmtNum(livePrice, decimals) : '—'}
+            tone="accent"
+            meta={compact ? undefined : livePriceMeta}
           />
-          <Level label="Entry" value={levelEntry} pair={pair} type={type} accent="muted" decimals={decimals} />
-          <Level label="SL" value={levelSl} pair={pair} type={type} accent="short" decimals={decimals} />
-          <Level label={isEngineBOnly ? 'TP1' : 'TP'} value={levelTp1} pair={pair} type={type} accent="long" decimals={decimals} />
+          <Metric label="Entry" value={fmtNum(levelEntry, decimals)} />
+          <Metric label="SL" value={fmtNum(levelSl, decimals)} tone="short" />
+          <Metric
+            label={isEngineBOnly ? 'TP1' : 'TP'}
+            value={fmtNum(levelTp1, decimals)}
+            tone="long"
+          />
         </div>
 
-        {(levelTp2 != null && Number.isFinite(Number(levelTp2))) && (
-          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-            <ArrowUpRight className="w-3 h-3 text-long" />
-            TP2: <span className="font-mono text-foreground">{fmtPrice(levelTp2, pair, type)}</span>
+        {/* ── Risk/reward strip ── */}
+        {(rr1 != null || rr2 != null || levelTp2 != null) && (
+          <div className="flex flex-wrap items-center gap-1.5">
             {rr1 != null && (
-              <span className="ml-2">{isEngineBOnly ? 'TP1 R:R' : 'R:R'} {fmtNum(rr1, 2)}{tp1MinRr != null ? ` ≥ ${fmtNum(tp1MinRr, 2)}` : ''}</span>
+              <Chip title={isEngineBOnly ? 'TP1 risk/reward' : 'Risk/reward'}>
+                {isEngineBOnly ? 'TP1 R:R' : 'R:R'} {fmtNum(rr1, 2)}
+                {tp1MinRr != null ? ` ≥ ${fmtNum(tp1MinRr, 2)}` : ''}
+              </Chip>
             )}
             {rr2 != null && (
-              <span className="ml-1">{isEngineBOnly ? 'Runner R:R' : 'TP2 R:R'} {fmtNum(rr2, 2)}{runnerMinRr != null ? ` ≥ ${fmtNum(runnerMinRr, 2)}` : ''}</span>
+              <Chip title={isEngineBOnly ? 'Runner risk/reward' : 'TP2 risk/reward'}>
+                {isEngineBOnly ? 'Runner R:R' : 'TP2 R:R'} {fmtNum(rr2, 2)}
+                {runnerMinRr != null ? ` ≥ ${fmtNum(runnerMinRr, 2)}` : ''}
+              </Chip>
+            )}
+            {levelTp2 != null && Number.isFinite(Number(levelTp2)) && (
+              <Chip title="Second take-profit">TP2 {fmtPrice(levelTp2, pair, type)}</Chip>
             )}
             {isEngineBOnly && rrUsedForGate != null && rrUsedForGate !== rr2 && (
-              <span className="ml-1">Gate R:R {fmtNum(rrUsedForGate, 2)}</span>
+              <Chip title="R:R value the gate actually used">Gate R:R {fmtNum(rrUsedForGate, 2)}</Chip>
             )}
           </div>
         )}
 
-        {/* Context row */}
-        {!compact && (
-          <div className="flex items-center justify-between text-[10px] text-muted-foreground gap-2 flex-wrap">
-            <span>Regime: <span className="text-foreground font-mono">{regimeLabel(signal.regime)}</span></span>
-            <span>Session: <span className="text-foreground font-mono">{sessionLabel(signal.session)}</span></span>
-            {signal.factorDiagnostics?.adxValue != null && (
-              <span>ADX: <span className="text-foreground font-mono">{fmtNum(signal.factorDiagnostics.adxValue, 1)}</span></span>
-            )}
-            {signal.atr != null && (
-              <span>ATR: <span className="text-foreground font-mono">{fmtPrice(signal.atr, pair, type)}</span></span>
-            )}
-          </div>
+        {/* Quality was not computed for this payload — say so, rather than let a
+            saturated fallback read as an earned score. */}
+        {isEngineBOnly && !engineBHeadline.isQuality && (
+          <p className="note">
+            Quality layer unavailable on this payload — showing the{' '}
+            {engineBHeadline.caption.replace('Engine B ', '')} figure, which is
+            near-constant for any passing signal and cannot be used to rank.
+          </p>
         )}
 
-        {/* Warnings */}
-        {!compact && signal.warnings && signal.warnings.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {signal.warnings.slice(0, 6).map((w) => (
-              <Badge key={w} variant="outline" className="text-[9px] text-warning border-warning/40">
-                {w}
-              </Badge>
-            ))}
-          </div>
+        {/* ── Blocking state stays on the surface: it changes what you do ── */}
+        {isResearchOnly && (
+          <p className="note">
+            Research-only — trend engine disabled for trade-ready status on this instrument.
+            {tradeGateReason ? ` ${tradeGateReason}` : ''}
+          </p>
         )}
+        {trendAbortNote && <p className="note text-warning">{trendAbortNote}</p>}
+        {isEngineBOnlyStub && (
+          <p className="note">
+            Engine B-only watchlist. Engine A blocked: {engineABlockReason || 'no Engine A trade signal'}.
+          </p>
+        )}
+        {isEngineBOnly && bBreakdown?.scoreFloorPasses && !bBreakdown.confidencePasses && (
+          <p className="note text-warning">
+            Score clears the floor, but one or more mandatory gates failed.
+          </p>
+        )}
+
+        {/* ══ Everything diagnostic lives here — present, not deleted ══ */}
+        <Details summary="Details" className="border-t border-border pt-0.5" >
+          <div onClick={stopSelect} className="space-y-3">
+            <TimeframePolicyBlock signal={signal} />
+
+            {/* Score composition */}
+            <div className="space-y-0.5">
+              {isEngineBOnly && bBreakdown?.totalScore != null ? (
+                <>
+                  <KeyValue
+                    label="Gates"
+                    value={`${fmtNum(bBreakdown.gateScore, 2)} / ${fmtNum(bBreakdown.gateMax ?? max, 2)}`}
+                    tone={passed ? 'long' : 'muted'}
+                  />
+                  <KeyValue
+                    label="Total"
+                    value={`${fmtNum(bBreakdown.totalScore, 2)} / ${fmtNum(bBreakdown.totalMax ?? max, 2)}`}
+                  />
+                  {bBreakdown.minScore != null && (
+                    <KeyValue
+                      label="Min score"
+                      value={fmtNum(bBreakdown.minScore, 2)}
+                      meta={bBreakdown.minScoreFloorBinding === false ? 'floor non-binding' : undefined}
+                    />
+                  )}
+                </>
+              ) : (
+                <>
+                  <KeyValue label="Score" value={`${fmtNum(score, 2)} / ${fmtNum(max, 2)}`} />
+                  {threshold != null && (
+                    <KeyValue label="Trade threshold" value={`≥ ${fmtNum(threshold, 2)}`} />
+                  )}
+                </>
+              )}
+              {!isEngineBOnly && scoreBreakdown?.hasAdjustments && (
+                <EngineAScoreAdjustmentRows breakdown={scoreBreakdown} />
+              )}
+            </div>
+
+            {/* Factor breakdown */}
+            {hasFactorGrid && (
+              <div>
+                <p className="label mb-1.5">Factors</p>
+                {hasOrthoScores && orthoScores ? (
+                  <div className="grid grid-cols-3 gap-x-3 gap-y-1.5">
+                    <FactorCell label="Trend" value={fs.trend} />
+                    <FactorCell label="Momentum" value={fs.momentum} />
+                    {Object.entries(orthoScores).map(([name, v]) => (
+                      <FactorCell key={name} label={ORTHO_LABELS[name] ?? name} value={v} signed />
+                    ))}
+                    <FactorCell label="Ortho Σ" value={fs.ortho_term} signed />
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 gap-3">
+                    <FactorCell label="Trend" value={fs.trend} />
+                    <FactorCell label="Momentum" value={fs.momentum} />
+                    <FactorCell label="Addon" value={fs.addon} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Multiplier chain */}
+            {showDiChain && (
+              <div>
+                <p className="label mb-1">Score chain</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {Number.isFinite(diAlign) && (
+                    <Chip
+                      tone={diAlign <= 0.35 ? 'short' : 'default'}
+                      title={diAlign <= 0.35 ? '+DI/-DI opposes EMA trend — the main forex suppressor' : undefined}
+                    >
+                      DI ×{fmtNum(diAlign, 2)}
+                    </Chip>
+                  )}
+                  {Number.isFinite(adxMult) && <Chip>ADX ×{fmtNum(adxMult, 2)}</Chip>}
+                  {Number.isFinite(dirRamp) && <Chip>Ramp ×{fmtNum(dirRamp, 2)}</Chip>}
+                </div>
+              </div>
+            )}
+
+            {/* Context */}
+            <div className="grid grid-cols-2 gap-x-4">
+              <KeyValue label="Regime" value={regimeLabel(signal.regime)} />
+              <KeyValue label="Session" value={sessionLabel(signal.session)} />
+              {signal.factorDiagnostics?.adxValue != null && (
+                <KeyValue label="ADX" value={fmtNum(signal.factorDiagnostics.adxValue, 1)} />
+              )}
+              {signal.atr != null && (
+                <KeyValue label="ATR" value={fmtPrice(signal.atr, pair, type)} />
+              )}
+              {signal.signalClass && (
+                <KeyValue label="Class" value={String(signal.signalClass)} />
+              )}
+            </div>
+
+            {/* Intermarket */}
+            {intermarketEntries.length > 0 && (
+              <div>
+                <p className="label mb-1">Intermarket confirmation</p>
+                <div className="grid grid-cols-2 gap-x-4">
+                  {intermarketEntries.map(([label, value]) => (
+                    <KeyValue key={label} label={label} value={value} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {hasWarnings && (
+              <div>
+                <p className="label mb-1">Warnings</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {signal.warnings!.slice(0, 6).map(w => (
+                    <Chip key={w} tone="warning">{w}</Chip>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!isEngineBOnly && signal.engine_b != null && (
+              <p className="note">Engine B attached — see the Engine B tab.</p>
+            )}
+
+            <p className="note">
+              {isEngineBOnly
+                ? 'Engine B structure scan — confidence from Naked Engine gates (structure, location, trigger, RR).'
+                : 'Quality score (0–3.0): weighted multi-timeframe trend and momentum, entry location and volatility regime, plus intermarket, carry, COT, microstructure and volume. The meter tick marks this group’s TRADE threshold.'}
+            </p>
+          </div>
+        </Details>
 
         {onExecute && (
           <Button
             size="sm"
             className="w-full gap-2"
-            style={{
-              background: 'linear-gradient(135deg, hsl(var(--gold-dark)), hsl(var(--gold)))',
-              color: 'hsl(var(--primary-foreground))',
-              border: 'none',
-            }}
             onClick={(e) => {
               e.stopPropagation();
               onExecute(signal);
             }}
             disabled={executeDisabled}
           >
-            <Play className="w-3.5 h-3.5" />
+            <Play className="h-3.5 w-3.5" />
             {executeLabel || 'Execute'}
           </Button>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </CardShell>
   );
 }
 
@@ -542,7 +566,6 @@ function EngineAV3SignalCard({
   selected,
   executeDisabled,
   executeLabel,
-  compact,
 }: Props) {
   const pair = signal.display || signal.pair || signal.symbol || '-';
   const type = signal.type;
@@ -551,11 +574,7 @@ function EngineAV3SignalCard({
   const decision = String(signal.decision || 'NO_SIGNAL');
   const entryZone = Array.isArray(signal.entryZone) ? signal.entryZone : [];
   const passedPredicates = (signal.predicates || []).filter((predicate) => predicate.passed);
-  const decisionClass = decision === 'TRADE'
-    ? 'text-long border-long/40'
-    : decision === 'WATCH'
-    ? 'text-warning border-warning/40'
-    : 'text-muted-foreground border-border/60';
+  const decisionTone = decision === 'TRADE' ? 'long' : decision === 'WATCH' ? 'warning' : 'default';
   const scoreBreakdown = engineAScoreBreakdown(signal);
   const score = scoreBreakdown?.decisionScore ?? toNum(signal.confluenceScore ?? signal.score, NaN);
   const max = toNum(signal.maxScore, NaN);
@@ -578,162 +597,145 @@ function EngineAV3SignalCard({
   );
 
   return (
-    <Card
-      className={cn(
-        'transition-all duration-200',
-        isLong ? 'signal-long-border' : '',
-        isShort ? 'signal-short-border' : '',
-      )}
-      style={selected
-        ? { background: 'hsl(var(--card) / 0.70)', border: '1px solid hsl(var(--gold) / 0.45)' }
-        : { background: 'hsl(var(--card) / 0.50)', border: '1px solid hsl(var(--border) / 0.60)' }}
-      onClick={() => onSelect?.(signal)}
+    <CardShell
+      isLong={isLong}
+      isShort={isShort}
+      selected={selected}
+      onClick={onSelect ? () => onSelect(signal) : undefined}
     >
-      <CardContent className={compact ? 'p-3 space-y-2' : 'p-4 space-y-3'}>
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-mono font-bold">{pair}</span>
-              <Badge variant="outline" className={cn('text-[10px]', decisionClass)}>{decision}</Badge>
-              <Badge variant="outline" className="text-[10px]">{signal.horizon || '-'}</Badge>
-              <Badge variant="outline" className={cn(
-                'text-[10px]',
-                signal.validationStatus === 'PROMOTED' ? 'text-long border-long/40' : 'text-warning border-warning/40',
-              )}>{signal.validationStatus || 'UNAVAILABLE'}</Badge>
-              <Badge variant="outline" className="text-[10px]">{signal.exitPolicy || 'SINGLE_TP1'}</Badge>
-            </div>
-            <p className="mt-1 text-[11px] text-muted-foreground break-words">
-              {signal.setupId || 'No qualified setup'} · {signal.family || '-'} / {signal.subclass || '-'}
-            </p>
-          </div>
-          <Badge variant={isShort ? 'destructive' : 'secondary'}>{signal.direction || '-'}</Badge>
+      {/* ── Identity ── */}
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="readout truncate text-sm font-semibold">{pair}</span>
+          <DirectionChip direction={signal.direction} />
+          <Chip tone={decisionTone as 'long' | 'warning' | 'default'}>{decision}</Chip>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {signal.horizon && <Chip>{signal.horizon}</Chip>}
+          <Chip tone={convT.tier === 'HIGH' ? 'accent' : 'default'} title="Conviction tier">
+            {convT.tier}
+          </Chip>
+        </div>
+      </div>
+
+      <div className="space-y-3 p-3">
+        {hasQuality && (
+          <ScoreLine
+            caption="Decision score"
+            fraction={`${fmtNum(score, 2)}/${fmtNum(max, 2)}`}
+            pct={conf}
+            thresholdPct={thresholdPct}
+            passed={passed}
+            thresholdTitle={
+              threshold != null ? `Trade threshold ${fmtNum(threshold, 2)} of ${fmtNum(max, 2)}` : undefined
+            }
+          />
+        )}
+
+        <div className="grid grid-cols-4 gap-3">
+          <Metric label="Entry" value={fmtPrice(signal.price, pair, type)} />
+          <Metric label="Invalidation" value={fmtPrice(signal.invalidation ?? signal.sl, pair, type)} tone="short" />
+          <Metric label="TP1" value={fmtPrice(signal.tp1, pair, type)} tone="long" />
+          <Metric label="TP2" value={fmtPrice(signal.tp2, pair, type)} tone="long" />
         </div>
 
-        <TimeframePolicyLine signal={signal} compact={compact} />
+        {/* State that changes the decision stays uncollapsed */}
+        {showAdjustmentMismatch && (
+          <p className="note text-warning">
+            WATCH: adjusted score clears threshold, but the decision used the pre-blend score.
+          </p>
+        )}
+        {showDecisionPassButWatch && (
+          <p className="note text-warning">
+            WATCH: score clears threshold — awaiting setup confirmation or execution eligibility.
+          </p>
+        )}
+        {(signal.rejectionReasons || []).length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {signal.rejectionReasons?.map((reason) => (
+              <Chip key={reason} tone="warning">{reason}</Chip>
+            ))}
+          </div>
+        )}
 
-        {hasQuality && (
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-              <span>
-                Decision score{' '}
-                <span className={cn('font-mono', passed ? 'text-long' : 'text-muted-foreground')}>
-                  {fmtNum(score, 2)}/{fmtNum(max, 2)}
-                </span>
-                {threshold != null && <span className="ml-1">≥ {fmtNum(threshold, 2)}</span>}
-              </span>
-              <div className="flex items-center gap-1 shrink-0">
-                <Badge variant="outline" className={cn('text-[10px] font-mono', convT.color)}>{convT.tier}</Badge>
-                <span className="font-mono">{conf != null ? `${conf.toFixed(0)}%` : '—'}</span>
-              </div>
-            </div>
-            {scoreBreakdown?.hasAdjustments && (
-              <EngineAScoreAdjustmentNote breakdown={scoreBreakdown} />
-            )}
-            {showAdjustmentMismatch && (
-              <p className="text-[9px] text-warning leading-snug">
-                WATCH: adjusted score clears threshold, but decision used the pre-blend score.
-              </p>
-            )}
-            {showDecisionPassButWatch && (
-              <p className="text-[9px] text-warning leading-snug">
-                WATCH: score clears threshold — awaiting setup confirmation or execution eligibility.
-              </p>
-            )}
-            <div className="relative w-full rounded-full h-2 overflow-hidden" style={{ background: 'hsl(var(--border) / 0.55)' }}>
-              <div
-                className={`h-full rounded-full transition-all duration-300 ${passed ? 'glow-gold-sm' : ''}`}
-                style={{
-                  width: `${conf ?? 0}%`,
-                  background: passed
-                    ? 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--long)))'
-                    : 'linear-gradient(90deg, hsl(var(--gold-dark)), hsl(var(--gold-light)))',
-                }}
-              />
-              {thresholdPct != null && (
-                <div
-                  className="absolute top-0 h-full"
-                  style={{
-                    left: `${thresholdPct}%`,
-                    width: '2px',
-                    background: 'hsl(var(--foreground) / 0.65)',
-                  }}
-                  title={`Trade threshold ${fmtNum(threshold, 2)} of ${fmtNum(max, 2)}`}
+        <Details summary="Details" className="border-t border-border pt-0.5">
+          <div onClick={stopSelect} className="space-y-3">
+            <TimeframePolicyBlock signal={signal} />
+
+            <div className="space-y-0.5">
+              <KeyValue label="Setup" value={signal.setupId || 'No qualified setup'} />
+              <KeyValue label="Family / subclass" value={`${signal.family || '-'} / ${signal.subclass || '-'}`} />
+              <KeyValue label="Validation" value={signal.validationStatus || 'UNAVAILABLE'} />
+              <KeyValue label="Exit policy" value={signal.exitPolicy || 'SINGLE_TP1'} />
+              {entryZone.length >= 2 && (
+                <KeyValue
+                  label="Trigger zone"
+                  value={`${fmtPrice(entryZone[0], pair, type)} – ${fmtPrice(entryZone[1], pair, type)}`}
                 />
               )}
+              {scoreBreakdown?.hasAdjustments && (
+                <EngineAScoreAdjustmentRows breakdown={scoreBreakdown} />
+              )}
             </div>
-            {!compact && (
-              <p className="text-[9px] text-muted-foreground leading-snug">
-                Bar uses the decision-time score (before intermarket/news blends). Tier follows the V3
-                {` ${decision}`} badge, not the adjusted display score.
-              </p>
-            )}
-          </div>
-        )}
 
-        <div className="grid grid-cols-4 gap-2">
-          <Level label="Entry" value={signal.price} pair={pair} type={type} accent="muted" />
-          <Level label="Invalidation" value={signal.invalidation ?? signal.sl} pair={pair} type={type} accent="short" />
-          <Level label="TP1" value={signal.tp1} pair={pair} type={type} accent="long" />
-          <Level label="TP2" value={signal.tp2} pair={pair} type={type} accent="long" />
-        </div>
-
-        {entryZone.length >= 2 && (
-          <p className="text-[10px] text-muted-foreground">
-            Trigger zone: <span className="font-mono text-foreground">
-              {fmtPrice(entryZone[0], pair, type)} - {fmtPrice(entryZone[1], pair, type)}
-            </span>
-          </p>
-        )}
-
-        {!compact && Object.keys(components).length > 0 && (
-          <div className="grid grid-cols-2 gap-1">
-            {Object.entries(components).map(([name, component]) => (
-              <div key={name} className="rounded border border-border/50 bg-muted/20 p-1.5 text-[10px]">
-                <div className="flex justify-between"><span className="capitalize">{name}</span><span className="font-mono">{component.available === false ? 'N/A' : fmtNum(component.contribution, 3)}</span></div>
-                <div className="text-muted-foreground font-mono">s {fmtNum(component.signal, 2)} · q {fmtNum(component.quality, 2)} · w {fmtNum(component.weight, 2)}</div>
+            {Object.keys(components).length > 0 && (
+              <div>
+                <p className="label mb-1.5">Component scores</p>
+                <div className="space-y-0.5">
+                  {Object.entries(components).map(([name, component]) => (
+                    <KeyValue
+                      key={name}
+                      label={name}
+                      value={component.available === false ? 'N/A' : fmtNum(component.contribution, 3)}
+                      meta={`s ${fmtNum(component.signal, 2)} · q ${fmtNum(component.quality, 2)} · w ${fmtNum(component.weight, 2)}`}
+                    />
+                  ))}
+                </div>
               </div>
-            ))}
-          </div>
-        )}
+            )}
 
-        {!compact && (
-          <div className="rounded-md border border-border/50 bg-muted/20 p-2 space-y-1">
-            <p className="text-[10px] uppercase text-muted-foreground">
-              Component diagnostics {passedPredicates.length}/{signal.predicates?.length || 0} aligned
+            {(signal.predicates || []).length > 0 && (
+              <div>
+                <p className="label mb-1.5">
+                  Predicates — {passedPredicates.length}/{signal.predicates?.length || 0} aligned
+                </p>
+                <div className="space-y-0.5">
+                  {(signal.predicates || []).slice(0, 8).map((predicate) => (
+                    <KeyValue
+                      key={predicate.name}
+                      label={predicate.name}
+                      value={predicate.passed ? 'PASS' : 'FAIL'}
+                      tone={predicate.passed ? 'long' : 'warning'}
+                      meta={predicate.expected}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {signal.validationArtifact && (
+              <div className="space-y-0.5">
+                <KeyValue
+                  label="Artifact"
+                  value={signal.validationArtifact.artifactId}
+                  meta={signal.validationArtifact.status}
+                />
+                {signal.scoringProfile?.profileSha256 && (
+                  <KeyValue
+                    label="Profile"
+                    value={signal.scoringProfile.profileId}
+                    meta={signal.scoringProfile.profileSha256.slice(0, 12)}
+                  />
+                )}
+              </div>
+            )}
+
+            <p className="note">
+              The meter uses the decision-time score (before intermarket/news blends). The tier
+              follows the V3 {decision} badge, not the adjusted display score.
             </p>
-            {(signal.predicates || []).slice(0, 8).map((predicate) => (
-              <div key={predicate.name} className="flex items-start justify-between gap-2 text-[10px]">
-                <span className={predicate.passed ? 'text-long' : 'text-warning'}>
-                  {predicate.passed ? 'PASS' : 'FAIL'} {predicate.name}
-                </span>
-                <span className="text-right text-muted-foreground">{predicate.expected}</span>
-              </div>
-            ))}
           </div>
-        )}
-
-        {(signal.rejectionReasons || []).length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {signal.rejectionReasons?.map((reason) => (
-              <Badge key={reason} variant="outline" className="text-[9px] text-warning border-warning/40">
-                {reason}
-              </Badge>
-            ))}
-          </div>
-        )}
-
-        {!compact && signal.validationArtifact && (
-          <p className="text-[10px] text-muted-foreground break-all">
-            Validation: <span className="font-mono text-foreground">
-              {signal.validationArtifact.artifactId} · {signal.validationArtifact.status}
-            </span>
-            {signal.scoringProfile?.profileSha256 && (
-              <span className="block font-mono text-foreground">
-                Profile {signal.scoringProfile.profileId} · {signal.scoringProfile.profileSha256.slice(0, 12)}
-              </span>
-            )}
-          </p>
-        )}
+        </Details>
 
         {onExecute && (
           <Button
@@ -750,16 +752,17 @@ function EngineAV3SignalCard({
               || signal.engineATradeEnabled !== true
             }
           >
-            <Play className="w-3.5 h-3.5" />
+            <Play className="h-3.5 w-3.5" />
             {executeLabel || 'Execute demo'}
           </Button>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </CardShell>
   );
 }
 
-function TimeframePolicyLine({ signal, compact }: { signal: EngineASignal; compact?: boolean }) {
+/** Timeframe ladder + policy provenance. Always inside a disclosure. */
+function TimeframePolicyBlock({ signal }: { signal: EngineASignal }) {
   if (!signal.timeframePolicyVersion) return null;
   const roles = [
     signal.regimeTf ? `${signal.regimeTf} regime` : null,
@@ -769,34 +772,38 @@ function TimeframePolicyLine({ signal, compact }: { signal: EngineASignal; compa
     signal.triggerTf ? `${signal.triggerTf} trigger` : null,
     signal.atrTimeframe ? `${signal.atrTimeframe} ATR` : null,
     signal.executionTf ? `${signal.executionTf} execution` : null,
-  ].filter(Boolean).join(' · ');
+  ].filter(Boolean) as string[];
+  if (roles.length === 0) return null;
   const speed = signal.liveSpeedClass || signal.baselineSpeedClass || 'UNKNOWN';
   const profile = signal.timeframeProfile || 'SAFE_FALLBACK';
   return (
-    <div className="rounded border border-border/50 bg-muted/20 px-2 py-1 text-[10px] text-muted-foreground">
-      <p className="font-mono text-foreground">{roles}</p>
-      {!compact && (
-        <p>
-          Speed {speed} · baseline {profile}
-          {signal.entryReadiness && (
-            <span className={signal.entryReadiness === 'READY' ? 'text-long' : 'text-warning'}>
-              {' '}· entry {signal.entryReadiness}
-            </span>
-          )}
-        </p>
-      )}
-      {!compact && signal.policyScore != null && (
-        <p>
-          Policy score: <span className="font-mono text-foreground">{fmtNum(signal.policyScore, 2)}</span>
-          {' '}· Legacy score: <span className="font-mono text-foreground">{fmtNum(signal.legacyScore, 2)}</span>
-          {' '}· Authoritative: <span className="font-mono text-foreground">{signal.authoritativeScoreSource || 'LEGACY'}</span>
-        </p>
-      )}
+    <div>
+      <p className="label mb-1">Timeframes</p>
+      <div className="flex flex-wrap gap-1.5">
+        {roles.map(r => <Chip key={r}>{r}</Chip>)}
+      </div>
+      <div className="mt-1.5 space-y-0.5">
+        <KeyValue label="Speed / baseline" value={`${speed} · ${profile}`} />
+        {signal.entryReadiness && (
+          <KeyValue
+            label="Entry readiness"
+            value={signal.entryReadiness}
+            tone={signal.entryReadiness === 'READY' ? 'long' : 'warning'}
+          />
+        )}
+        {signal.policyScore != null && (
+          <KeyValue
+            label="Policy / legacy score"
+            value={`${fmtNum(signal.policyScore, 2)} · ${fmtNum(signal.legacyScore, 2)}`}
+            meta={`authoritative: ${signal.authoritativeScoreSource || 'LEGACY'}`}
+          />
+        )}
+      </div>
     </div>
   );
 }
 
-function EngineAScoreAdjustmentNote({
+function EngineAScoreAdjustmentRows({
   breakdown,
 }: {
   breakdown: NonNullable<ReturnType<typeof engineAScoreBreakdown>>;
@@ -810,43 +817,32 @@ function EngineAScoreAdjustmentNote({
     parts.push(`news ${breakdown.newsAdjustment >= 0 ? '+' : ''}${fmtNum(breakdown.newsAdjustment, 2)}`);
   }
   return (
-    <p className="text-[9px] text-muted-foreground leading-snug">
-      Adjusted display{' '}
-      <span className="font-mono text-foreground">{fmtNum(breakdown.displayScore, 2)}</span>
-      {parts.length > 0 && (
-        <span> ({parts.join(', ')})</span>
-      )}
-    </p>
+    <KeyValue
+      label="Adjusted display"
+      value={fmtNum(breakdown.displayScore, 2)}
+      meta={parts.length > 0 ? parts.join(', ') : undefined}
+    />
   );
 }
 
-function FactorBox({
+/**
+ * One factor contribution. Signed factors (the ortho block) colour by sign
+ * because the sign is the information; unsigned magnitudes stay neutral ink.
+ */
+function FactorCell({
   label,
   value,
-  accent,
+  signed,
 }: {
   label: string;
   value: number | undefined;
-  accent: 'long' | 'short' | 'primary' | 'warning';
+  signed?: boolean;
 }) {
-  const fg =
-    accent === 'long' ? 'text-long'
-    : accent === 'short' ? 'text-short'
-    : accent === 'warning' ? 'text-warning'
-    : 'text-primary';
-  const bg =
-    accent === 'long' ? 'hsl(var(--long) / 0.10)'
-    : accent === 'short' ? 'hsl(var(--short) / 0.10)'
-    : accent === 'warning' ? 'hsl(var(--warning) / 0.10)'
-    : 'hsl(var(--gold) / 0.10)';
-  return (
-    <div className="p-2 rounded-md" style={{ background: bg }}>
-      <p className="text-[10px] text-muted-foreground uppercase">{label}</p>
-      <p className={cn('text-xs font-mono font-bold', fg)}>
-        {fmtNum(value, 2)}
-      </p>
-    </div>
-  );
+  const n = toNum(value, NaN);
+  const tone = signed && Number.isFinite(n)
+    ? (n >= 0 ? 'long' : 'short')
+    : 'default';
+  return <Metric label={label} value={fmtNum(value, 2)} tone={tone} />;
 }
 
 function intermarketConfirmationEntries(value: unknown): Array<[string, string]> {
@@ -869,40 +865,4 @@ function formatIntermarketValue(value: unknown): string {
       .join(' ');
   }
   return String(value ?? '');
-}
-
-function Level({
-  label,
-  value,
-  pair,
-  type,
-  accent,
-  decimals,
-  meta,
-}: {
-  label: string;
-  value: unknown;
-  pair?: string;
-  type?: string;
-  accent: 'muted' | 'long' | 'short' | 'primary';
-  decimals?: number;
-  meta?: string;
-}) {
-  const bgStyle = accent === 'long'
-    ? 'hsl(var(--long) / 0.10)'
-    : accent === 'short'
-    ? 'hsl(var(--short) / 0.10)'
-    : accent === 'primary'
-    ? 'hsl(var(--gold) / 0.10)'
-    : 'hsl(var(--muted) / 0.30)';
-  const fg = accent === 'long' ? 'text-long' : accent === 'short' ? 'text-short' : accent === 'primary' ? 'text-primary' : 'text-foreground';
-  return (
-    <div className="p-2 rounded-md" style={{ background: bgStyle }}>
-      <p className={cn('text-[10px] uppercase', accent === 'muted' ? 'text-muted-foreground' : fg)}>{label}</p>
-      <p className={cn('text-xs font-mono font-bold', fg)}>
-        {decimals != null ? fmtNum(value, decimals) : fmtPrice(value, pair, type)}
-      </p>
-      {meta && <p className="text-[9px] font-mono text-muted-foreground truncate">{meta}</p>}
-    </div>
-  );
 }

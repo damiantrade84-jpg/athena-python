@@ -1,9 +1,34 @@
 import { useStore } from '@/hooks/useStore';
-import { Badge } from '@/components/ui/badge';
 import { useEffect, useState } from 'react';
 import { Activity, Wifi } from 'lucide-react';
 import { currentSegment, nextSegment, QUALITY_META, fmtCountdown } from '@/lib/primeWindows';
 import MacroBadge from '@/components/shared/MacroBadge';
+
+/** Status pill: a 5px dot carries the state, the label stays neutral ink. */
+function StatusPill({
+  dotColor,
+  label,
+  title,
+  pulse,
+}: {
+  dotColor: string;
+  label: string;
+  title?: string;
+  pulse?: boolean;
+}) {
+  return (
+    <div
+      className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
+      title={title}
+    >
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${pulse ? 'animate-pulse' : ''}`}
+        style={{ background: dotColor }}
+      />
+      <span className="tracking-tight">{label}</span>
+    </div>
+  );
+}
 
 export default function Header() {
   const { guardian } = useStore();
@@ -16,112 +41,53 @@ export default function Header() {
 
   const isHealthy = guardian.overall === 'healthy';
   const isWarning = guardian.overall === 'warning';
-  const guardianColor = isHealthy
+  const guardianDot = isHealthy
     ? 'hsl(var(--long))'
     : isWarning
     ? 'hsl(var(--warning))'
     : 'hsl(var(--short))';
-  const guardianBg = isHealthy
-    ? 'hsl(var(--long) / 0.08)'
-    : isWarning
-    ? 'hsl(var(--warning) / 0.08)'
-    : 'hsl(var(--short) / 0.08)';
-  const guardianBorder = isHealthy
-    ? 'hsl(var(--long) / 0.30)'
-    : isWarning
-    ? 'hsl(var(--warning) / 0.30)'
-    : 'hsl(var(--short) / 0.30)';
+
+  const seg = currentSegment(time);
+  const next = nextSegment(time);
+  const primeMeta = QUALITY_META[seg.quality];
 
   return (
-    <header
-      className="h-11 border-b border-border flex items-center justify-between px-5 shrink-0 relative header-gold-line"
-      style={{ background: 'hsl(var(--sidebar-background))' }}
-    >
-      {/* Left — Logo */}
-      <div className="flex items-center gap-3">
-        <h1
-          className="text-sm font-bold logo-platinum"
-          style={{
-            fontFamily: "'Cinzel', serif",
-            letterSpacing: '0.3em',
-          }}
-        >
+    <header className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-sidebar px-4">
+      {/* ── Wordmark ── */}
+      <div className="flex items-baseline gap-2">
+        <span className="text-[13px] font-semibold tracking-[0.16em] text-foreground">
           SENTINEL
-        </h1>
-        <span
-          className="text-[10px] font-medium tracking-[0.3em]"
-          style={{
-            fontFamily: "'Cinzel', serif",
-            color: 'hsl(var(--gold-light) / 0.85)',
-          }}
-        >
-          PRO
         </span>
-        <Badge
-          variant="outline"
-          className="text-[9px] h-4 px-1"
-          style={{
-            borderColor: 'hsl(var(--gold) / 0.50)',
-            color: 'hsl(var(--gold-light))',
-            background: 'hsl(var(--gold) / 0.10)',
-          }}
-        >
-          v4.0
-        </Badge>
+        <span className="text-[11px] tracking-[0.16em] text-muted-foreground">PRO</span>
+        <span className="text-[10px] tracking-wide text-muted-foreground/70">v4.0</span>
       </div>
 
-      {/* Right — Status chips */}
-      <div className="flex items-center gap-4">
-        {/* FOMC / macro-risk chip (advisory; only shows when active/upcoming) */}
+      {/* ── Status rail ── */}
+      <div className="flex items-center gap-5">
         <MacroBadge />
 
-        {/* Prime execution-window pill (advisory) */}
-        {(() => {
-          const seg = currentSegment(time);
-          const next = nextSegment(time);
-          const meta = QUALITY_META[seg.quality];
-          const isPrime = seg.quality === 'prime';
-          return (
-            <div
-              className={`flex items-center gap-2 px-2.5 py-1 rounded-md border text-[10px] font-mono tracking-wider ${isPrime ? 'animate-glow-gold' : ''}`}
-              style={{ background: meta.bg, borderColor: meta.border, color: meta.color }}
-              title={`${seg.label} · ${seg.markets} · next: ${next.segment.label} in ${fmtCountdown(next.minutesUntil)}`}
-            >
-              <div className={`w-1.5 h-1.5 rounded-full bg-current ${isPrime ? 'animate-pulse' : ''}`} />
-              {meta.label} · {fmtCountdown(next.minutesUntil)}
-            </div>
-          );
-        })()}
+        <StatusPill
+          dotColor={primeMeta.color}
+          label={`${primeMeta.label} · ${fmtCountdown(next.minutesUntil)}`}
+          title={`${seg.label} · ${seg.markets} · next: ${next.segment.label} in ${fmtCountdown(next.minutesUntil)}`}
+        />
 
-        {/* Guardian status pill */}
-        <div
-          className="flex items-center gap-2 px-2.5 py-1 rounded-md border text-[10px] font-mono tracking-wider"
-          style={{ background: guardianBg, borderColor: guardianBorder, color: guardianColor }}
-        >
-          <div
-            className={`w-1.5 h-1.5 rounded-full bg-current ${!isHealthy ? 'animate-pulse' : ''}`}
-            style={isHealthy ? { boxShadow: '0 0 5px hsl(var(--long) / 0.7)' } : {}}
-          />
-          GUARDIAN · {guardian.overall?.toUpperCase() || 'UNKNOWN'}
+        <StatusPill
+          dotColor={guardianDot}
+          label={`Guardian ${guardian.overall || 'unknown'}`}
+          pulse={!isHealthy}
+        />
+
+        <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <Activity className="h-3 w-3" /> MT5
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Wifi className="h-3 w-3" /> Bybit
+          </span>
         </div>
 
-        {/* MT5 chip */}
-        <div className="flex items-center gap-1.5">
-          <Activity className="w-3 h-3" style={{ color: 'hsl(var(--muted-foreground))' }} />
-          <span className="text-[10px]" style={{ color: 'hsl(var(--muted-foreground))' }}>MT5</span>
-        </div>
-
-        {/* Bybit chip */}
-        <div className="flex items-center gap-1.5">
-          <Wifi className="w-3 h-3" style={{ color: 'hsl(var(--muted-foreground))' }} />
-          <span className="text-[10px]" style={{ color: 'hsl(var(--muted-foreground))' }}>Bybit</span>
-        </div>
-
-        {/* Clock */}
-        <span
-          className="text-[10px] font-mono"
-          style={{ color: 'hsl(var(--gold) / 0.70)' }}
-        >
+        <span className="readout text-[11px] text-muted-foreground">
           {time.toLocaleTimeString()}
         </span>
       </div>

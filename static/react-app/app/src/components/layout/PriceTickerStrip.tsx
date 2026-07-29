@@ -143,7 +143,9 @@ export default function PriceTickerStrip() {
               key={`${row.key}-${idx}`}
               className="flex items-center gap-2 text-[11px] font-mono shrink-0"
             >
-              <span className="font-semibold tracking-wide" style={{ color: 'hsl(var(--gold-light))' }}>
+              {/* Symbol stays neutral ink — the change figure is the only
+                  thing on the ticker that should carry colour. */}
+              <span className="font-semibold tracking-wide text-muted-foreground">
                 {row.key}
               </span>
               <TickIcon className="w-3 h-3" style={{ color: tickColor }} />

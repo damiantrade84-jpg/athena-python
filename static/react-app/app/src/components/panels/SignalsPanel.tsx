@@ -1103,7 +1103,7 @@ export default function SignalsPanel() {
           <CardHeader className="pb-2">
             <CardTitle
               className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider"
-              style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}
+             
             >
               <span>Signal Feed</span>
               <Badge variant="outline" className="text-[10px]">
@@ -1165,18 +1165,11 @@ export default function SignalsPanel() {
                 <div className="space-y-4">
                   {groupedRows.map(({ key, items }) => (
                     <div key={key} className="space-y-2">
-                      <div
-                        className="flex items-center justify-between sticky top-0 z-[1] bg-card/95 backdrop-blur-sm py-1 border-b border-primary/15"
-                      >
-                        <span
-                          className="text-[10px] uppercase tracking-[0.18em] font-semibold"
-                          style={{ fontFamily: "'Cinzel', serif", color: 'hsl(var(--platinum) / 0.85)' }}
-                        >
-                          {formatGroupLabel(key)}
+                      <div className="sticky top-0 z-[1] flex items-center justify-between border-b border-border bg-card py-1.5">
+                        <span className="panel-title">{formatGroupLabel(key)}</span>
+                        <span className="readout text-[10px] text-muted-foreground">
+                          {items.length} · top {engineAV3ListLabel(items[0]?.signal) ?? fmtNum(engineAListScore(items[0]?.signal), 2)}
                         </span>
-                        <Badge variant="outline" className="text-[9px] font-mono">
-                          {items.length} - top {engineAV3ListLabel(items[0]?.signal) ?? fmtNum(engineAListScore(items[0]?.signal), 2)}
-                        </Badge>
                       </div>
                       <div className="space-y-2 pl-0">
                         {items.map((row) => (
@@ -1202,7 +1195,7 @@ export default function SignalsPanel() {
           <CardHeader className="pb-2">
             <CardTitle
               className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider"
-              style={{ fontFamily: "'Cinzel', serif", letterSpacing: '0.12em' }}
+             
             >
               <Activity className="w-4 h-4 text-primary" />
               Signal Detail
@@ -1841,25 +1834,25 @@ function UnifiedSignalRow({
   const presentation = feedEngine === 'B' ? engineBPresentationSignal(row) : row.signal;
   const label = feedEngine === 'B' ? 'B' : unifiedEngineLabel(row.engines);
   const canonicalChip = feedEngine === 'B' ? engineBCanonicalChip(presentation) : null;
-  const badge = label === 'B'
-    ? { text: 'B', icon: <Layers className="w-3 h-3" />, bg: 'hsl(var(--info) / 0.18)', fg: 'hsl(var(--info))' }
-    : { text: 'A', icon: <Zap className="w-3 h-3" />, bg: 'hsl(var(--gold) / 0.12)', fg: 'hsl(var(--gold-light))' };
+  // The engine rail was a 36px colour-filled column on every row. It is now a
+  // hairline gutter with a single hue dot — same information, no colour mass.
+  const railHue = label === 'B' ? 'var(--chart-3)' : 'var(--chart-1)';
 
   return (
     <div className="flex items-stretch gap-2">
       <div
-        className="shrink-0 w-9 rounded-md border flex flex-col items-center justify-center text-[9px] font-mono uppercase tracking-wider"
-        style={{ background: badge.bg, borderColor: 'hsl(var(--border) / 0.6)', color: badge.fg }}
+        className="flex w-6 shrink-0 flex-col items-center gap-1 rounded border border-border py-1.5"
         title={`Flagged by Engine ${label}`}
       >
-        {badge.icon}
-        <span className="mt-1 font-semibold">{badge.text}</span>
+        <span
+          className="h-1.5 w-1.5 rounded-full"
+          style={{ background: `hsl(${railHue})` }}
+        />
+        <span className="readout text-[10px] text-muted-foreground">{label}</span>
       </div>
-      <div className="flex-1 min-w-0 space-y-1">
+      <div className="min-w-0 flex-1 space-y-1">
         {canonicalChip && (
-          <Badge variant="outline" className={cn('text-[9px] font-mono', canonicalChip.className)}>
-            {canonicalChip.label}
-          </Badge>
+          <span className={cn('chip', canonicalChip.className)}>{canonicalChip.label}</span>
         )}
         <EngineASignalCard
           signal={presentation}
@@ -1875,11 +1868,11 @@ function UnifiedSignalRow({
 function DetailRow({ label, value, accent, meta }: { label: string; value: string; accent?: 'short' | 'long'; meta?: string }) {
   const fg = accent === 'long' ? 'text-long' : accent === 'short' ? 'text-short' : 'text-foreground';
   return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-[10px] text-muted-foreground capitalize">{label.replace(/_/g, ' ')}</span>
-      <span className={`text-xs font-mono text-right ${fg}`}>
+    <div className="flex items-baseline justify-between gap-3 py-1">
+      <span className="label normal-case tracking-normal">{label.replace(/_/g, ' ')}</span>
+      <span className={`readout text-right text-xs ${fg}`}>
         {value}
-        {meta && <span className="block text-[9px] text-muted-foreground">{meta}</span>}
+        {meta && <span className="block text-[10px] text-muted-foreground">{meta}</span>}
       </span>
     </div>
   );

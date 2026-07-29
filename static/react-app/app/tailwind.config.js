@@ -2,22 +2,38 @@
 module.exports = {
   darkMode: ["class"],
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
-  // Aurora design-system classes defined in index.css @layer components must survive
-  // production purge even before panels adopt them in TSX.
+  // Obsidian design-system classes defined in index.css @layer components must
+  // survive production purge even before panels adopt them in TSX.
   safelist: [
     'panel-glass',
     'panel-header-title',
+    'panel-title',
     'surface-glass',
+    'label',
+    'readout',
+    'note',
+    'chip',
+    'chip-long',
+    'chip-short',
+    'chip-accent',
+    'chip-warning',
     'badge-long',
     'badge-short',
     'badge-gold',
     'badge-neutral',
+    'meter',
+    'meter-fill',
+    'meter-fill-pass',
+    'meter-fill-accent',
+    'meter-tick',
+    'disclosure',
     'glow-gold',
     'glow-gold-sm',
     'glow-long-sm',
     'glow-short-sm',
     'progress-gold',
     'data-grid',
+    'focus-ring',
     'animate-glow-gold',
     'animate-glow-long',
     'animate-slide-in',
@@ -68,7 +84,7 @@ module.exports = {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
-        /* Ice accent (legacy "gold" token names, remapped to glacier palette) */
+        /* Blue accent (legacy "gold" token names, remapped to the Obsidian accent) */
         gold: {
           DEFAULT: "hsl(var(--gold))",
           light: "hsl(var(--gold-light))",
@@ -76,14 +92,25 @@ module.exports = {
           muted: "hsl(var(--gold-muted))",
         },
         platinum: "hsl(var(--platinum))",
-        /* Directional */
+        /* Semantic — direction and P&L only */
         long: "hsl(var(--long))",
         short: "hsl(var(--short))",
+        warning: "hsl(var(--warning))",
+        info: "hsl(var(--info))",
+        /* Chart categorical ramp — fixed order, never cycled */
+        chart: {
+          1: "hsl(var(--chart-1))",
+          2: "hsl(var(--chart-2))",
+          3: "hsl(var(--chart-3))",
+          4: "hsl(var(--chart-4))",
+          5: "hsl(var(--chart-5))",
+          6: "hsl(var(--chart-6))",
+        },
       },
       fontFamily: {
-        display: ["Cinzel", "serif"],
-        body: ["'Hanken Grotesk'", "system-ui", "sans-serif"],
-        mono: ["'Spline Sans Mono'", "monospace"],
+        display: ["Inter", "system-ui", "sans-serif"],
+        body: ["Inter", "system-ui", "sans-serif"],
+        mono: ["'JetBrains Mono'", "ui-monospace", "monospace"],
       },
       borderRadius: {
         xl: "calc(var(--radius) + 4px)",
@@ -92,12 +119,14 @@ module.exports = {
         sm: "calc(var(--radius) - 4px)",
         xs: "calc(var(--radius) - 6px)",
       },
+      /* Elevation, not luminance. The legacy glow names resolve to real
+         drop shadows so `shadow-gold` on un-rebuilt panels reads as depth. */
       boxShadow: {
-        xs: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-        gold: "0 0 14px hsl(258 90% 68% / 0.28), 0 0 34px hsl(258 90% 68% / 0.10)",
-        "gold-sm": "0 0 9px hsl(258 90% 68% / 0.36)",
-        "long-sm": "0 0 9px hsl(156 72% 47% / 0.36)",
-        "short-sm": "0 0 9px hsl(350 85% 64% / 0.36)",
+        xs: "0 1px 2px 0 rgb(0 0 0 / 0.30)",
+        gold: "0 4px 16px rgb(0 0 0 / 0.45)",
+        "gold-sm": "0 2px 8px rgb(0 0 0 / 0.35)",
+        "long-sm": "0 2px 8px rgb(0 0 0 / 0.35)",
+        "short-sm": "0 2px 8px rgb(0 0 0 / 0.35)",
       },
       keyframes: {
         "accordion-down": {
@@ -113,8 +142,8 @@ module.exports = {
           "20%,50%": { opacity: "0" },
         },
         "glow-pulse-gold": {
-          "0%, 100%": { boxShadow: "0 0 6px hsl(258 90% 68% / 0.38)" },
-          "50%": { boxShadow: "0 0 20px hsl(258 90% 68% / 0.66)" },
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.72" },
         },
       },
       animation: {
