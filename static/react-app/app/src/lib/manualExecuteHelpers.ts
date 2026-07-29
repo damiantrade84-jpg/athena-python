@@ -227,6 +227,24 @@ export function canExecuteEngineBSignal(signal: EngineASignal | null): boolean {
 export function engineBExecuteBlockReason(signal: EngineASignal | null): string | null {
   if (!signal || !isEngineBOnlySignal(signal)) return null;
   if (signal.executable === false) {
+    // MT5 scan spread gate (apply_mt5_spread_to_sl_scan_gate) flips executable
+    // off after revalidation - surface its reason instead of a generic block.
+    const spreadGate = signal as {
+      spreadToSlBlockReason?: string;
+      executionBlockReason?: string;
+      spreadToSlRatio?: number;
+      spreadToSlRatioCap?: number;
+    };
+    if (
+      spreadGate.spreadToSlBlockReason === 'SPREAD_TOO_WIDE_FOR_SL'
+      || spreadGate.executionBlockReason === 'SPREAD_TOO_WIDE_FOR_SL'
+    ) {
+      const ratio = spreadGate.spreadToSlRatio;
+      const cap = spreadGate.spreadToSlRatioCap;
+      return typeof ratio === 'number' && typeof cap === 'number'
+        ? `Spread too wide: ${(ratio * 100).toFixed(1)}% of SL distance (cap ${(cap * 100).toFixed(0)}%)`
+        : 'Spread too wide for SL';
+    }
     const freshness = (signal as { dataFreshness?: { reason?: string } }).dataFreshness;
     if (freshness?.reason) return 'Stale data';
     const readiness = String(

@@ -171,6 +171,37 @@ describe('engine B execute gating', () => {
     expect(engineBExecuteBlockReason(actionable)).toBeNull();
   });
 
+  it('surfaces the MT5 spread-to-SL gate when it marks an actionable row non-executable', () => {
+    const spreadBlocked = {
+      pair: 'Spain 35',
+      display: 'Spain 35',
+      type: 'index',
+      direction: 'SHORT',
+      engine: 'engine_b',
+      is_naked: true,
+      executable: false,
+      spreadToSlBlockReason: 'SPREAD_TOO_WIDE_FOR_SL',
+      executionBlockReason: 'SPREAD_TOO_WIDE_FOR_SL',
+      spreadToSlRatio: 0.14,
+      spreadToSlRatioCap: 0.1,
+      entryReadiness: 'READY',
+      naked_data: {
+        passed: true,
+        current_price: 19395.6,
+        execution_sl: 19495.38,
+        execution_tp1: 19332.59,
+        canonical_trade_ok: true,
+        engine_b_canonical_actionable: true,
+        suggested_levels_executable: true,
+      },
+    } as EngineASignal;
+
+    expect(canExecuteEngineBSignal(spreadBlocked)).toBe(false);
+    expect(engineBExecuteBlockReason(spreadBlocked)).toBe(
+      'Spread too wide: 14.0% of SL distance (cap 10%)',
+    );
+  });
+
   it('recognizes engine_b identity and keeps style execute available when timing is pending', () => {
     const actionable = {
       ...bchLike,
