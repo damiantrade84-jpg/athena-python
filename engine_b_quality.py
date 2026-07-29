@@ -340,10 +340,22 @@ def _inapplicable_quality_components(
 
     out: list[str] = []
 
+    # The producer stamps source eligibility after applying the asset-class
+    # volume policy. Missing provenance is not evidence of an eligible source.
+    if not bool(res.get("bos_volume_source_applicable", False)):
+        out.append("volume_confirmation")
+
     # Spot FX/MT5 volume is tick activity rather than centralized traded volume,
     # so an authoritative volume feed cannot exist for forex.
     if asset_lower == "forex":
         out.append("volume_confirmation")
+
+    # Profile scoring is deliberately enabled only for trusted asset/group
+    # sources. A disabled profile cannot be earned and therefore cannot remain
+    # in the denominator for that pair.
+    profile_context = res.get("profile_context")
+    if isinstance(profile_context, dict) and not bool(profile_context.get("enabled")):
+        out.append("profile_reaction")
 
     # orderflow: crypto reads aggTrade CVD; other classes read carry/COT via
     # engine_b_subsystems, whose weight table is empty for stock/index/etf/
@@ -373,7 +385,7 @@ def _inapplicable_quality_components(
     ):
         out.append("session_context")
 
-    return tuple(out)
+    return tuple(dict.fromkeys(out))
 
 
 def apply_regime_component_weights(

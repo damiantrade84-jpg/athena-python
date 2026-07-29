@@ -617,16 +617,16 @@ def resolve_engine_b_tfs(
             "policy_mode": str(config.CONFIG.get("TF_POLICY_MODE", "off")).lower(),
             "proposed": policy.payload(),
         }
-    # Engine B's structural ATR remains tied to its principal structure horizon;
-    # M5/M15 trigger noise must never size an H1/H4 structure trade.
+    # Engine B's structural ATR remains tied to its principal H4 structure
+    # horizon; M5/M15 trigger noise must never size the structural trade.
     return {
         "regime": policy.regime_tf.value,
         "bias": policy.bias_tf.value,
         "struct": policy.structure_tf.value,
-        # Room/space-gate walls and structural TP/location zones track structure
-        # TF (intraday H1, swing H4). Bias remains one rung higher for MTF bias
-        # only. Pair with ENGINE_B_SPACE_GATE_ENABLED when dense zone walls would
-        # otherwise over-block; set zone back to bias_tf to restore H4/D1 walls.
+        # Room/space-gate walls and structural TP/location zones track the H4
+        # primary structure TF. Bias remains context only. Pair with
+        # ENGINE_B_SPACE_GATE_ENABLED when dense zone walls would otherwise
+        # over-block; set zone back to bias_tf to restore D1 swing walls.
         "zone": policy.structure_tf.value,
         "setup": policy.setup_tf.value,
         "trigger": policy.trigger_tf.value,
@@ -5249,6 +5249,12 @@ class NakedEngine:
             _has_vol = any(float(c.get("vol", 0)) > 0 for c in struct_candles[-5:])
             if _has_vol:
                 struct_volumes = np.array([float(c.get("vol", 0)) for c in struct_candles])
+        # Quality must not retain a volume denominator for an asset/feed where
+        # the BOS volume source is deliberately unavailable (for example MT5
+        # tick volume while the tick-volume gate is disabled).
+        _bos_volume_source_applicable = bool(
+            _vol_gate_eligible and struct_volumes is not None
+        )
 
         bos_data = self._detect_bos(struct_highs, struct_lows, struct_atr, volumes=struct_volumes, closes=struct_closes, swings=struct_swings, min_break_atr=structure_min_break_atr)
 
@@ -5496,6 +5502,7 @@ class NakedEngine:
             "macro_seq_data": macro_seq_data,
             "macro_sequence_tf": _bias_tf,
             "bos_data": bos_data,
+            "bos_volume_source_applicable": _bos_volume_source_applicable,
             "d1_bos": d1_bos,
             "sweep_data": sweep_data,
             "bos_mtf_confirmed": bos_mtf_confirmed,
@@ -5970,6 +5977,9 @@ class NakedEngine:
             "bos_mtf_confirmed": bos_mtf_confirmed,
             "bos_mtf_aligned": bool(bos_mtf_confirmed and bos_confirmed),
             "bos_volume_confirmed": bos_data.get("bos_volume_confirmed", False),
+            "bos_volume_source_applicable": bool(
+                precompute.get("bos_volume_source_applicable", False)
+            ),
             "m5_policy": precompute.get("m5_policy"),
             "m5_conditional_required": _m5_conditional_required,
             "m5_prereq_tf": _m5_prereq_tf,
@@ -6822,7 +6832,12 @@ class NakedEngine:
         # Centralized traded volume is not available for spot FX; tick volume
         # must not become a synthetic zero that lowers forex quality.
         _bos_data = res.get("bos_data") if isinstance(res.get("bos_data"), dict) else {}
-        _volume_scoring_applicable = asset_type_lower != "forex"
+        # This is source provenance, not a generic non-FX heuristic. Missing
+        # provenance excludes the factor instead of turning unavailable volume
+        # into a permanent zero-score handicap.
+        _volume_scoring_applicable = bool(
+            res.get("bos_volume_source_applicable", False)
+        )
         volume_ok = bool(
             _volume_scoring_applicable
             and res.get("bos_confirmed")
@@ -6952,8 +6967,12 @@ class NakedEngine:
                     )
                     if len(_bar_time) >= 10:
                         _subsystem_as_of = _bar_time[:10]
+                # Quality applicability consumes the same trusted profile
+                # context used by the profile bonus/output path below.
+                _quality_res = dict(res)
+                _quality_res["profile_context"] = _profile_vp_context
                 _subscores = compute_confluence_subscores(
-                    res,
+                    _quality_res,
                     direction,
                     atr_val,
                     bos_followthrough_norm=_ft_norm,
