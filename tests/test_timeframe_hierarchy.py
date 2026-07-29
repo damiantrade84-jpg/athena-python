@@ -68,7 +68,7 @@ def test_us_stock_single_d1_bias() -> None:
     assert policy.bias_tf == Timeframe.D1
     assert policy.structure_tf == Timeframe.H1
     assert policy.setup_tf == Timeframe.M15
-    assert policy.trigger_tf == Timeframe.M5
+    assert policy.trigger_tf == Timeframe.M15
     assert policy.m5_policy == M5Policy.CONDITIONAL
     assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
 
@@ -107,8 +107,8 @@ def test_engine_a_intraday_overlay_preserves_instrument_profile() -> None:
     assert policy.bias_tf == Timeframe.H4
     assert policy.structure_tf == Timeframe.H1
     assert policy.setup_tf == Timeframe.M15
-    assert policy.trigger_tf == Timeframe.M5
-    assert policy.execution_tf == Timeframe.M5
+    assert policy.trigger_tf == Timeframe.M15
+    assert policy.execution_tf == Timeframe.M15
     assert policy.m5_role == M5Role.REFINEMENT
     assert policy.m5_policy == M5Policy.CONDITIONAL
 
@@ -134,7 +134,7 @@ def test_engine_b_intraday_overlay_preserves_instrument_profile() -> None:
         "GBP/USD", "forex", "forex_majors", "intraday", engine_id="engine_b"
     )
     assert policy.profile == "ENGINE_B_INTRADAY_FOREX_MAJORS_FAST"
-    assert policy.trigger_tf == Timeframe.M5
+    assert policy.trigger_tf == Timeframe.M15
     assert policy.m5_role == M5Role.REFINEMENT
     assert policy.m5_policy == M5Policy.CONDITIONAL
 

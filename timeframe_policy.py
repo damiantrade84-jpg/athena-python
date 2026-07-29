@@ -100,9 +100,10 @@ class M5Policy(str, Enum):
     """Declarative M5 authority for a resolved profile.
 
     ``CONDITIONAL`` pairs with ``m5Role=refinement`` and
-    ``m15_confirmation_required_for_m5=True``: M5 may act only after M15
-    confirmation and a passing M5-eligibility evaluation. ``DISABLED`` pairs
-    with ``m5Role=disabled``. There is no unconditional M5 authority in v4.
+    ``m15_confirmation_required_for_m5=True``: M15 remains the authoritative
+    trigger while M5 may contribute refinement diagnostics after confirmation.
+    M5 eligibility never blocks Engine A/B entry. ``DISABLED`` pairs with
+    ``m5Role=disabled``. There is no M5 trigger authority in v4.
     """
 
     DISABLED = "disabled"
@@ -631,7 +632,7 @@ _FOREX_MAJORS_STANDARD = _group_template(
 _FOREX_MAJORS_FAST = _group_template(
     "FOREX_MAJORS_FAST",
     setup=Timeframe.M15,
-    trigger=Timeframe.M5,
+    trigger=Timeframe.M15,
     m5_policy=M5Policy.CONDITIONAL,
     speed=SpeedClass.FAST,
 )
@@ -661,7 +662,7 @@ _FOREX_EXOTICS_RESTRICTED = _group_template(
 _ENERGY_OIL = _group_template(
     "ENERGY_OIL_CONDITIONAL",
     setup=Timeframe.M15,
-    trigger=Timeframe.M5,
+    trigger=Timeframe.M15,
     m5_policy=M5Policy.CONDITIONAL,
     speed=SpeedClass.FAST,
 )
@@ -683,7 +684,7 @@ _THIN_METALS_BASE_SOFTS = _group_template(
 _EQUITY_INDEX_FAST = _group_template(
     "EQUITY_INDEX_FAST",
     setup=Timeframe.M15,
-    trigger=Timeframe.M5,
+    trigger=Timeframe.M15,
     m5_policy=M5Policy.CONDITIONAL,
     speed=SpeedClass.FAST,
 )
@@ -695,13 +696,13 @@ _US_STOCK_SINGLE = _group_template(
     bias=Timeframe.D1,
     structure=Timeframe.H1,
     setup=Timeframe.M15,
-    trigger=Timeframe.M5,
+    trigger=Timeframe.M15,
     m5_policy=M5Policy.CONDITIONAL,
 )
 # Cash-equity share CFDs (ATFX). Same D1-bias shape as the named US singles but
 # one rung slower on setup/trigger and with M5 off: these 219 instruments have
 # no trade history in Athena and no frozen out-of-sample evidence, so the
-# conditional-M5 promotion that us_stock_single carries is not justified for
+# conditional-M5 refinement that us_stock_single carries is not justified for
 # them. Flip m5_policy to CONDITIONAL only when m5_validation_status reaches
 # APPROVED for the region group.
 _CASH_EQUITY_STANDARD_DYNAMIC = _group_template(
@@ -722,7 +723,7 @@ _BOND_TLT_SMALLCAP_EM_ETF = _group_template(
 _CRYPTO_MAJORS_FAST = _group_template(
     "CRYPTO_MAJORS_FAST",
     setup=Timeframe.M15,
-    trigger=Timeframe.M5,
+    trigger=Timeframe.M15,
     m5_policy=M5Policy.CONDITIONAL,
     speed=SpeedClass.FAST,
 )
@@ -859,9 +860,9 @@ _SYMBOL_OVERRIDES: dict[str, dict[str, Any]] = {
     "AUDUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
     "NZDUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
     "USDCAD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
-    # Fast majors — D1/H4/H1/M15/M5, M5 conditional.
-    "GBPUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "FOREX_MAJORS_FAST"},
-    "USDJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "FOREX_MAJORS_FAST"},
+    # Fast majors — D1/H4/H1/M15/M15; M5 conditional refinement.
+    "GBPUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "FOREX_MAJORS_FAST"},
+    "USDJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "FOREX_MAJORS_FAST"},
     # Broad crosses — D1/H4/H4/H1/M30, M5 disabled.
     "EURGBP": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
     "AUDNZD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
@@ -874,9 +875,9 @@ _SYMBOL_OVERRIDES: dict[str, dict[str, Any]] = {
     "EURJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
     "AUDJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
     # GBP/JPY fast-cross symbol override: partial patch over the liquid-cross
-    # group (regime/bias inherit D1/H4); H1 structure, M15 setup, conditional
-    # M5 trigger.
-    "GBPJPY": {"structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "GBPJPY_FAST_CROSS_CONDITIONAL"},
+    # group (regime/bias inherit D1/H4); H1 structure, M15 setup/trigger, and
+    # conditional M5 refinement.
+    "GBPJPY": {"structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "GBPJPY_FAST_CROSS_CONDITIONAL"},
     # Exotics — liquid: D1/H4/H4/H1/M30; restricted: H1 confirmed trigger, no
     # M30/M15/M5 promotion.
     "USDZAR": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_LIQUID"},
@@ -906,32 +907,32 @@ _SYMBOL_OVERRIDES: dict[str, dict[str, Any]] = {
     # China A50: broad-index ladder (H4 structure, M30 trigger). The CFD quotes
     # for extended hours, which must not be read as cash-index liquidity.
     "CHI50": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "EQUITY_INDEX_BROAD"},
-    # Metals — XAU conditional M5 (M15 setup); XAG stays M15; XPT/XPD H4 structure.
-    "XAUUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "XAU_CONDITIONAL_M5"},
+    # Metals — XAU uses M15 authority plus M5 refinement; XAG stays M15.
+    "XAUUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "XAU_CONDITIONAL_M5"},
     "XAGUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "LIQUID_METALS"},
     "XPTUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "THIN_METALS_BASE_SOFTS"},
     "XPDUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "THIN_METALS_BASE_SOFTS"},
-    # Energy — WTI/Brent conditional M5; NATGAS M5 never.
-    "WTI": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "ENERGY_OIL_CONDITIONAL"},
-    "BRENT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "ENERGY_OIL_CONDITIONAL"},
+    # Energy — WTI/Brent use M15 authority plus M5 refinement; NATGAS M5 never.
+    "WTI": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "ENERGY_OIL_CONDITIONAL"},
+    "BRENT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "ENERGY_OIL_CONDITIONAL"},
     "NATGAS": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.FAST, "profile": "NAT_GAS_NO_M5"},
-    # Indices — fast conditional; standard disabled.
-    "NAS100": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
-    "US30": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
-    "GER40": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
+    # Indices — fast profiles use M15 authority plus M5 refinement.
+    "NAS100": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
+    "US30": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
+    "GER40": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
     "US500": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
     "UK100": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
     "JPN225": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
     # Single stocks / bond & small-cap & EM ETFs — D1 bias.
-    "AAPL": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},
-    "SPY": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},
+    "AAPL": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},
+    "SPY": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},
     "TLT": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
     "IWM": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
     "EEM": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
-    # Crypto — fast majors conditional; alt majors disabled; thin H4 structure.
-    "BTCUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
-    "ETHUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
-    "SOLUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M5, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
+    # Crypto — fast majors use M15 authority plus M5 refinement.
+    "BTCUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
+    "ETHUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
+    "SOLUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
     "BNBUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
     "XRPUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
     "ADAUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},

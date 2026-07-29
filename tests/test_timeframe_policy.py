@@ -9,6 +9,8 @@ import pytest
 from athena_app.services.market_state import candle_timestamp_epoch, split_market_state
 from market_structure import engine_b_candles_for_tf, resolve_engine_b_tfs
 from timeframe_policy import (
+    _GROUP_OVERRIDES,
+    _SYMBOL_OVERRIDES,
     ExecutionMode,
     LiquidityClass,
     M5Policy,
@@ -92,6 +94,47 @@ def _registered_pairs() -> list[dict]:
     return pairs
 
 
+def test_all_conditional_m5_groups_and_overrides_keep_m15_authority() -> None:
+    conditional_groups = {
+        name: template
+        for name, template in _GROUP_OVERRIDES.items()
+        if template.m5_policy == M5Policy.CONDITIONAL
+    }
+    assert conditional_groups
+    for name, template in conditional_groups.items():
+        assert template.trigger == Timeframe.M15, name
+        assert template.execution == Timeframe.M15, name
+        assert template.m5_role == M5Role.REFINEMENT, name
+
+    conditional_symbols = {
+        symbol: patch
+        for symbol, patch in _SYMBOL_OVERRIDES.items()
+        if patch.get("m5_policy") == M5Policy.CONDITIONAL
+    }
+    assert conditional_symbols
+    for symbol, patch in conditional_symbols.items():
+        assert patch.get("trigger") == Timeframe.M15, symbol
+
+
+@pytest.mark.parametrize("engine_id", ("engine_a", "engine_b"))
+@pytest.mark.parametrize("style", ("intraday", "swing"))
+def test_registered_universe_never_uses_m5_as_authoritative_trigger(
+    engine_id: str,
+    style: str,
+) -> None:
+    for pair in _registered_pairs():
+        display = str(pair.get("display") or pair.get("symbol") or "")
+        policy = resolve_timeframe_policy(
+            display,
+            str(pair.get("type") or ""),
+            pair.get("score_group"),
+            style,
+            engine_id=engine_id,
+        )
+        assert policy.trigger_tf != Timeframe.M5, (display, engine_id, style)
+        assert policy.execution_tf != Timeframe.M5, (display, engine_id, style)
+
+
 def test_every_source_enabled_registered_symbol_resolves_once() -> None:
     result = reconcile_symbol_universe(_registered_pairs())
     expected = [pair for pair in _registered_pairs() if pair.get("enabled", True)]
@@ -131,15 +174,15 @@ def test_required_baseline_matrix() -> None:
     # policy v4 matrix: (structure, trigger, advisory execution context, m5 role)
     cases = {
         "EUR/USD": ("forex", "forex_majors", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
-        "GBP/USD": ("forex", "forex_majors", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "GBP/USD": ("forex", "forex_majors", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
         "EUR/GBP": ("forex", "forex_crosses", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
-        "XAU/USD": ("commodity", "precious_trackers", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "XAU/USD": ("commodity", "precious_trackers", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
         "XPT/USD": ("commodity", "pgm_metals", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
-        "WTI Oil": ("commodity", "energy_oil", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "WTI Oil": ("commodity", "energy_oil", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
         "S&P 500": ("index", "us_indices_trackers", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
-        "AAPL": ("stock", "us_stock_single", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
-        "BTC/USDT": ("crypto", "crypto_btc", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
-        "SOL/USDT": ("crypto", "crypto_alt_majors", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "AAPL": ("stock", "us_stock_single", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "BTC/USDT": ("crypto", "crypto_btc", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "SOL/USDT": ("crypto", "crypto_alt_majors", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
     }
     for symbol, (asset, group, structure, trigger, execution, m5_role) in cases.items():
         policy = resolve_timeframe_policy(symbol, asset, group, "intraday")
@@ -158,7 +201,7 @@ def test_required_baseline_matrix() -> None:
     assert payload["executionMode"] == ExecutionMode.LIVE_QUOTE.value
     assert payload["m5Policy"] == M5Policy.CONDITIONAL.value
     # Backward-compat fields remain emitted alongside the v4 fields.
-    assert payload["executionTf"] == "M5"
+    assert payload["executionTf"] == "M15"
     assert payload["m5Role"] == M5Role.REFINEMENT.value
 
     standard = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday")
@@ -171,10 +214,10 @@ def test_required_baseline_matrix() -> None:
 
 def test_corrected_symbol_specific_profiles() -> None:
     cases = {
-        "USD/JPY": ("forex", "forex_majors", "FOREX_MAJORS_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "USD/JPY": ("forex", "forex_majors", "FOREX_MAJORS_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
         "USD/CAD": ("forex", "forex_majors", "FOREX_MAJORS_STANDARD", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
         "AUD/NZD": ("forex", "forex_crosses", "FOREX_CROSSES_BROAD", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
-        "GBP/JPY": ("forex", "forex_crosses", "GBPJPY_FAST_CROSS_CONDITIONAL", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "GBP/JPY": ("forex", "forex_crosses", "GBPJPY_FAST_CROSS_CONDITIONAL", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
         "EUR/JPY": ("forex", "forex_crosses", "FOREX_CROSSES_LIQUID", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
         "AUD/JPY": ("forex", "forex_crosses", "FOREX_CROSSES_LIQUID", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
         "EUR/CHF": ("forex", "forex_crosses", "FOREX_CROSSES_BROAD", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
@@ -182,18 +225,18 @@ def test_corrected_symbol_specific_profiles() -> None:
         "XPT/USD": ("commodity", "pgm_metals", "THIN_METALS_BASE_SOFTS", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
         "XPD/USD": ("commodity", "pgm_metals", "THIN_METALS_BASE_SOFTS", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
         "Natural Gas": ("commodity", "nat_gas", "NAT_GAS_NO_M5", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
-        "NAS100": ("index", "us_indices_trackers", "EQUITY_INDEX_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
-        "US30": ("index", "us_indices_trackers", "EQUITY_INDEX_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
-        "GER40": ("index", "eu_indices", "EQUITY_INDEX_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "NAS100": ("index", "us_indices_trackers", "EQUITY_INDEX_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "US30": ("index", "us_indices_trackers", "EQUITY_INDEX_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "GER40": ("index", "eu_indices", "EQUITY_INDEX_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
         "JPN225": ("index", "asia_indices", "EQUITY_INDEX_STANDARD", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
         "US500": ("index", "us_indices_trackers", "EQUITY_INDEX_STANDARD", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
         "UK100": ("index", "eu_indices", "EQUITY_INDEX_STANDARD", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
-        "AAPL": ("stock", "us_stock_single", "US_STOCK_SINGLE", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
-        "SPY": ("etf", "us_etfs", "US_STOCK_SINGLE", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
-        "BTC/USDT": ("crypto", "crypto_btc", "CRYPTO_MAJORS_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
-        "ETH/USDT": ("crypto", "crypto_eth", "CRYPTO_MAJORS_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "AAPL": ("stock", "us_stock_single", "US_STOCK_SINGLE", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "SPY": ("etf", "us_etfs", "US_STOCK_SINGLE", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "BTC/USDT": ("crypto", "crypto_btc", "CRYPTO_MAJORS_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
+        "ETH/USDT": ("crypto", "crypto_eth", "CRYPTO_MAJORS_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
         "BNB/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
-        "SOL/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_MAJORS_FAST", Timeframe.H1, Timeframe.M5, Timeframe.M5, M5Role.REFINEMENT),
+        "SOL/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_MAJORS_FAST", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.REFINEMENT),
         "XRP/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
         "DOGE/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_OTHER_THIN", Timeframe.H4, Timeframe.M30, Timeframe.M30, M5Role.DISABLED),
         "ADA/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", Timeframe.H1, Timeframe.M15, Timeframe.M15, M5Role.DISABLED),
@@ -224,7 +267,7 @@ def test_symbol_overrides_are_partial_role_patches_with_diagnostics() -> None:
     assert gbpjpy.bias_tf == Timeframe.H4
     assert gbpjpy.structure_tf == Timeframe.H1
     assert gbpjpy.setup_tf == Timeframe.M15
-    assert gbpjpy.trigger_tf == Timeframe.M5
+    assert gbpjpy.trigger_tf == Timeframe.M15
     assert gbpjpy.m5_policy == M5Policy.CONDITIONAL
 
     eurusd = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday")
@@ -361,11 +404,10 @@ def test_extreme_thin_market_blocks_m5_eligibility_without_rewriting_roles() -> 
     )
     policy = resolve_timeframe_policy("BTC/USDT", "crypto", "crypto_btc", "intraday", state)
 
-    # v4: THIN liquidity never rewrites role timeframes.  M5 stays declarative
-    # and conditional; the eligibility block is recorded for the M5-eligibility
-    # layer instead of stripping M5 authority here.
-    assert policy.trigger_tf == Timeframe.M5
-    assert policy.execution_tf == Timeframe.M5
+    # v4: THIN liquidity never rewrites role timeframes. M15 remains
+    # authoritative while M5 eligibility stays diagnostic.
+    assert policy.trigger_tf == Timeframe.M15
+    assert policy.execution_tf == Timeframe.M15
     assert policy.m5_role == M5Role.REFINEMENT
     assert policy.m5_policy == M5Policy.CONDITIONAL
     assert policy.diagnostics.m5_liquidity_blocked is True
@@ -408,18 +450,18 @@ def test_speed_adaptation_moves_setup_and_trigger_only() -> None:
     assert fast_policy.trigger_tf == Timeframe.M15
     assert fast_policy.execution_tf == Timeframe.M15
     assert fast_policy.diagnostics.adaptation_applied is False
-    # Conditional-M5 profiles keep their template M5 trigger under FAST; there
-    # is no speed-driven promotion to add or remove.
-    assert fast_majors.trigger_tf == Timeframe.M5
-    assert fast_majors.execution_tf == Timeframe.M5
+    # Conditional-M5 profiles keep M15 authoritative under FAST; M5 remains
+    # refinement-only and cannot be promoted into the trigger role.
+    assert fast_majors.trigger_tf == Timeframe.M15
+    assert fast_majors.execution_tf == Timeframe.M15
     assert fast_majors.m5_role == M5Role.REFINEMENT
     assert fast_majors.m5_policy == M5Policy.CONDITIONAL
     assert fast_majors.diagnostics.adaptation_applied is False
-    # SLOW on a conditional profile demotes the M5 trigger to M15 but never
-    # rewrites the advisory execution TF or the declarative M5 policy.
+    # SLOW on a conditional profile demotes M15 to M30 but never rewrites the
+    # advisory execution TF or the declarative M5 refinement policy.
     assert slow_majors.setup_tf == Timeframe.M30
-    assert slow_majors.trigger_tf == Timeframe.M15
-    assert slow_majors.execution_tf == Timeframe.M5
+    assert slow_majors.trigger_tf == Timeframe.M30
+    assert slow_majors.execution_tf == Timeframe.M15
     assert slow_majors.m5_policy == M5Policy.CONDITIONAL
 
 
@@ -529,8 +571,8 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     assert engine_b_swing["zone"] == engine_b_swing["struct"]
     assert engine_b_swing["bias"] == "D1"
     assert engine_b_swing["trigger"] == "H1"
-    assert engine_b_fast.execution_tf == Timeframe.M5
-    assert engine_b_fast.trigger_tf == Timeframe.M5
+    assert engine_b_fast.execution_tf == Timeframe.M15
+    assert engine_b_fast.trigger_tf == Timeframe.M15
     assert engine_b_fast.m5_role == M5Role.REFINEMENT
     assert engine_b_fast.m5_policy == M5Policy.CONDITIONAL
     assert engine_b_fast.execution_prerequisite_tf == Timeframe.M15
@@ -958,8 +1000,8 @@ def test_policy_payload_rebuild_tolerates_v3_and_v4_payloads() -> None:
     policy = resolve_timeframe_policy(
         "USD/JPY", "forex", "forex_majors", "intraday", rebuilt_v4
     )
-    assert policy.trigger_tf == Timeframe.M5
-    assert policy.execution_tf == Timeframe.M5
+    assert policy.trigger_tf == Timeframe.M15
+    assert policy.execution_tf == Timeframe.M15
     assert policy.m5_role == M5Role.REFINEMENT
     assert policy.m5_policy == M5Policy.CONDITIONAL
 
@@ -1253,11 +1295,10 @@ def test_liquidity_is_separate_from_speed_and_blocks_m5_eligibility() -> None:
     policy = resolve_timeframe_policy(
         "BTC/USDT", "crypto", "crypto_btc", "intraday", state
     )
-    # v4 fail-closed path: TFs are never rewritten by liquidity; M5 authority
-    # is withheld by the recorded eligibility block plus the conditional
-    # policy, not by mutating the resolved roles.
-    assert policy.trigger_tf == Timeframe.M5
-    assert policy.execution_tf == Timeframe.M5
+    # v4 fail-closed path: TFs are never rewritten by liquidity; M15 remains
+    # authoritative and the M5 eligibility state is diagnostic.
+    assert policy.trigger_tf == Timeframe.M15
+    assert policy.execution_tf == Timeframe.M15
     assert policy.m5_policy == M5Policy.CONDITIONAL
     assert policy.diagnostics.m15_confirmation_required_for_m5 is True
     assert policy.diagnostics.m5_liquidity_blocked is True
@@ -1301,7 +1342,7 @@ def test_fresh_scan_unavailable_speed_state_round_trips_policy_hash() -> None:
     stamped = scan.payload()
 
     assert scan.diagnostics.m5_liquidity_blocked is True
-    assert scan.trigger_tf == Timeframe.M5
+    assert scan.trigger_tf == Timeframe.M15
     assert scan.m5_policy == M5Policy.CONDITIONAL
 
     pinned = speed_state_from_policy_payload(stamped)
@@ -1541,9 +1582,9 @@ def test_attach_stamps_trigger_lifecycle_with_defaults() -> None:
     assert signal["signalId"]
     assert signal["triggerState"] == "ARMED"
     assert signal["triggerAge"] == 0.0
-    # Default TTL: whichever of 8 trigger bars (8 x M5 = 40 min) or 4h first.
-    assert policy.trigger_tf == Timeframe.M5
-    assert signal["triggerExpiry"] == "2026-07-13T11:40:00+00:00"
+    # Default TTL: whichever of 8 trigger bars (8 x M15 = 2h) or 4h first.
+    assert policy.trigger_tf == Timeframe.M15
+    assert signal["triggerExpiry"] == "2026-07-13T13:00:00+00:00"
 
     from timeframe_policy import get_trigger_record
 
@@ -1552,7 +1593,7 @@ def test_attach_stamps_trigger_lifecycle_with_defaults() -> None:
     assert record.state.value == "ARMED"
     assert record.setup_zone == (1.29, 1.30)
     assert record.trigger_level == 1.301
-    assert record.trigger_tf == "M5"
+    assert record.trigger_tf == "M15"
 
 
 def test_attach_trigger_lifecycle_respects_config_ttl_override() -> None:
@@ -1592,8 +1633,8 @@ def test_attach_trigger_lifecycle_expires_stale_record_on_restamp() -> None:
     )
     assert armed["triggerState"] == "ARMED"
 
-    # Same signal id re-stamped 5h later: past both TTL bounds (8 x M5 bars =
-    # 40 min, 4h wall clock), so the attach-time sweep expires the record.
+    # Same signal id re-stamped 5h later: past both TTL bounds (8 x M15 bars =
+    # 2h, 4h wall clock), so the attach-time sweep expires the record.
     restamped = dict(armed)
     restamped["signalId"] = armed["signalId"]
     restamped["timestamp"] = "2026-07-13T18:00:00Z"
@@ -1605,7 +1646,7 @@ def test_attach_trigger_lifecycle_expires_stale_record_on_restamp() -> None:
     assert restamped["signalId"] == armed["signalId"]
     assert restamped["triggerState"] == "EXPIRED"
     assert restamped["triggerAge"] == 5 * 3600.0
-    assert restamped["triggerExpiry"] == "2026-07-13T13:40:00+00:00"
+    assert restamped["triggerExpiry"] == "2026-07-13T15:00:00+00:00"
     # The expired trigger feeds M5 eligibility fail-closed.
     assert "trigger_expired" in restamped["m5EligibilityReasons"]
 

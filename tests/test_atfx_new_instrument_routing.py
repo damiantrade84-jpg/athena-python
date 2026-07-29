@@ -205,7 +205,7 @@ def test_china_a50_uses_the_broad_index_ladder_not_the_fast_one():
 
 def test_xauzar_keeps_the_thin_metal_ladder_not_the_xauusd_one():
     assert _ladder("XAU/ZAR", "commodity") == (D1, H4, H4, H1, M30)
-    assert _ladder("XAU/USD", "commodity") == (D1, H4, H1, M15, M5)
+    assert _ladder("XAU/USD", "commodity") == (D1, H4, H1, M15, M15)
 
 
 # ── Special-instrument rules ─────────────────────────────────────────────────
@@ -514,36 +514,36 @@ def test_etfs_are_not_swept_into_the_share_cfd_group():
 
 PRE_EXISTING = {
     ("EUR/USD", "forex"): ("forex_majors", (D1, H4, H1, M30, M15)),
-    ("GBP/USD", "forex"): ("forex_majors", (D1, H4, H1, M15, M5)),
-    ("USD/JPY", "forex"): ("forex_majors", (D1, H4, H1, M15, M5)),
+    ("GBP/USD", "forex"): ("forex_majors", (D1, H4, H1, M15, M15)),
+    ("USD/JPY", "forex"): ("forex_majors", (D1, H4, H1, M15, M15)),
     ("EUR/GBP", "forex"): ("forex_crosses", (D1, H4, H4, H1, M30)),
     ("EUR/JPY", "forex"): ("forex_crosses", (D1, H4, H1, M30, M15)),
     ("AUD/JPY", "forex"): ("forex_crosses", (D1, H4, H1, M30, M15)),
-    ("GBP/JPY", "forex"): ("forex_crosses", (D1, H4, H1, M15, M5)),
+    ("GBP/JPY", "forex"): ("forex_crosses", (D1, H4, H1, M15, M15)),
     ("USD/SGD", "forex"): ("forex_crosses", (D1, H4, H4, H1, M30)),
     ("AUD/CHF", "forex"): ("forex_crosses", (D1, H4, H4, H1, M30)),
     ("USD/ZAR", "forex"): ("forex_exotics", (D1, H4, H4, H1, M30)),
     ("USD/MXN", "forex"): ("forex_exotics", (D1, H4, H4, H1, M30)),
     ("USD/BRL", "forex"): ("forex_exotics", (D1, H4, H4, H1, H1)),
     ("USD/INR", "forex"): ("forex_exotics", (D1, H4, H4, H1, H1)),
-    ("XAU/USD", "commodity"): ("precious_trackers", (D1, H4, H1, M15, M5)),
+    ("XAU/USD", "commodity"): ("precious_trackers", (D1, H4, H1, M15, M15)),
     ("XAG/USD", "commodity"): ("precious_trackers", (D1, H4, H1, M30, M15)),
-    ("WTI Oil", "commodity"): ("energy_oil", (D1, H4, H1, M15, M5)),
+    ("WTI Oil", "commodity"): ("energy_oil", (D1, H4, H1, M15, M15)),
     ("Nat Gas", "commodity"): ("nat_gas", (D1, H4, H1, M30, M15)),
-    ("DAX 40", "index"): ("eu_indices", (D1, H4, H1, M15, M5)),
+    ("DAX 40", "index"): ("eu_indices", (D1, H4, H1, M15, M15)),
     ("UK100", "index"): ("eu_indices", (D1, H4, H1, M30, M15)),
     ("Nikkei 225", "index"): ("asian_indices", (D1, H4, H1, M30, M15)),
     ("Hang Seng", "index"): ("asian_indices", (D1, H4, H1, M30, M15)),
     ("ASX 200", "index"): ("asian_indices", (D1, H4, H1, M30, M15)),
-    ("NASDAQ-100", "index"): ("us_indices_trackers", (D1, H4, H1, M15, M5)),
-    ("AAPL", "stock"): ("us_stock_single", (D1, D1, H1, M15, M5)),
-    ("BTC/USDT", "crypto"): ("crypto_btc", (D1, H4, H1, M15, M5)),
+    ("NASDAQ-100", "index"): ("us_indices_trackers", (D1, H4, H1, M15, M15)),
+    ("AAPL", "stock"): ("us_stock_single", (D1, D1, H1, M15, M15)),
+    ("BTC/USDT", "crypto"): ("crypto_btc", (D1, H4, H1, M15, M15)),
     ("DOGE/USDT", "crypto"): ("crypto_doge", (D1, H4, H4, H1, M30)),
 }
 
 
 @pytest.mark.parametrize("key", sorted(PRE_EXISTING, key=str))
-def test_pre_existing_symbols_are_untouched_by_the_additions(key):
+def test_pre_existing_symbols_match_the_authoritative_policy(key):
     display, asset_type = key
     expected_group, expected_ladder = PRE_EXISTING[key]
     pair = {"display": display, "type": asset_type,

@@ -1,8 +1,8 @@
 """Regression tests for the Engine B timeframe-structure audit fixes.
 
 Covers:
-  * M5 policy trigger rungs are reachable (were failing closed on every scan)
-  * conditional M5 requires the setup rung to have armed
+  * M15 remains authoritative across every conditional-M5 asset group
+  * M5 refinement data cannot block or veto an M15 trigger
   * Engine B swing is group-aware (thin groups step one rung slower)
   * volatility bands are compared on an H4-equivalent ATR%
   * macro sequence is not double-counted when bias TF == structure TF
@@ -32,15 +32,21 @@ from market_structure import (
 )
 from timeframe_policy import resolve_timeframe_policy
 
-_M5_TRIGGER_SYMBOLS = [
+_M5_REFINEMENT_SYMBOLS = [
     ("GBP/USD", "forex"),
     ("USD/JPY", "forex"),
     ("GBP/JPY", "forex"),
     ("XAU/USD", "commodity"),
     ("WTI Oil", "commodity"),
+    ("SpotBrent", "commodity"),
     ("NASDAQ-100", "index"),
+    ("US30", "index"),
+    ("GER40", "index"),
     ("BTC/USDT", "crypto"),
+    ("ETH/USDT", "crypto"),
+    ("SOL/USDT", "crypto"),
     ("AAPL", "stock"),
+    ("SPY", "etf"),
 ]
 
 
@@ -76,26 +82,30 @@ def _with_bull_engulfing(rows, half):
 
 # ── M5 reachability ──────────────────────────────────────────────────────────
 
-def test_m5_is_an_allowed_trigger_timeframe():
+def test_m5_remains_available_for_refinement_diagnostics():
     assert "M5" in _DIAGNOSTIC_TRIGGER_TFS
 
 
-@pytest.mark.parametrize("symbol,asset", _M5_TRIGGER_SYMBOLS)
-def test_m5_policy_symbols_receive_trigger_role_candles(monkeypatch, symbol, asset):
-    """A policy that resolves trigger=M5 must actually get its M5 series."""
+@pytest.mark.parametrize("symbol,asset", _M5_REFINEMENT_SYMBOLS)
+def test_m5_policy_symbols_use_m15_as_authoritative_trigger(monkeypatch, symbol, asset):
+    """Every conditional-M5 production profile must keep M5 refinement-only."""
     monkeypatch.setitem(config.CONFIG, "TF_POLICY_MODE", "enforced_demo")
     tfs = resolve_engine_b_tfs(asset, "intraday", symbol=symbol)
-    assert tfs["trigger"] == "M5", f"{symbol} is not an M5-trigger symbol any more"
+    assert tfs["trigger"] == "M15"
+    assert tfs["execution"] == "M15"
+    assert tfs["m5_policy"] == "conditional"
+    assert tfs["execution_prerequisite"] == "M15"
     kwargs = engine_b_live_trigger_kwargs(
         {"entry_tf": tfs["trigger"]}, {"M5": [{}], "M15": [{}]}
     )
-    assert kwargs.get("trigger_tf_override") == "M5"
+    assert kwargs.get("trigger_tf_override") == "M15"
     assert kwargs.get("role_candles") is not None
 
 
 def test_resolve_engine_b_tfs_exposes_m5_policy_and_prerequisite(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "TF_POLICY_MODE", "enforced_demo")
     fast = resolve_engine_b_tfs("forex", "intraday", symbol="GBP/USD")
+    assert fast["trigger"] == "M15"
     assert fast["m5_policy"] == "conditional"
     assert fast["execution_prerequisite"] == "M15"
     standard = resolve_engine_b_tfs("forex", "intraday", symbol="EUR/USD")
@@ -105,7 +115,7 @@ def test_resolve_engine_b_tfs_exposes_m5_policy_and_prerequisite(monkeypatch):
 
 # ── conditional M5 prerequisite ──────────────────────────────────────────────
 
-def _run_m5(monkeypatch, role_candles):
+def _run_m15_with_optional_m5(monkeypatch, role_candles):
     monkeypatch.setitem(config.CONFIG, "TF_POLICY_MODE", "enforced_demo")
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRIP_FORMING_STRUCT", False)
     engine = NakedEngine()
@@ -120,49 +130,47 @@ def _run_m5(monkeypatch, role_candles):
         asset_type="forex",
         pair=pair,
         enable_zone_registry=False,
-        **engine_b_live_trigger_kwargs({"entry_tf": "M5"}, role_candles),
+        **engine_b_live_trigger_kwargs({"entry_tf": "M15"}, role_candles),
     )
     if pre.get("_error"):
         return pre, None
     return pre, engine.analyze_structure_direction(pre, 100.0, "LONG")
 
 
-def test_m5_trigger_fires_when_setup_rung_is_armed(monkeypatch):
-    pre, res = _run_m5(
+def test_missing_m5_refinement_does_not_block_m15_trigger(monkeypatch):
+    pre, res = _run_m15_with_optional_m5(
         monkeypatch,
         {
-            "M5": _with_bull_engulfing(_series(100.0, half=0.1), 0.1),
             "M15": _with_bull_engulfing(_series(100.0, half=0.2), 0.2),
         },
     )
     assert pre.get("_error") is None
-    assert pre["_tfs"]["trigger"] == "M5"
-    assert pre["m5_conditional_required"] is True
-    assert pre["m5_prereq_tf"] == "M15"
-    assert res["m5_setup_armed"] is True
+    assert pre["_tfs"]["trigger"] == "M15"
+    assert pre["m5_conditional_required"] is False
+    assert res["trigger_timeframe"] == "M15"
     assert res["trigger_ok"] is True
 
 
-def test_m5_trigger_blocked_when_setup_rung_not_armed(monkeypatch):
-    """Bare M5 authority is not permitted by M5Policy.CONDITIONAL."""
-    pre, res = _run_m5(
+def test_opposing_m5_refinement_cannot_veto_m15_trigger(monkeypatch):
+    pre, res = _run_m15_with_optional_m5(
         monkeypatch,
         {
-            "M5": _with_bull_engulfing(_series(100.0, half=0.1), 0.1),
-            "M15": _series(100.0, half=0.2),
+            "M5": _series(100.0, half=0.1),
+            "M15": _with_bull_engulfing(_series(100.0, half=0.2), 0.2),
         },
     )
     assert pre.get("_error") is None
-    assert res["m5_setup_armed"] is False
-    assert res["trigger_ok"] is False
+    assert pre["m5_conditional_required"] is False
+    assert res["trigger_timeframe"] == "M15"
+    assert res["trigger_ok"] is True
 
 
-def test_m5_fails_closed_when_prerequisite_timeframe_missing(monkeypatch):
-    pre, _ = _run_m5(
+def test_missing_authoritative_m15_trigger_still_fails_closed(monkeypatch):
+    pre, _ = _run_m15_with_optional_m5(
         monkeypatch,
         {"M5": _with_bull_engulfing(_series(100.0, half=0.1), 0.1)},
     )
-    assert pre.get("_error") == "missing_m5_prerequisite_timeframe:M15"
+    assert pre.get("_error") == "missing_required_trigger_timeframe:M15"
 
 
 def test_structure_timeframe_below_h1_fails_closed_not_substituted(monkeypatch):
