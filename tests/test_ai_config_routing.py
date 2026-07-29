@@ -231,6 +231,19 @@ def test_marcus_ai_sdk_retries_default_to_zero():
     assert get_ai_max_retries(CONFIG, "MARCUS_AI_SDK_MAX_RETRIES", fallback=0) == 0
 
 
+def test_marcus_grok_review_honors_low_reasoning_and_has_no_stacked_retries():
+    source = (ROOT / "athena.py").read_text(encoding="utf-8")
+    start = source.index('@ai_call_with_safe_default("marcus"')
+    end = source.index('@app.route("/api/analyze"', start)
+    run_ai_source = source[start:end]
+
+    assert '@ai_call_with_safe_default("marcus", max_retries=0)' in run_ai_source
+    assert '_extra_completion_kwargs["reasoning_effort"] = _resolved_effort' in run_ai_source
+    assert 'preferred_key="MARCUS_AI_MAX_RETRIES"' in run_ai_source
+    assert CONFIG["MARCUS_AI_REASONING_EFFORT"] == "low"
+    assert CONFIG["MARCUS_AI_MAX_RETRIES"] == 0
+
+
 def test_ai_retry_resolver_uses_non_negative_specific_value_before_global():
     cfg = {
         "AI_SDK_MAX_RETRIES": 2,

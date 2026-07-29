@@ -6119,7 +6119,7 @@ def _parse_ai_json(text: str, pair: str = "?") -> dict | None:
     return parse_json_object(text)
 
 
-@ai_call_with_safe_default("marcus", max_retries=1)
+@ai_call_with_safe_default("marcus", max_retries=0)
 def run_ai(
     signal: dict,
     news_ctx: dict | None = None,
@@ -6247,19 +6247,31 @@ def run_ai(
 
         _max_tokens = int(CONFIG.get("MARCUS_AI_MAX_TOKENS", 10000) or 10000)
         _extra_completion_kwargs: dict = {}
+        _configured_effort = str(
+            CONFIG.get("MARCUS_AI_REASONING_EFFORT", "low") or "low"
+        ).strip().lower()
+        _resolved_effort = marcus_reasoning_effort(
+            _configured_effort,
+            has_playbook=bool(playbook_block),
+            provider=_active_provider,
+        )
         if _active_provider == "openai":
             # OpenAI Responses path: reasoning tokens count against the output
             # budget, so a high effort with a small budget yields empty text.
-            _configured_effort = str(CONFIG.get("MARCUS_AI_REASONING_EFFORT", "low") or "low").strip().lower()
             _extra_completion_kwargs["reasoning"] = {
-                "effort": marcus_reasoning_effort(
-                    _configured_effort,
-                    has_playbook=bool(playbook_block),
-                    provider=_active_provider,
-                )
+                "effort": _resolved_effort
             }
+        elif _active_provider == "grok":
+            # Grok 4.5 defaults to high reasoning when omitted. Marcus is a
+            # latency-sensitive structured review, so honor the configured
+            # low effort instead of silently taking the provider default.
+            _extra_completion_kwargs["reasoning_effort"] = _resolved_effort
         _two_stage_enabled = bool(CONFIG.get("AI_MARCUS_TWO_STAGE_ENABLED", False))
-        _max_ai_retries = int(CONFIG.get("MARCUS_AI_MAX_RETRIES", 1) or 1)
+        _max_ai_retries = get_ai_max_retries(
+            CONFIG,
+            preferred_key="MARCUS_AI_MAX_RETRIES",
+            fallback=0,
+        )
         _backoff_base = float(CONFIG.get("MARCUS_AI_RETRY_BACKOFF_SEC", 2.0) or 2.0)
         _last_exc = None
         completion = None

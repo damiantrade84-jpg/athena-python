@@ -2693,7 +2693,7 @@ MARCUS_AI_TIMEOUT_SEC: 90
 # Marcus output budget. On OpenAI Responses, reasoning tokens share this budget;
 # keep it large enough that JSON output is never truncated to empty.
 MARCUS_AI_MAX_TOKENS: 10000
-MARCUS_AI_REASONING_EFFORT: "low"  # OpenAI path only; keeps latency/cost bounded
+MARCUS_AI_REASONING_EFFORT: "low"  # OpenAI and Grok paths; keeps latency/cost bounded
 # Keep Marcus manual reviews bounded; SDK default retries can multiply the timeout.
 MARCUS_AI_SDK_MAX_RETRIES: 0
 # Phase 1 AI agent scaffolding is advisory/read-only by default.
@@ -2720,7 +2720,8 @@ VISION_FRESHNESS_POLICY:
     H4: 18000
     D1: 97200
 # Retry loop inside run_ai() for transient timeouts (independent of SDK retries).
-MARCUS_AI_MAX_RETRIES: 2
+# Manual feedback favors a bounded response over repeating a full 90-second call.
+MARCUS_AI_MAX_RETRIES: 0
 MARCUS_AI_RETRY_BACKOFF_SEC: 3.0
 
 # Prompt-store janitor is conservative: recent files are preserved even when size cap is exceeded.
