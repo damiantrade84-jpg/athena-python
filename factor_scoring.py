@@ -2202,9 +2202,27 @@ def _entry_extension_multiplier(
     return mult, detail
 
 
+def _volume_provenance_uniform(candles: list | None, lookback: int) -> bool:
+    """True when every bar in the lookback window shares one volume provenance.
+
+    EODHD exchange volume and MT5 tick volume differ by ~3 orders of magnitude
+    (shares traded vs price-change count), so a window straddling both makes any
+    ratio or moving average meaningless — a real latest bar against a tick-volume
+    mean reads as extreme volume on every signal. Uniform tick volume (no bar
+    carries provenance) is the pre-overlay baseline and stays allowed.
+    """
+    if not isinstance(candles, list) or not candles:
+        return False
+    window = candles[-max(1, int(lookback)):]
+    flags = {str(c.get("volSource") or "") == "eodhd" for c in window}
+    return len(flags) == 1
+
+
 def _h4_volume_vs_ma(h4_candles: list | None, lookback: int) -> tuple[float | None, float | None]:
     """Return (latest_volume, volume_ma) from H4 candle volume series."""
     if not isinstance(h4_candles, list) or not h4_candles:
+        return None, None
+    if not _volume_provenance_uniform(h4_candles, lookback):
         return None, None
     try:
         # Only the final SMA value is consumed. Building the complete expanding
@@ -3011,6 +3029,15 @@ def _stock_volume_addon_with_status(
     vol_lo = float(cfg.get("VOL_RATIO_LOW", 0.5))
     obv_lookback = int(cfg.get("OBV_LOOKBACK", 20))
     conc_lookback = int(cfg.get("CONCORDANCE_LOOKBACK", 5))
+
+    # All three sub-signals below compare volume across bars, so the whole window
+    # must come from one source. During WS warm-up (or after a gap in coverage) the
+    # tail is EODHD volume over an MT5 tick-volume history; scoring that would
+    # inflate every stock signal. Treat mixed windows as no volume data.
+    if not _volume_provenance_uniform(
+        h4_candles, max(20, obv_lookback, conc_lookback + 1)
+    ):
+        return _ADDON_NEUTRAL, "unsupported"
 
     # Sub-signal 1: volume ratio vs SMA
     latest_vol, vol_ma = _h4_volume_vs_ma(h4_candles, obv_lookback)

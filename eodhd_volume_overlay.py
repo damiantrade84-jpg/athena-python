@@ -345,6 +345,10 @@ def overlay_candle_volumes(
         vol = overlay_map.get(ts)
         if vol is not None:
             row["vol"] = vol
+            # Provenance so consumers can distinguish real traded volume from the
+            # MT5 tick-activity fallback. Engine B keys volume eligibility off
+            # this instead of assuming any non-zero `vol` is exchange volume.
+            row["volSource"] = "eodhd"
             matched += 1
         merged.append(row)
     return merged, matched

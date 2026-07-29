@@ -151,6 +151,47 @@ def _record_eodhd_ws_live_price(
 
 _PRICE_POLL_FIRST_RUN = True
 
+# EODHD caps WS subscriptions per connection; keep the `us` list inside it.
+_EODHD_WS_US_MAX_SYMBOLS = 50
+
+
+def _eodhd_us_ws_ticker(pair: dict) -> str | None:
+    """WS ticker for a US-listed stock, or None when the pair is not one.
+
+    The EODHD `us` stream is the only feed carrying real per-trade exchange
+    volume for these names, so they are subscribed regardless of OHLC routing
+    (MT5 stays authoritative for price — see ``_record_eodhd_ws_live_price``).
+    Resolves the vendor symbol first so bare ATFX share tickers (``AA`` →
+    ``AA.US``) map correctly.
+    """
+    if str(pair.get("type") or "").lower() != "stock":
+        return None
+    sym = str(pair.get("eodhdSymbol") or pair.get("symbol") or "").strip()
+    if not sym.endswith(".US"):
+        return None
+    ticker = sym[: -len(".US")]
+    return ticker or None
+
+
+def eodhd_ws_us_stock_pairs(pairs: list[dict] | None) -> list[dict]:
+    """US stock pairs subscribed to the EODHD `us` stream, in subscription order.
+
+    Mirrors ``EODHDWebSocketManager._build_ticker_map`` selection so the seed
+    backfill and the live subscription cover exactly the same symbols.
+    """
+    out: list[dict] = []
+    for pair in pairs or []:
+        if not pair.get("enabled", True):
+            continue
+        if not pair.get("ws", True):
+            continue
+        if _eodhd_us_ws_ticker(pair) is None:
+            continue
+        out.append(pair)
+        if len(out) >= _EODHD_WS_US_MAX_SYMBOLS:
+            break
+    return out
+
 
 def _eodhd_rt_symbol(pair):
     """Convert Athena pair → EODHD real-time API symbol."""
@@ -1776,8 +1817,6 @@ class EODHDWebSocketManager:
         display_map = {}  # ws_ticker â†’ athena display name
 
         for p in pairs:
-            if p.get("source") != "eodhd":
-                continue
             if not p.get("ws", True):  # default True = backward-compatible
                 continue
 
@@ -1789,14 +1828,20 @@ class EODHDWebSocketManager:
                 # Crypto pairs are now handled by BinanceLivePriceWS - skip EODHD mapping
                 continue
 
-            elif ptype in ("stock",) and ".US" in sym:
-                ws_t = sym.replace(".US", "")
+            # US stocks subscribe for real per-trade volume even when OHLC and
+            # live price are MT5-routed; every other class still requires
+            # source=eodhd because those streams carry no usable volume.
+            us_ws_ticker = _eodhd_us_ws_ticker(p)
+            if us_ws_ticker is not None:
+                if len(us_tickers) < _EODHD_WS_US_MAX_SYMBOLS:
+                    us_tickers.append(us_ws_ticker)
+                    display_map[us_ws_ticker] = disp
+                continue
 
-                us_tickers.append(ws_t)
+            if p.get("source") != "eodhd":
+                continue
 
-                display_map[ws_t] = disp
-
-            elif ptype in ("forex", "commodity") or ("/" in disp and ptype != "crypto"):
+            if ptype in ("forex", "commodity") or ("/" in disp and ptype != "crypto"):
                 ws_t = disp.replace("/", "")
 
                 fx_tickers.append(ws_t)
@@ -1943,16 +1988,24 @@ class EODHDWebSocketManager:
 
                                 entry["marketStatus"] = msg.get("ms", "unknown")
 
-                            if _record_eodhd_ws_live_price(disp, entry):
-                                # Crypto candles come from Binance — only build WS candles for forex/US
-                                _cb = get_candle_builder()
-                                if _cb and endpoint != "crypto":
-                                    _cb.on_tick(
-                                        disp,
-                                        entry["price"],
-                                        entry.get("volume", 0),
-                                        entry.get("ts", 0),
-                                    )
+                            # Live-price write is refused for MT5-routed pairs so
+                            # MT5 stays authoritative for price and execution drift.
+                            _record_eodhd_ws_live_price(disp, entry)
+
+                            # Volume accumulation is independent of that refusal:
+                            # the `us` stream is the only real exchange-volume
+                            # source for the H1/H4 overlay, and those pairs are
+                            # MT5-routed. CandleBuilder OHLC is never read for
+                            # MT5 pairs (see candles_cache.use_candle_builder).
+                            # Crypto candles come from Binance — skip that endpoint.
+                            _cb = get_candle_builder()
+                            if _cb and endpoint != "crypto" and entry.get("price"):
+                                _cb.on_tick(
+                                    disp,
+                                    entry["price"],
+                                    entry.get("volume", 0),
+                                    entry.get("ts", 0),
+                                )
 
                         except Exception as _e:
                             log.debug(f"[WS] msg parse error: {_e}")
@@ -2048,7 +2101,10 @@ class CandleBuilder:
     # Forex/commodity/index on_tick: H1/H4/D1 only — no real volume in OTC ticks.
     _TFS_TICK = {"H1": 3600, "H4": 14400, "D1": 86400}
     # US stock on_tick: add M1/M5/M15 since EODHD US WS carries real exchange volume per tick.
-    _TFS_TICK_US_STOCK = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
+    # D1 is deliberately excluded: WS ticks only cover the observed session, and
+    # _flush uses INSERT OR REPLACE, so a partial bar would overwrite the
+    # authoritative full-day figure written by bulk_update_d1().
+    _TFS_TICK_US_STOCK = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400}
     # Binance on_kline: all futures kline intervals we subscribe to.
     _TFS_KLINE = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
 
@@ -2099,9 +2155,14 @@ class CandleBuilder:
         try:
             from athena_runtime import rt
             pairs = rt().ALL_PAIRS
+            # Resolve the same way as the WS subscription so bare ATFX share
+            # tickers ("ABNB" → "ABNB.US") land on the US tick timeframe set.
+            # Otherwise they fall through to _TFS_TICK, which has no M15 for the
+            # shifted-grid H4 resample and would write D1 bars that overwrite
+            # bulk_update_d1()'s authoritative full-session volume.
             self._us_stock_displays = {
                 p["display"] for p in pairs
-                if p.get("type") == "stock" and str(p.get("symbol", "")).endswith(".US")
+                if _eodhd_us_ws_ticker(p) is not None
             }
             self._us_stock_displays_loaded = True
         except Exception:

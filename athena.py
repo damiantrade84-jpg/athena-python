@@ -258,6 +258,7 @@ from candle_feeds import (  # noqa: E402
     CandleBuilder,
     EODHDWebSocketManager,
     _bybit_crypto_symbol_map,
+    eodhd_ws_us_stock_pairs,
     _live_prices,
     _live_prices_lock,
     _record_mt5_live_price,
@@ -2484,10 +2485,33 @@ def _fetch_eodhd_volume_only(
                             return d1_payload
                     # D1 not yet populated in CandleBuilder - fall through to REST
 
-                elif not grid_offset_seconds:
-                    # M1-H4 path: WS ticks or Live v2 injected ticks. Skipped when the
-                    # caller's bar grid is shifted off epoch alignment (MT5 H4) —
-                    # CandleBuilder buckets are epoch-aligned and can never match it.
+                else:
+                    # M1-H4 path: WS ticks or Live v2 injected ticks.
+                    if grid_offset_seconds:
+                        # MT5 keeps the broker's bar grid after the UTC shift (H4 at
+                        # 01/05/09 UTC on a UTC+3 broker) while CandleBuilder buckets
+                        # are epoch-aligned, so exact-timestamp matching can never
+                        # succeed. Resample the stored M15 series onto the caller's
+                        # grid rather than dropping the overlay for the whole scan.
+                        if tf_key in {"H1", "H4"}:
+                            _m15_per_bar = 4 if tf_key == "H1" else 16
+                            _m15_bars = cb.get_candles(
+                                display,
+                                "M15",
+                                min(int(limit) * _m15_per_bar + _m15_per_bar, 5000),
+                            )
+                            cb_candles = (
+                                _resample_eodhd_volume_bars(
+                                    _m15_bars,
+                                    tf_key,
+                                    int(limit),
+                                    offset_seconds=grid_offset_seconds,
+                                )
+                                if _m15_bars
+                                else None
+                            )
+                        else:
+                            cb_candles = None
                     _min_bars = {"M1": 5, "M5": 5, "M15": 5, "H1": 20, "H4": 10}.get(tf_key, 5)
                     if cb_candles and len(cb_candles) >= _min_bars:
                         last_ts_str = cb_candles[-1].get("time", "")
@@ -18833,8 +18857,11 @@ def ensure_runtime_services_started() -> None:
     _ws_key = os.environ.get("EODHD_KEY", "")
     if _ws_key:
         _ws_mgr = EODHDWebSocketManager(_ws_key)
-        _eodhd_pairs = [p for p in ACTIVE_PAIRS if p.get("source") == "eodhd"]
-        _ws_mgr.start(_eodhd_pairs)
+        # Pass the full active set: _build_ticker_map keeps the source=eodhd
+        # requirement for forex/index (no usable WS volume there) but subscribes
+        # US stocks regardless of OHLC routing, since the `us` stream is the only
+        # real exchange-volume source for the H1/H4 overlay.
+        _ws_mgr.start(ACTIVE_PAIRS)
 
         if get_candle_builder() is None:
             set_candle_builder(CandleBuilder())
@@ -18851,6 +18878,15 @@ def ensure_runtime_services_started() -> None:
             non_ws_stock_pairs = build_non_ws_stock_pairs(ALL_PAIRS)
             if non_ws_stock_pairs:
                 cb.seed(non_ws_stock_pairs)
+
+            # Backfill H1/H4 volume history for the WS-subscribed US stocks. Ticks
+            # alone need ~3 trading days to fill the 20-bar H1 lookback and ~10 for
+            # H4, and until then the window straddles seeded and tick bars, which the
+            # factors reject as mixed provenance. seed() skips pairs that already hold
+            # >=100 H1 rows, so this is a one-time cost per symbol, not per restart.
+            ws_us_stock_pairs = eodhd_ws_us_stock_pairs(ACTIVE_PAIRS)
+            if ws_us_stock_pairs:
+                cb.seed(ws_us_stock_pairs)
 
             cb.bulk_update_d1()  # fresh D1 from Bulk API
             cb.start_refresh_loop()  # bulk D1 every 4h

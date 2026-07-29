@@ -5320,7 +5320,18 @@ class NakedEngine:
         if (asset_type or "").lower() == "crypto":
             _vol_gate_eligible = not (_crypto_src == "mt5") or bool(_allow_tick_vol_gate)
         else:
-            _vol_gate_eligible = bool(_allow_tick_vol_gate)
+            # Real traded volume overlaid from EODHD is eligible on its own merit.
+            # ENGINE_B_BOS_VOLUME_FOR_TICKVOL keeps gating MT5 tick volume, which is
+            # price-change activity rather than traded size, so forex/commodity stay
+            # excluded. Absent provenance falls back to the flag (fail-closed).
+            #
+            # The whole avg_vol_20 window must be one source: EODHD share counts and
+            # MT5 tick counts differ by ~3 orders of magnitude, so a mixed mean makes
+            # bos_volume_ratio meaningless and clears bos_volume_multiplier on any BOS.
+            _real_vol_overlay = len(struct_candles) >= 20 and all(
+                str(c.get("volSource") or "") == "eodhd" for c in struct_candles[-20:]
+            )
+            _vol_gate_eligible = _real_vol_overlay or bool(_allow_tick_vol_gate)
         if _vol_gate_eligible:
             _has_vol = any(float(c.get("vol", 0)) > 0 for c in struct_candles[-5:])
             if _has_vol:
