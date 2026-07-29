@@ -4072,18 +4072,16 @@ ENGINE_B_REGIME_MULTIPLIERS:
   # where false BOS and doji-noise triggers cluster. Mirrors engine_b_config.yaml.
   LOW_VOLATILITY: 1.0
 
-  # 2026-07-28 (UNVALIDATED judgment value, not outcome-backed): per-asset
-  # override for forex — RANGING only. x1.25 makes the intraday score floor
-  # bind (4.5 x 1.25 = 5.63 -> ceil 5.7 > 5.0 gate floor), so a passing forex
-  # signal in ranging regimes must show real quality beyond gate completion —
-  # the regime where unfiltered BOS-continuation entries systematically lost.
-  # TRENDING/HIGH_VOLATILITY/LOW_VOLATILITY keep the flat-table values.
-  # Reversible: delete this forex block.
-  forex:
-    TRENDING: 0.95
-    RANGING: 1.25
-    HIGH_VOLATILITY: 1.10
-    LOW_VOLATILITY: 1.0
+  # 2026-07-29: the 2026-07-28 per-asset forex block (RANGING x1.25) is REMOVED.
+  # It raised the forex intraday floor to 5.7 (swing 6.3), which is above the
+  # entire observed forex score distribution: 0 of 1723 forex Engine B rows in
+  # ~10 days of live scans reached 5.7 (all-time max 5.4565). It did not make
+  # the floor bind, it made it unreachable — in the 2026-07-29 07:45Z scan
+  # USD/PLN 5.26, USD/HUF 5.26 and EUR/CHF 4.98 passed every mandatory gate and
+  # were rejected by the floor alone, and no forex signal cleared it in any scan
+  # after the change. Forex now uses the flat table again (RANGING 1.10 -> 4.95
+  # intraday floor). Do not re-add a forex floor above ~5.4 without outcome
+  # evidence that scores in that band exist.
 
 ENGINE_B_STYLE_MIN_SCORE_DIFFERENTIATION_ENABLED: true
 # NOTE (2026-07-25 audit): these floors are compared against confidence.score
