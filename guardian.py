@@ -401,15 +401,32 @@ def pre_trade_invariants(signal: dict) -> tuple[bool, str]:
     try:
         from config import CONFIG
         from risk_engine import resolve_max_sl_pct
+        from tp_sl_rr_gate_policy import (
+            add_level_advisory,
+            engine_ab_profitability_gates_enforced,
+            resolve_execution_profitability_gate_engine,
+        )
 
         asset_type = signal.get("type") or signal.get("pairType") or ""
         max_sl_pct, max_sl_source = resolve_max_sl_pct(signal, asset_type, CONFIG)
         if price > 0 and not _tp_sl_rr_relaxed:
             sl_dist_pct = abs(price - sl) / price
             if sl_dist_pct > max_sl_pct * 1.05:  # 5% tolerance for rounding
-                return False, (
-                    f"SL_EXCEEDS_CAP: {sl_dist_pct:.1%} > {max_sl_pct:.1%} for "
-                    f"{asset_type} ({max_sl_source})"
+                if engine_ab_profitability_gates_enforced(
+                    CONFIG,
+                    signal=signal,
+                    engine=resolve_execution_profitability_gate_engine(signal),
+                ):
+                    return False, (
+                        f"SL_EXCEEDS_CAP: {sl_dist_pct:.1%} > {max_sl_pct:.1%} for "
+                        f"{asset_type} ({max_sl_source})"
+                    )
+                add_level_advisory(
+                    signal,
+                    "MAX_SL_EXCEEDED",
+                    actual=sl_dist_pct,
+                    threshold=max_sl_pct,
+                    source=max_sl_source,
                 )
     except Exception:
         pass
@@ -516,9 +533,35 @@ def pre_trade_check(
     if max_sl_pct is not None and price > 0 and not _tp_sl_rr_relaxed:
         sl_dist_pct = abs(price - sl) / price
         if sl_dist_pct > max_sl_pct * 1.05:  # 5% tolerance for rounding
-            return False, (
-                f"SL_EXCEEDS_CAP: {sl_dist_pct:.1%} > {max_sl_pct:.1%} for {asset_type} ({max_sl_source})"
-            )
+            try:
+                from tp_sl_rr_gate_policy import (
+                    add_level_advisory,
+                    engine_ab_profitability_gates_enforced,
+                    resolve_execution_profitability_gate_engine,
+                )
+
+                if not engine_ab_profitability_gates_enforced(
+                    CONFIG,
+                    signal=signal,
+                    engine=resolve_execution_profitability_gate_engine(signal),
+                ):
+                    add_level_advisory(
+                        signal,
+                        "MAX_SL_EXCEEDED",
+                        actual=sl_dist_pct,
+                        threshold=max_sl_pct,
+                        source=max_sl_source,
+                    )
+                else:
+                    return False, (
+                        f"SL_EXCEEDS_CAP: {sl_dist_pct:.1%} > {max_sl_pct:.1%} "
+                        f"for {asset_type} ({max_sl_source})"
+                    )
+            except Exception:
+                return False, (
+                    f"SL_EXCEEDS_CAP: {sl_dist_pct:.1%} > {max_sl_pct:.1%} "
+                    f"for {asset_type} ({max_sl_source})"
+                )
 
     # ── Check 6: Signal freshness ──────────────────────────────────────
     try:

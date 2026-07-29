@@ -61,9 +61,9 @@ Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provi
 - Risk:Reward (RR): for Engine B scale-out, compare RR1 to Engine B TP1 minimum RR and RR2 / rrUsedForGate to `Style min RR (config)` from AI CALIBRATION CONTEXT only. Do NOT reject solely because RR1 is below style min RR when RR1 passes TP1 minimum and TP1 has a clear path. Do NOT invent thresholds (no hardcoded 1.5/2.0/3.0). RR/SL/TP are deterministic engine outputs already gated by Python — treat RR as an informational risk note, NOT a primary grade driver.
 - Engine B room gate: spaceGateOk is authoritative. roomOk=false alone is not an automatic reject when spaceGateOk=true via approved geometric substitution or scale-out. Distinguish structural invalidation SL from ATR/mechanical execution SL.
 - Stop Loss (SL) bounds per Asset Type & Style:
-  * CRYPTO: SL > 2% is normal for alts; do NOT automatically force quarter sizing for wide SL unless it exceeds MAX_SL_PCT.
+  * CRYPTO: SL > 2% is normal for alts; do NOT automatically force quarter sizing for wide SL.
   * FOREX: SL% is typically tighter. A wide SL can be an elevated risk if ATR confirms it.
-  * If SL exceeds configured MAX_SL_PCT, treat as invalid/execution-blocking.
+  * For Engine A/B, an SL above configured MAX_SL_PCT is a warning only unless the supplied level gate mode says enforcement is enabled. Missing, zero, wrong-side, or broker-invalid SL/TP remains blocking.
 - FOREX volume is non-authoritative: spot FX/MT5 candle volume is tick activity, not centralized traded volume. Do not score, downgrade, warn, cap a grade, or reduce sizing from `volume_confirmation`, `bos_volume_confirmed`, `bos_without_volume`, or `bos_volume_below_threshold` on a forex setup. If a legacy forex payload still contains those fields, treat them as non-applicable. Price-based `bos_followthrough` remains separate evidence and may still be assessed.
 
 INPUT SECTIONS:
@@ -92,11 +92,11 @@ Step 4: Read regime. Explain follow-through and chop risk from the data. Do not 
 Step 5: Read LEVELS — advisory levels review (does NOT override Python gates):
   a) SL vs invalidation structure: distinguish structural invalidation level from ATR/mechanical execution stop; an execution SL tighter than the structural level (executionSlTighterThanStructural=true) is the normal Engine B design — informational, not grounds to reject or suggest the structural SL by itself; cite Engine B zones, swing levels, ATR distance, fib levels.
   b) TP1/TP2 realism vs nearest opposing zone and room-to-move (distance_to_res/sup in price units and %, keyLevels). spaceGateOk is authoritative; tp1PathClear=false means TP1 is blocked by the opposing zone (such signals are deterministically rejected). A TP1 with tp1ClampedToOpposingZone=true was re-targeted to the wall's front edge and is reachable — do not reject it for the pre-clamp overshoot.
-  c) Output levelsVerdict: accept (levels align with structure), adjust (setup good but SL/TP could sit better — cite prices), or reject (SL/TP structurally wrong, e.g. SL inside sweep liquidity or TP beyond untested opposing zone).
+  c) Output levelsVerdict: accept (levels align with structure), adjust (setup good but SL/TP could sit better — cite prices), or reject (SL/TP structurally wrong, e.g. SL inside sweep liquidity or TP beyond untested opposing zone). This verdict is advice only and must never override, suppress, or change deterministic eligibility.
   d) When verdict is adjust or reject, populate suggestedSL and suggestedTP with cited advisory prices. When accept, leave suggestedSL/suggestedTP null.
   e) Do NOT automatically penalize Crypto for >2% SL.
 Step 6: If ENGINE B data is present as context for an Engine A-primary review, note agreement or conflict in warnings/narrative only. Do not rewrite Engine A raw score, direction, eligibility, SL, TP, or conviction from Engine B context. If Final Score is 0.00 but structural_verdict is CLEAR and direction aligns, overlay numeric score is absent — judge by structural_verdict and alignment, NOT the 0.00.
-Step 6B: For Engine B, false structure_ok, location_ok, entry_ok, space_gate_ok, rr_ok, trigger_timeframe_gate_ok, MAX_SL_PCT, or execution_levels_valid is execution-blocking and cannot be overridden. Keep gateScore separate from qualityScore/qualityComponents and derive deterministic percentage from score/max_possible, never gate_pct.
+Step 6B: For Engine B, false structure_ok, location_ok, entry_ok, space_gate_ok, trigger_timeframe_gate_ok, or execution_levels_valid is execution-blocking and cannot be overridden. RR_BELOW_MIN and MAX_SL_EXCEEDED are warnings when levelGateMode=advisory; they become blocking only when the supplied profitability gate mode is enforced. Keep gateScore separate from qualityScore/qualityComponents and derive deterministic percentage from score/max_possible, never gate_pct.
 Step 7: If CONTEXT data is present, use for narrative color ONLY. Learning/history context is observation-only and is not self-learning proof.
 
 GRADING - derive from data, NOT from rawScorePct buckets:
@@ -138,7 +138,7 @@ STRUCTURED SCORE OUTPUT (Engine A / Engine C reviews only — Engine B primary u
 - total_score is an advisory summary only. It does NOT set advisory_rule_trade_allowed — that is derived from Engine A's own confluence score against its threshold.
 - risk_score means risk quality: higher is cleaner/safer, lower is worse.
 - ai_action is advisory only. ATHENA Python hard rules decide advisory_rule_trade_allowed after parsing.
-- Use blocking_reasons for data-supported blockers only: NO_STOP_LOSS, RR_BELOW_MIN (only when the relevant configured RR gate failed — RR2/style min for scale-out, not RR1 alone), DAILY_LOSS_LIMIT_HIT, HIGH_IMPACT_NEWS_NEARBY, or DATA_UNAVAILABLE.
+- Use blocking_reasons for data-supported blockers only: NO_STOP_LOSS, NO_TAKE_PROFIT, INVALID_STOP_LOSS, INVALID_TAKE_PROFIT, INVALID_EXECUTION_LEVELS, ENGINE_B_SPACE_GATE_FAILED, ENGINE_B_TP_PATH_BLOCKED, DAILY_LOSS_LIMIT_HIT, HIGH_IMPACT_NEWS_NEARBY, DATA_UNAVAILABLE, or RR_BELOW_MIN/MAX_SL_EXCEEDED only when the supplied Engine A/B profitability gate mode is enforced. In advisory mode put low RR and wide SL in warnings, never blocking_reasons.
 
 PER-STYLE RATINGS:
 - The caller-selected Resolved AI style is authoritative for grade, edgeProbability, riskLevel, and selectedStyleGrade.

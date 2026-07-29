@@ -1306,13 +1306,23 @@ def _engine_b_clamp_tp1_to_opposing_zone(
       still clears ENGINE_B_TP1_MIN_RR (TP2/runner and the gate RR are untouched).
     - single-TP plans: clamp the trade TP; keep when the clamped RR still
       clears min_rr and exchange TP bounds pass.
-    When the clamped target cannot clear its RR floor the levels are left
-    unchanged and the TP1-path space gate blocks the signal.
+    When profitability gates are enforced and the clamped target cannot clear
+    its RR floor, levels are left unchanged and the TP1-path gate blocks. In
+    advisory mode the reachable wall target is kept and the RR miss is reported.
 
     Mutates exec_lvl in place; returns {"tp1_clamped_to_opposing_zone",
     "tp1_clamp_reject_reason"}.
     """
     diag = {"tp1_clamped_to_opposing_zone": False, "tp1_clamp_reject_reason": None}
+    try:
+        from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+        _rr_floor_enforced = engine_ab_profitability_gates_enforced(
+            config.CONFIG,
+            engine="engine_b",
+        )
+    except Exception:
+        _rr_floor_enforced = True
     _path = _engine_b_tp1_path_clear(
         direction=direction,
         entry=entry,
@@ -1356,7 +1366,7 @@ def _engine_b_clamp_tp1_to_opposing_zone(
         _floor = _engine_b_style_threshold(
             config.CONFIG.get("ENGINE_B_TP1_MIN_RR"), exec_style
         )
-        if _floor > 0 and _clamp_rr + 1e-12 < _floor:
+        if _rr_floor_enforced and _floor > 0 and _clamp_rr + 1e-12 < _floor:
             diag["tp1_clamp_reject_reason"] = "clamped_rr1_below_tp1_min_rr"
             return diag
     else:
@@ -1364,7 +1374,11 @@ def _engine_b_clamp_tp1_to_opposing_zone(
             _min_rr = float(min_rr) if min_rr is not None else None
         except (TypeError, ValueError):
             _min_rr = None
-        if _min_rr is not None and _clamp_rr + 1e-12 < _min_rr:
+        if (
+            _rr_floor_enforced
+            and _min_rr is not None
+            and _clamp_rr + 1e-12 < _min_rr
+        ):
             diag["tp1_clamp_reject_reason"] = "clamped_rr_below_min_rr"
             return diag
     _ac = str(asset_class or "").lower()
@@ -1392,7 +1406,9 @@ def _engine_b_clamp_tp1_to_opposing_zone(
         exec_lvl["execution_rr2"] = _clamp_rr_rounded
         exec_lvl["rr_used_for_gate"] = _clamp_rr_rounded
         exec_lvl["rr_actual"] = _clamp_rr_rounded
-        exec_lvl["rr_passed"] = True
+        exec_lvl["rr_passed"] = bool(
+            _min_rr is None or _clamp_rr + 1e-12 >= _min_rr
+        )
         exec_lvl["tp_source"] = "structural"
         exec_lvl["tp1_source"] = "structural"
         exec_lvl["tp2_source"] = "structural"
@@ -1480,7 +1496,20 @@ def _engine_b_adapt_execution_plan_for_venue(
         exec_lvl.get("structural_tp_valid") is True
         and str(exec_lvl.get("tp1_source") or "").lower() == "structural"
     )
-    if not structural_tp1 or not side_ok or rr1 + 1e-12 < floor:
+    try:
+        from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+        _rr_floor_enforced = engine_ab_profitability_gates_enforced(
+            config.CONFIG,
+            engine="engine_b",
+        )
+    except Exception:
+        _rr_floor_enforced = True
+    if (
+        not structural_tp1
+        or not side_ok
+        or (_rr_floor_enforced and rr1 + 1e-12 < floor)
+    ):
         exec_lvl["execution_plan"] = "scale_out_unavailable"
         exec_lvl["execution_plan_reason"] = "single_target_structural_tp1_invalid"
         return
@@ -1494,7 +1523,7 @@ def _engine_b_adapt_execution_plan_for_venue(
     exec_lvl["rr_used_for_gate"] = rr1
     exec_lvl["rr_required"] = floor
     exec_lvl["rr_actual"] = rr1
-    exec_lvl["rr_passed"] = True
+    exec_lvl["rr_passed"] = bool(rr1 + 1e-12 >= floor)
     exec_lvl["exit_strategy"] = "single_structural_tp"
     exec_lvl["runner_tp_requires_structural_break"] = False
     exec_lvl["tp_source"] = "structural"
@@ -2769,6 +2798,20 @@ def resolve_engine_b_execution_levels(
     """
     _style = (style or "intraday").lower()
     _asset = (asset_class or "forex").lower()
+    _configured_min_rr = min_rr
+    try:
+        from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+        _profitability_gates_enforced = engine_ab_profitability_gates_enforced(
+            config.CONFIG,
+            engine="engine_b",
+        )
+    except Exception:
+        _profitability_gates_enforced = True
+    if not _profitability_gates_enforced:
+        # Preserve valid structural geometry instead of tightening the SL or
+        # manufacturing a farther TP solely to satisfy the advisory RR floor.
+        min_rr = 0.0
 
     def _safe_float(v):
         try:
@@ -2845,9 +2888,11 @@ def resolve_engine_b_execution_levels(
             "fallback_tp_applied": False,
             "fallback_tp_reason": None,
             "synthetic_rr_tp_used": False,
-            "rr_required": _safe_float(min_rr),
+            "rr_required": _safe_float(_configured_min_rr),
             "rr_actual": 0.0,
             "rr_passed": False,
+            "rr_gate_enforced": _profitability_gates_enforced,
+            "max_sl_gate_enforced": _profitability_gates_enforced,
             "structural_target_distance_atr": _structural_target_distance_atr,
             "stop_distance_atr": None,
         }
@@ -2878,6 +2923,8 @@ def resolve_engine_b_execution_levels(
         _atr_reject = "no_atr_config_or_zero_atr"
 
     _enforce_max_sl = bool(config.CONFIG.get("ENGINE_B_ENFORCE_MAX_SL_PCT", True))
+    if not _profitability_gates_enforced:
+        _enforce_max_sl = False
     try:
         from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
 
@@ -2887,7 +2934,7 @@ def resolve_engine_b_execution_levels(
         pass
     _max_sl_pct = None
     _max_sl_source = None
-    if _enforce_max_sl and _entry > 0:
+    if _entry > 0:
         _max_sl_pct, _max_sl_source = _engine_b_resolve_max_sl_pct(
             _asset, pair=pair, score_group=score_group
         )
@@ -2906,7 +2953,10 @@ def resolve_engine_b_execution_levels(
         and _struct_tp_valid
         and min_rr is not None
         and _structural_rr >= float(min_rr)
-        and _engine_b_sl_within_max_sl_pct(_entry, _struct_sl, _max_sl_pct)
+        and (
+            not _enforce_max_sl
+            or _engine_b_sl_within_max_sl_pct(_entry, _struct_sl, _max_sl_pct)
+        )
     )
     if _keep_structural_sl:
         _exec_sl = _struct_sl
@@ -2990,8 +3040,14 @@ def resolve_engine_b_execution_levels(
         _abs_min_sl_atr = max(0.0, min(_abs_min_sl_atr, _min_sl_atr))
         _effective_min_sl_atr = _min_sl_atr if _min_leg_applies else _abs_min_sl_atr
         _dist_atr = abs(_entry - _exec_sl) / _atr
-        if _dist_atr < _effective_min_sl_atr or _dist_atr > _max_sl_atr:
-            _target_dist_atr = min(max(_dist_atr, _effective_min_sl_atr), _max_sl_atr)
+        _max_leg_applies = _profitability_gates_enforced
+        if (
+            _dist_atr < _effective_min_sl_atr
+            or (_max_leg_applies and _dist_atr > _max_sl_atr)
+        ):
+            _target_dist_atr = max(_dist_atr, _effective_min_sl_atr)
+            if _max_leg_applies:
+                _target_dist_atr = min(_target_dist_atr, _max_sl_atr)
             _exec_sl = (
                 _entry - (_atr * _target_dist_atr)
                 if direction == "LONG"
@@ -3003,6 +3059,7 @@ def resolve_engine_b_execution_levels(
                 "after_atr": round(_target_dist_atr, 4),
                 "min_sl_atr": round(_min_sl_atr, 4),
                 "max_sl_atr": round(_max_sl_atr, 4),
+                "max_leg_applied": bool(_max_leg_applies),
                 "min_leg_applied": bool(_min_leg_applies),
                 "effective_min_sl_atr": round(_effective_min_sl_atr, 4),
             }
@@ -3499,8 +3556,21 @@ def resolve_engine_b_execution_levels(
         if _exec_sl is not None and _entry > 0 and _atr > 0
         else None
     )
-    _rr_required = _safe_float(min_rr)
+    _rr_required = _safe_float(_configured_min_rr)
     _rr_passed = bool(_exec_valid and (_rr_required is None or _exec_rr >= _rr_required))
+    _sl_distance_pct = (
+        _engine_b_sl_distance_pct(_entry, _exec_sl)
+        if _exec_sl is not None and _entry > 0
+        else None
+    )
+    _max_sl_threshold_met = (
+        None
+        if _sl_distance_pct is None
+        else bool(
+            _max_sl_pct is None
+            or _sl_distance_pct <= float(_max_sl_pct) + 1e-12
+        )
+    )
     try:
         from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
 
@@ -3550,6 +3620,12 @@ def resolve_engine_b_execution_levels(
         "rr_required": _rr_required,
         "rr_actual": round(_exec_rr, 4),
         "rr_passed": _rr_passed,
+        "rr_gate_enforced": _profitability_gates_enforced,
+        "max_sl_pct": _max_sl_pct,
+        "max_sl_source": _max_sl_source,
+        "sl_distance_pct": _sl_distance_pct,
+        "max_sl_threshold_met": _max_sl_threshold_met,
+        "max_sl_gate_enforced": _profitability_gates_enforced,
         "structural_target_distance_atr": _structural_target_distance_atr,
         "stop_distance_atr": _stop_distance_atr,
     }
@@ -6566,7 +6642,19 @@ class NakedEngine:
         sl = _exec_lvl["execution_sl"]
         tp = _exec_lvl["execution_tp"]
         rr = _exec_lvl["rr_used_for_gate"]
-        rr_ok = bool(_exec_lvl["execution_levels_valid"]) and rr >= min_rr
+        _rr_threshold_met = bool(_exec_lvl["execution_levels_valid"]) and rr >= min_rr
+        try:
+            from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+            _rr_gate_enforced = engine_ab_profitability_gates_enforced(
+                config.CONFIG,
+                engine="engine_b",
+            )
+        except Exception:
+            _rr_gate_enforced = True
+        rr_ok = bool(_exec_lvl["execution_levels_valid"]) and (
+            _rr_threshold_met or not _rr_gate_enforced
+        )
 
         try:
             from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
@@ -6578,10 +6666,29 @@ class NakedEngine:
                 rr_ok = _exec_lvl.get("execution_sl") is not None and _exec_lvl.get("execution_tp") is not None
         except Exception:
             pass
-        if not bool(config.CONFIG.get("ENGINE_B_RR_GATE_ENABLED", True)):
-            rr_ok = (
-                _exec_lvl.get("execution_sl") is not None
-                and _exec_lvl.get("execution_tp") is not None
+        _level_advisories = []
+        if not _rr_gate_enforced and not _rr_threshold_met:
+            _level_advisories.append(
+                {
+                    "code": "RR_BELOW_MINIMUM",
+                    "blocking": False,
+                    "actual": round(float(rr), 6),
+                    "threshold": round(float(min_rr), 6),
+                    "source": "engine_b_confidence",
+                }
+            )
+        if (
+            not _rr_gate_enforced
+            and _exec_lvl.get("max_sl_threshold_met") is False
+        ):
+            _level_advisories.append(
+                {
+                    "code": "MAX_SL_EXCEEDED",
+                    "blocking": False,
+                    "actual": round(float(_exec_lvl.get("sl_distance_pct")), 6),
+                    "threshold": round(float(_exec_lvl.get("max_sl_pct")), 6),
+                    "source": str(_exec_lvl.get("max_sl_source") or "engine_b_levels"),
+                }
             )
 
         # FIX 7: Apply contextual room gate after rr is computed
@@ -6760,7 +6867,11 @@ class NakedEngine:
             not _rr_space_floor_enabled
             or (_room_distance_atr is not None and _room_distance_atr >= max(0.0, _rr_space_floor_atr))
         )
-        rr_can_satisfy_space = bool(rr_ok and _rr_space_tp_qualified and _rr_space_floor_ok)
+        # An advisory RR miss must not be allowed to satisfy the mandatory
+        # opposing-zone room/TP-path gate.
+        rr_can_satisfy_space = bool(
+            _rr_threshold_met and _rr_space_tp_qualified and _rr_space_floor_ok
+        )
         space_ok = room_ok or rr_can_satisfy_space or _scale_out_space_ok
         # Some asset classes often have a nearby structural level while the
         # execution RR model still has valid protective distance. Keep
@@ -7336,7 +7447,15 @@ class NakedEngine:
             "rr_source": _exec_lvl["rr_source"],
             "rr_required": _exec_lvl.get("rr_required", min_rr),
             "rr_actual": _exec_lvl.get("rr_actual", round(rr, 2)),
-            "rr_passed": _exec_lvl.get("rr_passed", rr_ok),
+            "rr_passed": _rr_threshold_met,
+            "rr_threshold_met": _rr_threshold_met,
+            "rr_gate_enforced": _rr_gate_enforced,
+            "max_sl_pct": _exec_lvl.get("max_sl_pct"),
+            "sl_distance_pct": _exec_lvl.get("sl_distance_pct"),
+            "max_sl_threshold_met": _exec_lvl.get("max_sl_threshold_met"),
+            "max_sl_gate_enforced": _rr_gate_enforced,
+            "levelGateMode": "enforced" if _rr_gate_enforced else "advisory",
+            "levelAdvisories": _level_advisories,
             "execution_plan": _exec_lvl.get("execution_plan"),
             "execution_plan_reason": _exec_lvl.get("execution_plan_reason"),
             "single_target_rr_floor": _exec_lvl.get("single_target_rr_floor"),

@@ -238,6 +238,54 @@ def _signal_stop_loss(signal: dict) -> float | None:
     return None
 
 
+def _signal_take_profit(signal: dict) -> float | None:
+    direct = _nested_first_number(
+        signal,
+        ("tp1", "tp", "takeProfit", "take_profit", "recommended_take_profit"),
+    )
+    if direct is not None:
+        return direct
+    for nested_key in ("levels", "risk", "riskState", "naked_data", "engine_b"):
+        nested = signal.get(nested_key)
+        if isinstance(nested, dict):
+            found = _nested_first_number(
+                nested,
+                (
+                    "tp1",
+                    "tp",
+                    "takeProfit",
+                    "take_profit",
+                    "recommended_take_profit",
+                    "execution_tp1",
+                    "execution_tp",
+                ),
+            )
+            if found is not None:
+                return found
+    return None
+
+
+def _signal_level_geometry_errors(signal: dict) -> list[str]:
+    entry = _nested_first_number(signal, ("price", "entry", "livePrice"))
+    sl = _signal_stop_loss(signal)
+    tp = _signal_take_profit(signal)
+    direction = str(signal.get("direction") or "").upper()
+    if entry is None or entry <= 0 or direction not in {"LONG", "SHORT"}:
+        return []
+    errors: list[str] = []
+    if sl is not None and (
+        (direction == "LONG" and sl >= entry)
+        or (direction == "SHORT" and sl <= entry)
+    ):
+        errors.append("INVALID_STOP_LOSS")
+    if tp is not None and (
+        (direction == "LONG" and tp <= entry)
+        or (direction == "SHORT" and tp >= entry)
+    ):
+        errors.append("INVALID_TAKE_PROFIT")
+    return errors
+
+
 def _signal_rr(signal: dict) -> float | None:
     direct = _nested_first_number(
         signal,
@@ -269,6 +317,26 @@ def _signal_rr(signal: dict) -> float | None:
             if found is not None:
                 return found
     return None
+
+
+def _signal_sl_width_state(signal: dict) -> tuple[float | None, float | None, str | None]:
+    """Return actual SL width, configured cap, and cap source when calculable."""
+    entry = _nested_first_number(signal, ("price", "entry", "livePrice"))
+    sl = _signal_stop_loss(signal)
+    if entry is None or sl is None or entry <= 0:
+        return None, None, None
+    try:
+        from config import CONFIG
+        from risk_engine import resolve_max_sl_pct
+
+        cap, source = resolve_max_sl_pct(
+            signal,
+            signal.get("type") or signal.get("asset_type"),
+            CONFIG,
+        )
+    except Exception:
+        return None, None, None
+    return abs(entry - sl) / abs(entry), cap, source
 
 
 def _daily_loss_limit_hit(signal: dict) -> bool:
@@ -351,6 +419,7 @@ def evaluate_engine_a_ai_advisory_rules(
     )
 
     blocking_reasons: list[str] = []
+    advisory_warnings: list[str] = []
     action = "review_incomplete"
     bucket = "score_unavailable"
     if score is None:
@@ -370,12 +439,45 @@ def evaluate_engine_a_ai_advisory_rules(
 
     if _signal_stop_loss(signal) is None:
         blocking_reasons.append("NO_STOP_LOSS")
+    if _signal_take_profit(signal) is None:
+        blocking_reasons.append("NO_TAKE_PROFIT")
+    blocking_reasons.extend(_signal_level_geometry_errors(signal))
 
     rr = _signal_rr(signal)
     if rr is None:
         blocking_reasons.append("RR_UNAVAILABLE")
     elif rr < min_rr:
-        blocking_reasons.append("RR_BELOW_MIN")
+        try:
+            from config import CONFIG
+            from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+            rr_enforced = engine_ab_profitability_gates_enforced(
+                CONFIG,
+                signal=signal,
+                engine="engine_a",
+            )
+        except Exception:
+            rr_enforced = True
+        (blocking_reasons if rr_enforced else advisory_warnings).append("RR_BELOW_MIN")
+
+    sl_width, max_sl_pct, _max_sl_source = _signal_sl_width_state(signal)
+    if (
+        sl_width is not None
+        and max_sl_pct is not None
+        and sl_width > max_sl_pct + 1e-12
+    ):
+        try:
+            from config import CONFIG
+            from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+            sl_enforced = engine_ab_profitability_gates_enforced(
+                CONFIG,
+                signal=signal,
+                engine="engine_a",
+            )
+        except Exception:
+            sl_enforced = True
+        (blocking_reasons if sl_enforced else advisory_warnings).append("MAX_SL_EXCEEDED")
 
     if _daily_loss_limit_hit(signal):
         blocking_reasons.append("DAILY_LOSS_LIMIT_HIT")
@@ -396,7 +498,10 @@ def evaluate_engine_a_ai_advisory_rules(
         "advisory_ai_score": round(ai_score, 2) if ai_score is not None else None,
         "advisory_rule_bucket": bucket,
         "advisory_blocking_reasons": blocking_reasons,
+        "advisory_warnings": advisory_warnings,
         "advisory_min_rr": min_rr,
+        "advisory_sl_width": round(sl_width, 6) if sl_width is not None else None,
+        "advisory_max_sl_pct": max_sl_pct,
     }
 
 
@@ -641,26 +746,59 @@ def evaluate_marcus_advisory_rules(
             score_source = None
 
     blocking_reasons: list[str] = []
+    advisory_warnings: list[str] = []
     if _signal_stop_loss(signal) is None:
         blocking_reasons.append("NO_STOP_LOSS")
+    if _signal_take_profit(signal) is None:
+        blocking_reasons.append("NO_TAKE_PROFIT")
+    blocking_reasons.extend(_signal_level_geometry_errors(signal))
+
+    if source == "engine_b":
+        engine_b_data = _engine_b_payload(signal)
+        if engine_b_data.get("space_gate_ok") is False:
+            blocking_reasons.append("ENGINE_B_SPACE_GATE_FAILED")
+        if engine_b_data.get("tp1_path_clear") is False:
+            blocking_reasons.append("ENGINE_B_TP_PATH_BLOCKED")
+        if engine_b_data.get("execution_levels_valid") is False:
+            blocking_reasons.append("INVALID_EXECUTION_LEVELS")
 
     if source == "engine_b":
         rr, min_rr_applied, engine_rr_passed = _engine_b_rr_state(signal, min_rr)
+        try:
+            from config import CONFIG
+            from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+            rr_enforced = engine_ab_profitability_gates_enforced(
+                CONFIG,
+                signal=signal,
+                engine="engine_b",
+            )
+        except Exception:
+            rr_enforced = True
         if engine_rr_passed is False:
-            blocking_reasons.append("RR_BELOW_MIN")
+            (blocking_reasons if rr_enforced else advisory_warnings).append("RR_BELOW_MIN")
         elif engine_rr_passed is None:
             # No engine RR verdict supplied — fall back to the numeric comparison,
             # against the threshold Engine B itself applied.
             if rr is None:
                 blocking_reasons.append("RR_UNAVAILABLE")
             elif rr < min_rr_applied:
-                blocking_reasons.append("RR_BELOW_MIN")
+                (blocking_reasons if rr_enforced else advisory_warnings).append("RR_BELOW_MIN")
     else:
         rr, min_rr_applied = _signal_rr(signal), min_rr
         if rr is None:
             blocking_reasons.append("RR_UNAVAILABLE")
         elif rr < min_rr_applied:
             blocking_reasons.append("RR_BELOW_MIN")
+
+    sl_width, max_sl_pct, _max_sl_source = _signal_sl_width_state(signal)
+    if (
+        source == "engine_b"
+        and sl_width is not None
+        and max_sl_pct is not None
+        and sl_width > max_sl_pct + 1e-12
+    ):
+        (blocking_reasons if rr_enforced else advisory_warnings).append("MAX_SL_EXCEEDED")
 
     if _daily_loss_limit_hit(signal):
         blocking_reasons.append("DAILY_LOSS_LIMIT_HIT")
@@ -680,8 +818,11 @@ def evaluate_marcus_advisory_rules(
         "advisory_rule_score_source": score_source,
         "advisory_rule_bucket": bucket,
         "advisory_blocking_reasons": blocking_reasons,
+        "advisory_warnings": advisory_warnings,
         "advisory_min_rr": min_rr_applied,
         "advisory_rr_value": round(rr, 3) if rr is not None else None,
+        "advisory_sl_width": round(sl_width, 6) if sl_width is not None else None,
+        "advisory_max_sl_pct": max_sl_pct,
         "advisory_gate_pct": _engine_b_gate_score(signal) if source == "engine_b" else None,
     }
 

@@ -633,11 +633,16 @@ def _apply_engine_b_scan_levels(signal: dict, conf_b: dict | None, res_b: dict |
         "execution_plan_reason",
         "rr_required",
         "rr_passed",
+        "rr_gate_enforced",
+        "max_sl_gate_enforced",
         "single_target_rr_floor",
         "single_target_execution_tp",
         "single_target_valid",
     ):
         signal[f"engine_b_{key}"] = (conf_b or {}).get(key)
+    signal["engine_b_levelAdvisories"] = list(
+        (conf_b or {}).get("levelAdvisories") or []
+    )
 
     # Stamp the resolved Engine B exit mode + runner directive. The helper
     # no-ops for non-Engine-B rows, so Engine A rows carrying a B overlay

@@ -1796,10 +1796,32 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
             )
             _sl_dist_pct = abs(float(price) - float(sl)) / float(price)
             if _sl_dist_pct > _max_sl_pct:
-                return {
-                    "success": False,
-                    "error": f"SL_TOO_WIDE: {_sl_dist_pct:.1%} exceeds {_max_sl_pct:.0%} cap ({_max_sl_source})"
-                }
+                from tp_sl_rr_gate_policy import (
+                    add_level_advisory,
+                    engine_ab_profitability_gates_enforced,
+                    resolve_execution_profitability_gate_engine,
+                )
+
+                if engine_ab_profitability_gates_enforced(
+                    _cfg,
+                    signal=signal,
+                    engine=resolve_execution_profitability_gate_engine(signal),
+                ):
+                    return {
+                        "success": False,
+                        "error": f"SL_TOO_WIDE: {_sl_dist_pct:.1%} exceeds {_max_sl_pct:.0%} cap ({_max_sl_source})"
+                    }
+                add_level_advisory(
+                    signal,
+                    "MAX_SL_EXCEEDED",
+                    actual=_sl_dist_pct,
+                    threshold=_max_sl_pct,
+                    source=f"bybit:{_max_sl_source}",
+                )
+                log.warning(
+                    f"[BYBIT] {ccxt_symbol}: advisory SL width {_sl_dist_pct:.1%} "
+                    f"exceeds {_max_sl_pct:.1%} ({_max_sl_source})"
+                )
         except Exception as sl_cap_err:
             log.warning(
                 f"[BYBIT] {ccxt_symbol}: SL width cap check failed ({sl_cap_err}) — rejecting order"

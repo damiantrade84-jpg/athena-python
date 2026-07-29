@@ -2626,6 +2626,10 @@ BACKTEST_DISABLE_HURST_GATE: false  # Measurement complete 2026-04-18: disabling
 # Active when EXECUTOR_MODE is demo/paper or RESEARCH_MODE/BACKTEST_RUNNING. Never
 # applies when EXECUTOR_MODE is live. Enable in config.local.yaml for research runs.
 DISABLE_TP_SL_RR_GATES: false
+# Engine A/B only. false = minimum RR and MAX_SL_PCT are advisory; true restores
+# their legacy scan/execution blocks. Missing/wrong-side/broker-invalid levels
+# and Engine B room/TP-path gates remain mandatory in both modes.
+ENGINE_AB_PROFITABILITY_GATES_ENFORCED: false
 
 
 

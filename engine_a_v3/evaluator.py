@@ -342,9 +342,15 @@ def _build_levels(
         _mr_min_risk = 0.0
         try:
             from config import CONFIG
-            from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+            from tp_sl_rr_gate_policy import (
+                engine_ab_profitability_gates_enforced,
+                tp_sl_rr_gates_disabled,
+            )
 
-            if tp_sl_rr_gates_disabled(CONFIG):
+            if tp_sl_rr_gates_disabled(CONFIG) or not engine_ab_profitability_gates_enforced(
+                CONFIG,
+                engine="engine_a",
+            ):
                 _mr_min_rr = 0.0
             _mr_cfg = CONFIG.get("ENGINE_A_V3_MEAN_REVERSION") or {}
             _mr_sl_buffer = float(_mr_cfg.get("SL_BUFFER_ATR", 0.5))
@@ -858,6 +864,62 @@ def evaluate_engine_a_v3(
     qualified = decision == "TRADE" and promotion_execution_allowed and levels is not None
     executable_levels = levels
     targets = executable_levels.targets if executable_levels else ()
+    level_gate_mode = "enforced"
+    level_advisories: list[dict[str, Any]] = []
+    try:
+        from config import CONFIG
+        from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+        if not engine_ab_profitability_gates_enforced(CONFIG, engine="engine_a"):
+            level_gate_mode = "advisory"
+            try:
+                rr_required = float(CONFIG.get("ENGINE_C_EXEC_MIN_RR", 1.0) or 1.0)
+            except (TypeError, ValueError):
+                rr_required = 1.0
+            rr_actual = float(targets[0].rr) if targets else None
+            if (
+                rr_actual is not None
+                and rr_required > 0
+                and rr_actual + 1e-12 < rr_required
+            ):
+                level_advisories.append(
+                    {
+                        "code": "RR_BELOW_MINIMUM",
+                        "blocking": False,
+                        "actual": round(rr_actual, 6),
+                        "threshold": round(rr_required, 6),
+                        "source": "engine_a_levels",
+                    }
+                )
+            if executable_levels is not None and executable_levels.price > 0:
+                from risk_engine import resolve_max_sl_pct
+
+                sl_distance_pct = abs(
+                    float(executable_levels.price) - float(executable_levels.invalidation)
+                ) / abs(float(executable_levels.price))
+                max_sl_pct, max_sl_source = resolve_max_sl_pct(
+                    {
+                        "engine": "engine_a",
+                        "pair": pair,
+                        "symbol": symbol,
+                        "type": route.family,
+                        "scoreGroup": route.score_group,
+                    },
+                    route.family,
+                    CONFIG,
+                )
+                if sl_distance_pct > max_sl_pct + 1e-12:
+                    level_advisories.append(
+                        {
+                            "code": "MAX_SL_EXCEEDED",
+                            "blocking": False,
+                            "actual": round(sl_distance_pct, 6),
+                            "threshold": round(max_sl_pct, 6),
+                            "source": max_sl_source,
+                        }
+                    )
+    except Exception:
+        pass
 
     validation_status = (
         "UNVALIDATED"
@@ -1048,4 +1110,6 @@ def evaluate_engine_a_v3(
         factorDiagnostics=factor_diagnostics,
         engineATradeEnabled=qualified,
         triggerConfirmed=trigger_confirmed,
+        levelGateMode=level_gate_mode,
+        levelAdvisories=tuple(level_advisories),
     )

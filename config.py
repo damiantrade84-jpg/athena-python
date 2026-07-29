@@ -1737,6 +1737,10 @@ CONFIG: dict = {
     "BACKTEST_EVENT_RISK_GATING": False,
     "BACKTEST_SENTIMENT_GATING": False,
     "DISABLE_TP_SL_RR_GATES": False,
+    # Engine A/B only: false keeps minimum RR and maximum SL width diagnostic
+    # while allowing otherwise valid structural trades. The Scan Config UI can
+    # restore the legacy hard-blocking behavior at runtime.
+    "ENGINE_AB_PROFITABILITY_GATES_ENFORCED": False,
     "ASE_BT_ENABLED": True,
     "ASE_BT_LOOKBACK_DAYS": 365,
     "ASE_BT_HORIZONS": ["intraday", "swing"],

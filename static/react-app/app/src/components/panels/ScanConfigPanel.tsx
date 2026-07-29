@@ -27,6 +27,7 @@ interface FeatureToggles {
   news_sentiment?: boolean;
   sentiment_gate?: boolean;
   event_risk?: boolean;
+  profitability_gates?: boolean;
 }
 
 interface ExecutionConfig {
@@ -183,6 +184,7 @@ export default function ScanConfigPanel() {
                         {key === 'news_sentiment' && 'EODHD news → score blend'}
                         {key === 'sentiment_gate' && 'Block trades on bearish sentiment'}
                         {key === 'event_risk' && 'Block trades around macro events'}
+                        {key === 'profitability_gates' && 'Restore minimum RR and max-SL blocks for Engine A/B'}
                       </p>
                     </div>
                     <Switch

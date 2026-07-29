@@ -2641,6 +2641,15 @@ def _stamp_m5_eligibility(
             trigger_expired = bool(
                 _first_signal_value(signal, "triggerExpired", "trigger_expired") or False
             )
+        try:
+            from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+            _profitability_gates_enforced = engine_ab_profitability_gates_enforced(
+                dict(config),
+                signal=signal,
+            )
+        except Exception:
+            _profitability_gates_enforced = True
         context = M5EligibilityContext(
             m5_policy=policy.m5_policy,
             htf_structure_valid=_first_signal_value(
@@ -2677,10 +2686,26 @@ def _stamp_m5_eligibility(
             ),
             fallback_trigger_tf=policy.trigger_tf.value,
             m5_validation_status=_resolve_m5_validation_status(m5_cfg, policy),
+            profitability_gates_enforced=_profitability_gates_enforced,
         )
         result = evaluate_m5_eligibility(context)
         signal["m5Eligible"] = bool(result.eligible)
         signal["m5EligibilityReasons"] = list(result.reasons)
+        if (
+            not _profitability_gates_enforced
+            and context.structural_rr_at_current_price is not None
+            and context.min_rr is not None
+            and context.structural_rr_at_current_price < context.min_rr
+        ):
+            from tp_sl_rr_gate_policy import add_level_advisory
+
+            add_level_advisory(
+                signal,
+                "RR_BELOW_MINIMUM",
+                actual=context.structural_rr_at_current_price,
+                threshold=context.min_rr,
+                source="m5_eligibility",
+            )
     except Exception:
         signal["m5Eligible"] = False
         signal["m5EligibilityReasons"] = ["m5_eligibility_error"]

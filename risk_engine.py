@@ -103,12 +103,26 @@ def clamp_execution_sl_to_max_sl_pct(signal: dict, cfg: dict | None = None) -> b
     signal = signal or {}
     cfg = cfg or CONFIG
     try:
-        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+        from tp_sl_rr_gate_policy import (
+            engine_ab_profitability_gates_enforced,
+            resolve_profitability_gate_engine,
+            tp_sl_rr_gates_disabled,
+        )
 
         if tp_sl_rr_gates_disabled(cfg, signal=signal):
             return False
+        selected_engine = resolve_profitability_gate_engine(signal)
+        raw_engine = str(
+            signal.get("engine") or signal.get("source_engine") or ""
+        ).strip().lower()
+        policy_engine = selected_engine or (raw_engine if raw_engine else "engine_a")
+        profitability_gates_enforced = engine_ab_profitability_gates_enforced(
+            cfg,
+            signal=signal,
+            engine=policy_engine,
+        )
     except Exception:
-        pass
+        profitability_gates_enforced = True
     try:
         entry = float(signal.get("price") or 0.0)
         sl = float(signal.get("sl") or 0.0)
@@ -136,6 +150,17 @@ def clamp_execution_sl_to_max_sl_pct(signal: dict, cfg: dict | None = None) -> b
     sl_dist = abs(entry - sl)
     sl_pct = sl_dist / abs(entry)
     if sl_pct <= max_sl_pct + 1e-12:
+        return False
+    if not profitability_gates_enforced:
+        from tp_sl_rr_gate_policy import add_level_advisory
+
+        add_level_advisory(
+            signal,
+            "MAX_SL_EXCEEDED",
+            actual=sl_pct,
+            threshold=max_sl_pct,
+            source=_source,
+        )
         return False
     # Borderline only (e.g. 8.1% vs 8.0% cap). Materially wide stops fail Check 5.
     _borderline_margin = 0.005
@@ -1122,7 +1147,21 @@ def _engine_b_resolver_plan_for_risk(signal: dict, entry: float, asset_type: str
         if source_plan != plan:
             continue
         rr_passed = source.get("rr_passed", source.get("engine_b_rr_passed"))
-        if rr_passed is not True:
+        advisory_provenance = (
+            source.get("rr_gate_enforced") is False
+            or source.get("engine_b_rr_gate_enforced") is False
+        )
+        try:
+            from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+            advisory_provenance = advisory_provenance and not engine_ab_profitability_gates_enforced(
+                CONFIG,
+                signal=signal,
+                engine="engine_b",
+            )
+        except Exception:
+            advisory_provenance = False
+        if rr_passed is not True and not advisory_provenance:
             continue
         if plan == "scale_out":
             if str(asset_type or "").lower() != "crypto":
@@ -1468,12 +1507,40 @@ def risk_check(
     entry = float(signal.get("price") or signal.get("livePrice") or 0)
     sl = float(signal.get("sl") or 0)
     _tp_sl_rr_relaxed = False
+    _profitability_gates_enforced = True
     try:
-        from tp_sl_rr_gate_policy import tp_sl_rr_gates_disabled
+        from tp_sl_rr_gate_policy import (
+            engine_ab_profitability_gates_enforced,
+            resolve_profitability_gate_engine,
+            tp_sl_rr_gates_disabled,
+        )
 
         _tp_sl_rr_relaxed = tp_sl_rr_gates_disabled(CONFIG, signal=signal)
+        _raw_profitability_engine = str(
+            signal.get("engine") or signal.get("source_engine") or ""
+        ).strip().lower()
+        _selected_profitability_engine = resolve_profitability_gate_engine(signal)
+        if _selected_profitability_engine in {"engine_a", "engine_b"}:
+            _policy_engine = _selected_profitability_engine
+        elif _is_engine_b_execution_signal(signal):
+            _policy_engine = "engine_b"
+        elif (
+            execution_context in {"ase_bridge", "fx_factor_bridge"}
+            or _raw_profitability_engine
+            in {"c", "engine_c", "engine_c_consensus", "consensus", "d", "engine_d", "scalp", "scalp_vp"}
+        ):
+            _policy_engine = _raw_profitability_engine or None
+        else:
+            # Historical Engine A payloads predate the explicit engine field.
+            _policy_engine = "engine_a"
+        _profitability_gates_enforced = engine_ab_profitability_gates_enforced(
+            CONFIG,
+            signal=signal,
+            engine=_policy_engine,
+        )
     except Exception:
         _tp_sl_rr_relaxed = False
+        _profitability_gates_enforced = True
     if clamp_execution_sl_to_max_sl_pct(signal, CONFIG):
         sl = float(signal.get("sl") or 0)
     if not entry or not sl or entry == sl:
@@ -1584,15 +1651,12 @@ def risk_check(
         and signal.get("fxFactorExecution") is True
     )
     _is_engine_d_rr = _eng_rr in ("scalp", "scalp_vp", "engine_d", "d")
-    if _is_engine_b_execution_signal(signal):
-        _rr_gate_enabled = bool(CONFIG.get("ENGINE_B_RR_GATE_ENABLED", True))
-    elif _is_ase_rr or _is_fx_factor_rr or _is_engine_d_rr:
+    if _is_ase_rr or _is_fx_factor_rr or _is_engine_d_rr:
         _rr_gate_enabled = True
     else:
-        _rr_gate_enabled = bool(CONFIG.get("ENGINE_A_RR_GATE_ENABLED", True))
+        _rr_gate_enabled = _profitability_gates_enforced
     if (
         not _tp_sl_rr_relaxed
-        and _rr_gate_enabled
         and _min_exec_rr > 0
         and _rr_target > 0
     ):
@@ -1600,12 +1664,23 @@ def risk_check(
         if risk_abs > 0:
             rr_geom = abs(_rr_target - entry) / risk_abs
             if rr_geom + 1e-12 < _min_exec_rr:
-                log.warning(
-                    f"{prefix} REJECTED: R:R {rr_geom:.3f} < min {_min_exec_rr}"
-                )
-                return RiskApproval(
-                    False, 0.0, 0.0, 0.0, 0.0, dd, "RR_BELOW_MINIMUM"
-                )
+                if not _rr_gate_enabled:
+                    from tp_sl_rr_gate_policy import add_level_advisory
+
+                    add_level_advisory(
+                        signal,
+                        "RR_BELOW_MINIMUM",
+                        actual=rr_geom,
+                        threshold=_min_exec_rr,
+                        source="risk_engine",
+                    )
+                else:
+                    log.warning(
+                        f"{prefix} REJECTED: R:R {rr_geom:.3f} < min {_min_exec_rr}"
+                    )
+                    return RiskApproval(
+                        False, 0.0, 0.0, 0.0, 0.0, dd, "RR_BELOW_MINIMUM"
+                    )
 
     # ── Check 5b: SL distance within MAX_SL_PCT ─────────────────────────────
     # BUG 4 fix: Enforce hard rejection for over-wide stops before volume calc.
@@ -1615,11 +1690,22 @@ def risk_check(
     if not _tp_sl_rr_relaxed and entry != 0:
         sl_pct = abs(entry - sl) / abs(entry)
         if sl_pct > max_sl_pct + 1e-9:
-            log.warning(
-                f"{prefix} REJECTED: SL distance {sl_pct:.1%} exceeds MAX_SL_PCT "
-                f"{max_sl_pct:.1%} for {asset_type} ({max_sl_source})"
-            )
-            return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "MAX_SL_EXCEEDED")
+            if not _profitability_gates_enforced:
+                from tp_sl_rr_gate_policy import add_level_advisory
+
+                add_level_advisory(
+                    signal,
+                    "MAX_SL_EXCEEDED",
+                    actual=sl_pct,
+                    threshold=max_sl_pct,
+                    source=max_sl_source,
+                )
+            else:
+                log.warning(
+                    f"{prefix} REJECTED: SL distance {sl_pct:.1%} exceeds MAX_SL_PCT "
+                    f"{max_sl_pct:.1%} for {asset_type} ({max_sl_source})"
+                )
+                return RiskApproval(False, 0.0, 0.0, 0.0, 0.0, dd, "MAX_SL_EXCEEDED")
 
     _risk_regime = signal.get("regimeName")
     if not _risk_regime:

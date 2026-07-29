@@ -98,6 +98,8 @@ class EngineASetupSignal:
     engineATradeEnabled: bool = False
     entryTimeframe: str | None = None
     triggerConfirmed: bool | None = None
+    levelGateMode: str = "enforced"
+    levelAdvisories: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -107,6 +109,7 @@ class EngineASetupSignal:
         payload["targets"] = [asdict(target) for target in self.targets]
         payload["predicates"] = [asdict(predicate) for predicate in self.predicates]
         payload["rejectionReasons"] = list(self.rejectionReasons)
+        payload["levelAdvisories"] = [dict(item) for item in self.levelAdvisories]
         if self.validationArtifact is not None:
             artifact = asdict(self.validationArtifact)
             artifact["metrics"] = dict(self.validationArtifact.metrics)

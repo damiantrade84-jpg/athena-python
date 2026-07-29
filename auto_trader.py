@@ -1180,6 +1180,29 @@ class AutoTrader:
             }
         )
         if _sl_pct > _max_sl_pct:
+            try:
+                from tp_sl_rr_gate_policy import (
+                    add_level_advisory,
+                    engine_ab_profitability_gates_enforced,
+                    resolve_execution_profitability_gate_engine,
+                )
+
+                if not engine_ab_profitability_gates_enforced(
+                    cfg,
+                    signal=signal,
+                    engine=resolve_execution_profitability_gate_engine(signal),
+                ):
+                    add_level_advisory(
+                        signal,
+                        "MAX_SL_EXCEEDED",
+                        actual=_sl_pct,
+                        threshold=_max_sl_pct,
+                        source=_max_sl_source,
+                    )
+                    detail["advisory"] = True
+                    return True, "", detail
+            except Exception:
+                pass
             detail["allowed"] = False
             reason = (
                 f"SL distance {_sl_pct:.1%} exceeds MAX_SL_PCT {_max_sl_pct:.1%} "

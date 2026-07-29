@@ -154,6 +154,12 @@ def run_engine_b_backtest(
         max_hold_h4_bars = 24
     max_hold_iter_bars = max_hold_h4_bars * (_TF_SECONDS["H4"] // iter_dur)
     max_sl_pct = float((CONFIG.get("MAX_SL_PCT", {}) or {}).get(asset_type, 0.05))
+    from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+    profitability_gates_enforced = engine_ab_profitability_gates_enforced(
+        CONFIG,
+        engine="engine_b",
+    )
 
     funnel: dict[str, int] = {
         "bars_seen": 0,
@@ -165,6 +171,8 @@ def run_engine_b_backtest(
         "levels_side_invalid": 0,
         "rr_gate_rejected": 0,
         "sl_cap_rejected": 0,
+        "rr_advisory": 0,
+        "sl_cap_advisory": 0,
         "entered": 0,
     }
     rejection_reasons: dict[str, int] = {}
@@ -337,13 +345,17 @@ def run_engine_b_backtest(
         except (TypeError, ValueError):
             rr_required = float(profile.get("min_rr", 1.0))
         if target_rr < rr_required:
-            funnel["rr_gate_rejected"] += 1
-            index += 1
-            continue
+            if profitability_gates_enforced:
+                funnel["rr_gate_rejected"] += 1
+                index += 1
+                continue
+            funnel["rr_advisory"] += 1
         if entry > 0 and risk / entry > max_sl_pct:
-            funnel["sl_cap_rejected"] += 1
-            index += 1
-            continue
+            if profitability_gates_enforced:
+                funnel["sl_cap_rejected"] += 1
+                index += 1
+                continue
+            funnel["sl_cap_advisory"] += 1
 
         exit_strategy = str(conf.get("exit_strategy") or "")
         exit_policy = (

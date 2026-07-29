@@ -132,6 +132,7 @@ class M5EligibilityContext:
     # Frozen out-of-sample evidence state for this instrument's group.
     # Defaults to UNVALIDATED so an omitted value can never permit promotion.
     m5_validation_status: Optional[Union[M5ValidationStatus, str]] = None
+    profitability_gates_enforced: bool = True
 
 
 @dataclass(frozen=True)
@@ -242,7 +243,10 @@ def evaluate_m5_eligibility(context: M5EligibilityContext) -> M5Eligibility:
     # 8) Current-price structural RR remains valid (>= min).
     if context.structural_rr_at_current_price is None or context.min_rr is None:
         reasons.append(REASON_RR_MISSING)
-    elif context.structural_rr_at_current_price < context.min_rr:
+    elif (
+        context.structural_rr_at_current_price < context.min_rr
+        and context.profitability_gates_enforced
+    ):
         reasons.append(REASON_RR_BELOW_MIN)
     # 9) Current quote is not inside the opposing structural zone.
     if context.quote_inside_opposing_zone:

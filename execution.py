@@ -1154,8 +1154,33 @@ def _displacement_guard_block_reason(sig: dict, cfg: dict | None) -> tuple[str |
         if rr is not None:
             diag["rrAtEntry"] = round(rr, 4)
             diag["minRrAtEntry"] = min_rr
-        if rr is None or rr + 1e-12 < min_rr:
+        if rr is None:
             return "CHASE_PROTECTION_RR_BELOW_MIN", diag
+        if rr + 1e-12 < min_rr:
+            try:
+                from tp_sl_rr_gate_policy import (
+                    add_level_advisory,
+                    engine_ab_profitability_gates_enforced,
+                    resolve_execution_profitability_gate_engine,
+                )
+
+                if not engine_ab_profitability_gates_enforced(
+                    rt().CONFIG,
+                    signal=sig,
+                    engine=resolve_execution_profitability_gate_engine(sig),
+                ):
+                    add_level_advisory(
+                        sig,
+                        "RR_BELOW_MINIMUM",
+                        actual=rr,
+                        threshold=min_rr,
+                        source="displacement_guard",
+                    )
+                    diag["rrAdvisory"] = True
+                else:
+                    return "CHASE_PROTECTION_RR_BELOW_MIN", diag
+            except Exception:
+                return "CHASE_PROTECTION_RR_BELOW_MIN", diag
     else:
         diag["skipped"]["rrAtEntry"] = "missing sl/tp1 or no minimum RR floor"
 
@@ -1182,6 +1207,28 @@ def _post_fill_rr_violation(
         except (TypeError, ValueError):
             min_rr = None
     if min_rr is not None and min_rr > 0 and rr_at_fill + 1e-12 < min_rr:
+        try:
+            from tp_sl_rr_gate_policy import (
+                add_level_advisory,
+                engine_ab_profitability_gates_enforced,
+                resolve_execution_profitability_gate_engine,
+            )
+
+            if not engine_ab_profitability_gates_enforced(
+                cfg,
+                signal=sig,
+                engine=resolve_execution_profitability_gate_engine(sig),
+            ):
+                add_level_advisory(
+                    sig,
+                    "RR_BELOW_MINIMUM",
+                    actual=rr_at_fill,
+                    threshold=min_rr,
+                    source="post_fill",
+                )
+                return None
+        except Exception:
+            pass
         return f"ACTUAL_RR_BELOW_MIN_AT_FILL: {rr_at_fill:.4f} < min {min_rr}"
     return None
 
@@ -1279,6 +1326,29 @@ def _reconcile_engine_b_rr_after_broker_entry(sig: dict, cfg: dict) -> str | Non
     rr_geom = _geometric_rr(entry, sl, rr_target)
     if rr_geom is None or rr_geom + 1e-12 >= min_rr:
         return None
+    try:
+        from tp_sl_rr_gate_policy import (
+            add_level_advisory,
+            engine_ab_profitability_gates_enforced,
+        )
+
+        if not engine_ab_profitability_gates_enforced(
+            cfg,
+            signal=sig,
+            engine="engine_b",
+        ):
+            add_level_advisory(
+                sig,
+                "RR_BELOW_MINIMUM",
+                actual=rr_geom,
+                threshold=min_rr,
+                source="broker_entry_rebase",
+            )
+            sig["engine_b_rr_passed"] = False
+            sig["rr_gate_enforced"] = False
+            return None
+    except Exception:
+        pass
 
     synth_tp, _target_rr = _synthesize_tp_from_sl(
         entry, sl, direction, fallback_rr, min_rr
@@ -1347,13 +1417,22 @@ def _engine_b_context_confirmed(sig: dict, engine_b: dict | None = None) -> bool
 def _engine_b_execution_levels_marked_invalid(source: dict | None) -> bool:
     if not isinstance(source, dict):
         return False
+    reason = source.get("execution_level_reject_reason")
+    if reason == "max_sl_exceeded" and source.get("max_sl_gate_enforced") is False:
+        try:
+            from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced
+
+            if not engine_ab_profitability_gates_enforced(
+                rt().CONFIG,
+                signal=source,
+                engine="engine_b",
+            ):
+                return False
+        except Exception:
+            pass
     if source.get("execution_levels_valid") is False:
         return True
-    return source.get("execution_level_reject_reason") in (
-        "max_sl_exceeded",
-        "tp_wrong_side",
-        "levels_missing",
-    )
+    return reason in ("max_sl_exceeded", "tp_wrong_side", "levels_missing")
 
 
 def _engine_b_execution_tp_side_ok(
@@ -1504,6 +1583,8 @@ def _stamp_engine_b_execution_plan(sig: dict, source: dict | None, levels: dict)
         "execution_plan_reason",
         "rr_required",
         "rr_passed",
+        "rr_gate_enforced",
+        "max_sl_gate_enforced",
         "execution_sl",
         "execution_tp",
         "execution_tp1",
@@ -1515,6 +1596,19 @@ def _stamp_engine_b_execution_plan(sig: dict, source: dict | None, levels: dict)
         value = levels.get(key, source.get(key))
         if value is not None:
             sig[f"engine_b_{key}"] = value
+            if key in ("rr_gate_enforced", "max_sl_gate_enforced"):
+                sig[key] = value
+    for advisory in source.get("levelAdvisories") or []:
+        if isinstance(advisory, dict) and advisory.get("code"):
+            from tp_sl_rr_gate_policy import add_level_advisory
+
+            add_level_advisory(
+                sig,
+                advisory["code"],
+                actual=advisory.get("actual"),
+                threshold=advisory.get("threshold"),
+                source=advisory.get("source"),
+            )
 
 
 def _extract_engine_b_execution_levels(
@@ -1943,6 +2037,28 @@ def _engine_b_execution_sl_exceeds_max(sig: dict, sl: float) -> bool:
     asset_type = str(sig.get("type") or sig.get("asset_type") or "").lower()
     max_sl_pct, _ = resolve_max_sl_pct(sig, asset_type, rt().CONFIG)
     sl_pct = abs(entry - sl_f) / abs(entry)
+    if sl_pct > float(max_sl_pct) + 1e-12:
+        try:
+            from tp_sl_rr_gate_policy import (
+                add_level_advisory,
+                engine_ab_profitability_gates_enforced,
+            )
+
+            if not engine_ab_profitability_gates_enforced(
+                rt().CONFIG,
+                signal=sig,
+                engine="engine_b",
+            ):
+                add_level_advisory(
+                    sig,
+                    "MAX_SL_EXCEEDED",
+                    actual=sl_pct,
+                    threshold=max_sl_pct,
+                    source="engine_b_execution_levels",
+                )
+                return False
+        except Exception:
+            pass
     return sl_pct > float(max_sl_pct) + 1e-12
 
 
@@ -2036,6 +2152,21 @@ def _apply_engine_b_execution_levels(sig: dict, engine_b: dict | None = None) ->
         sig["engine_b_rr_required"] = levels["rr_required"]
     if levels.get("rr_passed") is not None:
         sig["engine_b_rr_passed"] = levels["rr_passed"]
+    if levels.get("rr_gate_enforced") is not None:
+        sig["rr_gate_enforced"] = levels["rr_gate_enforced"]
+    if levels.get("max_sl_gate_enforced") is not None:
+        sig["max_sl_gate_enforced"] = levels["max_sl_gate_enforced"]
+    for advisory in levels.get("levelAdvisories") or []:
+        if isinstance(advisory, dict) and advisory.get("code"):
+            from tp_sl_rr_gate_policy import add_level_advisory
+
+            add_level_advisory(
+                sig,
+                advisory["code"],
+                actual=advisory.get("actual"),
+                threshold=advisory.get("threshold"),
+                source=advisory.get("source"),
+            )
     sig["level_source"] = "engine_b_execution"
     return True
 

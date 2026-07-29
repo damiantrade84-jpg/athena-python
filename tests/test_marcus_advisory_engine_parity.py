@@ -13,6 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import config
 from ai_schemas import (
     _clamp_edge_to_grade_band,
     _engine_b_gate_score,
@@ -58,11 +59,13 @@ def _engine_b_signal(**overrides):
         "pair": "EUR/USD",
         "type": "forex",
         "direction": "LONG",
+        "price": 1.1000,
         "is_naked": True,
         "engine_source": "engine_b",
         "naked_data": naked,
         "engine_b": naked,
         "sl": 1.0850,
+        "tp1": 1.1200,
         "rr1": naked["execution_rr1"],
         "rr2": naked["execution_rr2"],
         "min_rr": naked["min_rr"],
@@ -106,7 +109,27 @@ class TestEngineBRiskReward:
         # The gated leg, not the TP1 partial, is what was compared.
         assert out["advisory_rr_value"] == 2.6
 
-    def test_engine_rr_gate_failure_is_honoured(self):
+    def test_engine_rr_gate_failure_is_warning_in_advisory_mode(self):
+        out = evaluate_marcus_advisory_rules(
+            "engine_b",
+            {"edgeProbability": 72},
+            _engine_b_signal(rr_ok=False, rr_passed=False),
+        )
+        assert "RR_BELOW_MIN" not in out["advisory_blocking_reasons"]
+        assert "RR_BELOW_MIN" in out["advisory_warnings"]
+        assert out["advisory_rule_action"] != "reject"
+
+    def test_numeric_fallback_when_engine_supplies_no_rr_verdict(self):
+        signal = _engine_b_signal()
+        for key in ("rr_ok", "rr_passed"):
+            signal["naked_data"].pop(key)
+        signal["naked_data"]["rr_used_for_gate"] = 1.1
+        out = evaluate_marcus_advisory_rules("engine_b", {"edgeProbability": 72}, signal)
+        assert "RR_BELOW_MIN" not in out["advisory_blocking_reasons"]
+        assert "RR_BELOW_MIN" in out["advisory_warnings"]
+
+    def test_master_toggle_restores_engine_b_rr_reject(self, monkeypatch):
+        monkeypatch.setitem(config.CONFIG, "ENGINE_AB_PROFITABILITY_GATES_ENFORCED", True)
         out = evaluate_marcus_advisory_rules(
             "engine_b",
             {"edgeProbability": 72},
@@ -115,13 +138,35 @@ class TestEngineBRiskReward:
         assert "RR_BELOW_MIN" in out["advisory_blocking_reasons"]
         assert out["advisory_rule_action"] == "reject"
 
-    def test_numeric_fallback_when_engine_supplies_no_rr_verdict(self):
-        signal = _engine_b_signal()
-        for key in ("rr_ok", "rr_passed"):
-            signal["naked_data"].pop(key)
-        signal["naked_data"]["rr_used_for_gate"] = 1.1
-        out = evaluate_marcus_advisory_rules("engine_b", {"edgeProbability": 72}, signal)
-        assert "RR_BELOW_MIN" in out["advisory_blocking_reasons"]
+    def test_wide_valid_stop_is_warning_in_advisory_mode(self):
+        signal = _engine_b_signal(execution_sl=1.0, rr_passed=True)
+        signal["sl"] = 1.0
+        out = evaluate_marcus_advisory_rules(
+            "engine_b",
+            {"edgeProbability": 72},
+            signal,
+        )
+        assert "MAX_SL_EXCEEDED" not in out["advisory_blocking_reasons"]
+        assert "MAX_SL_EXCEEDED" in out["advisory_warnings"]
+
+    def test_missing_stop_and_blocked_tp_path_still_reject(self):
+        missing_stop = _engine_b_signal()
+        missing_stop.pop("sl")
+        missing_stop["naked_data"].pop("execution_sl")
+        out_missing = evaluate_marcus_advisory_rules(
+            "engine_b", {"edgeProbability": 72}, missing_stop
+        )
+        out_path = evaluate_marcus_advisory_rules(
+            "engine_b",
+            {"edgeProbability": 72},
+            _engine_b_signal(space_gate_ok=False, tp1_path_clear=False),
+        )
+
+        assert "NO_STOP_LOSS" in out_missing["advisory_blocking_reasons"]
+        assert out_missing["advisory_rule_action"] == "reject"
+        assert "ENGINE_B_SPACE_GATE_FAILED" in out_path["advisory_blocking_reasons"]
+        assert "ENGINE_B_TP_PATH_BLOCKED" in out_path["advisory_blocking_reasons"]
+        assert out_path["advisory_rule_action"] == "reject"
 
 
 class TestEngineAScoreSource:
@@ -136,6 +181,8 @@ class TestEngineAScoreSource:
         "qualified": True,
         "decision": "TRADE",
         "sl": 58800,
+        "price": 60000,
+        "tp1": 62400,
         "rr1": 2.0,
         "min_rr": 1.5,
     }

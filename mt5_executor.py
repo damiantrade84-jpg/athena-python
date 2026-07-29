@@ -2068,13 +2068,35 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         _max_sl_pct = CONFIG.get("MAX_SL_PCT", {}).get(signal.get("type", ""), 0.05)
         _max_sl_source = f"asset:{signal.get('type', '')}"
     if sl_dist_pct > _max_sl_pct + 1e-9:
-        log.error(
-            f"[MT5] {mt5_symbol}: SL distance {sl_dist_pct:.1%} exceeds configured cap {_max_sl_pct:.1%} ({_max_sl_source})"
+        from tp_sl_rr_gate_policy import (
+            add_level_advisory,
+            engine_ab_profitability_gates_enforced,
+            resolve_execution_profitability_gate_engine,
         )
-        return {
-            "success": False,
-            "error": f"SL_TOO_FAR: SL is {sl_dist_pct:.0%} from entry (max {_max_sl_pct:.0%})",
-        }
+
+        if engine_ab_profitability_gates_enforced(
+            CONFIG,
+            signal=signal,
+            engine=resolve_execution_profitability_gate_engine(signal),
+        ):
+            log.error(
+                f"[MT5] {mt5_symbol}: SL distance {sl_dist_pct:.1%} exceeds configured cap {_max_sl_pct:.1%} ({_max_sl_source})"
+            )
+            return {
+                "success": False,
+                "error": f"SL_TOO_FAR: SL is {sl_dist_pct:.0%} from entry (max {_max_sl_pct:.0%})",
+            }
+        add_level_advisory(
+            signal,
+            "MAX_SL_EXCEEDED",
+            actual=sl_dist_pct,
+            threshold=_max_sl_pct,
+            source=f"mt5:{_max_sl_source}",
+        )
+        log.warning(
+            f"[MT5] {mt5_symbol}: advisory SL width {sl_dist_pct:.1%} exceeds "
+            f"{_max_sl_pct:.1%} ({_max_sl_source})"
+        )
 
     # Check broker minimum stop distance
 
