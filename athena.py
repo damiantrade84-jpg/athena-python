@@ -935,6 +935,46 @@ US_STOCK_PAIRS = [
 ]
 
 
+# US-region exceptions: BRKb is Berkshire Hathaway B (BRK-B on both vendors);
+# SPCX is pre-IPO SpaceX — no public EOD feed exists, so no vendor keys are
+# wired (a bare "SPCX" lookup would silently serve the unrelated SPAC ETF).
+_ATFX_US_VENDOR_OVERRIDES = {
+    "BRKB": {"yfinanceSymbol": "BRK-B", "eodhdSymbol": "BRK-B.US"},
+    "SPCX": {},
+}
+
+
+def _atfx_share_vendor_keys(ticker: str) -> dict:
+    """EOD-provider wiring per listing region for ATFX share CFDs.
+
+    Bare ATFX tickers resolve on no vendor: US shares need a .US suffix for
+    EODHD, HK<digits> tickers are HKEX numeric codes, the XETRA subset maps
+    1:1 to German listings, and the Euronext Paris names map through the
+    confirmed ATFX→Euronext ticker table.
+    """
+    from engine_a_groups import (
+        CASH_EQUITY_EURONEXT_TICKER_MAP,
+        CASH_EQUITY_XETRA_TICKERS,
+        resolve_cash_equity_region,
+    )
+
+    region = resolve_cash_equity_region(ticker)
+    if region == "CASH_EQUITY_HONG_KONG":
+        code = ticker[2:]
+        return {"yfinanceSymbol": f"{code}.HK", "eodhdSymbol": f"{code}.HK"}
+    if region == "CASH_EQUITY_US":
+        override = _ATFX_US_VENDOR_OVERRIDES.get(ticker.upper())
+        if override is not None:
+            return dict(override)
+        return {"eodhdSymbol": f"{ticker}.US"}
+    if ticker.upper() in CASH_EQUITY_XETRA_TICKERS:
+        return {"yfinanceSymbol": f"{ticker}.DE", "eodhdSymbol": f"{ticker}.XETRA"}
+    euronext = CASH_EQUITY_EURONEXT_TICKER_MAP.get(ticker.upper())
+    if euronext:
+        return {"yfinanceSymbol": f"{euronext}.PA", "eodhdSymbol": f"{euronext}.PA"}
+    return {}
+
+
 def _configured_atfx_share_pairs() -> list[dict]:
     """Build the local ATFX share expansion without duplicating broker symbols."""
     raw_tickers = CONFIG.get("MT5_ATFX_SHARE_TICKERS") or []
@@ -954,6 +994,7 @@ def _configured_atfx_share_pairs() -> list[dict]:
                 "display": ticker,
                 "source": "mt5",
                 "enabled": True,
+                **_atfx_share_vendor_keys(ticker),
             }
         )
         known_displays.add(ticker.casefold())
@@ -1596,6 +1637,30 @@ _VENDOR_SYMBOL_OVERRIDES = {
         "eodhd_intraday": "HSI.INDX",
         "fallback": "yfinance",
     },
+    # ATFX cash-index CFDs (2026-07-28): vendor tickers verified live
+    # against EODHD and Yahoo on 2026-07-28.
+    "Spain 35": {
+        "yfinance": "^IBEX",
+        "eodhd": "IBEX.INDX",
+        "fallback": "yfinance",
+    },
+    "France 40": {
+        "yfinance": "^FCHI",
+        "eodhd": "FCHI.INDX",  # note: CAC.INDX 404s on EODHD
+        "fallback": "yfinance",
+    },
+    "Italy 40": {
+        "yfinance": "FTSEMIB.MI",
+        "eodhd": "",  # no valid EODHD EOD ticker (MIB.INDX/FTSEMIB.INDX 404)
+        "fallback": "yfinance",
+    },
+    "China A50": {
+        # 2823.HK is the CSOP FTSE China A50 ETF - tracks the same
+        # underlying index; Yahoo's own ^XIN9/XIN9.FGI series are dead.
+        "yfinance": "2823.HK",
+        "eodhd": "",  # no valid EODHD EOD ticker (XIN9.INDX/CHINA50.INDX 404)
+        "fallback": "yfinance",
+    },
     # Currency basket indices: no valid EODHD EOD ticker - falls back to MT5
     "EURX": {"eodhd": "", "fallback": "yfinance"},
     "JPYX": {"eodhd": "", "fallback": "yfinance"},
@@ -1634,7 +1699,7 @@ def _eodhd_ticker_for_pair(pair: dict) -> str | None:
 
     # Check vendor override first - highest priority
     # Empty string "" is an explicit block (pair confirmed to have no valid EODHD EOD ticker)
-    override = _vendor_overrides(pair).get("eodhd")
+    override = pair.get("eodhdSymbol") or _vendor_overrides(pair).get("eodhd")
     if ptype == "commodity" and commodity_ticker:
         return commodity_ticker
     if override is not None:

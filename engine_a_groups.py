@@ -197,6 +197,7 @@ ENGINE_A_TIMEFRAME_POLICY_GROUPS = frozenset({
     "equity_index_fast",
     "equity_index_standard",
     "us_stock_single",
+    "cash_equity_standard_dynamic",
     "bond_tlt_smallcap_em_etf",
     "crypto_majors_fast",
     "crypto_alt_majors",
@@ -228,7 +229,12 @@ TIMEFRAME_POLICY_GROUP_ALIASES = {
     "index_other": "equity_index_standard",
     "bond_tlt": "bond_tlt_smallcap_em_etf",
     "smallcap_em_etf": "bond_tlt_smallcap_em_etf",
-    "stock_other": "us_stock_single",
+    # stock_other holds the ATFX share CFDs (219 active) plus the 14 JSE pairs,
+    # which are all enabled=False. It used to alias to us_stock_single, which
+    # carries an M15 setup and a conditional M5 trigger calibrated on the named
+    # US single stocks. Those share CFDs have no validated M5 evidence, so they
+    # get their own template with an M15 trigger and M5 disabled.
+    "stock_other": "cash_equity_standard_dynamic",
 }
 
 _deprecation_logged: set[str] = set()
@@ -285,6 +291,33 @@ CASH_EQUITY_EUROPE_TICKERS = frozenset({
     "VOW", "AIR", "AIRP", "AXAF", "BNPP", "BOUY", "DANO", "HRMS", "LVMH",
     "MICP", "OREP", "TTEF",
 })
+
+# XETRA subset of CASH_EQUITY_EUROPE_TICKERS: German listings whose ATFX ticker
+# is the real XETRA ticker, so EOD providers can be wired mechanically (.DE for
+# Yahoo, .XETRA for EODHD). The Euronext Paris names are ATFX-specific (LVMH,
+# DANO, ...) and do not map 1:1 to Euronext codes — see the map below.
+CASH_EQUITY_XETRA_TICKERS = frozenset({
+    "ADS", "ALV", "BAS", "BAYN", "BEI", "BMW", "CBK", "DAI", "DB1", "DBK",
+    "DPW", "DTE", "EON", "FME", "IFX", "LHA", "MUV2", "RWE", "SAP", "SIE",
+    "VOW",
+})
+
+# Euronext Paris listings: ATFX-specific name → real Euronext ticker.
+# Company identities confirmed against the ATFX contract descriptions in the
+# MT5 terminal (Shares\France\...) on 2026-07-28.
+CASH_EQUITY_EURONEXT_TICKER_MAP = {
+    "AIR": "AIR",    # Airbus Group SE
+    "AIRP": "AI",    # Air Liquide SA
+    "AXAF": "CS",    # AXA SA
+    "BNPP": "BNP",   # BNP Paribas SA
+    "BOUY": "EN",    # Bouygues SA
+    "DANO": "BN",    # Danone SA
+    "HRMS": "RMS",   # Hermès International SCA
+    "LVMH": "MC",    # LVMH Moët Hennessy Louis Vuitton SE
+    "MICP": "ML",    # Michelin SCA
+    "OREP": "OR",    # L'Oréal SA
+    "TTEF": "TTE",   # TotalEnergies SE
+}
 
 
 def resolve_cash_equity_region(ticker: str | None) -> str:

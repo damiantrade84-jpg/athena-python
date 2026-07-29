@@ -64,6 +64,8 @@ _FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
 
 # FRED policy / short-rate proxies per currency (not all are daily like DFF).
 # NZD/CAD/MXN/SGD still use _STATIC_RATES when not listed here.
+# DKK/CNH/HKD are static-only on purpose: IRSTCI01DKM156N has not published
+# since 2025-11, IRSTCI01CNM156N since 2025-05, and no HK series exists.
 _FRED_CURRENCY_SERIES: dict[str, str] = {
     "USD": "DFF",  # Fed Funds Rate (daily)
     "EUR": "ECBDFR",  # ECB Deposit Facility Rate
@@ -72,6 +74,12 @@ _FRED_CURRENCY_SERIES: dict[str, str] = {
     "AUD": "IRSTCI01AUM156N",  # Australia short-term interest rate (monthly)
     "CHF": "IRSTCI01CHM156N",  # Switzerland short-term rate (monthly)
     "ZAR": "IRSTCI01ZAM156N",  # South Africa short-term rate (monthly)
+    "CZK": "IRSTCI01CZM156N",  # Czechia short-term rate (monthly)
+    "HUF": "IRSTCI01HUM156N",  # Hungary short-term rate (monthly)
+    "NOK": "IRSTCI01NOM156N",  # Norway short-term rate (monthly)
+    "PLN": "IRSTCI01PLM156N",  # Poland short-term rate (monthly)
+    # IRSTCI01SEM156N was discontinued in 2020-09; STIBOR 3M is the live proxy.
+    "SEK": "IR3TIB01SEM156N",  # Sweden 3-month interbank rate (monthly)
 }
 
 # 10Y government bond yields — for index/commodity risk signals
@@ -91,12 +99,12 @@ _STATIC_10Y_EZ = 3.22  # Euro Area 10Y, Jan 2026 (FRED IRLTLT01EZM156N)
 
 # ── Hardcoded policy rates for currencies without reliable FRED coverage ──────
 # Update these when central banks change rates (meetings ~6-8x per year).
-# Source: FRED latest obs + central bank sites. Last updated: 2026-07-14.
+# Source: FRED latest obs + central bank sites. Last updated: 2026-07-28.
 # Update these when central banks change rates. USD/EUR/GBP also listed here
 # as fallback when FRED is temporarily unreachable.
 # Version date for static fallbacks — keep in sync with _STATIC_RATES comments.
 # Config key CARRY_STATIC_RATES_AS_OF mirrors this; carry_feed warns when stale.
-_STATIC_RATES_AS_OF = "2026-07-14"
+_STATIC_RATES_AS_OF = "2026-07-28"
 
 _STATIC_RATES: dict[str, float] = {
     "USD": 3.62,  # Fed funds effective, Jul 10 2026 (FRED DFF)
@@ -110,6 +118,15 @@ _STATIC_RATES: dict[str, float] = {
     "ZAR": 7.00,  # SARB repo rate, +25bp to 7.00% May 28 2026 (SARB)
     "MXN": 6.50,  # Banxico target rate, held Jun 2026 (Banxico)
     "SGD": 1.00,  # SORA overnight proxy ~1.00%, Jul 2026 (MAS)
+    # ── ATFX expansion currencies (2026-07-28) ─────────────────────────────
+    "CZK": 3.50,  # CNB short rate proxy, May 2026 (FRED IRSTCI01CZM156N)
+    "DKK": 1.85,  # Danmarks Nationalbank current-account rate, 12 Jun 2026 (DN)
+    "HUF": 6.15,  # NBH short rate proxy, May 2026 (FRED IRSTCI01HUM156N)
+    "NOK": 4.19,  # Norges Bank short rate proxy, May 2026 (FRED IRSTCI01NOM156N)
+    "PLN": 3.71,  # NBP short rate proxy, May 2026 (FRED IRSTCI01PLM156N)
+    "SEK": 1.75,  # Riksbank policy rate, held 24 Jun 2026 (Riksbank)
+    "CNH": 1.40,  # PBoC 7-day reverse repo, Jul 2026 (PBoC)
+    "HKD": 3.62,  # HKD pegged to USD; short rates track Fed funds, Jul 2026 (HKMA)
 }
 
 # ── Pair → carry formula ──────────────────────────────────────────────────────
@@ -135,6 +152,31 @@ _PAIR_CARRY_FORMULA: dict[str, list[tuple[float, str]]] = {
     "USD/MXN": [(1.0, "USD"), (-1.0, "MXN")],
     "USD/ZAR": [(1.0, "USD"), (-1.0, "ZAR")],
     "USD/SGD": [(1.0, "USD"), (-1.0, "SGD")],
+    # ── ATFX expansion FX (2026-07-28): G10 crosses + CEE/Scandi exotics ────
+    "AUD/CAD": [(1.0, "AUD"), (-1.0, "CAD")],
+    "CAD/CHF": [(1.0, "CAD"), (-1.0, "CHF")],
+    "CAD/JPY": [(1.0, "CAD"), (-1.0, "JPY")],
+    "CHF/JPY": [(1.0, "CHF"), (-1.0, "JPY")],
+    "EUR/CAD": [(1.0, "EUR"), (-1.0, "CAD")],
+    "EUR/NZD": [(1.0, "EUR"), (-1.0, "NZD")],
+    "GBP/CAD": [(1.0, "GBP"), (-1.0, "CAD")],
+    "GBP/CHF": [(1.0, "GBP"), (-1.0, "CHF")],
+    "GBP/NZD": [(1.0, "GBP"), (-1.0, "NZD")],
+    "NZD/CAD": [(1.0, "NZD"), (-1.0, "CAD")],
+    "NZD/CHF": [(1.0, "NZD"), (-1.0, "CHF")],
+    "NZD/JPY": [(1.0, "NZD"), (-1.0, "JPY")],
+    "EUR/HUF": [(1.0, "EUR"), (-1.0, "HUF")],
+    "EUR/PLN": [(1.0, "EUR"), (-1.0, "PLN")],
+    "EUR/ZAR": [(1.0, "EUR"), (-1.0, "ZAR")],
+    "GBP/ZAR": [(1.0, "GBP"), (-1.0, "ZAR")],
+    "USD/CNH": [(1.0, "USD"), (-1.0, "CNH")],
+    "USD/HKD": [(1.0, "USD"), (-1.0, "HKD")],
+    "USD/CZK": [(1.0, "USD"), (-1.0, "CZK")],
+    "USD/DKK": [(1.0, "USD"), (-1.0, "DKK")],
+    "USD/NOK": [(1.0, "USD"), (-1.0, "NOK")],
+    "USD/HUF": [(1.0, "USD"), (-1.0, "HUF")],
+    "USD/PLN": [(1.0, "USD"), (-1.0, "PLN")],
+    "USD/SEK": [(1.0, "USD"), (-1.0, "SEK")],
     # ── Crypto: carry handled by funding rate factor ───────────────────────
     "BTC/USDT": [],
     "ETH/USDT": [],
@@ -167,8 +209,14 @@ _PAIR_CARRY_FORMULA: dict[str, list[tuple[float, str]]] = {
     "Nikkei 225": [(-1.0, "_10Y_JP")],
     "Euro Stoxx 50": [(-1.0, "_10Y_EZ")],
     "Hang Seng": [(-1.0, "_10Y")],
+    # ── ATFX expansion indices (2026-07-28) ────────────────────────────────
+    "China A50": [(-1.0, "_10Y")],  # same convention as Hang Seng
+    "Spain 35": [(-1.0, "_10Y_EZ")],
+    "France 40": [(-1.0, "_10Y_EZ")],
+    "Italy 40": [(-1.0, "_10Y_EZ")],
     # ── Commodities ────────────────────────────────────────────────────────
     "XAU/USD": [(-1.0, "_10Y")],  # gold is inversely correlated with real yields
+    "XAU/ZAR": [(-1.0, "_10Y")],  # same yield dynamic as XAU/USD
     "XAG/USD": [(-1.0, "_10Y")],
     "XPT/USD": [(-1.0, "_10Y")],  # platinum — precious metal, same yield dynamic
     "XPD/USD": [(-1.0, "_10Y")],  # palladium — precious metal, same yield dynamic

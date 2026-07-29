@@ -689,7 +689,7 @@ ADX_MISSING_BOTH_ABORT: true
 # Narrowed from 0.0002 to 0.0001 so typical Binance/Bybit funding deviations
 # are treated as signal rather than noise.
 # Carry static fallback versioning — warn when FRED fails and these rates are used.
-CARRY_STATIC_RATES_AS_OF: "2026-07-14"
+CARRY_STATIC_RATES_AS_OF: "2026-07-28"
 CARRY_STATIC_RATES_MAX_AGE_DAYS: 30
 
 FACTOR_FUNDING_BASELINE: 0.0001
