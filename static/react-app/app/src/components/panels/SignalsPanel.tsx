@@ -771,6 +771,11 @@ export default function SignalsPanel() {
     ? (feedEngine === 'B' && hasEngineBFeedRow(selectedRow))
       || !isEngineAV3Signal(selectedRow.signal)
     : false;
+  // Per-trade exit-mode override is Engine-A only — buildQuickExecutePayload drops
+  // it for Engine B signals, so don't offer a selector that would be ignored.
+  const exitModeOverrideApplies = selectedRow
+    ? !isEngineBOnlySignal(preferredExecutionSignal(selectedRow))
+    : true;
   const crossEngineNotes = useMemo(
     () => (selectedRow ? crossEngineContextNotes(selectedRow) : []),
     [selectedRow],
@@ -1318,11 +1323,18 @@ export default function SignalsPanel() {
                           sizingOverride={sizingOverride}
                           onSizingOverrideChange={setSizingOverride}
                         />
-                        <ExitModeField
-                          compact
-                          exitMode={exitMode}
-                          onExitModeChange={setExitMode}
-                        />
+                        {exitModeOverrideApplies ? (
+                          <ExitModeField
+                            compact
+                            exitMode={exitMode}
+                            onExitModeChange={setExitMode}
+                          />
+                        ) : (
+                          <p className="text-[10px] text-muted-foreground">
+                            Exit strategy is managed by Engine B for this signal; the per-trade
+                            exit-mode override is ignored.
+                          </p>
+                        )}
                         <div className="grid grid-cols-3 gap-2">
                           <Button
                             size="sm"
@@ -1771,11 +1783,18 @@ export default function SignalsPanel() {
                   sizingOverride={sizingOverride}
                   onSizingOverrideChange={setSizingOverride}
                 />
-                <ExitModeField
-                  compact
-                  exitMode={exitMode}
-                  onExitModeChange={setExitMode}
-                />
+                {confirmRow && !isEngineBOnlySignal(preferredExecutionSignal(confirmRow)) ? (
+                  <ExitModeField
+                    compact
+                    exitMode={exitMode}
+                    onExitModeChange={setExitMode}
+                  />
+                ) : (
+                  <p className="text-[10px] text-muted-foreground">
+                    Exit strategy is managed by Engine B for this signal; the per-trade
+                    exit-mode override is ignored.
+                  </p>
+                )}
                 {riskPreviewLine && (
                   <div className="font-mono text-[10px] text-muted-foreground">{riskPreviewLine}</div>
                 )}
