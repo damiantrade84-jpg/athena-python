@@ -53,6 +53,14 @@ CANDLE_BUILDER_BULK_D1_SKIP_EXCHANGES: ["COMM"]
 
 SCAN_MAX_WORKERS: 8           # Increased scan concurrency for faster Engine A full-universe runs. (Conservative: 8 for i7/16GB)
 
+# Skip share CFDs whose exchange is not in continuous trading (CLOSED, PRE_OPEN,
+# POST_CLOSE, LUNCH_BREAK) before any candle fetch or scoring. They are rejected
+# downstream on the live-quote/freshness gates regardless, so analysing them is
+# pure cost. Set false to score them anyway (restores closed-market watchlist
+# rows at the cost of a slower scan). Only affects the four modelled cash-equity
+# calendars; forex, crypto, commodities, indices and ETFs are never skipped.
+SCAN_SKIP_CLOSED_EXCHANGE_PAIRS: true
+
 
 
 # ── News / EODHD sentiment background refresh ────────────────────────────────

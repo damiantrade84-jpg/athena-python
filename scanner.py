@@ -1490,6 +1490,57 @@ def _scan_signal_rank(signal: dict) -> float:
     return score / max_score
 
 
+def _split_pairs_on_session_phase(
+    pairs: list[dict],
+    *,
+    at: datetime,
+    config: dict | None = None,
+) -> tuple[list[dict], list[tuple[dict, str]]]:
+    """Split scan pairs into (analyse, skip) on cash-equity session phase.
+
+    A share CFD whose exchange is not in continuous trading cannot produce an
+    executable signal — it is rejected downstream on the Engine B live-quote gate
+    or the freshness gate — but only after a full D1/H4/H1 + lower-TF candle
+    fetch and a complete Engine A and Engine B evaluation. Deciding it up front
+    skips that work instead of paying for it and discarding the result.
+
+    Only the four modelled cash-equity calendars can be skipped. A pair whose
+    calendar or phase does not resolve is analysed, so forex, crypto,
+    commodities, indices, ETFs, and any unmapped ticker are unaffected.
+    """
+    cfg = config if config is not None else CONFIG
+    if not bool(cfg.get("SCAN_SKIP_CLOSED_EXCHANGE_PAIRS", True)):
+        return list(pairs), []
+
+    try:
+        from engine_a_groups import resolve_cash_equity_exchange_calendar
+        from exchange_calendars import compute_session_phase, is_break_phase
+    except Exception as _cal_err:
+        # Fail open: an unavailable calendar must never shrink scan coverage.
+        log.warning("[SCAN] session-phase prefilter unavailable: %s", _cal_err)
+        return list(pairs), []
+
+    analyse: list[dict] = []
+    skip: list[tuple[dict, str]] = []
+    for pair in pairs:
+        if str(pair.get("type") or "").strip().lower() != "stock":
+            analyse.append(pair)
+            continue
+        try:
+            calendar_id = resolve_cash_equity_exchange_calendar(
+                pair.get("display") or pair.get("symbol")
+            )
+            phase = compute_session_phase(calendar_id, at) if calendar_id else None
+        except Exception:
+            analyse.append(pair)
+            continue
+        if phase is None or not is_break_phase(phase):
+            analyse.append(pair)
+            continue
+        skip.append((pair, f"{calendar_id} {phase.value}"))
+    return analyse, skip
+
+
 def _a_only_auto_weight(pair: dict | None, config: dict | None = None) -> float:
     """Return the config-gated A-only auto conviction weight."""
     cfg = config or CONFIG
@@ -2021,6 +2072,13 @@ def run_full_scan(
 
         active_pairs = [p for p in candidate_pairs if p.get("enabled", True)]
 
+        # Drop share CFDs whose exchange is not in continuous trading before any
+        # candle fetch or scoring runs — they are rejected downstream regardless,
+        # so analysing them is pure cost. Reported below as ordinary skip rows.
+        analysis_pairs, session_skipped = _split_pairs_on_session_phase(
+            active_pairs, at=datetime.now(timezone.utc)
+        )
+
         results, watchlist, errors, skipped = [], [], [], []
         threshold_audit_rows: list[dict[str, Any]] = []
         _threshold_audit_on = threshold_audit_enabled()
@@ -2039,6 +2097,34 @@ def run_full_scan(
             "counter_trend": 0,
             "dead_ranging": 0,
         }
+
+        for _skip_pair, _phase_detail in session_skipped:
+            if _threshold_audit_on:
+                threshold_audit_rows.append(
+                    build_signal_funnel_row(
+                        _skip_pair,
+                        None,
+                        tier="skip",
+                        skipped_reason=f"Exchange closed ({_phase_detail})",
+                    )
+                )
+            skipped.append(
+                {
+                    "pair": _skip_pair["display"],
+                    "reason": "Exchange closed",
+                    "tier": "skip",
+                    "diagnostics": [
+                        {"code": "closed_exchange", "detail": f"Exchange closed ({_phase_detail})"}
+                    ],
+                }
+            )
+            scan_funnel["closed_exchange"] += 1
+        if session_skipped:
+            log.info(
+                "[SCAN] session prefilter: skipped %d/%d pairs not in continuous trading",
+                len(session_skipped),
+                len(active_pairs),
+            )
 
         btc_bias = "neutral"
 
@@ -2183,7 +2269,7 @@ def run_full_scan(
                 with ThreadPoolExecutor(max_workers=_max_workers) as _im_pool:
                     _im_futures = {
                         _im_pool.submit(_preload_intermarket_h4, _pair): _pair
-                        for _pair in active_pairs
+                        for _pair in analysis_pairs
                     }
                     for _im_fut in as_completed(_im_futures):
                         _im_pair = _im_futures[_im_fut]
@@ -3430,7 +3516,7 @@ def run_full_scan(
         buffered_ok: list[tuple[Any, dict]] = []
 
         with ThreadPoolExecutor(max_workers=_max_workers) as pool:
-            futures = {pool.submit(_analyse, pair): pair for pair in active_pairs}
+            futures = {pool.submit(_analyse, pair): pair for pair in analysis_pairs}
 
             for fut in as_completed(futures):
                 pair = futures[fut]
