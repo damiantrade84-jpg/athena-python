@@ -90,4 +90,28 @@ describe('engineBCanonicalGates', () => {
     const gates = readEngineBCanonicalGatesFromNaked(marcusReidLongFixture)!;
     expect(gates.confidenceDisplayLabel).not.toBe('CONFIDENCE PASSED');
   });
+
+  it('shows canonical Engine B execution levels stored on the naked result', () => {
+    const indexResult = {
+      direction: 'LONG',
+      entry: 0,
+      sl: 0,
+      tp: 0,
+      current_price: 19396.2,
+      execution_sl: 19250.4,
+      execution_tp1: 19585.74,
+      passed: true,
+      canonical_trade_ok: true,
+      suggested_levels_executable: true,
+      confidence_passed: true,
+    } as EngineBNakedResult;
+    const gates = readEngineBCanonicalGatesFromNaked(indexResult)!;
+
+    expect(executableLevels(indexResult, gates, 'Spain 35', 'index')).toMatchObject({
+      showExecutable: true,
+      entry: 19396.2,
+      sl: 19250.4,
+      tp: 19585.74,
+    });
+  });
 });

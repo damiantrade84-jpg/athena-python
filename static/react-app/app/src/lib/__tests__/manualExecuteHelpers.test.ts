@@ -147,6 +147,30 @@ describe('engine B execute gating', () => {
     expect(engineBExecuteBlockReason(actionable)).toBeNull();
   });
 
+  it('allows execute when an index stores levels only in the naked Engine B payload', () => {
+    const actionable = {
+      pair: 'Spain 35',
+      display: 'Spain 35',
+      type: 'index',
+      direction: 'LONG',
+      engine: 'engine_b',
+      is_naked: true,
+      executable: true,
+      naked_data: {
+        passed: true,
+        current_price: 19396.2,
+        execution_sl: 19250.4,
+        execution_tp1: 19585.74,
+        canonical_trade_ok: true,
+        engine_b_canonical_actionable: true,
+        suggested_levels_executable: true,
+      },
+    } as EngineASignal;
+
+    expect(canExecuteEngineBSignal(actionable)).toBe(true);
+    expect(engineBExecuteBlockReason(actionable)).toBeNull();
+  });
+
   it('recognizes engine_b identity and keeps style execute available when timing is pending', () => {
     const actionable = {
       ...bchLike,

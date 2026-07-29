@@ -196,11 +196,21 @@ function engineBCanonicalTradeOk(signal: EngineASignal): boolean | null {
 
 function engineBExecutableTp(signal: EngineASignal): number | undefined {
   const raw = signal as Record<string, unknown>;
+  const status = raw.engine_b_status as Record<string, unknown> | undefined;
+  const engineB = raw.engine_b as Record<string, unknown> | undefined;
   const naked = engineBNakedPayload(signal);
-  return positiveNumber(signal.tp1 ?? signal.tp)
+  return positiveNumber(raw.engine_b_execution_tp1)
+    ?? positiveNumber(raw.engine_b_execution_tp)
+    ?? positiveNumber(status?.execution_tp1)
+    ?? positiveNumber(status?.execution_tp)
+    ?? positiveNumber(signal.tp1 ?? signal.tp)
+    ?? positiveNumber(naked?.execution_tp1)
+    ?? positiveNumber(naked?.execution_tp)
     ?? positiveNumber(naked?.recommended_take_profit as number | undefined)
     ?? positiveNumber(naked?.final_take_profit as number | undefined)
-    ?? positiveNumber((raw.engine_b as Record<string, unknown> | undefined)?.recommended_take_profit as number | undefined);
+    ?? positiveNumber(engineB?.execution_tp1)
+    ?? positiveNumber(engineB?.execution_tp)
+    ?? positiveNumber(engineB?.recommended_take_profit as number | undefined);
 }
 
 /** Engine B score threshold pass is separate from canonical actionability. */

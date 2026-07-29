@@ -328,18 +328,38 @@ export function executableLevels(
   diagnosticTp: number | null;
 } {
   const conf = readConf(data);
-  const entry = (data.entry ?? data.price ?? conf.entry) as number | null | undefined;
-  const sl = (data.sl ?? conf.execution_sl) as number | null | undefined;
-  const tp = (data.tp ?? conf.execution_tp1 ?? conf.execution_tp) as number | null | undefined;
-  const diagEntry = entry != null ? Number(entry) : null;
-  const diagSl = sl != null ? Number(sl) : null;
-  const diagTp = tp != null ? Number(tp) : null;
+  const firstPositiveLevel = (...values: unknown[]): number | null => {
+    for (const value of values) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return null;
+  };
+  const diagEntry = firstPositiveLevel(
+    data.entry, data.price, data.current_price, conf.entry, conf.current_price,
+  );
+  const diagSl = firstPositiveLevel(
+    data.sl, data.execution_sl, conf.execution_sl,
+  );
+  const diagTp = firstPositiveLevel(
+    data.tp,
+    data.execution_tp1,
+    data.execution_tp,
+    conf.execution_tp1,
+    conf.execution_tp,
+  );
+  const showExecutable = Boolean(
+    gates.suggestedLevelsExecutable
+    && diagEntry != null
+    && diagSl != null
+    && diagTp != null,
+  );
 
   return {
-    showExecutable: gates.suggestedLevelsExecutable,
-    entry: gates.suggestedLevelsExecutable ? diagEntry : null,
-    sl: gates.suggestedLevelsExecutable ? diagSl : null,
-    tp: gates.suggestedLevelsExecutable ? diagTp : null,
+    showExecutable,
+    entry: showExecutable ? diagEntry : null,
+    sl: showExecutable ? diagSl : null,
+    tp: showExecutable ? diagTp : null,
     diagnosticEntry: diagEntry,
     diagnosticSl: diagSl,
     diagnosticTp: diagTp,
