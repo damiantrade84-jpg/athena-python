@@ -354,7 +354,15 @@ def test_engine_a_compact_replay_score_preserves_strategy_fields():
         assert compact.factor_diagnostics[key] == full.factor_diagnostics[key]
 
 
-def test_engine_a_confirmed_policy_does_not_request_active_entry_override(monkeypatch):
+@pytest.mark.parametrize(
+    ("m5_policy", "execution_prerequisite"),
+    (("conditional", "M15"), ("disabled", "")),
+)
+def test_engine_a_confirmed_policy_does_not_request_active_entry_override(
+    monkeypatch,
+    m5_policy,
+    execution_prerequisite,
+):
     import engine_a_v3.evaluator as evaluator_module
     import engine_a_v3.promotion as promotion_module
     from athena_backtesting_v2.replay import replay_engine_a
@@ -393,6 +401,8 @@ def test_engine_a_confirmed_policy_does_not_request_active_entry_override(monkey
         "trigger_tf": "M15",
         "execution_tf": "M5",
         "forming_tf": "M5",
+        "m5_policy": m5_policy,
+        "execution_prerequisite_tf": execution_prerequisite,
     }
     replay_engine_a(
         {

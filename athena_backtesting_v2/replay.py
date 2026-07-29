@@ -54,6 +54,22 @@ def _warm(view: CausalMarketView, snapshot: dict[str, list[dict[str, Any]]], req
     return all(len(snapshot.get(timeframe) or []) >= (50 if timeframe != "D1" else 50) for timeframe in required)
 
 
+def _engine_a_required_timeframes(roles: dict[str, str]) -> set[str]:
+    return {
+        roles[role]
+        for role in (
+            "regime",
+            "bias",
+            "structure",
+            "setup",
+            "trigger",
+            "execution",
+            "execution_prerequisite",
+        )
+        if roles[role]
+    } | {"D1", "H4", "H1"}
+
+
 def replay_engine_a(
     pair: dict[str, Any],
     frames: dict[str, pd.DataFrame],
@@ -93,7 +109,7 @@ def replay_engine_a(
     unique_signal_ids: set[str] = set()
     rejection_counts: Counter[str] = Counter()
     intents: list[SignalIntent] = []
-    required = set(roles.values()) | {"D1", "H4", "H1"}
+    required = _engine_a_required_timeframes(roles)
     if forming_requested:
         snapshots = (
             (decision_time, *view.snapshot(decision_time, forming_timeframes=forming_requested))
