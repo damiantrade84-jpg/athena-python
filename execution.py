@@ -671,7 +671,7 @@ def _engine_b_pre_risk_broker_price(sig: dict, venue: str, cfg: dict) -> tuple[s
                 except (AttributeError, TypeError, ValueError):
                     pass
             broker_quote_age = _mt5_tick_age_seconds(tick) if tick else None
-            broker_quote_age_limit = _mt5_max_tick_age_sec()
+            broker_quote_age_limit = _mt5_max_tick_age_sec(sig)
     except Exception as exc:
         return f"BROKER_QUOTE_ERROR:{type(exc).__name__}", {}
 

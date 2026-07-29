@@ -2384,6 +2384,16 @@ MAX_BROKER_TICK_AGE_SEC:
   mt5: 5
   bybit: 3
 
+# Per-asset-type MT5 overrides for the gate above. Share CFDs quote far slower
+# than forex: measured on ATFX 2026-07-29 inside the HK cash session, #HK0005
+# inter-tick gaps ran median 22s / p90 68s / max 78s (80% of gaps > 5s), so the
+# flat 5s limit rejected essentially every share-CFD execution
+# (BROKER_TICK_STALE). 90s matches LIVE_PRICE_MAX_AGE_SEC.stock and still
+# fail-closes on a closed/frozen feed (HK lunch break 1h, overnight ~17h).
+# Asset types not listed keep MAX_BROKER_TICK_AGE_SEC.mt5.
+MAX_BROKER_TICK_AGE_SEC_BY_ASSET_TYPE:
+  stock: 90
+
 # ── Execution-time spread cap (Fix #4) ──────────────────────────────────────
 # Per-asset-type ask-bid spread ceiling as a fraction of mid (e.g. 0.001 = 10 bps).
 MAX_EXECUTION_SPREAD_PCT:

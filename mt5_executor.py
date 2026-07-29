@@ -84,8 +84,22 @@ def apply_single_leg_execution_gate(
     return do_split, hybrid_split, vols
 
 
-def _mt5_max_tick_age_sec() -> float | None:
-    """Return the configured MT5 broker tick-age limit in seconds, or None when disabled."""
+def _mt5_max_tick_age_sec(signal: dict | None = None) -> float | None:
+    """Return the MT5 broker tick-age limit in seconds, or None when disabled.
+
+    A per-asset-type override wins over the flat venue limit when the signal
+    carries a type: share CFDs rest tens of seconds between broker ticks inside
+    their own cash session, so the forex-calibrated venue limit rejects them
+    almost always. Overrides only apply to classes listed in config; everything
+    else keeps MAX_BROKER_TICK_AGE_SEC.mt5.
+    """
+    asset_type = str((signal or {}).get("type") or "").strip().lower()
+    if asset_type:
+        by_type = CONFIG.get("MAX_BROKER_TICK_AGE_SEC_BY_ASSET_TYPE")
+        if isinstance(by_type, dict):
+            raw = by_type.get(asset_type)
+            if isinstance(raw, (int, float)) and raw > 0:
+                return float(raw)
     cfg = CONFIG.get("MAX_BROKER_TICK_AGE_SEC")
     if not isinstance(cfg, dict):
         return None
@@ -1822,7 +1836,7 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         }
 
     # Fix #3 — broker tick age check (default disabled via config).
-    _tick_age_limit = _mt5_max_tick_age_sec()
+    _tick_age_limit = _mt5_max_tick_age_sec(signal)
     if _tick_age_limit is not None:
         _tick_age = _mt5_tick_age_seconds(tick)
         if _tick_age is None:

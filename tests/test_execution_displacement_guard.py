@@ -675,7 +675,7 @@ def _mt5_common_patches(monkeypatch, fake_mt5, fill_price, closes):
     monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: fake_mt5)
     monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
     # The broker-clock tick-age gate is covered elsewhere; not under test here.
-    monkeypatch.setattr(mt5_executor, "_mt5_max_tick_age_sec", lambda: None)
+    monkeypatch.setattr(mt5_executor, "_mt5_max_tick_age_sec", lambda *_a: None)
     monkeypatch.setattr(mt5_executor, "_mt5_trade_state", lambda *a, **kw: {})
     monkeypatch.setattr(
         mt5_executor, "_mt5_trade_state_block_reason", lambda *a, **kw: None

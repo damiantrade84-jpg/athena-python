@@ -112,6 +112,37 @@ def test_mt5_max_tick_age_returns_configured_value(monkeypatch):
     assert mt5_executor._mt5_max_tick_age_sec() == 8.5
 
 
+def test_mt5_max_tick_age_uses_asset_type_override(monkeypatch):
+    """Share CFDs (ATFX #HK0005: median 22s / max 78s inter-tick gaps inside the HK
+    cash session) get the per-asset-type limit; other classes keep the venue limit."""
+    import mt5_executor
+
+    monkeypatch.setitem(mt5_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"mt5": 5})
+    monkeypatch.setitem(
+        mt5_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC_BY_ASSET_TYPE", {"stock": 90}
+    )
+
+    assert mt5_executor._mt5_max_tick_age_sec({"pair": "HK0005", "type": "stock"}) == 90.0
+    assert mt5_executor._mt5_max_tick_age_sec({"pair": "EUR/USD", "type": "forex"}) == 5.0
+    assert mt5_executor._mt5_max_tick_age_sec({}) == 5.0
+    assert mt5_executor._mt5_max_tick_age_sec() == 5.0
+
+
+def test_mt5_max_tick_age_override_still_rejects_closed_market(monkeypatch):
+    """The stock override must stay far below a closed/frozen feed: an HK lunch
+    break (1h) or overnight gap still fails closed."""
+    import mt5_executor
+
+    monkeypatch.setitem(mt5_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"mt5": 5})
+    monkeypatch.setitem(
+        mt5_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC_BY_ASSET_TYPE", {"stock": 90}
+    )
+    limit = mt5_executor._mt5_max_tick_age_sec({"type": "stock"})
+
+    assert limit is not None
+    assert 78 < limit < 3600  # above the measured live gap, below any session break
+
+
 def test_mt5_tick_age_seconds_normalizes_broker_clock(monkeypatch):
     import mt5_executor
 

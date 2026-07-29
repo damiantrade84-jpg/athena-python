@@ -167,7 +167,7 @@ def test_engine_b_mt5_drift_uses_midpoint_and_anchors_execution_side(monkeypatch
     fake_mt5 = SimpleNamespace(symbol_info_tick=lambda _symbol: tick)
     fake_mt5_executor = SimpleNamespace(
         _get_mt5=lambda: fake_mt5,
-        _mt5_max_tick_age_sec=lambda: 3.0,
+        _mt5_max_tick_age_sec=lambda *_a: 3.0,
         _mt5_tick_age_seconds=lambda _tick: 0.2,
         mt5_connect=lambda: True,
         mt5_map_symbol=lambda _value: "EURX",
@@ -202,7 +202,7 @@ def test_engine_a_pre_risk_refreshes_mt5_quote_for_every_asset_family(monkeypatc
     fake_mt5 = SimpleNamespace(symbol_info_tick=lambda _symbol: tick)
     fake_mt5_executor = SimpleNamespace(
         _get_mt5=lambda: fake_mt5,
-        _mt5_max_tick_age_sec=lambda: 5.0,
+        _mt5_max_tick_age_sec=lambda *_a: 5.0,
         _mt5_tick_age_seconds=lambda _tick: 0.2,
         mt5_connect=lambda: True,
         mt5_map_symbol=lambda value: value,
@@ -275,7 +275,7 @@ def test_engine_a_pre_risk_still_rejects_a_stale_broker_tick(monkeypatch):
     fake_mt5 = SimpleNamespace(symbol_info_tick=lambda _symbol: tick)
     fake_mt5_executor = SimpleNamespace(
         _get_mt5=lambda: fake_mt5,
-        _mt5_max_tick_age_sec=lambda: 5.0,
+        _mt5_max_tick_age_sec=lambda *_a: 5.0,
         _mt5_tick_age_seconds=lambda _tick: 6.0,
         mt5_connect=lambda: True,
         mt5_map_symbol=lambda _value: "XAUUSD",
