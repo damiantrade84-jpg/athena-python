@@ -4,6 +4,8 @@ import ast
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from athena_app.services.market_state import candle_timestamp_epoch, split_market_state
 from market_structure import engine_b_candles_for_tf, resolve_engine_b_tfs
 from timeframe_policy import (
@@ -26,6 +28,7 @@ from timeframe_policy import (
     classify_liquidity,
     canonical_symbol,
     derive_warmup_bars,
+    get_trigger_record,
     parse_m5_matrix_language,
     reconcile_symbol_universe,
     resolve_session_calendar,
@@ -36,6 +39,34 @@ from timeframe_policy import (
     timeframe_policy_execution_block_reason,
     validate_timeframe_role_order,
 )
+
+#: TF_POLICY_SESSION_CALENDARS config block for the four cash-equity
+#: calendars, built the same way config.py's default does. Tests pass this
+#: explicitly via ``config=`` rather than depending on the real CONFIG import,
+#: so a change to the live config.yaml/config.py defaults cannot silently
+#: change what these tests exercise.
+_CASH_EQUITY_SESSION_CALENDARS_CONFIG = {
+    "TF_POLICY_SESSION_CALENDARS": {
+        "mt5": {
+            "calendar:NYSE_NASDAQ": {
+                "sessionCalendarId": "NYSE_NASDAQ",
+                "providerSessionTimezone": "America/New_York",
+            },
+            "calendar:XETRA": {
+                "sessionCalendarId": "XETRA",
+                "providerSessionTimezone": "Europe/Berlin",
+            },
+            "calendar:EURONEXT_PARIS": {
+                "sessionCalendarId": "EURONEXT_PARIS",
+                "providerSessionTimezone": "Europe/Paris",
+            },
+            "calendar:HKEX": {
+                "sessionCalendarId": "HKEX",
+                "providerSessionTimezone": "Asia/Hong_Kong",
+            },
+        },
+    },
+}
 
 
 def _registered_pairs() -> list[dict]:
@@ -1605,3 +1636,198 @@ def test_attach_stamps_symbol_override_applied_flag() -> None:
         signal["timeframePolicyDiagnostics"]["symbolOverrideApplied"]
         == signal["symbolOverrideApplied"]
     )
+
+
+# --- Cash-equity exchange-session calendars (2026-07-28 ATFX additions) ---
+#
+# 2026-07-28 is a Tuesday, an ordinary trading day with no weekend/holiday
+# ambiguity. UTC offsets below assume each zone's July (summer) offset:
+# America/New_York EDT UTC-4, Europe/Berlin & Europe/Paris CEST UTC+2,
+# Asia/Hong_Kong UTC+8 year-round (no DST). exchange_calendars has its own
+# boundary-by-boundary tests; these confirm the wiring through
+# attach_timeframe_policy_payload, not the calendar math itself.
+
+def _hk0700_pair() -> dict:
+    return {"display": "HK0700", "symbol": "HK0700", "type": "stock", "source": "mt5"}
+
+
+def _sap_pair() -> dict:
+    """XETRA-listed via CASH_EQUITY_XETRA_TICKERS, not Euronext."""
+    return {"display": "SAP", "symbol": "SAP", "type": "stock", "source": "mt5"}
+
+
+def _lvmh_pair() -> dict:
+    """Euronext Paris-listed: in CASH_EQUITY_EUROPE_TICKERS but not XETRA."""
+    return {"display": "LVMH", "symbol": "LVMH", "type": "stock", "source": "mt5"}
+
+
+def _aapl_pair() -> dict:
+    return {"display": "AAPL", "symbol": "AAPL.US", "type": "stock", "source": "mt5"}
+
+
+def test_hk_share_resolves_hkex_calendar_and_live_lunch_break_phase() -> None:
+    signal = {
+        "direction": "LONG", "timestamp": "2026-07-28T04:30:00Z",  # 12:30 HKT
+    }
+    attach_timeframe_policy_payload(
+        signal, _hk0700_pair(), "intraday",
+        config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert signal["sessionCalendarId"] == "HKEX"
+    assert signal["providerSessionTimezone"] == "Asia/Hong_Kong"
+    assert signal["sessionState"] == "LUNCH_BREAK"
+
+
+def test_hk_share_reports_open_during_continuous_session() -> None:
+    signal = {"direction": "LONG", "timestamp": "2026-07-28T02:00:00Z"}  # 10:00 HKT
+    attach_timeframe_policy_payload(
+        signal, _hk0700_pair(), "intraday",
+        config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert signal["sessionState"] == "OPEN"
+
+
+def test_xetra_and_euronext_share_split_resolves_distinct_calendars() -> None:
+    """SAP and LVMH are both CASH_EQUITY_EUROPE but on different exchanges."""
+    sap_signal = {"direction": "LONG", "timestamp": "2026-07-28T08:00:00Z"}  # 10:00 CEST
+    attach_timeframe_policy_payload(
+        sap_signal, _sap_pair(), "intraday",
+        config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert sap_signal["sessionCalendarId"] == "XETRA"
+    assert sap_signal["providerSessionTimezone"] == "Europe/Berlin"
+    assert sap_signal["sessionState"] == "OPEN"
+
+    lvmh_signal = {"direction": "LONG", "timestamp": "2026-07-28T08:00:00Z"}
+    attach_timeframe_policy_payload(
+        lvmh_signal, _lvmh_pair(), "intraday",
+        config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert lvmh_signal["sessionCalendarId"] == "EURONEXT_PARIS"
+    assert lvmh_signal["providerSessionTimezone"] == "Europe/Paris"
+    assert lvmh_signal["sessionState"] == "OPEN"
+
+
+def test_us_share_resolves_nyse_nasdaq_calendar() -> None:
+    signal = {"direction": "LONG", "timestamp": "2026-07-28T18:00:00Z"}  # 14:00 ET
+    attach_timeframe_policy_payload(
+        signal, _aapl_pair(), "swing",
+        config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert signal["sessionCalendarId"] == "NYSE_NASDAQ"
+    assert signal["sessionState"] == "OPEN"
+
+
+def test_forex_pair_is_unaffected_by_cash_equity_calendars() -> None:
+    """The calendar config only matches type=='stock'; forex must resolve
+
+    exactly as it did before session calendars existed: SESSION_UNAVAILABLE.
+    """
+    signal = {"direction": "LONG", "timestamp": "2026-07-28T14:00:00Z"}
+    attach_timeframe_policy_payload(
+        signal, _eurusd_pair(), "intraday",
+        config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert signal.get("sessionCalendarId") is None
+    assert signal["sessionState"] == "SESSION_UNAVAILABLE"
+
+
+def test_missing_timestamp_leaves_session_state_at_config_default() -> None:
+    """No decision timestamp -> no live phase computed; identity still resolves."""
+    signal = {"direction": "LONG"}
+    attach_timeframe_policy_payload(
+        signal, _hk0700_pair(), "intraday",
+        config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert signal["sessionCalendarId"] == "HKEX"
+    assert signal["sessionState"] == "UNKNOWN"
+
+
+def test_hk_trigger_armed_before_lunch_is_invalidated_when_restamped_during_lunch() -> None:
+    """A trigger armed just before the HK lunch break must not carry through it."""
+    pair = _hk0700_pair()
+    signal_id = "hk-lunch-carry-test"
+
+    armed = {
+        "direction": "LONG", "timestamp": "2026-07-28T03:55:00Z",  # 11:55 HKT
+        "signalId": signal_id, "setupZone": [100.0, 101.0], "triggerLevel": 101.5,
+    }
+    attach_timeframe_policy_payload(
+        armed, pair, "intraday", config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert armed["sessionState"] == "OPEN"
+    assert armed["triggerState"] == "ARMED"
+
+    restamped = {
+        "direction": "LONG", "timestamp": "2026-07-28T04:30:00Z",  # 12:30 HKT
+        "signalId": signal_id, "setupZone": [100.0, 101.0], "triggerLevel": 101.5,
+    }
+    attach_timeframe_policy_payload(
+        restamped, pair, "intraday", config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert restamped["sessionState"] == "LUNCH_BREAK"
+    assert restamped["triggerState"] == "INVALIDATED"
+
+    record = get_trigger_record(signal_id)
+    assert record is not None
+    assert record.invalidation_reason == "session_break:LUNCH_BREAK"
+
+
+def test_hk_trigger_does_not_arm_fresh_during_lunch_break() -> None:
+    """A brand-new signal_id first seen during the break must not arm at all."""
+    signal = {
+        "direction": "LONG", "timestamp": "2026-07-28T04:30:00Z",
+        "signalId": "hk-lunch-fresh-test",
+        "setupZone": [100.0, 101.0], "triggerLevel": 101.5,
+    }
+    attach_timeframe_policy_payload(
+        signal, _hk0700_pair(), "intraday",
+        config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert signal["sessionState"] == "LUNCH_BREAK"
+    assert "triggerState" not in signal
+    assert get_trigger_record("hk-lunch-fresh-test") is None
+
+
+def test_hk_trigger_can_rearm_after_lunch_reopens() -> None:
+    """Once invalidated, a later signal for the same underlying setup can arm
+
+    fresh with a new signal_id — the next scan's rebuilt setup/room/spread,
+    not the stale pre-lunch one.
+    """
+    pair = _hk0700_pair()
+    before = {
+        "direction": "LONG", "timestamp": "2026-07-28T03:55:00Z",
+        "signalId": "hk-reopen-before", "setupZone": [100.0, 101.0], "triggerLevel": 101.5,
+    }
+    attach_timeframe_policy_payload(
+        before, pair, "intraday", config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert before["triggerState"] == "ARMED"
+
+    after = {
+        "direction": "LONG", "timestamp": "2026-07-28T05:05:00Z",  # 13:05 HKT
+        "signalId": "hk-reopen-after", "setupZone": [100.2, 101.2], "triggerLevel": 101.7,
+    }
+    attach_timeframe_policy_payload(
+        after, pair, "intraday", config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert after["sessionState"] == "OPEN"
+    assert after["triggerState"] == "ARMED"
+
+
+@pytest.mark.parametrize("ticker,calendar_id", [
+    ("HK0001", "HKEX"), ("HK9988", "HKEX"),
+    ("SAP", "XETRA"), ("BMW", "XETRA"),
+    ("LVMH", "EURONEXT_PARIS"), ("BNPP", "EURONEXT_PARIS"),
+    ("AAPL", "NYSE_NASDAQ"), ("BABA", "NYSE_NASDAQ"),
+])
+def test_share_calendar_resolution_matches_region(ticker, calendar_id) -> None:
+    signal = {"direction": "LONG", "timestamp": "2026-07-28T10:00:00Z"}
+    attach_timeframe_policy_payload(
+        signal,
+        {"display": ticker, "symbol": ticker, "type": "stock", "source": "mt5"},
+        "intraday",
+        config=_CASH_EQUITY_SESSION_CALENDARS_CONFIG,
+    )
+    assert signal["sessionCalendarId"] == calendar_id

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from config import CONFIG
@@ -31,6 +32,8 @@ ENGINE_B_SCAN_FUNNEL_SHAPE_KEYS = frozenset(
         "structure_verdict",
         "direction_a",
         "direction_b",
+        "direction_conflict",
+        "engines_aligned",
         "structure_ok",
         "location_ok",
         "entry_ok",
@@ -184,6 +187,71 @@ def test_attach_engine_b_scan_gate_funnel_stable_shape(monkeypatch):
     _patch_engine_b_funnel_final_tier(sig, "skip", "Below discovery threshold")
     assert funnel["final_tier"] == "skip"
     assert funnel["final_reason"] == "Below discovery threshold"
+
+
+def test_attach_funnel_surfaces_direction_conflict_without_changing_scores(monkeypatch):
+    """Advisory-only: a conflicting B direction is labelled, never hidden or scored away.
+
+    CLAUDE.md: "Engine A and Engine B scoring must not affect each other."
+    This asserts the negative half of that rule for the new field specifically:
+    conf_b/score/passed are read back unchanged regardless of the conflict flag.
+    """
+    monkeypatch.setitem(CONFIG, "ENGINE_B_SCAN_GATE_FUNNEL_ENABLED", True)
+    pair = {"display": "EURUSD", "symbol": "EURUSD", "type": "forex"}
+    sig = {
+        "direction": "SHORT",
+        "engine_b_direction": "LONG",
+        "engine_b_direction_aligned_with_a": False,
+        "engine_b_evaluated": True,
+    }
+    conf_b = {"structure_ok": True, "passed": True, "score": 4.2}
+    res_b = {"structural_verdict": "CLEAR"}
+
+    _attach_engine_b_scan_gate_funnel(
+        sig=sig, pair=pair, score_group="forex_majors", resolved_style="intraday",
+        style_profile_b={"min_rr": 1.5}, conf_b=conf_b, res_b=res_b,
+        extras={"candles_tf_ok": True},
+    )
+    funnel = sig["engine_b_scan_gate_funnel"]
+    assert funnel["direction_a"] == "SHORT"
+    assert funnel["direction_b"] == "LONG"
+    assert funnel["direction_conflict"] is True
+    assert funnel["engines_aligned"] is False
+    # Untouched by the conflict — no veto, no discount applied at this layer.
+    assert funnel["score"] == 4.2
+
+
+def test_attach_funnel_direction_conflict_false_when_aligned():
+    pair = {"display": "EURUSD", "type": "forex"}
+    sig = {"direction": "LONG", "engine_b_direction": "LONG",
+           "engine_b_direction_aligned_with_a": True}
+    _attach_engine_b_scan_gate_funnel(
+        sig=sig, pair=pair, score_group="forex_majors", resolved_style="intraday",
+        style_profile_b={}, conf_b={}, res_b={}, extras={"candles_tf_ok": True},
+    )
+    funnel = sig["engine_b_scan_gate_funnel"]
+    assert funnel["direction_conflict"] is False
+    assert funnel["engines_aligned"] is True
+
+
+@pytest.mark.parametrize("sig", [
+    {"direction": "LONG"},                                   # B never scored
+    {"direction": "LONG", "engine_b_direction": None},
+    {"engine_b_direction": "SHORT"},                          # A never scored
+    {},
+])
+def test_attach_funnel_direction_conflict_false_when_one_side_missing(sig):
+    """One engine not having produced a direction is not itself a conflict."""
+    pair = {"display": "EURUSD", "type": "forex"}
+    sig = dict(sig)
+    _attach_engine_b_scan_gate_funnel(
+        sig=sig, pair=pair, score_group="forex_majors", resolved_style="intraday",
+        style_profile_b={}, conf_b={}, res_b={}, extras={"candles_tf_ok": True},
+    )
+    funnel = sig["engine_b_scan_gate_funnel"]
+    assert funnel["direction_conflict"] is False
+    # No alignment check ran for these rows either.
+    assert funnel["engines_aligned"] is None
 
 
 def test_attach_respects_engine_b_scan_gate_funnel_disabled(monkeypatch):

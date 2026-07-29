@@ -1639,6 +1639,22 @@ def _attach_engine_b_scan_gate_funnel(
         "structure_verdict": rb.get("structural_verdict"),
         "direction_a": sig.get("direction"),
         "direction_b": sig.get("engine_b_direction"),
+        # Advisory-only, mirrors cross_engine_context._cross_context: surfaced
+        # here so the same signal is visible in the operator-facing scan
+        # diagnostic, not only inside the AI review packet. Self-computed from
+        # the two direction fields above rather than a pass-through, so it is
+        # always populated regardless of which code path produced this row.
+        # Never used to hide, veto, or reorder a signal — see CLAUDE.md
+        # "Engine A and Engine B scoring must not affect each other."
+        "direction_conflict": bool(
+            sig.get("direction") in ("LONG", "SHORT")
+            and sig.get("engine_b_direction") in ("LONG", "SHORT")
+            and sig.get("direction") != sig.get("engine_b_direction")
+        ),
+        # Pass-through of the full-scan blended-conviction alignment check
+        # (scanner._engine_b_scan_combined_conviction). None when that check
+        # never ran for this row (e.g. an early gate skip before B scored).
+        "engines_aligned": sig.get("engine_b_direction_aligned_with_a"),
         "structure_ok": _scalar_bool_gate(cnf.get("structure_ok")),
         "location_ok": _scalar_bool_gate(cnf.get("location_ok")),
         "entry_ok": _scalar_bool_gate(cnf.get("entry_ok")),

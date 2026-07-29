@@ -2465,7 +2465,36 @@ CONFIG: dict = {
         "base_metals": "THIN",
         "softs": "THIN",
     },
-    "TF_POLICY_SESSION_CALENDARS": {},
+    # Calendar identity only (sessionCalendarId + timezone); live open/lunch/
+    # closed phase is computed separately by exchange_calendars.py from these
+    # two fields and overrides whatever sessionState a candidate sets here.
+    # Keyed "calendar:<ID>" per timeframe_policy._pair_exchange_calendar_key,
+    # which routes cash-equity CFDs (type=="stock") through
+    # engine_a_groups.resolve_cash_equity_exchange_calendar. A canonical-
+    # symbol key (e.g. "AAPL") still takes precedence over the regional
+    # "calendar:" entry if ever added below. Forex/commodity/index/crypto
+    # pairs have no calendar_id here and fall through unresolved (unchanged
+    # from before this key existed).
+    "TF_POLICY_SESSION_CALENDARS": {
+        "mt5": {
+            "calendar:NYSE_NASDAQ": {
+                "sessionCalendarId": "NYSE_NASDAQ",
+                "providerSessionTimezone": "America/New_York",
+            },
+            "calendar:XETRA": {
+                "sessionCalendarId": "XETRA",
+                "providerSessionTimezone": "Europe/Berlin",
+            },
+            "calendar:EURONEXT_PARIS": {
+                "sessionCalendarId": "EURONEXT_PARIS",
+                "providerSessionTimezone": "Europe/Paris",
+            },
+            "calendar:HKEX": {
+                "sessionCalendarId": "HKEX",
+                "providerSessionTimezone": "Asia/Hong_Kong",
+            },
+        },
+    },
     "TF_POLICY_UNDERLYING_EXCHANGE_CALENDARS": {},
     # Conditional-M5 promotion evidence gate (m5_eligibility.M5ValidationStatus).
     # Only "approved" permits an M5 trigger. Everything defaults to

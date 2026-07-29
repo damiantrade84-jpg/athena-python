@@ -280,11 +280,13 @@ _TF_INDEX_FAST = {"NASDAQ-100", "DOW JONES", "DAX", "DAX 40"}
 _TF_BOND_SMALLCAP_EM = {"TLT", "IWM", "EEM"}
 
 # ── Cash-equity region taxonomy (ATFX share CFDs, 2026-07-28) ────────────────
-# Region drives session handling only. It is metadata today: the core-session
-# calendars it will key into (TF_POLICY_SESSION_CALENDARS) are still empty, so
-# nothing consumes this beyond diagnostics and tests. Hong Kong is derived from
-# the HK<number> broker ticker form; the European set is explicit because those
-# tickers are indistinguishable from US ones by shape alone.
+# Region drives session handling: resolve_cash_equity_exchange_calendar() maps
+# a ticker through this table to an exchange_calendars.EXCHANGE_CALENDARS key,
+# which timeframe_policy wires into TF_POLICY_SESSION_CALENDARS for live
+# session-phase resolution and trigger-lifecycle session-break invalidation.
+# Hong Kong is derived from the HK<number> broker ticker form; the European
+# set is explicit because those tickers are indistinguishable from US ones by
+# shape alone.
 CASH_EQUITY_EUROPE_TICKERS = frozenset({
     "ADS", "ALV", "BAS", "BAYN", "BEI", "BMW", "CBK", "DAI", "DB1", "DBK",
     "DPW", "DTE", "EON", "FME", "IFX", "LHA", "MUV2", "RWE", "SAP", "SIE",
@@ -335,6 +337,30 @@ def resolve_cash_equity_region(ticker: str | None) -> str:
     if upper in CASH_EQUITY_EUROPE_TICKERS:
         return "CASH_EQUITY_EUROPE"
     return "CASH_EQUITY_US"
+
+
+#: Region -> exchange_calendars.EXCHANGE_CALENDARS key, for regions with only
+#: one possible exchange. CASH_EQUITY_EUROPE is deliberately absent: it splits
+#: across XETRA and Euronext Paris per-ticker (see below).
+_CASH_EQUITY_REGION_CALENDAR = {
+    "CASH_EQUITY_US": "NYSE_NASDAQ",
+    "CASH_EQUITY_HONG_KONG": "HKEX",
+}
+
+
+def resolve_cash_equity_exchange_calendar(ticker: str | None) -> str | None:
+    """Map an ATFX share ticker to its exchange_calendars.EXCHANGE_CALENDARS key.
+
+    Returns None for a ticker resolve_cash_equity_region cannot place (empty
+    input) rather than guessing a default exchange.
+    """
+    raw = str(ticker or "").strip().lstrip("#")
+    if not raw:
+        return None
+    region = resolve_cash_equity_region(raw)
+    if region == "CASH_EQUITY_EUROPE":
+        return "XETRA" if raw.upper() in CASH_EQUITY_XETRA_TICKERS else "EURONEXT_PARIS"
+    return _CASH_EQUITY_REGION_CALENDAR.get(region)
 
 
 def resolve_timeframe_policy_group(pair: dict) -> str:

@@ -232,6 +232,30 @@ def resolve_session_calendar(
     )
 
 
+def _apply_live_session_phase(
+    resolved: SessionCalendarResolution, at: datetime | None
+) -> SessionCalendarResolution:
+    """Override ``session_state`` with a live-computed phase, when possible.
+
+    ``resolve_session_calendar`` only resolves calendar *identity* (which
+    calendar, which timezone); its ``session_state`` field otherwise just
+    echoes whatever the config candidate happened to set (or "UNKNOWN"). This
+    computes the actual live phase from exchange_calendars for the four cash-
+    equity calendars it knows, and leaves every other resolution (forex,
+    crypto, commodity, index, or an unrecognised calendar_id) untouched.
+    """
+    if at is None or resolved.calendar_id is None:
+        return resolved
+    try:
+        from exchange_calendars import compute_session_phase
+    except Exception:
+        return resolved
+    phase = compute_session_phase(resolved.calendar_id, at)
+    if phase is None:
+        return resolved
+    return replace(resolved, session_state=phase.value)
+
+
 class PolicySource(str, Enum):
     SYMBOL_OVERRIDE = "SYMBOL_OVERRIDE"
     SCORE_GROUP_OVERRIDE = "SCORE_GROUP_OVERRIDE"
@@ -2327,6 +2351,24 @@ def _signal_id(
     return sha256(stable.encode("utf-8")).hexdigest()[:24]
 
 
+def _pair_exchange_calendar_key(pair: Mapping[str, Any]) -> str | None:
+    """Return the ``calendar:<ID>`` config key for a cash-equity pair, if any.
+
+    Only stock-type pairs resolve: this is the ATFX share-CFD region taxonomy
+    (engine_a_groups.resolve_cash_equity_exchange_calendar), not a general
+    exchange lookup for forex/commodity/index/crypto.
+    """
+    if str(pair.get("type") or pair.get("asset_type") or "").strip().lower() != "stock":
+        return None
+    try:
+        from engine_a_groups import resolve_cash_equity_exchange_calendar
+    except Exception:
+        return None
+    ticker = pair.get("symbol") or pair.get("display")
+    calendar_id = resolve_cash_equity_exchange_calendar(ticker)
+    return f"calendar:{calendar_id}" if calendar_id else None
+
+
 def _configured_session_candidate(
     config: Mapping[str, Any] | None,
     section_key: str,
@@ -2342,7 +2384,17 @@ def _configured_session_candidate(
     provider_section = section.get(provider)
     if not isinstance(provider_section, Mapping):
         return None
-    candidate = provider_section.get(canonical) or provider_section.get("default")
+    # Precedence: exact canonical-symbol entry, then the pair's resolved
+    # exchange-calendar key (cash-equity CFDs only), then a flat default.
+    # Canonical-symbol entries let one instrument override its region's
+    # calendar without touching the shared regional entry.
+    candidate = provider_section.get(canonical)
+    if not isinstance(candidate, Mapping):
+        calendar_key = _pair_exchange_calendar_key(pair)
+        if calendar_key:
+            candidate = provider_section.get(calendar_key)
+    if not isinstance(candidate, Mapping):
+        candidate = provider_section.get("default")
     return candidate if isinstance(candidate, Mapping) else None
 
 
@@ -2469,7 +2521,33 @@ def _stamp_trigger_lifecycle(
 
         _TRIGGER_TRACKER.sweep_expired(now)
         record = _TRIGGER_TRACKER.get(str(signal_id))
-        if record is None:
+        # A trigger armed before a session break (HK lunch, any market close)
+        # must not carry through it: invalidate rather than let it sit ARMED
+        # across a gap where the setup/spread/room it was armed against are
+        # stale. This is a session-boundary event, distinct from TTL expiry
+        # above — trigger_lifecycle.TriggerState.INVALIDATED, not EXPIRED.
+        # signal["sessionState"] was just set from resolved_session above
+        # (_apply_live_session_phase), so this reads the phase for `now`.
+        try:
+            from exchange_calendars import is_break_phase
+
+            in_break_phase = is_break_phase(signal.get("sessionState"))
+        except Exception:
+            in_break_phase = False
+        if (
+            record is not None
+            and in_break_phase
+            and record.state in (
+                TriggerState.ARMED, TriggerState.TRIGGERED, TriggerState.EXECUTABLE,
+            )
+        ):
+            record = _TRIGGER_TRACKER.invalidate(
+                str(signal_id), now, f"session_break:{signal.get('sessionState')}"
+            )
+        # Never arm a fresh trigger while the market is in a non-continuous
+        # phase — the setup it would be armed against cannot be trusted until
+        # the session reopens and a new scan rebuilds it.
+        if record is None and not in_break_phase:
             record = _TRIGGER_TRACKER.arm(
                 signal_id=str(signal_id),
                 symbol=policy.canonical_symbol,
@@ -2489,13 +2567,18 @@ def _stamp_trigger_lifecycle(
                 max_trigger_bars=max_bars if bar_seconds else None,
                 bar_seconds=bar_seconds,
             )
-        signal["triggerState"] = record.state.value
-        signal["triggerAge"] = (
-            max(0.0, (now - record.armed_at).total_seconds())
-            if record.armed_at is not None
-            else None
-        )
-        signal["triggerExpiry"] = record.to_dict().get("expires_at")
+        # record stays None when this is a fresh signal_id encountered while
+        # in_break_phase is True: nothing armed against a stale pre-break
+        # setup, so there is nothing to stamp. signal["sessionState"] already
+        # explains why (set earlier via _apply_live_session_phase).
+        if record is not None:
+            signal["triggerState"] = record.state.value
+            signal["triggerAge"] = (
+                max(0.0, (now - record.armed_at).total_seconds())
+                if record.armed_at is not None
+                else None
+            )
+            signal["triggerExpiry"] = record.to_dict().get("expires_at")
     except Exception:
         # Diagnostics must never break payload stamping.
         return
@@ -2858,6 +2941,9 @@ def attach_timeframe_policy_payload(
             runtime_config = CONFIG
         except Exception:
             runtime_config = {}
+    decision_time = _parse_signal_timestamp(
+        _first_signal_value(signal, "timestamp", "ts", "time", "decisionTime", "decision_time")
+    )
     resolved_session = session_calendar or resolve_session_calendar(
         provider_metadata=(
             pair.get("provider_session_metadata")
@@ -2885,6 +2971,7 @@ def attach_timeframe_policy_payload(
             )
         ),
     )
+    resolved_session = _apply_live_session_phase(resolved_session, decision_time)
     signal.update(resolved_session.to_dict())
     _stamp_trigger_lifecycle(signal, policy, runtime_config)
     _stamp_m5_eligibility(signal, policy, runtime_config)
