@@ -3430,7 +3430,7 @@ def run_full_scan(
         buffered_ok: list[tuple[Any, dict]] = []
 
         with ThreadPoolExecutor(max_workers=_max_workers) as pool:
-            futures = {pool.submit(_analyse, pair): pair for pair in candidate_pairs}
+            futures = {pool.submit(_analyse, pair): pair for pair in active_pairs}
 
             for fut in as_completed(futures):
                 pair = futures[fut]
