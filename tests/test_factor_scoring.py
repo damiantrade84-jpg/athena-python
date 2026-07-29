@@ -561,7 +561,8 @@ def test_gbpusd_like_cluster_diagnostics_show_risk(monkeypatch):
     result = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
 
     tc = result["trend_coherence"]
-    assert tc["coherence_ratio"] == pytest.approx(0.4)
+    # 0.34: b0e32160 intraday trend weights 0.42/0.33/0.25 -> margin (0.67-0.33)/1.0.
+    assert tc["coherence_ratio"] == pytest.approx(0.34)
     assert tc["agreement_count"] == 2
     assert tc["price_inside_ema_cluster"] is True
     assert tc["at_or_below_resistance"] is True
@@ -687,7 +688,8 @@ def test_gbpusd_like_default_config_applies_multiplier_penalty(monkeypatch):
     result = _score(d1, h4, h1, pair={"type": "forex", "display": "GBP/USD"})
 
     tc = result["trend_coherence"]
-    assert tc["coherence_ratio"] == pytest.approx(0.4)
+    # 0.34: b0e32160 intraday trend weights 0.42/0.33/0.25 -> margin (0.67-0.33)/1.0.
+    assert tc["coherence_ratio"] == pytest.approx(0.34)
     assert tc["ema_cluster_penalty_applied"] is True
     assert tc["ema_cluster_penalty_reason"] == "ema_cluster_multiplier"
     assert result["feed_status"].get("ema_cluster_penalty") == "ema_cluster_multiplier"
@@ -908,7 +910,14 @@ def test_full_bearish_alignment_is_stronger_than_partial_alignment():
     assert abs(full["factor_scores"]["trend"]) > abs(d1_only["factor_scores"]["trend"])
 
 
-def test_h4_h1_against_d1_perfect_tie_returns_no_direction():
+def test_h4_h1_against_d1_perfect_tie_returns_no_direction(monkeypatch):
+    # 2437b78a set stock-group trend weights to 0.40/0.35/0.25; restore the
+    # tying 0.50/0.30/0.20 split so d1-long vs h4+h1-short stays a perfect tie.
+    monkeypatch.setitem(
+        CONFIG["ENGINE_A_SCORING_PROFILE"]["BY_SCORE_GROUP"]["stock_other"],
+        "trend_weights",
+        {"d1_ema_trend": 0.50, "h4_ema_trend": 0.30, "ema_trend": 0.20},
+    )
     full_short = _score(_snap("short"), _snap("short"), _snap("short"))
     conflicted = _score(_snap("long"), _snap("short"), _snap("short"))
 
@@ -994,7 +1003,9 @@ def test_compute_factor_scores_uses_prior_candle_snapshots_for_hysteresis():
     )
 
     assert result["final_score"] == 0.0
-    assert result["abort_reason"] == "indeterminate_trend"
+    # bcaf7012 enabled the reversal-pending overlay: fresh crosses on >=2 TFs
+    # with no confirmed vote now abort as reversal_pending_advisory (score 0.0).
+    assert result["abort_reason"] == "reversal_pending_advisory"
     assert result["trend_coherence"]["hysteresis_prev_available"] == {
         "d1": True,
         "h4": True,
@@ -1104,7 +1115,10 @@ def test_intermarket_confirmation_adjusts_engine_a_when_enabled(monkeypatch):
     assert adjusted["final_score"] > baseline["final_score"]
 
 
-def test_crypto_addon_conviction_positive_zero_negative_ordering():
+def test_crypto_addon_conviction_positive_zero_negative_ordering(monkeypatch):
+    # e3c98ac6 enabled FACTOR_FUNDING_USE_ZSCORE (live funding-stats fetch); pin
+    # absolute-threshold mode so baseline/noise-band ordering stays deterministic.
+    monkeypatch.setitem(CONFIG, "FACTOR_FUNDING_USE_ZSCORE", False)
     pair = {"type": "crypto", "display": "BTC/USDT"}
 
     positive = _score(pair=pair, funding_rate=-0.0002)
@@ -1480,7 +1494,8 @@ def test_stock_index_cot_proxy_formulas_are_config_gated(monkeypatch):
 def test_commodity_without_cot_formula_is_explicitly_unsupported(monkeypatch):
     monkeypatch.setitem(CONFIG, "ENGINE_A_COT_ADDON_ASSET_TYPES", ["commodity", "index", "stock"])
 
-    result = _score(pair={"type": "commodity", "display": "Cocoa"})
+    # e3c98ac6 added a COT formula for Cocoa; Lumber still has none.
+    result = _score(pair={"type": "commodity", "display": "Lumber"})
 
     assert result["addon_type"] == "cot"
     assert result["addon_unsupported"] is True
@@ -2306,7 +2321,9 @@ def test_trx_like_late_trend_reduces_score_direction_stays_long(monkeypatch):
     assert "vwap_extended" in (diag["crypto_late_trend_reason"] or "")
     assert "volume_below_ma" in (diag["crypto_late_trend_reason"] or "")
     assert penalized["direction"] == "LONG"
-    assert baseline["final_score"] == pytest.approx(3.0, abs=0.05)
+    # 1ccb26b5 enabled ENGINE_A_TREND_MAGNITUDE: ATR-scaled trend leg caps this
+    # synthetic snapshot at ~2.53 instead of the old 3.0.
+    assert baseline["final_score"] == pytest.approx(2.53, abs=0.05)
     assert penalized["final_score"] < 3.0
     assert penalized["final_score"] == pytest.approx(baseline["final_score"] * 0.85, rel=1e-2)
 
@@ -2326,7 +2343,9 @@ def test_late_trend_strong_adx_rising_skips_adjustment(monkeypatch):
     diag = result["crypto_engine_a_diagnostics"]
     assert diag is not None
     assert diag.get("late_trend_adjustment_applied") is not True
-    assert result["final_score"] == pytest.approx(3.0, abs=0.05)
+    # 1ccb26b5 enabled ENGINE_A_TREND_MAGNITUDE: ATR-scaled trend leg caps this
+    # synthetic snapshot at ~2.53 instead of the old 3.0.
+    assert result["final_score"] == pytest.approx(2.53, abs=0.05)
 
 
 def test_late_trend_volume_above_ma_still_applies_penalty(monkeypatch):
@@ -2552,8 +2571,14 @@ def test_orthogonal_vote_providers_scale_and_fail_closed(monkeypatch):
     assert factor_scoring._vote_cot("EUR/USD", "LONG", "2024-01-02T00:00:00Z") == (-1.0, "ok")
     assert factor_scoring._vote_cot("EUR/USD", "SHORT", "2024-01-02T00:00:00Z") == (1.0, "ok")
 
-    assert factor_scoring._vote_funding(0.03, "LONG", {"mean": 0.0, "std": 0.01}) == (-1.0, "ok")
-    assert factor_scoring._vote_funding(0.03, "SHORT", {"mean": 0.0, "std": 0.01}) == (1.0, "ok")
+    # fd513e20 rebuilt funding votes as continuous tanh-scaled values in [-1,+1];
+    # z = (0.03-0.0)/0.01 = 3.0 -> magnitude tanh(z / FACTOR_FUNDING_Z_REF).
+    _funding_expected = math.tanh(3.0 / float(CONFIG.get("FACTOR_FUNDING_Z_REF", 2.0)))
+    v_long, st_long = factor_scoring._vote_funding(0.03, "LONG", {"mean": 0.0, "std": 0.01})
+    v_short, st_short = factor_scoring._vote_funding(0.03, "SHORT", {"mean": 0.0, "std": 0.01})
+    assert v_long == pytest.approx(-_funding_expected)
+    assert v_short == pytest.approx(_funding_expected)
+    assert st_long == st_short == "ok"
     assert factor_scoring._vote_funding(None, "LONG") == (0.0, "neutral")
 
     oi_ctx = {"oi_change_pct": 5.0, "price_change_pct": 2.0}
