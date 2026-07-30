@@ -15583,6 +15583,38 @@ def analyze_pair(
                     _policy_state if isinstance(_policy_state, dict) else None,
                 )
 
+    # M5 refinement rung — conditional-M5 policies only. M5 is not a policy role
+    # (the universal ladder's execution role follows the trigger, M15), so it is
+    # carried separately for the scorer's m5RefinementEvidence, which entry
+    # confirmation uses as a pullback-turn confirm. It stays refinement: M5 is
+    # absent from the freshness gate's setup/trigger list and from
+    # _validate_candles, so it can never become a required rung, block scoring,
+    # or stand in for a missing structure/ATR rung. Missing M5 simply leaves the
+    # evidence unavailable and entry confirmation falls back to the M15 rung.
+    if (
+        _policy_timeframes
+        and str(_policy_timeframes.get("m5_policy") or "").lower() == "conditional"
+        and "M5" not in _v3_candles
+        and bool(CONFIG.get("ENGINE_A_M5_PULLBACK_REFINEMENT_ENABLED", True))
+    ):
+        _m5_state = preloaded_market_state.get("M5")
+        _m5_raw = preloaded_candles.get("M5")
+        if _m5_raw is None and not isinstance(_m5_state, dict):
+            _m5_raw, _m5_meta = _fetch_ab_crypto_signal_candles(
+                pair,
+                "M5",
+                _lim["M5"],
+                engine="A",
+                force_refresh=refresh_market_data,
+            )
+            if _m5_meta:
+                preloaded_fetch_meta["M5"] = _m5_meta
+        _m5_confirmed = _engine_a_confirmed_candles(
+            "M5", _m5_raw, _m5_state if isinstance(_m5_state, dict) else None
+        )
+        if _m5_confirmed:
+            _v3_candles["M5"] = _m5_confirmed
+
     if not d1 or not h4 or not h1 or (_v3_live_entry_tf and not _v3_entry_candles):
         log.warning(
             f"[ANALYZE] {pair.get('display', '?')} no candles - "
