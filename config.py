@@ -2675,6 +2675,10 @@ CONFIG: dict = {
     "ENGINE_B_DIRECTION_INDEPENDENT_CONFLICT_GUARD_ENABLED": True,
     "ENGINE_B_DIRECTION_INDEPENDENT_CONFLICT_MIN_CONFIDENCE": "HIGH",
     "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF": True,
+    # Fail-closed: exclusive structure-TF BOS opposes trade side → structure_ok
+    # false. Lagging HH_HL/LH_LL cannot emit the counter-BOS direction. Aligned
+    # CHoCH remains the only reversal escape. Default ON.
+    "ENGINE_B_STRUCTURE_BOS_DIRECTION_GUARD_ENABLED": True,
     "ENGINE_B_ROOM_NO_WALL_REQUIRE_MTF": True,
     "ENGINE_B_LOW_VOLATILITY_GATE_ENABLED": True,
     "ENGINE_B_LOW_VOLATILITY_LOOKBACK": 50,

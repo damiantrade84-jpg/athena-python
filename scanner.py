@@ -1296,9 +1296,10 @@ def _engine_b_independent_direction_probe(
     Precomputes structure once (BT parity), then runs
     ``analyze_structure_direction`` for LONG and SHORT. For any CLEAR verdict
     computes confidence and tests the style/regime gate. Returns the best
-    ``(direction, res_b, conf_b)`` tuple — preferring gate-passed over
-    not-passed, then higher confidence score. Returns ``(None, None, None)``
-    when neither direction has a CLEAR structural verdict.
+    gate-passed ``(direction, res_b, conf_b)`` tuple. Returns
+    ``(None, None, None)`` when neither direction has a CLEAR structural
+    verdict or when no direction passes the confidence gate (fail-closed:
+    never return a failed counter-structure side as the selected direction).
     """
     from engine_b_snapshot import evaluate_engine_b_snapshot
 

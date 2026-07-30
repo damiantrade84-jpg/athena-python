@@ -792,6 +792,9 @@ ENGINE_B_REASON_FOREX_ADX_LOW = "forex_adx_below_min"
 ENGINE_B_REASON_TP_WRONG_SIDE = "tp_wrong_side"
 ENGINE_B_REASON_SL_WRONG_SIDE = "sl_wrong_side"
 ENGINE_B_REASON_SEQUENCE_COUNTER_TREND = "sequence_counter_trend"
+# Exclusive structure-TF BOS opposes the trade side (lagging HH_HL/LH_LL must not
+# green-light the counter-BOS direction).
+ENGINE_B_REASON_STRUCTURE_BOS_DIRECTION_CONFLICT = "structure_bos_direction_conflict"
 ENGINE_B_REASON_NO_TRIGGER_PATTERN = "no_trigger_pattern"
 ENGINE_B_REASON_BOS_WITHOUT_VOLUME = "bos_without_volume"
 ENGINE_B_REASON_BOS_VOLUME_BELOW_THRESHOLD = "bos_volume_below_threshold"
@@ -4938,13 +4941,15 @@ class NakedEngine:
             votes["sweep"] = 0
 
         # --- Weight the votes ---
-        # H4 swing carries more weight than H1, CHoCH, or sweep.
+        # H4 swing carries more weight than H1/CHoCH/sweep. Structure-TF BOS is
+        # a hard break of structure and must outrank a single lagging sequence
+        # leg so independent opinion does not rubber-stamp counter-BOS sides.
         weights = {
             "h4_swing": 2,
             "h1_swing": 1,
             "choch":    1,
             "sweep":    1,
-            "bos":      1,
+            "bos":      3,
         }
         total_weight = sum(weights.values())
         weighted_score = sum(
@@ -5005,6 +5010,36 @@ class NakedEngine:
             reason = (
                 f"Structural evidence mixed or ranging: score={score_ratio:.2f} "
                 f"(pos={positive}, neg={negative}, h4={h4_sequence})"
+            )
+
+        # Exclusive structure-TF BOS is authoritative for independent opinion
+        # unless an opposing CHoCH is the active character change. Prevents
+        # lagging HH_HL votes from labelling direction opposite the break.
+        _choch_bull = bool(choch_data.get("choch_bull")) and not bool(
+            choch_data.get("choch_bear")
+        )
+        _choch_bear = bool(choch_data.get("choch_bear")) and not bool(
+            choch_data.get("choch_bull")
+        )
+        if bos_bear and not bos_bull and not _choch_bull:
+            direction = "SHORT"
+            if confidence in {"NONE", "LOW", ""}:
+                confidence = "HIGH"
+            elif confidence == "MEDIUM":
+                confidence = "HIGH"
+            reason = (
+                f"Exclusive structure-TF BOS bearish overrides lagging sequence "
+                f"(h4={h4_sequence}, h1={h1_sequence})"
+            )
+        elif bos_bull and not bos_bear and not _choch_bear:
+            direction = "LONG"
+            if confidence in {"NONE", "LOW", ""}:
+                confidence = "HIGH"
+            elif confidence == "MEDIUM":
+                confidence = "HIGH"
+            reason = (
+                f"Exclusive structure-TF BOS bullish overrides lagging sequence "
+                f"(h4={h4_sequence}, h1={h1_sequence})"
             )
 
         return {
@@ -6405,6 +6440,29 @@ class NakedEngine:
         if structure_gate_disabled:
             structure_ok = True
 
+        # Fail-closed: exclusive structure-TF BOS is authoritative over a lagging
+        # swing sequence. LONG must not pass structure_ok when structure BOS is
+        # exclusively bearish (and vice versa). Aligned CHoCH is the only
+        # reversal escape — a true change of character against the prior break.
+        # Not bypassed by disable_structure_gate (safety invariant).
+        _bos_dir_guard = bool(
+            config.CONFIG.get("ENGINE_B_STRUCTURE_BOS_DIRECTION_GUARD_ENABLED", True)
+        )
+        _bos_raw_for_dir = (
+            res.get("bos_data") if isinstance(res.get("bos_data"), dict) else {}
+        )
+        _bos_bull_raw = bool(_bos_raw_for_dir.get("bos_bull"))
+        _bos_bear_raw = bool(_bos_raw_for_dir.get("bos_bear"))
+        _structure_bos_opposes = (
+            direction == "LONG" and _bos_bear_raw and not _bos_bull_raw
+        ) or (direction == "SHORT" and _bos_bull_raw and not _bos_bear_raw)
+        _bos_dir_reversal_ok = bool(res.get("choch_confirmed", False))
+        _structure_bos_dir_conflict = bool(
+            _bos_dir_guard and _structure_bos_opposes and not _bos_dir_reversal_ok
+        )
+        if _structure_bos_dir_conflict:
+            structure_ok = False
+
         # Forex ADX is exposed as a diagnostic (engine_b_overlay / Marcus Reid /
         # tests) but no longer gates structure_ok. Consumers can use it as a
         # soft conviction signal.
@@ -7353,6 +7411,8 @@ class NakedEngine:
 
         if hard_counter:
             _diag_codes.append(ENGINE_B_REASON_SEQUENCE_COUNTER_TREND)
+        if _structure_bos_dir_conflict:
+            _diag_codes.append(ENGINE_B_REASON_STRUCTURE_BOS_DIRECTION_CONFLICT)
         if _forex_ranging_continuation_blocked and (
             res.get("bos_confirmed") or breakout_ok
         ):
@@ -7632,6 +7692,8 @@ class NakedEngine:
             "hard_counter_active": bool(hard_counter),
             "hard_counter_mode": _hard_counter_mode,
             "hard_counter_penalty": round(_hard_counter_penalty, 2),
+            "structure_bos_direction_conflict": bool(_structure_bos_dir_conflict),
+            "structure_bos_opposes": bool(_structure_bos_opposes),
             "location_passed": location_ok,
             "location_mode": location_mode,
             "location_distance_atr": round(location_distance_atr, 4)

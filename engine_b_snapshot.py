@@ -382,6 +382,27 @@ def _atr_from_candles(candles: list[dict[str, Any]], period: int = 14) -> float:
         return 0.0
 
 
+def _exclusive_structure_bos_direction(structure: Mapping[str, Any] | None) -> str | None:
+    """Return LONG/SHORT when structure-TF BOS is exclusive; else None.
+
+    Used so a failed gate stack still surfaces the structure-aligned side for
+    display, instead of blanking the direction or picking the higher-scoring
+    counter-BOS side.
+    """
+    if not isinstance(structure, Mapping):
+        return None
+    bos = structure.get("bos_data")
+    if not isinstance(bos, Mapping):
+        return None
+    bull = bool(bos.get("bos_bull"))
+    bear = bool(bos.get("bos_bear"))
+    if bear and not bull:
+        return "SHORT"
+    if bull and not bear:
+        return "LONG"
+    return None
+
+
 def evaluate_engine_b_snapshot(
     pair: dict[str, Any],
     role_candles: Mapping[str, list[dict[str, Any]]],
@@ -722,15 +743,54 @@ def evaluate_engine_b_snapshot(
                 resolved_profile,
                 regime,
             )
+    # No fully-passed side: still surface the exclusive structure-BOS-aligned
+    # direction when it has a CLEAR candidate. That shows correct SELL/BUY from
+    # structure without allowing the higher-scoring counter-BOS side (the old
+    # BUY-on-SELL bug). Tradeability stays `passed=False` until gates clear.
     if selected is None:
-        best = max(eligible, key=lambda item: (bool(item["passed"]), float(item["score"]), str(item["direction"])))
-        selected = {
-            "direction": best["direction"],
-            "score": float(best["score"]),
-            "passed": bool(best["passed"]),
-            "structure": best["structure"],
-            "confidence": best["confidence"],
-        }
+        bos_aligned: dict[str, Any] | None = None
+        for candidate in eligible:
+            aligned = _exclusive_structure_bos_direction(candidate.get("structure"))
+            if aligned is None or str(candidate.get("direction") or "").upper() != aligned:
+                continue
+            conf = candidate.get("confidence") or {}
+            # Prefer structure_ok on the aligned side; still show it if CLEAR.
+            rank = (
+                1 if bool(conf.get("structure_ok")) else 0,
+                float(candidate.get("score") or 0.0),
+            )
+            if bos_aligned is None:
+                bos_aligned = {"candidate": candidate, "rank": rank}
+                continue
+            if rank > bos_aligned["rank"]:
+                bos_aligned = {"candidate": candidate, "rank": rank}
+        if bos_aligned is not None:
+            best = bos_aligned["candidate"]
+            selected = {
+                "direction": best["direction"],
+                "score": float(best["score"]),
+                "passed": bool(best["passed"]),
+                "structure": best["structure"],
+                "confidence": best["confidence"],
+            }
+            return EngineBSnapshotResult(
+                ENGINE_B_SNAPSHOT_CONTRACT_VERSION,
+                selected,
+                tuple(candidates),
+                None if selected["passed"] else "structure_direction_gates_pending",
+                resolved_style,
+                resolved_profile,
+                regime,
+            )
+        return EngineBSnapshotResult(
+            ENGINE_B_SNAPSHOT_CONTRACT_VERSION,
+            None,
+            tuple(candidates),
+            "no_passing_direction",
+            resolved_style,
+            resolved_profile,
+            regime,
+        )
     return EngineBSnapshotResult(
         ENGINE_B_SNAPSHOT_CONTRACT_VERSION,
         selected,
