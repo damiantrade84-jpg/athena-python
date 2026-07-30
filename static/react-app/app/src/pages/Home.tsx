@@ -12,6 +12,7 @@ import ScalpLabPanel from '@/components/panels/ScalpLabPanel';
 import ScalpWorkbenchPanel from '@/components/panels/ScalpWorkbenchPanel';
 import TVChartPanel from '@/components/panels/TVChartPanel';
 import BacktestPanel from '@/components/panels/BacktestPanel';
+import BacktestV3Panel from '@/components/panels/BacktestV3Panel';
 import ScreenerPanel from '@/components/panels/ScreenerPanel';
 import LotteryLabPanel from '@/components/panels/LotteryLabPanel';
 import ResearchLabPanel from '@/components/panels/ResearchLabPanel';
@@ -42,6 +43,7 @@ const panels: Record<string, React.ComponentType> = {
   scalpWorkbench: ScalpWorkbenchPanel,
   tvChart: TVChartPanel,
   backtest: BacktestPanel,
+  backtestV3: BacktestV3Panel,
   screener: ScreenerPanel,
   lotteryLab: LotteryLabPanel,
   researchLab: ResearchLabPanel,

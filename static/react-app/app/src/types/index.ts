@@ -217,6 +217,7 @@ export type PanelId =
   | 'scalpWorkbench'
   | 'tvChart'
   | 'backtest'
+  | 'backtestV3'
   | 'screener'
   | 'lotteryLab'
   | 'researchLab'
