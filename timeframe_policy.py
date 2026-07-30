@@ -574,17 +574,28 @@ class TimeframePolicy:
         }
 
 
+# Universal Engine A/B role ladder (all groups and pairs):
+#   regime=D1, bias=H4, structure=H4, setup=H1, trigger=M15
+# Group/symbol templates may still differ on profile name, m5_policy, and
+# baseline speed only. Engine D (scalp) keeps its own native contract.
+_UNIVERSAL_REGIME = Timeframe.D1
+_UNIVERSAL_BIAS = Timeframe.H4
+_UNIVERSAL_STRUCTURE = Timeframe.H4
+_UNIVERSAL_SETUP = Timeframe.H1
+_UNIVERSAL_TRIGGER = Timeframe.M15
+
+
 @dataclass(frozen=True)
 class _Template:
     profile: str
-    regime: Timeframe = Timeframe.D1
-    bias: Timeframe = Timeframe.H4
-    structure: Timeframe = Timeframe.H1
-    setup: Timeframe = Timeframe.M30
-    trigger: Timeframe = Timeframe.M15
+    regime: Timeframe = _UNIVERSAL_REGIME
+    bias: Timeframe = _UNIVERSAL_BIAS
+    structure: Timeframe = _UNIVERSAL_STRUCTURE
+    setup: Timeframe = _UNIVERSAL_SETUP
+    trigger: Timeframe = _UNIVERSAL_TRIGGER
     # Advisory execution-context TF; production execution is live-quote based
     # (execution_mode) and never resolved from this field.
-    execution: Timeframe = Timeframe.M15
+    execution: Timeframe = _UNIVERSAL_TRIGGER
     m5_role: M5Role = M5Role.DISABLED
     m5_policy: M5Policy = M5Policy.DISABLED
     execution_mode: ExecutionMode = ExecutionMode.LIVE_QUOTE
@@ -599,24 +610,24 @@ class _Template:
 def _group_template(
     profile: str,
     *,
-    regime: Timeframe = Timeframe.D1,
-    bias: Timeframe = Timeframe.H4,
-    structure: Timeframe = Timeframe.H1,
-    setup: Timeframe = Timeframe.M30,
-    trigger: Timeframe = Timeframe.M15,
     m5_policy: M5Policy = M5Policy.DISABLED,
     speed: SpeedClass = SpeedClass.NORMAL,
 ) -> _Template:
+    """Build a group template on the universal role ladder.
+
+    Role TFs are fixed (D1/H4/H4/H1/M15). Only profile identity, M5 policy, and
+    baseline speed may vary by group.
+    """
     m5_role, confirm_m15 = _M5_POLICY_DERIVED[m5_policy]
     return _Template(
         profile=profile,
-        regime=regime,
-        bias=bias,
-        structure=structure,
-        setup=setup,
-        trigger=trigger,
+        regime=_UNIVERSAL_REGIME,
+        bias=_UNIVERSAL_BIAS,
+        structure=_UNIVERSAL_STRUCTURE,
+        setup=_UNIVERSAL_SETUP,
+        trigger=_UNIVERSAL_TRIGGER,
         # Advisory execution context follows the trigger by default.
-        execution=trigger,
+        execution=_UNIVERSAL_TRIGGER,
         m5_role=m5_role,
         m5_policy=m5_policy,
         execution_mode=ExecutionMode.LIVE_QUOTE,
@@ -625,122 +636,60 @@ def _group_template(
     )
 
 
-# Policy-v4 group matrix (regime/bias/structure/setup/trigger/M5 policy).
-_FOREX_MAJORS_STANDARD = _group_template(
-    "FOREX_MAJORS_STANDARD", setup=Timeframe.M30, trigger=Timeframe.M15
-)
+# Policy-v4 group matrix: universal roles; groups differ on M5 policy / speed.
+_FOREX_MAJORS_STANDARD = _group_template("FOREX_MAJORS_STANDARD")
 _FOREX_MAJORS_FAST = _group_template(
     "FOREX_MAJORS_FAST",
-    setup=Timeframe.M15,
-    trigger=Timeframe.M15,
     m5_policy=M5Policy.CONDITIONAL,
     speed=SpeedClass.FAST,
 )
-_FOREX_CROSSES_BROAD = _group_template(
-    "FOREX_CROSSES_BROAD",
-    structure=Timeframe.H4,
-    setup=Timeframe.H1,
-    trigger=Timeframe.M30,
-)
-_FOREX_CROSSES_LIQUID = _group_template(
-    "FOREX_CROSSES_LIQUID", setup=Timeframe.M30, trigger=Timeframe.M15
-)
+_FOREX_CROSSES_BROAD = _group_template("FOREX_CROSSES_BROAD")
+_FOREX_CROSSES_LIQUID = _group_template("FOREX_CROSSES_LIQUID")
 _FOREX_EXOTICS_LIQUID = _group_template(
     "FOREX_EXOTICS_LIQUID",
-    structure=Timeframe.H4,
-    setup=Timeframe.H1,
-    trigger=Timeframe.M30,
     speed=SpeedClass.SLOW,
 )
 _FOREX_EXOTICS_RESTRICTED = _group_template(
     "FOREX_EXOTICS_RESTRICTED",
-    structure=Timeframe.H4,
-    setup=Timeframe.H1,
-    trigger=Timeframe.H1,
     speed=SpeedClass.SLOW,
 )
 _ENERGY_OIL = _group_template(
     "ENERGY_OIL_CONDITIONAL",
-    setup=Timeframe.M15,
-    trigger=Timeframe.M15,
     m5_policy=M5Policy.CONDITIONAL,
     speed=SpeedClass.FAST,
 )
-_NAT_GAS = _group_template(
-    "NAT_GAS_NO_M5",
-    setup=Timeframe.M30,
-    trigger=Timeframe.M15,
-    speed=SpeedClass.FAST,
-)
-_LIQUID_METALS = _group_template(
-    "LIQUID_METALS", setup=Timeframe.M30, trigger=Timeframe.M15
-)
-_THIN_METALS_BASE_SOFTS = _group_template(
-    "THIN_METALS_BASE_SOFTS",
-    structure=Timeframe.H4,
-    setup=Timeframe.H1,
-    trigger=Timeframe.M30,
-)
+_NAT_GAS = _group_template("NAT_GAS_NO_M5", speed=SpeedClass.FAST)
+_LIQUID_METALS = _group_template("LIQUID_METALS")
+_THIN_METALS_BASE_SOFTS = _group_template("THIN_METALS_BASE_SOFTS")
 _EQUITY_INDEX_FAST = _group_template(
     "EQUITY_INDEX_FAST",
-    setup=Timeframe.M15,
-    trigger=Timeframe.M15,
     m5_policy=M5Policy.CONDITIONAL,
     speed=SpeedClass.FAST,
 )
-_EQUITY_INDEX_STANDARD = _group_template(
-    "EQUITY_INDEX_STANDARD", setup=Timeframe.M30, trigger=Timeframe.M15
-)
+_EQUITY_INDEX_STANDARD = _group_template("EQUITY_INDEX_STANDARD")
 _US_STOCK_SINGLE = _group_template(
     "US_STOCK_SINGLE",
-    bias=Timeframe.D1,
-    structure=Timeframe.H1,
-    setup=Timeframe.M15,
-    trigger=Timeframe.M15,
     m5_policy=M5Policy.CONDITIONAL,
 )
-# Cash-equity share CFDs (ATFX). Same D1-bias shape as the named US singles but
-# one rung slower on setup/trigger and with M5 off: these 219 instruments have
-# no trade history in Athena and no frozen out-of-sample evidence, so the
-# conditional-M5 refinement that us_stock_single carries is not justified for
-# them. Flip m5_policy to CONDITIONAL only when m5_validation_status reaches
-# APPROVED for the region group.
+# Cash-equity share CFDs (ATFX). Same universal ladder as named US singles but
+# with M5 off: these instruments have no trade history in Athena and no frozen
+# out-of-sample evidence, so conditional-M5 refinement is not justified.
+# Flip m5_policy to CONDITIONAL only when m5_validation_status reaches APPROVED.
 _CASH_EQUITY_STANDARD_DYNAMIC = _group_template(
     "CASH_EQUITY_STANDARD_DYNAMIC",
-    bias=Timeframe.D1,
-    structure=Timeframe.H1,
-    setup=Timeframe.M30,
-    trigger=Timeframe.M15,
     m5_policy=M5Policy.DISABLED,
 )
-_BOND_TLT_SMALLCAP_EM_ETF = _group_template(
-    "BOND_TLT_SMALLCAP_EM_ETF",
-    bias=Timeframe.D1,
-    structure=Timeframe.H1,
-    setup=Timeframe.M30,
-    trigger=Timeframe.M15,
-)
+_BOND_TLT_SMALLCAP_EM_ETF = _group_template("BOND_TLT_SMALLCAP_EM_ETF")
 _CRYPTO_MAJORS_FAST = _group_template(
     "CRYPTO_MAJORS_FAST",
-    setup=Timeframe.M15,
-    trigger=Timeframe.M15,
     m5_policy=M5Policy.CONDITIONAL,
     speed=SpeedClass.FAST,
 )
-_CRYPTO_ALT_MAJORS = _group_template(
-    "CRYPTO_ALT_MAJORS", setup=Timeframe.M30, trigger=Timeframe.M15
-)
-_CRYPTO_OTHER_THIN = _group_template(
-    "CRYPTO_OTHER_THIN",
-    structure=Timeframe.H4,
-    setup=Timeframe.H1,
-    trigger=Timeframe.M30,
-)
+_CRYPTO_ALT_MAJORS = _group_template("CRYPTO_ALT_MAJORS")
+_CRYPTO_OTHER_THIN = _group_template("CRYPTO_OTHER_THIN")
 # Fail-closed base for CONFIG_CONFLICT / SAFE_FALLBACK resolutions.
 _FAIL_CLOSED = _group_template(
     "EXTREME_EVENT_SENSITIVE",
-    setup=Timeframe.M30,
-    trigger=Timeframe.M15,
     speed=SpeedClass.SLOW,
 )
 
@@ -847,97 +796,82 @@ for _canonical, _values in {
     _aliases(_canonical, *_values)
 
 
-# Symbol overrides are per-role patches over the resolved group/asset
-# template (unset roles inherit).  ``m5_policy`` patches also re-derive
-# m5_role/m15 confirmation via _M5_POLICY_DERIVED, and a patched trigger moves
-# the advisory execution context with it unless ``execution`` is patched
-# explicitly.  Patches pin every spec'd role so a symbol resolves
-# deterministically regardless of the group fallback underneath it.
+# Symbol overrides patch profile identity, m5_policy, and baseline speed only.
+# Role TFs always inherit the universal ladder (D1/H4/H4/H1/M15) from the group
+# template — symbol patches must not reintroduce per-pair role ladders.
+# ``m5_policy`` patches also re-derive m5_role/m15 confirmation via
+# _M5_POLICY_DERIVED. Role keys remain accepted by _apply_symbol_patch for
+# diagnostics/back-compat but production entries omit them.
 _SYMBOL_OVERRIDES: dict[str, dict[str, Any]] = {
-    # Standard majors — D1/H4/H1/M30/M15, M5 disabled.
-    "EURUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
-    "USDCHF": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
-    "AUDUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
-    "NZDUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
-    "USDCAD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
-    # Fast majors — D1/H4/H1/M15/M15; M5 conditional refinement.
-    "GBPUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "FOREX_MAJORS_FAST"},
-    "USDJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "FOREX_MAJORS_FAST"},
-    # Broad crosses — D1/H4/H4/H1/M30, M5 disabled.
-    "EURGBP": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
-    "AUDNZD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
-    "EURCHF": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
-    "AUDCHF": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
-    "EURAUD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
-    "GBPAUD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
-    "USDSGD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
-    # Liquid crosses — D1/H4/H1/M30/M15, M5 disabled.
-    "EURJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
-    "AUDJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
-    # GBP/JPY fast-cross symbol override: partial patch over the liquid-cross
-    # group (regime/bias inherit D1/H4); H1 structure, M15 setup/trigger, and
-    # conditional M5 refinement.
-    "GBPJPY": {"structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "GBPJPY_FAST_CROSS_CONDITIONAL"},
-    # Exotics — liquid: D1/H4/H4/H1/M30; restricted: H1 confirmed trigger, no
-    # M30/M15/M5 promotion.
-    "USDZAR": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_LIQUID"},
-    "USDMXN": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_LIQUID"},
-    "USDBRL": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
-    "USDINR": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
+    # Standard majors — M5 disabled.
+    "EURUSD": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
+    "USDCHF": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
+    "AUDUSD": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
+    "NZDUSD": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
+    "USDCAD": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_MAJORS_STANDARD"},
+    # Fast majors — M5 conditional refinement.
+    "GBPUSD": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "FOREX_MAJORS_FAST"},
+    "USDJPY": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "FOREX_MAJORS_FAST"},
+    # Broad crosses.
+    "EURGBP": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "AUDNZD": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "EURCHF": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "AUDCHF": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "EURAUD": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "GBPAUD": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    "USDSGD": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_BROAD"},
+    # Liquid crosses.
+    "EURJPY": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
+    "AUDJPY": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
+    # GBP/JPY — conditional M5 refinement.
+    "GBPJPY": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "GBPJPY_FAST_CROSS_CONDITIONAL"},
+    # Exotics.
+    "USDZAR": {"m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_LIQUID"},
+    "USDMXN": {"m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_LIQUID"},
+    "USDBRL": {"m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
+    "USDINR": {"m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
     # ── 2026-07-28 ATFX additions ────────────────────────────────────────────
-    # Yen crosses and Scandi USD pairs: liquid-cross ladder, matching EUR/JPY
-    # and AUD/JPY. Their forex_crosses score group aliases to crosses_broad, so
-    # without these patches they would sit a rung slow on structure and trigger.
-    "CADJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
-    "CHFJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
-    "NZDJPY": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
-    "USDNOK": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_SCANDI_USD"},
-    "USDSEK": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "FOREX_SCANDI_USD"},
-    # USD/CNH: managed float. Liquid ladder, but M5 stays disabled so no
-    # eligibility path can promote the trigger past M15 on a policy-driven rate.
-    "USDCNH": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_MANAGED_ASIA"},
-    # USD/HKD: band-pegged 7.75-7.85. Restricted ladder pins a confirmed H1
-    # trigger, mirroring USD/BRL and USD/INR. This stops standard trending
-    # handling from acting on band noise; it is NOT a peg-aware model.
-    "USDHKD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_MANAGED_PEGGED_RESTRICTED"},
-    # ZAR crosses: thinner and wider-spread than USD/ZAR, which already sits on
-    # exotics_liquid. Restricted H1 trigger, no M30/M15/M5 promotion.
-    "EURZAR": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
-    "GBPZAR": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.H1, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
-    # China A50: broad-index ladder (H4 structure, M30 trigger). The CFD quotes
-    # for extended hours, which must not be read as cash-index liquidity.
-    "CHI50": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "EQUITY_INDEX_BROAD"},
-    # Metals — XAU uses M15 authority plus M5 refinement; XAG stays M15.
-    "XAUUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "XAU_CONDITIONAL_M5"},
-    "XAGUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "LIQUID_METALS"},
-    "XPTUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "THIN_METALS_BASE_SOFTS"},
-    "XPDUSD": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "profile": "THIN_METALS_BASE_SOFTS"},
-    # Energy — WTI/Brent use M15 authority plus M5 refinement; NATGAS M5 never.
-    "WTI": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "ENERGY_OIL_CONDITIONAL"},
-    "BRENT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "ENERGY_OIL_CONDITIONAL"},
-    "NATGAS": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.FAST, "profile": "NAT_GAS_NO_M5"},
-    # Indices — fast profiles use M15 authority plus M5 refinement.
-    "NAS100": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
-    "US30": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
-    "GER40": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
-    "US500": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
-    "UK100": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
-    "JPN225": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
-    # Single stocks / bond & small-cap & EM ETFs — D1 bias.
-    "AAPL": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},
-    "SPY": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},
-    "TLT": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
-    "IWM": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
-    "EEM": {"regime": Timeframe.D1, "bias": Timeframe.D1, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
-    # Crypto — fast majors use M15 authority plus M5 refinement.
-    "BTCUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
-    "ETHUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
-    "SOLUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M15, "trigger": Timeframe.M15, "m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
-    "BNBUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
-    "XRPUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
-    "ADAUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
-    "LINKUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H1, "setup": Timeframe.M30, "trigger": Timeframe.M15, "m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
-    "DOGEUSDT": {"regime": Timeframe.D1, "bias": Timeframe.H4, "structure": Timeframe.H4, "setup": Timeframe.H1, "trigger": Timeframe.M30, "m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_OTHER_THIN"},
+    "CADJPY": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
+    "CHFJPY": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
+    "NZDJPY": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_CROSSES_LIQUID"},
+    "USDNOK": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_SCANDI_USD"},
+    "USDSEK": {"m5_policy": M5Policy.DISABLED, "profile": "FOREX_SCANDI_USD"},
+    "USDCNH": {"m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_MANAGED_ASIA"},
+    "USDHKD": {"m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_MANAGED_PEGGED_RESTRICTED"},
+    "EURZAR": {"m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
+    "GBPZAR": {"m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "FOREX_EXOTICS_RESTRICTED"},
+    "CHI50": {"m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.SLOW, "profile": "EQUITY_INDEX_BROAD"},
+    # Metals — XAU conditional M5 refinement.
+    "XAUUSD": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "XAU_CONDITIONAL_M5"},
+    "XAGUSD": {"m5_policy": M5Policy.DISABLED, "profile": "LIQUID_METALS"},
+    "XPTUSD": {"m5_policy": M5Policy.DISABLED, "profile": "THIN_METALS_BASE_SOFTS"},
+    "XPDUSD": {"m5_policy": M5Policy.DISABLED, "profile": "THIN_METALS_BASE_SOFTS"},
+    # Energy — WTI/Brent conditional M5; NATGAS M5 never.
+    "WTI": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "ENERGY_OIL_CONDITIONAL"},
+    "BRENT": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "ENERGY_OIL_CONDITIONAL"},
+    "NATGAS": {"m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.FAST, "profile": "NAT_GAS_NO_M5"},
+    # Indices.
+    "NAS100": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
+    "US30": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
+    "GER40": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "EQUITY_INDEX_FAST"},
+    "US500": {"m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
+    "UK100": {"m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
+    "JPN225": {"m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
+    # Single stocks / bond & small-cap & EM ETFs.
+    "AAPL": {"m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},
+    "SPY": {"m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},
+    "TLT": {"m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
+    "IWM": {"m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
+    "EEM": {"m5_policy": M5Policy.DISABLED, "profile": "BOND_TLT_SMALLCAP_EM_ETF"},
+    # Crypto.
+    "BTCUSDT": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
+    "ETHUSDT": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
+    "SOLUSDT": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
+    "BNBUSDT": {"m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
+    "XRPUSDT": {"m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
+    "ADAUSDT": {"m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
+    "LINKUSDT": {"m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
+    "DOGEUSDT": {"m5_policy": M5Policy.DISABLED, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_OTHER_THIN"},
 }
 
 
@@ -1101,17 +1035,6 @@ def _clamp_adaptive_roles(
     return clamped[0], clamped[1]
 
 
-_ENGINE_A_H4_PRIMARY_GROUP_PROFILES = frozenset(
-    {
-        "FOREX_CROSSES_BROAD",
-        "FOREX_EXOTICS_LIQUID",
-        "FOREX_EXOTICS_RESTRICTED",
-        "THIN_METALS_BASE_SOFTS",
-        "CRYPTO_OTHER_THIN",
-    }
-)
-
-
 def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
     if engine_id == "engine_d":
         # Engine D native scalp contract: H1 context/regime, M15 confirmed
@@ -1131,88 +1054,26 @@ def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
             baseline_speed=base.baseline_speed,
             m15_confirmation_required_for_m5=True,
         )
+    # Engine A/B share the universal role ladder for every style. Overlays only
+    # rename the profile for provenance; they never rewrite regime/bias/
+    # structure/setup/trigger/execution away from D1/H4/H4/H1/M15.
     if engine_id == "engine_b" and style == "swing":
-        # H4 is Engine B's primary structural horizon for every asset class.
-        # D1 supplies swing bias; H1 is supporting/setup context, never a
-        # replacement for structural zones, BOS, liquidity, or structural ATR.
-        return _Template(
-            profile=f"ENGINE_B_SWING_{base.profile}",
-            regime=Timeframe.D1,
-            bias=Timeframe.D1,
-            structure=Timeframe.H4,
-            setup=Timeframe.H1,
-            trigger=Timeframe.H1,
-            execution=Timeframe.H1,
-            m5_role=M5Role.DISABLED,
-            m5_policy=M5Policy.DISABLED,
-            execution_mode=ExecutionMode.LIVE_QUOTE,
-            baseline_speed=base.baseline_speed,
-        )
+        return replace(base, profile=f"ENGINE_B_SWING_{base.profile}")
     if engine_id == "engine_b" and style == "intraday":
-        is_forex_exotic = base.profile in {
-            "FOREX_EXOTICS_LIQUID",
-            "FOREX_EXOTICS_RESTRICTED",
-        }
-        return replace(
-            base,
-            profile=f"ENGINE_B_INTRADAY_{base.profile}",
-            structure=Timeframe.H4,
-            setup=Timeframe.H1,
-            trigger=Timeframe.M15 if is_forex_exotic else base.trigger,
-            execution=Timeframe.M15 if is_forex_exotic else base.execution,
-        )
+        return replace(base, profile=f"ENGINE_B_INTRADAY_{base.profile}")
     if engine_id == "engine_b" and style == "scalp":
-        # Engine B retains its H4 structural contract even when explicitly
-        # requested in scalp style. M15 is the execution confirmation; M5 may
-        # only refine after that confirmation and never replaces H4 structure.
-        return _Template(
+        # Engine B scalp keeps the universal H4 structure ladder; M5 may only
+        # refine after M15 confirmation and never replaces structure.
+        m5_role, confirm_m15 = _M5_POLICY_DERIVED[M5Policy.CONDITIONAL]
+        return replace(
+            base,
             profile=f"ENGINE_B_SCALP_{base.profile}",
-            regime=Timeframe.D1,
-            bias=Timeframe.H4,
-            structure=Timeframe.H4,
-            setup=Timeframe.H1,
-            trigger=Timeframe.M15,
-            execution=Timeframe.M15,
-            m5_role=M5Role.REFINEMENT,
+            m5_role=m5_role,
             m5_policy=M5Policy.CONDITIONAL,
-            execution_mode=ExecutionMode.LIVE_QUOTE,
-            baseline_speed=base.baseline_speed,
-            m15_confirmation_required_for_m5=True,
+            m15_confirmation_required_for_m5=confirm_m15,
         )
-    if engine_id == "engine_a" and base.profile in _ENGINE_A_H4_PRIMARY_GROUP_PROFILES:
-        # Broad/thin/exotic Engine A groups use one fixed hierarchy across
-        # intraday, swing, and explicit scalp styles. Live speed classification
-        # records diagnostics but does not demote their requested M15 trigger.
-        return replace(
-            base,
-            profile=f"ENGINE_A_H4_PRIMARY_{style.upper()}_{base.profile}",
-            regime=Timeframe.D1,
-            bias=Timeframe.H4,
-            structure=Timeframe.H4,
-            setup=Timeframe.H1,
-            trigger=Timeframe.M15,
-            execution=Timeframe.M15,
-            m5_role=M5Role.DISABLED,
-            m5_policy=M5Policy.DISABLED,
-            m15_confirmation_required_for_m5=False,
-        )
-    # Engine A intraday keeps the instrument profile unchanged. Swing is a
-    # full slow overlay: D1 regime/bias, H4 structure, H1 setup, H1 confirmed
-    # trigger, M5 disabled.
     if engine_id == "engine_a" and style == "swing":
-        return replace(
-            base,
-            profile=f"ENGINE_A_SWING_{base.profile}",
-            regime=Timeframe.D1,
-            bias=Timeframe.D1,
-            structure=Timeframe.H4,
-            setup=Timeframe.H1,
-            trigger=Timeframe.H1,
-            execution=Timeframe.H1,
-            m5_role=M5Role.DISABLED,
-            m5_policy=M5Policy.DISABLED,
-            m15_confirmation_required_for_m5=False,
-        )
+        return replace(base, profile=f"ENGINE_A_SWING_{base.profile}")
     return base
 
 
@@ -1293,20 +1154,18 @@ def resolve_timeframe_policy(
     # Execution is never adapted: no speed/liquidity input may rewrite the
     # advisory execution TF, and speed never promotes M5 execution (the v3
     # allow_dynamic_m5_execution promotion is removed in v4).
+    # Role TFs are fixed to the universal ladder (D1/H4/H4/H1/M15) for Engine
+    # A/B — speed no longer demotes setup/trigger either.
     execution = selected.execution
     m5_role = selected.m5_role
     m5_policy = selected.m5_policy
 
     if not adaptation_ready:
         messages.append("INSUFFICIENT_HISTORY: baseline policy retained")
-    elif (
-        effective_speed == SpeedClass.SLOW
-        and not selected.profile.startswith("ENGINE_A_H4_PRIMARY_")
-    ):
-        # Speed adaptation may modify setup and trigger ONLY — never
-        # regime/bias/structure, never execution.
-        setup = _adjacent(setup, faster=False)
-        trigger = _adjacent(trigger, faster=False)
+    elif effective_speed == SpeedClass.SLOW:
+        messages.append(
+            "SLOW speed recorded for diagnostics; universal role ladder retained"
+        )
 
     # THIN/UNAVAILABLE liquidity no longer rewrites any role TF.  It is
     # recorded as an M5-eligibility input consumed by the eligibility layer.

@@ -20,70 +20,53 @@ from timeframe_policy import (
 )
 
 
+def _assert_universal_roles(policy) -> None:
+    """Engine A/B universal ladder: D1 / H4 / H4 / H1 / M15."""
+    assert policy.regime_tf == Timeframe.D1
+    assert policy.bias_tf == Timeframe.H4
+    assert policy.structure_tf == Timeframe.H4
+    assert policy.setup_tf == Timeframe.H1
+    assert policy.trigger_tf == Timeframe.M15
+    assert policy.execution_tf == Timeframe.M15
+    assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
+
+
 def test_usd_zar_exotic_liquid_resolution() -> None:
     policy = resolve_timeframe_policy(
         "USD/ZAR", "forex", "forex_exotics_liquid", "intraday"
     )
     assert policy.profile == "FOREX_EXOTICS_LIQUID"
-    assert policy.regime_tf == Timeframe.D1
-    assert policy.bias_tf == Timeframe.H4
-    assert policy.structure_tf == Timeframe.H4
-    assert policy.setup_tf == Timeframe.H1
-    assert policy.trigger_tf == Timeframe.M30
-    assert policy.execution_tf == Timeframe.M30
+    _assert_universal_roles(policy)
     assert policy.m5_role == M5Role.DISABLED
     assert policy.m5_policy == M5Policy.DISABLED
-    assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
 
 
-def test_usd_brl_exotic_restricted_h1_confirmed_trigger_no_lower_tfs() -> None:
+def test_usd_brl_exotic_restricted_uses_universal_ladder() -> None:
     policy = resolve_timeframe_policy(
         "USD/BRL", "forex", "forex_exotics_restricted", "intraday"
     )
     assert policy.profile == "FOREX_EXOTICS_RESTRICTED"
-    assert policy.regime_tf == Timeframe.D1
-    assert policy.bias_tf == Timeframe.H4
-    assert policy.structure_tf == Timeframe.H4
-    assert policy.setup_tf == Timeframe.H1
-    # H1 confirmed trigger: no M30/M15/M5 anywhere in the role chain.
-    assert policy.trigger_tf == Timeframe.H1
-    assert policy.execution_tf == Timeframe.H1
-    role_tfs = {
-        policy.regime_tf,
-        policy.bias_tf,
-        policy.structure_tf,
-        policy.setup_tf,
-        policy.trigger_tf,
-        policy.execution_tf,
-    }
-    assert role_tfs.isdisjoint({Timeframe.M30, Timeframe.M15, Timeframe.M5, Timeframe.M1})
+    _assert_universal_roles(policy)
     assert policy.m5_role == M5Role.DISABLED
     assert policy.m5_policy == M5Policy.DISABLED
 
 
-def test_us_stock_single_d1_bias() -> None:
+def test_us_stock_single_universal_ladder() -> None:
     policy = resolve_timeframe_policy("AAPL", "stock", "us_stock_single", "intraday")
     assert policy.profile == "US_STOCK_SINGLE"
-    assert policy.regime_tf == Timeframe.D1
-    assert policy.bias_tf == Timeframe.D1
-    assert policy.structure_tf == Timeframe.H1
-    assert policy.setup_tf == Timeframe.M15
-    assert policy.trigger_tf == Timeframe.M15
+    _assert_universal_roles(policy)
     assert policy.m5_policy == M5Policy.CONDITIONAL
-    assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
 
 
 def test_unlisted_symbol_inherits_group_template() -> None:
-    # No symbol override for USD/SEK: the exotic-liquid group template applies.
+    # EUR/CAD has no symbol override: the group template applies.
     policy = resolve_timeframe_policy(
-        "USD/SEK", "forex", "forex_exotics_liquid", "intraday"
+        "EUR/CAD", "forex", "forex_crosses_broad", "intraday"
     )
     assert policy.policy_source == PolicySource.SCORE_GROUP_OVERRIDE
     assert policy.diagnostics.symbol_override_applied is False
-    assert policy.profile == "FOREX_EXOTICS_LIQUID"
-    assert policy.structure_tf == Timeframe.H4
-    assert policy.setup_tf == Timeframe.H1
-    assert policy.trigger_tf == Timeframe.M30
+    assert policy.profile == "FOREX_CROSSES_BROAD"
+    _assert_universal_roles(policy)
     assert policy.m5_policy == M5Policy.DISABLED
 
 
@@ -92,23 +75,18 @@ def test_unlisted_symbol_without_group_inherits_asset_default() -> None:
     assert policy.policy_source == PolicySource.ASSET_STYLE_DEFAULT
     assert policy.diagnostics.symbol_override_applied is False
     assert policy.profile == "CRYPTO_OTHER_THIN"
-    assert policy.structure_tf == Timeframe.H4
+    _assert_universal_roles(policy)
     assert policy.m5_policy == M5Policy.DISABLED
 
 
 def test_engine_a_intraday_overlay_preserves_instrument_profile() -> None:
-    # A conditional-M5 fast-major keeps its full profile under engine_a
+    # A conditional-M5 fast-major keeps its profile under engine_a
     # intraday: the overlay is a no-op, not a timeframe rewrite.
     policy = resolve_timeframe_policy(
         "GBP/USD", "forex", "forex_majors", "intraday", engine_id="engine_a"
     )
     assert policy.profile == "FOREX_MAJORS_FAST"
-    assert policy.regime_tf == Timeframe.D1
-    assert policy.bias_tf == Timeframe.H4
-    assert policy.structure_tf == Timeframe.H1
-    assert policy.setup_tf == Timeframe.M15
-    assert policy.trigger_tf == Timeframe.M15
-    assert policy.execution_tf == Timeframe.M15
+    _assert_universal_roles(policy)
     assert policy.m5_role == M5Role.REFINEMENT
     assert policy.m5_policy == M5Policy.CONDITIONAL
 
@@ -118,15 +96,9 @@ def test_engine_b_swing_overlay_full_chain() -> None:
         "EUR/USD", "forex", "forex_majors", "swing", engine_id="engine_b"
     )
     assert policy.profile.startswith("ENGINE_B_SWING_")
-    assert policy.regime_tf == Timeframe.D1
-    assert policy.bias_tf == Timeframe.D1
-    assert policy.structure_tf == Timeframe.H4
-    assert policy.setup_tf == Timeframe.H4
-    assert policy.trigger_tf == Timeframe.H1
-    assert policy.execution_tf == Timeframe.H1
+    _assert_universal_roles(policy)
     assert policy.m5_role == M5Role.DISABLED
     assert policy.m5_policy == M5Policy.DISABLED
-    assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
 
 
 def test_engine_b_intraday_overlay_preserves_instrument_profile() -> None:
@@ -134,14 +106,13 @@ def test_engine_b_intraday_overlay_preserves_instrument_profile() -> None:
         "GBP/USD", "forex", "forex_majors", "intraday", engine_id="engine_b"
     )
     assert policy.profile == "ENGINE_B_INTRADAY_FOREX_MAJORS_FAST"
-    assert policy.trigger_tf == Timeframe.M15
+    _assert_universal_roles(policy)
     assert policy.m5_role == M5Role.REFINEMENT
     assert policy.m5_policy == M5Policy.CONDITIONAL
 
 
 def test_overlays_do_not_modify_unrelated_provenance() -> None:
-    # The swing overlay patches role timeframes only; resolution provenance
-    # (policy source, score group, symbol-override diagnostics) is untouched.
+    # Swing only renames the profile; role TFs and provenance stay fixed.
     intraday = resolve_timeframe_policy(
         "GBP/USD", "forex", "forex_majors", "intraday", engine_id="engine_a"
     )
@@ -158,11 +129,9 @@ def test_overlays_do_not_modify_unrelated_provenance() -> None:
         swing.diagnostics.symbol_override_patched_roles
         == intraday.diagnostics.symbol_override_patched_roles
     )
-    # Roles did move to the slow swing chain — provenance alone was preserved.
-    assert swing.bias_tf == Timeframe.D1
-    assert swing.structure_tf == Timeframe.H4
-    assert intraday.bias_tf == Timeframe.H4
-    assert intraday.structure_tf == Timeframe.H1
+    _assert_universal_roles(intraday)
+    _assert_universal_roles(swing)
+    assert swing.profile.startswith("ENGINE_A_SWING_")
 
 
 def test_speed_adaptation_never_touches_regime_or_execution_mode() -> None:
@@ -186,9 +155,5 @@ def test_speed_adaptation_never_touches_regime_or_execution_mode() -> None:
         policy = resolve_timeframe_policy(
             "EUR/USD", "forex", "forex_majors", "intraday", state
         )
-        assert policy.regime_tf == Timeframe.D1
-        assert policy.bias_tf == Timeframe.H4
-        assert policy.structure_tf == Timeframe.H1
-        assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
-        # Advisory execution context is never speed-shifted.
-        assert policy.execution_tf == Timeframe.M15
+        _assert_universal_roles(policy)
+        assert policy.diagnostics.adaptation_applied is False

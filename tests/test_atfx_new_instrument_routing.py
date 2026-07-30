@@ -177,35 +177,37 @@ def _ladder(display, asset_type, style="intraday", engine_id="engine_a"):
 
 D1, H4, H1, M30, M15, M5 = (Timeframe.D1, Timeframe.H4, Timeframe.H1,
                             Timeframe.M30, Timeframe.M15, Timeframe.M5)
+# Universal Engine A/B ladder for every group and pair.
+UNIVERSAL = (D1, H4, H4, H1, M15)
 
 
-def test_g10_broad_crosses_use_the_broad_ladder():
+def test_g10_broad_crosses_use_universal_ladder():
     for display in G10_BROAD_CROSSES + MANAGED_EUR_PROXY:
-        assert _ladder(display, "forex") == (D1, H4, H4, H1, M30), display
+        assert _ladder(display, "forex") == UNIVERSAL, display
 
 
-def test_jpy_and_scandi_crosses_use_the_liquid_ladder():
+def test_jpy_and_scandi_crosses_use_universal_ladder():
     for display in JPY_CROSSES + SCANDI_USD + ["USD/CNH"]:
-        assert _ladder(display, "forex") == (D1, H4, H1, M30, M15), display
+        assert _ladder(display, "forex") == UNIVERSAL, display
 
 
-def test_cee_crosses_use_the_exotics_liquid_ladder():
+def test_cee_crosses_use_universal_ladder():
     for display in CEE_EM:
-        assert _ladder(display, "forex") == (D1, H4, H4, H1, M30), display
+        assert _ladder(display, "forex") == UNIVERSAL, display
 
 
-def test_zar_crosses_and_usdhkd_pin_a_confirmed_h1_trigger():
+def test_zar_crosses_and_usdhkd_use_universal_ladder():
     for display in ZAR_CROSSES + ["USD/HKD"]:
-        assert _ladder(display, "forex") == (D1, H4, H4, H1, H1), display
+        assert _ladder(display, "forex") == UNIVERSAL, display
 
 
-def test_china_a50_uses_the_broad_index_ladder_not_the_fast_one():
-    assert _ladder("China A50", "index") == (D1, H4, H4, H1, M30)
+def test_china_a50_uses_universal_ladder():
+    assert _ladder("China A50", "index") == UNIVERSAL
 
 
-def test_xauzar_keeps_the_thin_metal_ladder_not_the_xauusd_one():
-    assert _ladder("XAU/ZAR", "commodity") == (D1, H4, H4, H1, M30)
-    assert _ladder("XAU/USD", "commodity") == (D1, H4, H1, M15, M15)
+def test_xauzar_and_xauusd_share_universal_ladder():
+    assert _ladder("XAU/ZAR", "commodity") == UNIVERSAL
+    assert _ladder("XAU/USD", "commodity") == UNIVERSAL
 
 
 # ── Special-instrument rules ─────────────────────────────────────────────────
@@ -219,8 +221,10 @@ def _trigger_is_not_faster_than(display, asset_type, floor):
                 f"{display} {engine_id}/{style} trigger={trigger}")
 
 
-def test_usdhkd_cannot_promote_below_h1_on_any_engine_or_style():
-    _trigger_is_not_faster_than("USD/HKD", "forex", Timeframe.H1)
+def test_usdhkd_uses_m15_trigger_on_any_engine_or_style():
+    for engine_id in ("engine_a", "engine_b"):
+        for style in ("intraday", "swing"):
+            assert _ladder("USD/HKD", "forex", style, engine_id) == UNIVERSAL
 
 
 def test_usdcnh_never_reaches_m5():
@@ -235,21 +239,18 @@ def test_usdcnh_never_reaches_m5():
 def test_usddkk_is_not_a_liquid_usd_major():
     pair = _fx("USD/DKK")
     assert resolve_score_group_by_type(pair) != "forex_majors"
-    assert _ladder("USD/DKK", "forex") != _ladder("EUR/USD", "forex")
+    # Roles are universal; group/profile identity still differ from majors.
+    assert resolve_score_group_by_type(pair) == "forex_crosses"
 
 
-def test_zar_crosses_are_stricter_than_usdzar():
-    # USD/ZAR keeps its exotics_liquid M30 trigger; the crosses are pinned to H1.
-    assert _ladder("USD/ZAR", "forex")[4] is M30
+def test_zar_crosses_and_usdzar_share_universal_trigger():
+    assert _ladder("USD/ZAR", "forex")[4] is M15
     for display in ZAR_CROSSES:
-        assert _ladder(display, "forex")[4] is H1, display
+        assert _ladder(display, "forex")[4] is M15, display
 
 
-def test_fra40_receives_the_standard_index_ladder_until_m5_is_validated():
-    # The plan proposes conditional M5 for FRA40. There is no frozen
-    # out-of-sample evidence for it, and an UNVALIDATED conditional M5 resolves
-    # to an M15 trigger anyway, so the standard ladder is assigned explicitly.
-    assert _ladder("France 40", "index") == (D1, H4, H1, M30, M15)
+def test_fra40_receives_universal_ladder_with_m5_disabled():
+    assert _ladder("France 40", "index") == UNIVERSAL
     pair = _index("France 40", "FRA40")
     policy = resolve_timeframe_policy(
         "France 40", "index", resolve_score_group_by_type(pair), "intraday")
@@ -266,7 +267,10 @@ def test_symbol_override_beats_score_group():
     inherited = resolve_timeframe_policy("EUR/CAD", "forex", "forex_crosses", "intraday")
     assert pinned.policy_source is PolicySource.SYMBOL_OVERRIDE
     assert inherited.policy_source is PolicySource.SCORE_GROUP_OVERRIDE
-    assert pinned.structure_tf is H1 and inherited.structure_tf is H4
+    # Roles are universal; profile identity still differs via the pin.
+    assert pinned.structure_tf is H4 and inherited.structure_tf is H4
+    assert pinned.profile == "FOREX_CROSSES_LIQUID"
+    assert inherited.profile == "FOREX_CROSSES_BROAD"
 
 
 def test_score_group_beats_asset_default():
@@ -362,10 +366,11 @@ def test_describe_symbol_policy_reports_the_required_fields():
     assert described["profileResolutionSource"] == "SYMBOL_OVERRIDE"
     assert described["scoreGroup"] == "forex_exotics"
     assert described["structureTf"] == "H4"
-    assert described["triggerTf"] == "H1"
+    assert described["setupTf"] == "H1"
+    assert described["triggerTf"] == "M15"
     assert described["executionMode"] == "live_quote"
     assert described["m5Policy"] == "disabled"
-    assert {"M30", "M15", "M5"} <= set(described["disabledTfs"])
+    assert "M5" in set(described["disabledTfs"])
     assert described["allowedRefinementTfs"] == []
     assert described["symbolOverrideApplied"] is True
     for field_name in (
@@ -427,22 +432,22 @@ def test_everything_else_keeps_its_existing_auto_style(display, asset_type):
                               asset_type=asset_type) == "swing", display
 
 
-@pytest.mark.parametrize("display,asset_type,expected", [
-    ("XAU/ZAR", "commodity", (D1, H4, H4, H1, M30)),
-    ("China A50", "index", (D1, H4, H4, H1, M30)),
-    ("France 40", "index", (D1, H4, H1, M30, M15)),
-    ("Spain 35", "index", (D1, H4, H1, M30, M15)),
-    ("Italy 40", "index", (D1, H4, H1, M30, M15)),
-    ("EUR/HUF", "forex", (D1, H4, H4, H1, M30)),
+@pytest.mark.parametrize("display,asset_type", [
+    ("XAU/ZAR", "commodity"),
+    ("China A50", "index"),
+    ("France 40", "index"),
+    ("Spain 35", "index"),
+    ("Italy 40", "index"),
+    ("EUR/HUF", "forex"),
 ])
-def test_auto_scan_now_runs_the_declared_ladder(display, asset_type, expected):
+def test_auto_scan_now_runs_the_universal_ladder(display, asset_type):
     """The ladder a live auto scan resolves, not just the explicit-intraday one."""
     pair = {"display": display, "type": asset_type,
             "symbol": display.replace("/", "")}
     group = resolve_score_group_by_type(pair)
     style = resolve_auto_style("auto", pair, score_group=group,
                                asset_type=asset_type)
-    assert _ladder(display, asset_type, style) == expected, display
+    assert _ladder(display, asset_type, style) == UNIVERSAL, display
 
 
 def test_opt_in_matches_on_display_symbol_or_broker_suffix():
@@ -472,11 +477,11 @@ def test_opt_in_does_not_leak_to_similar_symbols():
 # ── Cash-equity share CFDs ───────────────────────────────────────────────────
 
 def test_share_cfds_use_the_cash_equity_ladder_not_us_stock_single():
-    """The 219 ATFX shares get an M15 trigger with M5 off, not us_stock_single.
+    """The 219 ATFX shares share the universal ladder with M5 off.
 
-    us_stock_single carries an M15 setup and a conditional M5 trigger calibrated
-    on the named US singles. These share CFDs have no trade history in Athena,
-    so they route to their own template instead of inheriting that promotion.
+    us_stock_single carries conditional M5 refinement calibrated on named US
+    singles. These share CFDs have no trade history in Athena, so they route to
+    their own template (M5 disabled) instead of inheriting that promotion.
     """
     for ticker in ("BABA", "LVMH", "HK0700", "BRKb", "AA"):
         pair = {"display": ticker, "symbol": ticker, "type": "stock"}
@@ -487,7 +492,7 @@ def test_share_cfds_use_the_cash_equity_ladder_not_us_stock_single():
         policy = resolve_timeframe_policy(ticker, "stock", group, style)
         assert policy.profile == "CASH_EQUITY_STANDARD_DYNAMIC", ticker
         assert (policy.regime_tf, policy.bias_tf, policy.structure_tf,
-                policy.setup_tf, policy.trigger_tf) == (D1, D1, H1, M30, M15), ticker
+                policy.setup_tf, policy.trigger_tf) == UNIVERSAL, ticker
         assert policy.m5_policy.value == "disabled", ticker
 
 
@@ -513,32 +518,32 @@ def test_etfs_are_not_swept_into_the_share_cfd_group():
 # ── Non-regression on the pre-existing book ──────────────────────────────────
 
 PRE_EXISTING = {
-    ("EUR/USD", "forex"): ("forex_majors", (D1, H4, H1, M30, M15)),
-    ("GBP/USD", "forex"): ("forex_majors", (D1, H4, H1, M15, M15)),
-    ("USD/JPY", "forex"): ("forex_majors", (D1, H4, H1, M15, M15)),
-    ("EUR/GBP", "forex"): ("forex_crosses", (D1, H4, H4, H1, M30)),
-    ("EUR/JPY", "forex"): ("forex_crosses", (D1, H4, H1, M30, M15)),
-    ("AUD/JPY", "forex"): ("forex_crosses", (D1, H4, H1, M30, M15)),
-    ("GBP/JPY", "forex"): ("forex_crosses", (D1, H4, H1, M15, M15)),
-    ("USD/SGD", "forex"): ("forex_crosses", (D1, H4, H4, H1, M30)),
-    ("AUD/CHF", "forex"): ("forex_crosses", (D1, H4, H4, H1, M30)),
-    ("USD/ZAR", "forex"): ("forex_exotics", (D1, H4, H4, H1, M30)),
-    ("USD/MXN", "forex"): ("forex_exotics", (D1, H4, H4, H1, M30)),
-    ("USD/BRL", "forex"): ("forex_exotics", (D1, H4, H4, H1, H1)),
-    ("USD/INR", "forex"): ("forex_exotics", (D1, H4, H4, H1, H1)),
-    ("XAU/USD", "commodity"): ("precious_trackers", (D1, H4, H1, M15, M15)),
-    ("XAG/USD", "commodity"): ("precious_trackers", (D1, H4, H1, M30, M15)),
-    ("WTI Oil", "commodity"): ("energy_oil", (D1, H4, H1, M15, M15)),
-    ("Nat Gas", "commodity"): ("nat_gas", (D1, H4, H1, M30, M15)),
-    ("DAX 40", "index"): ("eu_indices", (D1, H4, H1, M15, M15)),
-    ("UK100", "index"): ("eu_indices", (D1, H4, H1, M30, M15)),
-    ("Nikkei 225", "index"): ("asian_indices", (D1, H4, H1, M30, M15)),
-    ("Hang Seng", "index"): ("asian_indices", (D1, H4, H1, M30, M15)),
-    ("ASX 200", "index"): ("asian_indices", (D1, H4, H1, M30, M15)),
-    ("NASDAQ-100", "index"): ("us_indices_trackers", (D1, H4, H1, M15, M15)),
-    ("AAPL", "stock"): ("us_stock_single", (D1, D1, H1, M15, M15)),
-    ("BTC/USDT", "crypto"): ("crypto_btc", (D1, H4, H1, M15, M15)),
-    ("DOGE/USDT", "crypto"): ("crypto_doge", (D1, H4, H4, H1, M30)),
+    ("EUR/USD", "forex"): ("forex_majors", UNIVERSAL),
+    ("GBP/USD", "forex"): ("forex_majors", UNIVERSAL),
+    ("USD/JPY", "forex"): ("forex_majors", UNIVERSAL),
+    ("EUR/GBP", "forex"): ("forex_crosses", UNIVERSAL),
+    ("EUR/JPY", "forex"): ("forex_crosses", UNIVERSAL),
+    ("AUD/JPY", "forex"): ("forex_crosses", UNIVERSAL),
+    ("GBP/JPY", "forex"): ("forex_crosses", UNIVERSAL),
+    ("USD/SGD", "forex"): ("forex_crosses", UNIVERSAL),
+    ("AUD/CHF", "forex"): ("forex_crosses", UNIVERSAL),
+    ("USD/ZAR", "forex"): ("forex_exotics", UNIVERSAL),
+    ("USD/MXN", "forex"): ("forex_exotics", UNIVERSAL),
+    ("USD/BRL", "forex"): ("forex_exotics", UNIVERSAL),
+    ("USD/INR", "forex"): ("forex_exotics", UNIVERSAL),
+    ("XAU/USD", "commodity"): ("precious_trackers", UNIVERSAL),
+    ("XAG/USD", "commodity"): ("precious_trackers", UNIVERSAL),
+    ("WTI Oil", "commodity"): ("energy_oil", UNIVERSAL),
+    ("Nat Gas", "commodity"): ("nat_gas", UNIVERSAL),
+    ("DAX 40", "index"): ("eu_indices", UNIVERSAL),
+    ("UK100", "index"): ("eu_indices", UNIVERSAL),
+    ("Nikkei 225", "index"): ("asian_indices", UNIVERSAL),
+    ("Hang Seng", "index"): ("asian_indices", UNIVERSAL),
+    ("ASX 200", "index"): ("asian_indices", UNIVERSAL),
+    ("NASDAQ-100", "index"): ("us_indices_trackers", UNIVERSAL),
+    ("AAPL", "stock"): ("us_stock_single", UNIVERSAL),
+    ("BTC/USDT", "crypto"): ("crypto_btc", UNIVERSAL),
+    ("DOGE/USDT", "crypto"): ("crypto_doge", UNIVERSAL),
 }
 
 
