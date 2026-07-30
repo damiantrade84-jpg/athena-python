@@ -94,7 +94,9 @@ EODHD_WS_US_SYMBOLS:
   - MS        # 3.75
   - LUV       # 3.74
   - NFLX      # 3.61
-  - SQ        # 3.56
+  # SQ removed 2026-07-30: Block trades as XYZ now, so the EODHD `us` stream
+  # delivers no ticks under SQ and the pair held zero bars on every timeframe
+  # while still consuming one of the 50 subscription slots.
   - PYPL      # 3.56
   - GOOG      # 3.45, renamed from GOOGL: ATFX only quotes Alphabet Class C (#GOOG)
   - OMC       # 3.44

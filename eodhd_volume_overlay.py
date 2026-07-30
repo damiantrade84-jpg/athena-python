@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from candles_cache import candle_time_epoch_utc
 from config import CONFIG
 
@@ -150,6 +152,32 @@ _EODHD_VOLUME_WHITELIST = {
 }
 
 
+_WS_STOCK_TYPES = {"stock", "etf", "etf_bond"}
+
+
+@lru_cache(maxsize=4)
+def _ws_display_set(raw: tuple) -> frozenset:
+    return frozenset(str(s).strip().upper() for s in raw if str(s or "").strip())
+
+
+def configured_ws_stock_displays() -> frozenset:
+    """US equity displays subscribed to the EODHD `us` stream, from config.
+
+    ``_STOCK_ALL_TFS`` predates ``EODHD_WS_US_SYMBOLS`` and drifted out of date
+    the moment the WS selection was re-ranked: 41 of the 50 live symbols were
+    absent from it. Nothing hard-blocked, but the miss was silent — the
+    cache_miss warning and the background re-warm in
+    ``athena._fetch_eodhd_volume_only`` are both whitelist-gated, and the
+    Engine A (H1/H4/D1) and Engine D (M1/M5/M15) volume warmers skip anything
+    the whitelist rejects. Reading the same key the subscription reads keeps
+    the two from drifting apart again.
+    """
+    raw = CONFIG.get("EODHD_WS_US_SYMBOLS")
+    if not isinstance(raw, (list, tuple)):
+        return frozenset()
+    return _ws_display_set(tuple(raw))
+
+
 def supports_eodhd_volume_overlay(pair: dict | None) -> bool:
     """True when the pair should use EODHD volume as a best-effort overlay."""
     if not isinstance(pair, dict):
@@ -186,8 +214,19 @@ def is_eodhd_volume_whitelisted(pair: dict | None, tf: str) -> bool:
     display = str((pair or {}).get("display") or "")
     tf_key = str(tf or "").upper()
     keys = [symbol, display]
-    if str((pair or {}).get("type") or "").lower() in ("stock", "etf", "etf_bond"):
+    is_us_equity = str((pair or {}).get("type") or "").lower() in _WS_STOCK_TYPES
+    if is_us_equity:
         keys.extend([f"{symbol}.US", f"{display}.US"])
+        # WS-subscribed US equities carry per-trade exchange volume on every
+        # timeframe CandleBuilder accumulates, exactly like _STOCK_ALL_TFS.
+        ws_displays = configured_ws_stock_displays()
+        if ws_displays:
+            bare = {
+                symbol.upper().removesuffix(".US"),
+                display.upper().removesuffix(".US"),
+            }
+            if bare & ws_displays:
+                return tf_key in _EODHD_VOLUME_TIMEFRAMES
     allowed = None
     for key in keys:
         allowed = _EODHD_VOLUME_WHITELIST.get(key)

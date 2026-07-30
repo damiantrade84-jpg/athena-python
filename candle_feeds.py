@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 from athena_runtime import rt
 from athena.datafeeds.ws_ssl import default_ssl_context
-from candles_cache import forex_h4_resample_offset_hours
+from candles_cache import candle_time_epoch_utc, forex_h4_resample_offset_hours
 from data_feeds import _get_eodhd_client, http_requests
 from runtime_paths import ensure_candle_cache_db_ready
 
@@ -2177,6 +2177,38 @@ class CandleBuilder:
                 "CREATE INDEX IF NOT EXISTS idx_cc_lookup ON candle_cache(pair, timeframe)"
             )
 
+            self._normalize_bar_time_format(con)
+
+    @staticmethod
+    def _normalize_bar_time_format(con) -> int:
+        """Strip the legacy '+00:00' suffix from stored bar_time values.
+
+        Older seeds wrote H4 rows from a pandas Timestamp repr while _flush()
+        writes '%Y-%m-%d %H:%M:%S'. Both parse to the same instant, but the
+        primary key is TEXT, so the two spellings are distinct rows and
+        INSERT OR IGNORE cannot dedupe them. Idempotent: a no-op once converted.
+        """
+        # Existing canonical rows win, matching INSERT OR IGNORE semantics.
+        dropped = con.execute(
+            "DELETE FROM candle_cache WHERE bar_time LIKE '%+00:00' AND EXISTS ("
+            "  SELECT 1 FROM candle_cache c2"
+            "   WHERE c2.pair = candle_cache.pair"
+            "     AND c2.timeframe = candle_cache.timeframe"
+            "     AND c2.bar_time = substr(candle_cache.bar_time, 1,"
+            "                              length(candle_cache.bar_time) - 6))"
+        ).rowcount
+        converted = con.execute(
+            "UPDATE candle_cache "
+            "   SET bar_time = substr(bar_time, 1, length(bar_time) - 6) "
+            " WHERE bar_time LIKE '%+00:00'"
+        ).rowcount
+        if converted or dropped:
+            log.info(
+                "[CB] bar_time normalised: %s converted, %s duplicate bucket(s) dropped",
+                converted, dropped,
+            )
+        return converted
+
     @staticmethod
     def _bar_start(ts_s, tf_sec):
         """Align timestamp to bar boundary (UTC)."""
@@ -2383,6 +2415,50 @@ class CandleBuilder:
 
             return None
 
+    # A Fri-close → Tue-open US holiday weekend measures ~89.5h, so 120h clears
+    # every legitimate market closure while still catching a real feed outage.
+    _SEED_MAX_H1_GAP_HOURS = 120.0
+    _SEED_GAP_WINDOW_DAYS = 30
+
+    def _h1_gap_hours(self, disp: str) -> float | None:
+        """Largest recent H1 hole in hours, or None when the pair is unseeded.
+
+        seed() used to skip any pair holding >=100 H1 bars, so a pair that fell
+        off the WS kept its hole forever — the 2026-07-09 → 2026-07-30 outage
+        left the legacy WS symbols with a 21-day void no restart could fill.
+        The overlay matches on exact timestamps, so an unfilled hole does not
+        degrade gracefully: it makes the scoring lookback straddle EODHD and
+        MT5-tick provenance, and factor_scoring._volume_provenance_uniform then
+        disables the volume factor outright rather than mixing the two scales.
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=self._SEED_GAP_WINDOW_DAYS)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        with sqlite3.connect(self._db, timeout=15.0) as con:
+            total = con.execute(
+                "SELECT COUNT(*) FROM candle_cache WHERE pair=? AND timeframe='H1'",
+                (disp,),
+            ).fetchone()[0]
+            if total < 100:
+                return None
+            rows = con.execute(
+                "SELECT bar_time FROM candle_cache WHERE pair=? AND timeframe='H1' "
+                "AND bar_time >= ? ORDER BY bar_time",
+                (disp, cutoff),
+            ).fetchall()
+
+        stamps = []
+        for (value,) in rows:
+            ts = candle_time_epoch_utc(value)
+            if ts is not None:
+                stamps.append(float(ts))
+        if not stamps:
+            return float("inf")
+        # Include the trailing hole so a pair that simply stopped updating is
+        # backfilled, not just one with an interior void.
+        stamps.append(time.time())
+        return max(b - a for a, b in zip(stamps, stamps[1:])) / 3600.0
+
     def seed(self, pairs):
         """Seed candle_cache with EODHD historical data (D1 EOD + H1 intraday → H4 resample)."""
 
@@ -2419,14 +2495,17 @@ class CandleBuilder:
 
                 disp = p["display"]
 
-                with sqlite3.connect(self._db, timeout=15.0) as con:
-                    cnt = con.execute(
-                        "SELECT COUNT(*) FROM candle_cache WHERE pair=? AND timeframe='H1'",
-                        (disp,),
-                    ).fetchone()[0]
-
-                if cnt >= 100:
+                # Seeded pairs are re-fetched only when history is actually
+                # missing. Every write below is INSERT OR IGNORE, so a backfill
+                # fills holes without touching bars already on disk.
+                gap_hours = self._h1_gap_hours(disp)
+                if gap_hours is not None and gap_hours <= self._SEED_MAX_H1_GAP_HOURS:
                     continue
+                if gap_hours is not None:
+                    log.info(
+                        f"[CB] {disp}: H1 gap {gap_hours:.1f}h exceeds "
+                        f"{self._SEED_MAX_H1_GAP_HOURS:.0f}h - backfilling"
+                    )
 
                 d1_n = 0
 
@@ -2574,7 +2653,13 @@ class CandleBuilder:
                         (
                             disp,
                             "H4",
-                            str(idx),
+                            # Must match _flush()'s format: the primary key is
+                            # TEXT, so a pandas repr ("...20:00:00+00:00") and a
+                            # WS-built bar ("...20:00:00") are two rows for one
+                            # bucket. Harmless while seeding only ever ran on
+                            # empty pairs; a gap backfill re-seeds pairs the WS
+                            # has already written to.
+                            idx.strftime("%Y-%m-%d %H:%M:%S"),
                             float(row["open"]),
                             float(row["high"]),
                             float(row["low"]),
@@ -2698,6 +2783,86 @@ class CandleBuilder:
                 log.warning(f"[CB] Crypto seed {disp} {tf_label}: {e}")
             time.sleep(0.3)
 
+    def _stale_d1_codes(self, code_map: dict) -> dict:
+        """{bulk_code: display} whose cached D1 is behind the last closed session."""
+        expected = datetime.now(timezone.utc).date() - timedelta(days=1)
+        while expected.weekday() >= 5:  # Sat/Sun → previous Friday
+            expected -= timedelta(days=1)
+        expected_str = expected.isoformat()
+        out: dict = {}
+        with sqlite3.connect(self._db, timeout=15.0) as con:
+            for code, disp in code_map.items():
+                row = con.execute(
+                    "SELECT MAX(bar_time) FROM candle_cache WHERE pair=? AND timeframe='D1'",
+                    (disp,),
+                ).fetchone()
+                newest = str((row[0] if row else "") or "")[:10]
+                if not newest or newest < expected_str:
+                    out[code] = disp
+        return out
+
+    def _per_symbol_d1_backfill(self, exch: str, code_map: dict) -> int:
+        """Per-symbol EOD refresh for pairs the bulk route could not deliver.
+
+        ``eod-bulk-last-day`` sits on a higher plan tier and answers HTTP 402 on
+        this key, which silently froze every D1 volume series at the last
+        successful bulk call — nothing downstream notices, because
+        _fetch_eodhd_volume_only short-circuits on CandleBuilder as soon as D1
+        holds >=20 bars regardless of their age.
+        ``get_eod_historical_stock_market_data`` is on the base plan and already
+        backs seed(), so it keeps D1 moving. Only pairs actually behind the last
+        closed session are fetched.
+        """
+        api = _get_eodhd_client()
+        if not api:
+            return 0
+        stale = self._stale_d1_codes(code_map)
+        if not stale:
+            return 0
+
+        start = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
+        rows = []
+        for code, disp in stale.items():
+            try:
+                bars = api.get_eod_historical_stock_market_data(
+                    f"{code}.{exch}", period="d", from_date=start, order="a"
+                )
+            except Exception as exc:
+                log.debug("[CB] D1 fallback %s.%s: %s", code, exch, exc)
+                bars = None
+            if bars and isinstance(bars, list):
+                for b in bars:
+                    if b.get("open") is None or b.get("close") is None or not b.get("date"):
+                        continue
+                    rows.append(
+                        (
+                            disp,
+                            "D1",
+                            b["date"],
+                            float(b["open"]),
+                            float(b["high"]),
+                            float(b["low"]),
+                            float(b["close"]),
+                            float(b.get("volume") or 0),
+                            0,
+                        )
+                    )
+            time.sleep(0.15)
+
+        if rows:
+            with sqlite3.connect(self._db, timeout=15.0) as con:
+                con.executemany(
+                    "INSERT OR REPLACE INTO candle_cache "
+                    "(pair,timeframe,bar_time,open,high,low,close,volume,tick_count) "
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    rows,
+                )
+        log.info(
+            "[CB] D1 per-symbol fallback %s: %s bars across %s stale symbols",
+            exch, len(rows), len(stale),
+        )
+        return len(rows)
+
     def bulk_update_d1(self):
         """Use EODHD Bulk EOD API to update D1 candles for all active pairs in ~5 API calls.
 
@@ -2757,11 +2922,14 @@ class CandleBuilder:
                 if r.status_code != 200:
                     log.warning(f"[CB] Bulk D1 {exch}: HTTP {r.status_code}")
 
+                    updated += self._per_symbol_d1_backfill(exch, code_map)
+
                     continue
 
                 bars = r.json()
 
                 if not bars or not isinstance(bars, list):
+                    updated += self._per_symbol_d1_backfill(exch, code_map)
                     continue
 
                 rows = []
@@ -2825,6 +2993,10 @@ class CandleBuilder:
 
             except Exception as e:
                 log.warning(f"[CB] Bulk D1 {exch}: {e}")
+                try:
+                    updated += self._per_symbol_d1_backfill(exch, code_map)
+                except Exception as fallback_err:
+                    log.warning(f"[CB] D1 fallback {exch}: {fallback_err}")
 
         log.info(
             f"[CB] Bulk D1 update: {updated} total bars across {len(exchange_map)} exchanges"

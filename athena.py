@@ -2493,6 +2493,7 @@ def _fetch_eodhd_volume_only(
 
                 else:
                     # M1-H4 path: WS ticks or Live v2 injected ticks.
+                    _min_bars = {"M1": 5, "M5": 5, "M15": 5, "H1": 20, "H4": 10}.get(tf_key, 5)
                     if grid_offset_seconds:
                         # MT5 keeps the broker's bar grid after the UTC shift (H4 at
                         # 01/05/09 UTC on a UTC+3 broker) while CandleBuilder buckets
@@ -2516,9 +2517,37 @@ def _fetch_eodhd_volume_only(
                                 if _m15_bars
                                 else None
                             )
+                            if (
+                                tf_key == "H4"
+                                and len(cb_candles or []) < _min_bars
+                                and grid_offset_seconds % 3600 == 0
+                            ):
+                                # M15 only exists from the moment a symbol joined
+                                # the WS, so a newly subscribed stock holds hours
+                                # of it against ~180 days of seeded H1. The
+                                # resample above then yields a handful of bars,
+                                # fails the depth check below, and drops the H4
+                                # overlay entirely for ~5 sessions. The broker
+                                # shift is a whole number of hours, so H1 nests
+                                # into the shifted H4 grid exactly and carries the
+                                # seed's depth.
+                                _h1_bars = cb.get_candles(
+                                    display, "H1", min(int(limit) * 4 + 4, 5000)
+                                )
+                                _h4_from_h1 = (
+                                    _resample_eodhd_volume_bars(
+                                        _h1_bars,
+                                        "H4",
+                                        int(limit),
+                                        offset_seconds=grid_offset_seconds,
+                                    )
+                                    if _h1_bars
+                                    else None
+                                )
+                                if len(_h4_from_h1 or []) > len(cb_candles or []):
+                                    cb_candles = _h4_from_h1
                         else:
                             cb_candles = None
-                    _min_bars = {"M1": 5, "M5": 5, "M15": 5, "H1": 20, "H4": 10}.get(tf_key, 5)
                     if cb_candles and len(cb_candles) >= _min_bars:
                         last_ts_str = cb_candles[-1].get("time", "")
                         if last_ts_str:
