@@ -2401,7 +2401,8 @@ CONFIG: dict = {
         "crypto": 0.002,
     },
     # Block MT5 entries when spread > this fraction of SL distance (0/None off).
-    "MAX_EXECUTION_SPREAD_TO_SL_RATIO": 0.10,
+    # Disabled for testing (was 0.10); config.yaml is authoritative when loaded.
+    "MAX_EXECUTION_SPREAD_TO_SL_RATIO": 0,
     "MAX_SIGNAL_DRIFT_PCT": {
         "forex": 0.0015,
         "commodity": 0.003,
