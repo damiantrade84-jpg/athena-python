@@ -61,7 +61,7 @@ const navSections: NavSection[] = [
       { id: 'scalpWorkbench', label: 'Scalp Workbench', icon: BarChart2 },
       { id: 'tvChart',     label: 'TV Chart',     icon: BarChart2 },
       { id: 'suggestedTrades', label: 'Suggested Trades', icon: ListChecks },
-      { id: 'backtest',    label: 'Backtesting v2', icon: FlaskConical, badge: 'V2' },
+      { id: 'backtest',    label: 'Backtesting', icon: FlaskConical, badge: 'V3' },
       { id: 'screener',    label: 'Screener',     icon: Filter },
       { id: 'lotteryLab',  label: 'Lottery Lab',  icon: Ticket },
       { id: 'performance', label: 'Performance',  icon: PieChart },

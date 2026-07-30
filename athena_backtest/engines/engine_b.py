@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from athena_backtest.costs import cost_r, resolve_costs
 from athena_backtest.data.store import ParquetCandleStore
 from athena_backtest.exits import SAME_BAR_POLICY, simulate_fixed_exit
+from athena_backtest.policy import attach_policy_provenance, resolve_backtest_policy_roles
 from athena_backtest.speed_replay import SpeedStateReplay
 
 _PROVIDER_BY_SOURCE = {
@@ -30,6 +31,7 @@ _PROVIDER_BY_SOURCE = {
     "eodhd": "eodhd",
 }
 
+# Universal policy ladder uses D1/H4/H1/M15; M30 kept for store completeness.
 _ROLE_TFS = ("D1", "H4", "H1", "M30", "M15")
 _TF_SECONDS = {"D1": 86_400, "H4": 14_400, "H1": 3_600, "M30": 1_800, "M15": 900}
 
@@ -89,21 +91,32 @@ def run_engine_b_backtest(
     from config import CONFIG, scan_candle_limits
 
     candles = candles if candles is not None else load_candles(pair, store=store)
+    resolved_policy = resolve_backtest_policy_roles(pair, engine="B", style=style)
     role_rows = {tf: list(candles.get(tf) or []) for tf in _ROLE_TFS}
     role_close_epochs = {
         tf: [_epoch(row) + _TF_SECONDS[tf] for row in rows] for tf, rows in role_rows.items()
     }
 
-    # Iteration series: fastest stored intraday TF (trigger cadence upper bound).
-    iter_tf = next((tf for tf in ("M15", "M30", "H1") if role_rows.get(tf)), None)
+    # Iteration series: policy trigger first, then slower stored fallbacks.
+    policy_trigger = str(
+        (resolved_policy.get("roles") or {}).get("trigger") or "M15"
+    ).upper()
+    iter_candidates = (policy_trigger, "M15", "M30", "H1")
+    iter_tf = next(
+        (tf for tf in dict.fromkeys(iter_candidates) if role_rows.get(tf)),
+        None,
+    )
     if iter_tf is None or len(role_rows["D1"]) < 30 or len(role_rows["H4"]) < 30 or len(role_rows["H1"]) < 50:
-        return {
-            "pair": pair.get("display"),
-            "engine": "B",
-            "style": style,
-            "error": "insufficient_history",
-            "coverage": {tf: len(rows) for tf, rows in role_rows.items()},
-        }
+        return attach_policy_provenance(
+            {
+                "pair": pair.get("display"),
+                "engine": "B",
+                "style": style,
+                "error": "insufficient_history",
+                "coverage": {tf: len(rows) for tf, rows in role_rows.items()},
+            },
+            resolved_policy,
+        )
     iter_rows = role_rows[iter_tf]
     iter_dur = _TF_SECONDS[iter_tf]
 
@@ -476,7 +489,11 @@ def run_engine_b_backtest(
                     ),
                     "levelsAtrTf": atr_tf,
                 },
+                "timeframePolicyVersion": resolved_policy.get("policyVersion"),
+                "structureTf": (resolved_policy.get("roles") or {}).get("structure"),
+                "setupTf": (resolved_policy.get("roles") or {}).get("setup"),
+                "triggerTf": (resolved_policy.get("roles") or {}).get("trigger"),
             },
         }
     )
-    return summary
+    return attach_policy_provenance(summary, resolved_policy)

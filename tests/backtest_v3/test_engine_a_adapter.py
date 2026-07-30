@@ -18,7 +18,12 @@ from athena_backtest.engines.engine_a import run_engine_a_backtest
 
 
 def _bars(*, timeframe: str, count: int) -> list[dict]:
-    step = {"D1": timedelta(days=1), "H4": timedelta(hours=4), "H1": timedelta(hours=1)}[timeframe]
+    step = {
+        "D1": timedelta(days=1),
+        "H4": timedelta(hours=4),
+        "H1": timedelta(hours=1),
+        "M15": timedelta(minutes=15),
+    }[timeframe]
     start = datetime(2024, 1, 1, tzinfo=timezone.utc)
     out = []
     for index in range(count):
@@ -47,12 +52,18 @@ def _pair() -> dict:
     }
 
 
-def test_anti_lookahead_future_mutation_does_not_change_past_signal():
-    candles = {
+def _policy_candles() -> dict[str, list[dict]]:
+    # Universal ladder needs setup H1 + trigger M15 alongside D1/H4 structure.
+    return {
         "D1": _bars(timeframe="D1", count=300),
         "H4": _bars(timeframe="H4", count=600),
         "H1": _bars(timeframe="H1", count=1000),
+        "M15": _bars(timeframe="M15", count=2000),
     }
+
+
+def test_anti_lookahead_future_mutation_does_not_change_past_signal():
+    candles = _policy_candles()
     pair = _pair()
 
     result_a = run_engine_a_backtest(pair, horizon="intraday", candles=candles, collect_funnel=True)
@@ -76,8 +87,26 @@ def test_engine_a_adapter_returns_funnel_and_timing_fields():
         "D1": _bars(timeframe="D1", count=250),
         "H4": _bars(timeframe="H4", count=400),
         "H1": _bars(timeframe="H1", count=500),
+        "M15": _bars(timeframe="M15", count=1000),
     }
     result = run_engine_a_backtest(_pair(), horizon="intraday", candles=candles, collect_funnel=True)
     assert "funnel" in result
     assert result["funnel"]["barsEvaluated"] > 0
-    assert result["entryTimeframe"] in ("H1", "H4", "D1")
+    # Policy-driven setup is H1; trigger M15 is required but entry iterates setup.
+    assert result["entryTimeframe"] == "H1"
+    assert result["setupTf"] == "H1"
+    assert result["triggerTf"] == "M15"
+    assert result["structureTf"] == "H4"
+    assert result["timeframePolicyVersion"] == "timeframe_policy.v4"
+
+
+def test_engine_a_adapter_fails_closed_without_policy_trigger_candles():
+    candles = {
+        "D1": _bars(timeframe="D1", count=250),
+        "H4": _bars(timeframe="H4", count=400),
+        "H1": _bars(timeframe="H1", count=500),
+        # M15 intentionally missing
+    }
+    result = run_engine_a_backtest(_pair(), horizon="intraday", candles=candles)
+    assert result.get("error") == "ENGINE_A_V3_POLICY_CANDLES_MISSING"
+    assert "M15" in (result.get("missingPolicyTimeframes") or [])

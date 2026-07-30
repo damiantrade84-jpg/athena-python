@@ -53,8 +53,51 @@ import type {
   TradePage,
 } from '@/lib/backtestingV2';
 import { assuranceTone, hasExplicitUniverse, statusTone } from '@/lib/backtestingV2';
+import { buildBacktestRequest, type BacktestEngineKey } from '@/lib/backtestPayload';
 
-type WorkstationTab = 'run' | 'jobs' | 'results' | 'compare' | 'data';
+type WorkstationTab = 'v3' | 'run' | 'jobs' | 'results' | 'compare' | 'data';
+
+type V3HistoryRow = {
+  id?: number;
+  run_date?: string;
+  pair?: string;
+  symbol?: string;
+  engine?: string;
+  style?: string;
+  trades?: number;
+  win_rate?: number;
+  profit_factor?: number;
+  expectancy?: number;
+  sqn?: number;
+  total_r?: number;
+  verdict?: string;
+  wall_time_sec?: number;
+};
+
+type V3RunResult = {
+  error?: string;
+  totalTrades?: number;
+  winRate?: number;
+  profitFactor?: number;
+  expectancyR?: number;
+  sqn?: number;
+  totalR?: number;
+  maxDrawdownR?: number;
+  entryTimeframe?: string;
+  timeframePolicyVersion?: string;
+  policyKey?: string;
+  structureTf?: string;
+  setupTf?: string;
+  triggerTf?: string;
+  executionTf?: string;
+  m5Policy?: string;
+  missingPolicyTimeframes?: string[];
+  validation?: { verdict?: string; trialCount?: number };
+  metricsV3?: { deflatedSqn?: number };
+  wallTimeSec?: number;
+  funnel?: { barsEvaluated?: number };
+  runId?: number | string;
+};
 
 function isoDateOffset(days: number): string {
   const date = new Date();
@@ -145,7 +188,7 @@ function SectionTitle({ icon: Icon, title, note }: { icon: typeof Activity; titl
 
 function BacktestPanel() {
   const { showToast } = useStore();
-  const [tab, setTab] = useState<WorkstationTab>('run');
+  const [tab, setTab] = useState<WorkstationTab>('v3');
   const [engineMode, setEngineMode] = useState<'A' | 'B' | 'AB'>('AB');
   const [styleA, setStyleA] = useState('auto');
   const [styleB, setStyleB] = useState('auto');
@@ -169,11 +212,17 @@ function BacktestPanel() {
   const [tradeOffset, setTradeOffset] = useState(0);
   const [compareRunIds, setCompareRunIds] = useState<Set<string>>(new Set());
   const [latestComparison, setLatestComparison] = useState<ComparisonResult | null>(null);
+  const [v3Engine, setV3Engine] = useState<BacktestEngineKey>('A');
+  const [v3Style, setV3Style] = useState('intraday');
+  const [v3Pair, setV3Pair] = useState('EUR/USD');
+  const [v3Result, setV3Result] = useState<V3RunResult | null>(null);
 
   const capabilitiesPoll = useApiPoll<ApiEnvelope<BacktestCapabilities>>('/api/v2/backtest-capabilities', 60_000);
   const jobsPoll = useApiPoll<ApiEnvelope<BacktestRun[]>>('/api/v2/backtests?limit=200', 2_000);
   const datasetsPoll = useApiPoll<ApiEnvelope<DatasetManifest[]>>('/api/v2/backtest-datasets?limit=100', 15_000);
   const comparisonsPoll = useApiPoll<ApiEnvelope<Array<{ comparisonId: string; result: ComparisonResult }>>>('/api/v2/backtest-comparisons?limit=100', 15_000);
+  const v3HistoryPoll = useApiPoll<V3HistoryRow[]>('/api/v3/backtest-history', 10_000);
+  const v3RunMutation = useApiPost<V3RunResult>();
   const selectedRunPoll = useApiPoll<ApiEnvelope<BacktestRun>>(
     selectedRunId ? `/api/v2/backtests/${encodeURIComponent(selectedRunId)}` : '/api/v2/backtests/__none__',
     2_000,
@@ -371,11 +420,32 @@ function BacktestPanel() {
     setTab(destination);
   }, []);
 
-  const activeComparison = latestComparison || comparisonsPoll.data?.data?.[0]?.result || null;
+  const runV3Backtest = useCallback(async () => {
+    const pair = v3Pair.trim();
+    if (!pair) {
+      showToast('Select a pair for the V3 backtest', 'error');
+      return;
+    }
+    const request = buildBacktestRequest({ engine: v3Engine, pair, style: v3Style });
+    const response = await v3RunMutation.post(request.endpoint, {
+      ...request.payload,
+      persist: true,
+    });
+    if (!response || response.error) {
+      showToast(response?.error || v3RunMutation.error || 'V3 backtest failed', 'error');
+      setV3Result(response);
+      return;
+    }
+    setV3Result(response);
+    await v3HistoryPoll.refresh();
+    showToast(
+      `V3 Engine ${v3Engine} · ${pair}: ${response.totalTrades ?? 0} trades · setup ${response.setupTf || '—'} · trigger ${response.triggerTf || '—'}`,
+      'success',
+    );
+  }, [v3Pair, v3Engine, v3Style, v3RunMutation, v3HistoryPoll, showToast]);
 
-  if (capabilitiesPoll.loading) {
-    return <div className="space-y-4 p-6"><Skeleton className="h-16 w-full" /><Skeleton className="h-[520px] w-full" /></div>;
-  }
+  const activeComparison = latestComparison || comparisonsPoll.data?.data?.[0]?.result || null;
+  const v3History = Array.isArray(v3HistoryPoll.data) ? v3HistoryPoll.data : [];
 
   return (
     <div className="space-y-5 p-4 md:p-6">
@@ -386,28 +456,196 @@ function BacktestPanel() {
             <div className="flex flex-wrap items-center gap-2">
               <FlaskConical className="h-5 w-5 text-primary" />
               <h1 className="text-lg font-semibold tracking-[0.08em] text-foreground">A/B RESEARCH WORKSTATION</h1>
-              <Badge variant="outline" className="border-violet-400/30 bg-violet-400/10 text-[10px] text-violet-200">V2 CANDIDATE</Badge>
+              <Badge variant="outline" className="border-emerald-400/30 bg-emerald-400/10 text-[10px] text-emerald-200">V3 LIVE</Badge>
+              <Badge variant="outline" className="border-violet-400/30 bg-violet-400/10 text-[10px] text-violet-200">V2 PLATFORM</Badge>
             </div>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              Immutable point-in-time replay for Engine A and Engine B. Separate ledgers, explicit costs, anchored OOS validation, and no live configuration writes.
+              Engine A/B backtests use the universal TF policy (D1/H4/H4/H1/M15). V3 is the live single-pair runner; Platform tabs keep the immutable multi-symbol v2 research stack.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-[10px]">
+            <Badge variant="outline" className="border-border/70 bg-black/20 font-mono">POLICY timeframe_policy.v4</Badge>
             <Badge variant="outline" className="border-border/70 bg-black/20 font-mono">PLATFORM {capabilities?.platformVersion || '—'}</Badge>
             <Badge variant="outline" className="border-border/70 bg-black/20 font-mono">SIM {capabilities?.simulatorVersion || '—'}</Badge>
-            <Badge variant="outline" className="border-emerald-400/30 bg-emerald-400/10 text-emerald-300">NO LEGACY RULES</Badge>
           </div>
         </div>
       </div>
 
       <Tabs value={tab} onValueChange={(value) => setTab(value as WorkstationTab)} className="space-y-4">
-        <TabsList className="grid h-auto w-full grid-cols-5 rounded-xl border border-border/60 bg-card/60 p-1">
-          <TabsTrigger value="run" className="gap-2 py-2.5"><Play className="h-3.5 w-3.5" />Run</TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-6 rounded-xl border border-border/60 bg-card/60 p-1">
+          <TabsTrigger value="v3" className="gap-2 py-2.5"><Play className="h-3.5 w-3.5" />V3 Run</TabsTrigger>
+          <TabsTrigger value="run" className="gap-2 py-2.5"><SlidersHorizontal className="h-3.5 w-3.5" />Platform</TabsTrigger>
           <TabsTrigger value="jobs" className="gap-2 py-2.5"><Clock3 className="h-3.5 w-3.5" />Jobs</TabsTrigger>
           <TabsTrigger value="results" className="gap-2 py-2.5"><BarChart3 className="h-3.5 w-3.5" />Results</TabsTrigger>
           <TabsTrigger value="compare" className="gap-2 py-2.5"><GitCompareArrows className="h-3.5 w-3.5" />Compare</TabsTrigger>
           <TabsTrigger value="data" className="gap-2 py-2.5"><Database className="h-3.5 w-3.5" />Data</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="v3" className="space-y-4">
+          <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+            <Card className="panel-glass">
+              <CardHeader>
+                <SectionTitle
+                  icon={Play}
+                  title="Backtest V3 (live scoring policy)"
+                  note="Uses /api/v3/backtest · same resolve_timeframe_policy ladder as live Engine A/B (D1/H4/H4/H1/M15)."
+                />
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {(['A', 'B'] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setV3Engine(value)}
+                      className={cn(
+                        'rounded-xl border p-3 text-left transition',
+                        v3Engine === value ? 'border-primary/55 bg-primary/12' : 'border-border/60 bg-black/15 hover:border-primary/30',
+                      )}
+                    >
+                      <div className="text-sm font-semibold">Engine {value}</div>
+                      <div className="mt-1 text-[10px] text-muted-foreground">
+                        {value === 'A' ? 'POST /api/v3/backtest' : 'POST /api/v3/backtest-naked'}
+                      </div>
+                    </button>
+                  ))}
+                  <div className="space-y-2">
+                    <Label>Style</Label>
+                    <Select value={v3Style} onValueChange={setV3Style}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {['intraday', 'swing'].map((style) => (
+                          <SelectItem key={style} value={style}>{style}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Pair (display or symbol)</Label>
+                  <Input
+                    value={v3Pair}
+                    onChange={(event) => setV3Pair(event.target.value)}
+                    placeholder="EUR/USD"
+                    list="v3-backtest-pairs"
+                  />
+                  <datalist id="v3-backtest-pairs">
+                    {(capabilities?.universe || []).slice(0, 200).map((item) => (
+                      <option key={item.symbol} value={item.symbol} />
+                    ))}
+                  </datalist>
+                </div>
+                <div className="rounded-xl border border-border/60 bg-black/15 p-3 text-[11px] text-muted-foreground">
+                  Fixed policy roles: <span className="font-mono text-foreground">regime D1 · bias H4 · structure H4 · setup H1 · trigger M15</span>
+                </div>
+                <Button className="w-full" onClick={runV3Backtest} disabled={v3RunMutation.loading}>
+                  {v3RunMutation.loading ? (
+                    <><RefreshCw className="mr-2 h-4 w-4 animate-spin" />Running V3…</>
+                  ) : (
+                    <><Play className="mr-2 h-4 w-4" />Run V3 backtest</>
+                  )}
+                </Button>
+                {v3RunMutation.error && (
+                  <div className="rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{v3RunMutation.error}</div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="panel-glass">
+              <CardHeader>
+                <SectionTitle icon={BarChart3} title="Latest V3 result" note="Policy provenance is stamped on every successful run." />
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {!v3Result ? (
+                  <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
+                    Run a V3 backtest to see trades, SQN, and TF policy fields.
+                  </div>
+                ) : v3Result.error ? (
+                  <div className="rounded-xl border border-rose-400/30 bg-rose-400/10 p-4 text-sm text-rose-200">
+                    {v3Result.error}
+                    {v3Result.missingPolicyTimeframes?.length ? (
+                      <div className="mt-2 font-mono text-xs">Missing: {v3Result.missingPolicyTimeframes.join(', ')}</div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      <MetricTile label="Trades" value={String(v3Result.totalTrades ?? 0)} />
+                      <MetricTile label="SQN" value={metricValue(v3Result.sqn, 2)} />
+                      <MetricTile label="Total R" value={metricValue(v3Result.totalR, 2)} />
+                      <MetricTile label="Win rate" value={v3Result.winRate == null ? '—' : `${(v3Result.winRate * 100).toFixed(1)}%`} />
+                      <MetricTile label="Expectancy" value={metricValue(v3Result.expectancyR, 3)} />
+                      <MetricTile label="Wall time" value={formatDuration(v3Result.wallTimeSec)} />
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge variant="outline" className="font-mono text-[10px]">{v3Result.timeframePolicyVersion || 'policy?'}</Badge>
+                      <Badge variant="outline" className="font-mono text-[10px]">struct {v3Result.structureTf || '—'}</Badge>
+                      <Badge variant="outline" className="font-mono text-[10px]">setup {v3Result.setupTf || v3Result.entryTimeframe || '—'}</Badge>
+                      <Badge variant="outline" className="font-mono text-[10px]">trigger {v3Result.triggerTf || '—'}</Badge>
+                      <Badge variant="outline" className="font-mono text-[10px]">m5 {v3Result.m5Policy || '—'}</Badge>
+                      {v3Result.validation?.verdict && (
+                        <Badge variant="outline" className="text-[10px]">{v3Result.validation.verdict}</Badge>
+                      )}
+                    </div>
+                    {v3Result.policyKey && (
+                      <div className="font-mono text-[10px] text-muted-foreground">{v3Result.policyKey}</div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card className="panel-glass">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <SectionTitle icon={Database} title="V3 history" note="Rows from backtest_runs_v3 via /api/v3/backtest-history" />
+                <Button variant="outline" size="sm" onClick={v3HistoryPoll.refresh}>
+                  <RefreshCw className={cn('mr-2 h-3.5 w-3.5', v3HistoryPoll.isRefreshing && 'animate-spin')} />
+                  Refresh
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {v3HistoryPoll.loading && !v3History.length ? (
+                <Skeleton className="h-40 w-full" />
+              ) : !v3History.length ? (
+                <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">No V3 runs stored yet.</div>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-border/50">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>When</TableHead>
+                        <TableHead>Pair</TableHead>
+                        <TableHead>Engine</TableHead>
+                        <TableHead>Style</TableHead>
+                        <TableHead>Trades</TableHead>
+                        <TableHead>SQN</TableHead>
+                        <TableHead>Total R</TableHead>
+                        <TableHead>Verdict</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {v3History.slice(0, 50).map((row) => (
+                        <TableRow key={`${row.id}-${row.pair}-${row.run_date}`}>
+                          <TableCell className="text-[10px] text-muted-foreground">{row.run_date?.replace('T', ' ').slice(0, 19) || '—'}</TableCell>
+                          <TableCell className="font-medium">{row.pair || row.symbol}</TableCell>
+                          <TableCell>{row.engine}</TableCell>
+                          <TableCell className="text-[10px] uppercase">{row.style}</TableCell>
+                          <TableCell className="font-mono">{row.trades ?? '—'}</TableCell>
+                          <TableCell className="font-mono">{row.sqn == null ? '—' : Number(row.sqn).toFixed(2)}</TableCell>
+                          <TableCell className="font-mono">{row.total_r == null ? '—' : Number(row.total_r).toFixed(2)}</TableCell>
+                          <TableCell className="text-[10px]">{row.verdict || '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="run" className="space-y-4">
           <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
