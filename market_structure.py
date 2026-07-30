@@ -4729,9 +4729,12 @@ class NakedEngine:
 
         # Class thresholds only on M5/M15/M30 — same gate as trigger ATR period.
         # H1/H4/D1 keep legacy NAKED_ENGINE / hardcoded thresholds.
+        # Pass trigger_tf so nested M5/M15/M30 sub-rows merge when present.
         use_cal = engine_b_trigger_tf_uses_calibration(trigger_tf)
         if use_cal:
-            cal = resolve_engine_b_trigger_tf_calibration(score_group, asset_type)
+            cal = resolve_engine_b_trigger_tf_calibration(
+                score_group, asset_type, trigger_tf
+            )
             keyed = config.CONFIG.get("ENGINE_B_TRIGGER_TF_CALIBRATION") or {}
             g = str(score_group or "").strip().lower()
             a = str(asset_type or "").strip().lower()

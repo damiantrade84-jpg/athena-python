@@ -183,10 +183,15 @@ def refresh_series(pair: dict, tf: str, *, store: ParquetCandleStore) -> int:
     return store.write(pair, tf, rows, provider=provider)
 
 
+# Policy v4 universal ladder needs setup H1 + trigger M15 on top of D1/H4
+# structure. Keep M30 optional for legacy Engine B completeness.
+_DEFAULT_REFRESH_TFS = ("D1", "H4", "H1", "M15")
+
+
 def refresh_universe(
     pairs: list[dict],
     *,
-    tfs: tuple[str, ...] = ("D1", "H4", "H1"),
+    tfs: tuple[str, ...] = _DEFAULT_REFRESH_TFS,
     store: ParquetCandleStore | None = None,
 ) -> dict:
     """Top up every (pair, tf) series in `pairs` to maximum available history."""
@@ -252,6 +257,11 @@ def _main() -> None:
         help="restrict --refresh to pairs from one source",
     )
     parser.add_argument("--symbol", action="append", help="restrict --refresh to one or more symbols")
+    parser.add_argument(
+        "--tfs",
+        default=",".join(_DEFAULT_REFRESH_TFS),
+        help=f"comma-separated TFs to refresh (default: {','.join(_DEFAULT_REFRESH_TFS)})",
+    )
     parser.add_argument("--coverage", action="store_true", help="print coverage report")
     args = parser.parse_args()
 
@@ -277,8 +287,13 @@ def _main() -> None:
                 if str(p.get("symbol") or "").upper() in wanted
                 or str(p.get("display") or "").upper() in wanted
             ]
-        log.info("[BT-ETL] refresh: %s pairs", len(pairs))
-        summary = refresh_universe(pairs, store=store)
+        tfs = tuple(
+            tf.strip().upper()
+            for tf in str(args.tfs or "").split(",")
+            if tf.strip()
+        ) or _DEFAULT_REFRESH_TFS
+        log.info("[BT-ETL] refresh: %s pairs tfs=%s", len(pairs), list(tfs))
+        summary = refresh_universe(pairs, tfs=tfs, store=store)
         print(summary)
 
     if args.coverage or not (args.migrate or args.refresh or args.coverage):

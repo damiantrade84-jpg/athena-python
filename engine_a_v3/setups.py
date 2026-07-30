@@ -983,9 +983,9 @@ def detect_setup(
     primary, context, primary_tf, context_tf = _resolve_setup_candle_frames(
         route, horizon, candles, entry_tf_override=entry_tf_override
     )
-    from factor_scoring import ENTRY_TF_PERIOD_OVERRIDE_TFS
+    from factor_scoring import entry_tf_uses_period_overrides
 
-    if str(primary_tf or "").upper() in ENTRY_TF_PERIOD_OVERRIDE_TFS:
+    if entry_tf_uses_period_overrides(primary_tf):
         from engine_a_v3.profile import resolved_periods_for_tf
 
         periods = SetupPeriods.from_mapping(

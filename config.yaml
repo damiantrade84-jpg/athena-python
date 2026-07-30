@@ -1206,9 +1206,14 @@ ENGINE_A_ATR_ADX_PERIODS_BY_CLASS:
   stock_other:           { atr: 14, adx: 14 }
   unknown:               { atr: 14, adx: 14 }
 
-# Entry-TF-only indicator periods (M15/M30). D1/H4/H1 keep ENGINE_A_*_BY_CLASS above.
-# Missing score_group → fall back to base group periods (never crash).
-# RSI period/EMA/MACD/ADX/ATR only — no entry RSI bounds (V3 uses continuous RSI).
+# Entry/setup-TF indicator periods. Flat keys apply to M5/M15/M30 (legacy).
+# Optional nested TF sub-rows (M5/M15/M30/H1) override the flat keys when present:
+#   forex_majors:
+#     ema_trend: 8            # flat → M15/M30/M5
+#     H1: { ema_trend: 13, ... }  # only when ENGINE_A_SETUP_TF_PERIODS_ENABLED
+# D1/H4 always use ENGINE_A_*_BY_CLASS. Missing score_group → base periods.
+# H1 setup periods are evidence-gated OFF until calibrated (no invented H1 pack).
+ENGINE_A_SETUP_TF_PERIODS_ENABLED: false
 ENGINE_A_ENTRY_TF_PERIODS:
   default:               { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
   unknown:               { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
@@ -4235,7 +4240,10 @@ ENGINE_B_USE_FORMING_FOR_TRIGGER: true
 #   forex_majors:
 #     trigger_atr: 10          # flat defaults, still used for unlisted TFs
 #     M5:  { trigger_atr: 12 } # merged over the flat values when trigger TF = M5
-# No sub-rows are configured yet — that needs calibration evidence, not a guess.
+#     M15: { trigger_atr: 10, rejection_wick_body: 1.5 }  # optional M15-only evidence
+# Nested M15/M5/M30 sub-rows are supported by resolve_engine_b_trigger_tf_calibration
+# and are applied only when present (no invented M15 geometry below — flat group
+# values remain the production default for all of M5/M15/M30).
 ENGINE_B_TRIGGER_TF_CALIBRATION:
   forex_majors:      { trigger_atr: 10, rejection_wick_body: 1.5, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
   forex_crosses:     { trigger_atr: 11, rejection_wick_body: 1.4, engulfing_body_atr: 0.22, strong_close_pct: 0.70 }

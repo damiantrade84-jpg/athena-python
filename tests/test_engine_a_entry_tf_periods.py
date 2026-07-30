@@ -118,6 +118,48 @@ def test_entry_tf_override_tfs_frozen():
     assert ENTRY_TF_PERIOD_OVERRIDE_TFS == frozenset({"M30", "M15", "M5"})
 
 
+def test_h1_setup_periods_default_off_use_base(monkeypatch):
+    from factor_scoring import entry_tf_uses_period_overrides
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SETUP_TF_PERIODS_ENABLED", False)
+    group, asset = "forex_majors", "forex"
+    base = _base_indicator_periods(group, asset)
+    assert entry_tf_uses_period_overrides("H1") is False
+    assert _resolved_indicator_periods_for_tf(group, asset, "H1") == base
+
+
+def test_h1_setup_periods_apply_when_enabled_with_nested_row(monkeypatch):
+    from factor_scoring import entry_tf_uses_period_overrides
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SETUP_TF_PERIODS_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    keyed = dict(CONFIG.get("ENGINE_A_ENTRY_TF_PERIODS") or {})
+    forex = dict(keyed.get("forex_majors") or {})
+    forex["H1"] = {
+        "ema_trend": 13,
+        "ema_mom": 34,
+        "rsi": 11,
+        "macd": [8, 21, 9],
+        "adx": 12,
+        "atr": 14,
+    }
+    keyed["forex_majors"] = forex
+    monkeypatch.setitem(CONFIG, "ENGINE_A_ENTRY_TF_PERIODS", keyed)
+
+    group, asset = "forex_majors", "forex"
+    base = _base_indicator_periods(group, asset)
+    assert entry_tf_uses_period_overrides("H1") is True
+    h1 = _resolved_indicator_periods_for_tf(group, asset, "H1")
+    assert h1 != base
+    assert h1["ema_trend"] == 13
+    assert h1["ema_momentum"] == 34
+    assert h1["rsi"] == 11
+    assert h1["adx"] == 12
+    # M15 still uses flat legacy keys when no nested M15 row exists.
+    m15 = _resolved_indicator_periods_for_tf(group, asset, "M15")
+    assert m15["ema_trend"] == 8
+
+
 def test_m5_uses_intraday_periods_not_h4_scale():
     group, asset = "forex_majors", "forex"
     base = _base_indicator_periods(group, asset)

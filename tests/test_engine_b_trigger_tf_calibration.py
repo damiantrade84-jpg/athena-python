@@ -107,6 +107,32 @@ def test_h1_trigger_keeps_legacy_thresholds_for_forex_majors():
     assert h1["rejection"] is True
 
 
+def test_m15_nested_subrow_merges_when_present(monkeypatch):
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_B_TRIGGER_TF_CALIBRATION",
+        {
+            "forex_majors": {
+                "trigger_atr": 10,
+                "rejection_wick_body": 1.5,
+                "engulfing_body_atr": 0.25,
+                "strong_close_pct": 0.70,
+                "M15": {
+                    "trigger_atr": 9,
+                    "rejection_wick_body": 1.35,
+                },
+            }
+        },
+    )
+    cal_m15 = resolve_engine_b_trigger_tf_calibration("forex_majors", "forex", "M15")
+    cal_m5 = resolve_engine_b_trigger_tf_calibration("forex_majors", "forex", "M5")
+    assert cal_m15["trigger_atr"] == 9
+    assert cal_m15["rejection_wick_body"] == pytest.approx(1.35)
+    assert cal_m15["engulfing_body_atr"] == pytest.approx(0.25)  # inherited flat
+    assert cal_m5["trigger_atr"] == 10  # no M5 sub-row
+    assert engine_b_trigger_atr_period("forex_majors", "forex", "M15") == 9
+
+
 def test_m15_trigger_uses_forex_majors_wick_15():
     engine = NakedEngine()
     m15 = engine._price_action_trigger(

@@ -331,6 +331,29 @@ def _resolve_macd_params(score_group: str | None, asset_type: str) -> dict:
 # M15/M30 and are merely the closest available for M5 — a dedicated M5 row is
 # still a calibration task, not an assumption this constant should make.
 ENTRY_TF_PERIOD_OVERRIDE_TFS = frozenset({"M30", "M15", "M5"})
+# Setup-rung candidate under the universal policy (setup=H1). Only applied when
+# ENGINE_A_SETUP_TF_PERIODS_ENABLED is true *and* a nested H1 row exists for the
+# score group — no invented H1 periods when the flag is off.
+SETUP_TF_PERIOD_CANDIDATE_TFS = frozenset({"H1"})
+_NESTED_ENTRY_TF_KEYS = frozenset({"M5", "M15", "M30", "H1"})
+
+
+def _setup_tf_periods_enabled() -> bool:
+    """Evidence gate: H1 setup periods stay off until calibration is approved."""
+    try:
+        return bool(CONFIG.get("ENGINE_A_SETUP_TF_PERIODS_ENABLED", False))
+    except Exception:
+        return False
+
+
+def entry_tf_uses_period_overrides(tf: str | None) -> bool:
+    """Whether ``tf`` may take ENGINE_A_ENTRY_TF_PERIODS instead of base class periods."""
+    key = str(tf or "").upper()
+    if key in ENTRY_TF_PERIOD_OVERRIDE_TFS:
+        return True
+    if key in SETUP_TF_PERIOD_CANDIDATE_TFS and _setup_tf_periods_enabled():
+        return True
+    return False
 
 
 def _base_indicator_periods(score_group: str | None, asset_type: str) -> dict[str, int]:
@@ -351,10 +374,27 @@ def _base_indicator_periods(score_group: str | None, asset_type: str) -> dict[st
     }
 
 
+def _flat_entry_period_fields(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Strip nested TF sub-rows so flat legacy keys remain mergeable."""
+    return {
+        key: value
+        for key, value in row.items()
+        if str(key).upper() not in _NESTED_ENTRY_TF_KEYS
+    }
+
+
 def _resolve_entry_tf_period_override(
-    score_group: str | None, asset_type: str
+    score_group: str | None,
+    asset_type: str,
+    tf: str | None = None,
 ) -> dict | None:
-    """Raw ENGINE_A_ENTRY_TF_PERIODS row for score_group, or None.
+    """Raw ENGINE_A_ENTRY_TF_PERIODS fields for score_group (+ optional TF), or None.
+
+    Resolution order for a requested TF:
+    1. Nested ``ENGINE_A_ENTRY_TF_PERIODS[group][TF]`` when present
+       (H1 only when ``ENGINE_A_SETUP_TF_PERIODS_ENABLED``).
+    2. Flat legacy keys on the group row for M5/M15/M30 only.
+    3. None → caller keeps base class periods.
 
     Unlike other class maps, missing score_group does not inherit the ``default``
     entry row — callers fall back to base ENGINE_A_*_BY_CLASS periods.
@@ -366,7 +406,22 @@ def _resolve_entry_tf_period_override(
     if not score_group or score_group not in keyed:
         return None
     row = keyed.get(score_group)
-    return row if isinstance(row, dict) and row else None
+    if not isinstance(row, dict) or not row:
+        return None
+    tf_key = str(tf or "").upper()
+    if tf_key:
+        nested = row.get(tf_key)
+        if isinstance(nested, dict) and nested:
+            if tf_key == "H1" and not _setup_tf_periods_enabled():
+                return None
+            return dict(nested)
+        if tf_key in ENTRY_TF_PERIOD_OVERRIDE_TFS:
+            flat = _flat_entry_period_fields(row)
+            return flat if flat else None
+        return None
+    # Legacy callers (no TF): return flat fields only.
+    flat = _flat_entry_period_fields(row)
+    return flat if flat else None
 
 
 def _merge_entry_tf_periods(
@@ -420,12 +475,12 @@ def _merge_entry_tf_periods(
 def _resolved_indicator_periods_for_tf(
     score_group: str | None, asset_type: str, tf: str
 ) -> dict[str, int]:
-    """Period dict for one TF: entry overrides on M15/M30 only when configured."""
+    """Period dict for one TF: entry/setup overrides when the TF is eligible."""
     base = _base_indicator_periods(score_group, asset_type)
     tf_key = str(tf or "").upper()
-    if tf_key not in ENTRY_TF_PERIOD_OVERRIDE_TFS:
+    if not entry_tf_uses_period_overrides(tf_key):
         return base
-    override = _resolve_entry_tf_period_override(score_group, asset_type)
+    override = _resolve_entry_tf_period_override(score_group, asset_type, tf_key)
     if not override:
         return base
     return _merge_entry_tf_periods(base, override)

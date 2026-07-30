@@ -917,7 +917,7 @@ def _snapshots(
 ) -> dict[str, Mapping[str, Any]]:
     from engine_a_v3.indicator_adapter import indicator_snapshot
     from factor_scoring import (
-        ENTRY_TF_PERIOD_OVERRIDE_TFS,
+        entry_tf_uses_period_overrides,
         _resolved_indicator_periods_for_tf,
     )
 
@@ -934,7 +934,7 @@ def _snapshots(
 
     def _periods_for(tf: str) -> Mapping[str, int]:
         tf_key = str(tf or "").upper()
-        if tf_key not in ENTRY_TF_PERIOD_OVERRIDE_TFS:
+        if not entry_tf_uses_period_overrides(tf_key):
             return periods
         if entry_periods and tf_key == str(entry_tf or "").upper():
             return entry_periods
@@ -950,7 +950,7 @@ def _snapshots(
         return _per_tf_periods[tf_key]
 
     def _tf_uses_override(tf: str) -> bool:
-        return str(tf or "").upper() in ENTRY_TF_PERIOD_OVERRIDE_TFS
+        return entry_tf_uses_period_overrides(tf)
 
     for tf in tfs:
         rows = candles.get(tf) or []
@@ -1146,14 +1146,14 @@ def score_pair(
             feature_cache[plan_key] = plan
     tf_weights, momentum_tf, extra_tfs, indicator_periods, tf_diagnostics = plan
     from factor_scoring import (
-        ENTRY_TF_PERIOD_OVERRIDE_TFS,
+        entry_tf_uses_period_overrides,
         _resolved_indicator_periods_for_tf,
     )
 
     entry_tf_key = str(entry_tf or "").upper()
     entry_periods: dict[str, int] | None = None
     trend_indicator_periods = indicator_periods
-    if entry_tf_key in ENTRY_TF_PERIOD_OVERRIDE_TFS:
+    if entry_tf_uses_period_overrides(entry_tf_key):
         entry_periods = _resolved_indicator_periods_for_tf(
             group, asset_type, entry_tf_key
         )
