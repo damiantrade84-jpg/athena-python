@@ -2543,21 +2543,12 @@ MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL:
 # self-scales across asset classes and timeframes: wide-stop/higher-TF trades
 # pass, tight-stop trades on wide-spread symbols are rejected
 # (SPREAD_TOO_WIDE_FOR_SL). Set to 0 or null to disable.
-# Added 2026-07-23 after the Pepperstone→ATFX switch: ATFX resting spreads are
-# ~10x Pepperstone (EURUSD 0.0158%); all 4 post-switch entries paid 5.4-18 bps
-# vs the prior M1 close. Tightened 0.15 -> 0.10 same day: several ATFX pairs
-# rest near their spread caps (NZDUSD 0.87x, XAGUSD 0.75x, NATGAS ~0.85%
-# absolute), so a 15% allowance still opened trades materially in the red.
-# 2026-07-28: dict form — the scalar 0.10 was calibrated for wide structural
-# stops. The forex regime fixes (MR fades, pullback entries) produce tight
-# stops (~0.5-1.2x ATR on the M30 setup rung) that a 10% cap blocks across the
-# whole forex universe on ATFX spreads. forex: 0.20 pairs with the raised stop
-# floors (MR MIN_RISK_ATR 1.0, structural SL_MIN_ATR_MULT 1.2 for forex) so
-# cost-per-risk improves instead of the cap simply loosening. Other classes
-# keep 0.10. UNVALIDATED judgment value; reversible (restore scalar 0.10).
-MAX_EXECUTION_SPREAD_TO_SL_RATIO:
-  default: 0.10
-  forex: 0.20
+# 2026-07-30: disabled for testing (was default 0.10 / forex 0.20). Restore the
+# dict below when re-enabling the spread-to-SL gate.
+# MAX_EXECUTION_SPREAD_TO_SL_RATIO:
+#   default: 0.10
+#   forex: 0.20
+MAX_EXECUTION_SPREAD_TO_SL_RATIO: 0
 
 # ── Signal-to-execution drift cap (GAP-7) ───────────────────────────────────
 # Per-asset-type ceiling on |broker_price - signal_price| / signal_price.
