@@ -2,7 +2,7 @@
  * Backtest V3 — separate from the Backtesting v2 platform panel.
  * Uses /api/v3/backtest and /api/v3/backtest-naked only.
  */
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
   Database,
@@ -13,7 +13,6 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -22,6 +21,87 @@ import { useApiPoll, useApiPost } from '@/hooks/useApiData';
 import { useStore } from '@/hooks/useStore';
 import { buildBacktestRequest, type BacktestEngineKey } from '@/lib/backtestPayload';
 import { cn } from '@/lib/utils';
+import type { PairListEntry, PairsResponse } from '@/types/athena';
+
+type PairOption = {
+  symbol: string;
+  display: string;
+  group: string;
+  enabled: boolean;
+};
+
+/** Build group → pairs from /api/pairs (grouped or flat/legacy). */
+function pairsByGroup(data: PairsResponse | null | undefined): Record<string, PairOption[]> {
+  if (!data) return {};
+
+  if (data.groups && typeof data.groups === 'object') {
+    const out: Record<string, PairOption[]> = {};
+    for (const [group, items] of Object.entries(data.groups)) {
+      if (!Array.isArray(items)) continue;
+      out[group] = items
+        .map((item) => {
+          const row = item as { sym?: string; label?: string; enabled?: boolean };
+          const symbol = String(row.sym || '').trim();
+          const display = String(row.label || row.sym || '').trim();
+          if (!symbol && !display) return null;
+          return {
+            symbol: symbol || display,
+            display: display || symbol,
+            group,
+            enabled: row.enabled !== false,
+          };
+        })
+        .filter((row): row is PairOption => row != null)
+        .sort((a, b) => a.display.localeCompare(b.display));
+    }
+    return out;
+  }
+
+  const flat: PairListEntry[] = Array.isArray(data.pairs) ? data.pairs : [];
+  if (!flat.length) {
+    const legacy: Array<{ list?: string[]; group: string }> = [
+      { list: data.forex, group: 'Forex' },
+      { list: data.crypto, group: 'Crypto' },
+      { list: data.stocks, group: 'US Stocks' },
+      { list: data.indices, group: 'Indices' },
+      { list: data.commodities, group: 'Commodities' },
+      { list: data.etf, group: 'ETFs' },
+      { list: data.jse, group: 'JSE' },
+    ];
+    for (const bucket of legacy) {
+      for (const sym of bucket.list || []) {
+        flat.push({ symbol: sym, display: sym, type: bucket.group.toLowerCase(), enabled: true });
+      }
+    }
+  }
+
+  const typeToGroup: Record<string, string> = {
+    forex: 'Forex',
+    crypto: 'Crypto',
+    stock: 'US Stocks',
+    index: 'Indices',
+    commodity: 'Commodities',
+    etf: 'ETFs',
+  };
+  const out: Record<string, PairOption[]> = {};
+  for (const item of flat) {
+    const group = typeToGroup[String(item.type || '').toLowerCase()] || String(item.type || 'Other');
+    const display = String(item.display || item.symbol || '').trim();
+    const symbol = String(item.symbol || item.display || '').trim();
+    if (!display && !symbol) continue;
+    if (!out[group]) out[group] = [];
+    out[group].push({
+      symbol: symbol || display,
+      display: display || symbol,
+      group,
+      enabled: item.enabled !== false,
+    });
+  }
+  for (const group of Object.keys(out)) {
+    out[group].sort((a, b) => a.display.localeCompare(b.display));
+  }
+  return out;
+}
 
 type V3HistoryRow = {
   id?: number;
@@ -89,12 +169,52 @@ function BacktestV3Panel() {
   const { showToast } = useStore();
   const [engine, setEngine] = useState<BacktestEngineKey>('A');
   const [style, setStyle] = useState('intraday');
-  const [pair, setPair] = useState('EUR/USD');
+  const [group, setGroup] = useState('');
+  const [pair, setPair] = useState('');
   const [result, setResult] = useState<V3RunResult | null>(null);
 
+  const pairsPoll = useApiPoll<PairsResponse>('/api/pairs', 0);
   const historyPoll = useApiPoll<V3HistoryRow[]>('/api/v3/backtest-history', 10_000);
   const runMutation = useApiPost<V3RunResult>();
   const history = Array.isArray(historyPoll.data) ? historyPoll.data : [];
+
+  const grouped = useMemo(() => pairsByGroup(pairsPoll.data), [pairsPoll.data]);
+  const groupNames = useMemo(
+    () => Object.keys(grouped).filter((name) => (grouped[name] || []).length > 0).sort(),
+    [grouped],
+  );
+  const groupPairs = useMemo(() => {
+    const rows = grouped[group] || [];
+    // Prefer enabled pairs; fall back to full list if all disabled.
+    const enabled = rows.filter((row) => row.enabled);
+    return enabled.length ? enabled : rows;
+  }, [grouped, group]);
+
+  // Seed group/pair once pairs load, and keep pair valid when group changes.
+  useEffect(() => {
+    if (!groupNames.length) return;
+    if (!group || !groupNames.includes(group)) {
+      const preferred =
+        groupNames.find((name) => name.toLowerCase() === 'forex') || groupNames[0];
+      setGroup(preferred);
+    }
+  }, [groupNames, group]);
+
+  useEffect(() => {
+    if (!groupPairs.length) {
+      setPair('');
+      return;
+    }
+    const stillValid = groupPairs.some(
+      (row) => row.display === pair || row.symbol === pair,
+    );
+    if (!stillValid) {
+      const preferred =
+        groupPairs.find((row) => row.display === 'EUR/USD' || row.symbol === 'EURUSD')
+        || groupPairs[0];
+      setPair(preferred.display || preferred.symbol);
+    }
+  }, [groupPairs, pair]);
 
   const runBacktest = useCallback(async () => {
     const token = pair.trim();
@@ -188,10 +308,60 @@ function BacktestV3Panel() {
                 </Select>
               </div>
             </div>
-            <div className="space-y-2">
-              <Label>Pair (display or symbol)</Label>
-              <Input value={pair} onChange={(event) => setPair(event.target.value)} placeholder="EUR/USD" />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Group</Label>
+                <Select
+                  value={group || undefined}
+                  onValueChange={(value) => {
+                    setGroup(value);
+                    setPair('');
+                  }}
+                  disabled={!groupNames.length}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={pairsPoll.loading ? 'Loading groups…' : 'Select group'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {groupNames.map((name) => (
+                      <SelectItem key={name} value={name}>
+                        {name} ({grouped[name]?.length ?? 0})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Pair</Label>
+                <Select
+                  value={pair || undefined}
+                  onValueChange={setPair}
+                  disabled={!groupPairs.length}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={group ? 'Select pair' : 'Pick a group first'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {groupPairs.map((row) => {
+                      const value = row.display || row.symbol;
+                      return (
+                        <SelectItem key={`${row.group}-${row.symbol}-${row.display}`} value={value}>
+                          {row.display}
+                          {row.symbol && row.symbol !== row.display ? (
+                            <span className="ml-2 text-[10px] text-muted-foreground">{row.symbol}</span>
+                          ) : null}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
+            {pairsPoll.error && (
+              <div className="rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">
+                Failed to load pairs: {pairsPoll.error}
+              </div>
+            )}
             <div className="rounded-xl border border-border/60 bg-black/15 p-3 text-[11px] text-muted-foreground">
               Fixed policy roles:{' '}
               <span className="font-mono text-foreground">
