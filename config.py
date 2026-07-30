@@ -2679,6 +2679,13 @@ CONFIG: dict = {
     # false. Lagging HH_HL/LH_LL cannot emit the counter-BOS direction. Aligned
     # CHoCH remains the only reversal escape. Default ON.
     "ENGINE_B_STRUCTURE_BOS_DIRECTION_GUARD_ENABLED": True,
+    # Fast/conditional-M5 pairs only: when M15 trigger is not armed but location
+    # is OK and structure supports the side, allow M5 to confirm pullback turn
+    # (refinement — never flips direction). Default ON.
+    "ENGINE_B_M5_PULLBACK_REFINEMENT_ENABLED": True,
+    # Engine A: same refinement on trigger confirmation when m5_policy is
+    # conditional and HTF trend still supports direction. Default ON.
+    "ENGINE_A_M5_PULLBACK_REFINEMENT_ENABLED": True,
     "ENGINE_B_ROOM_NO_WALL_REQUIRE_MTF": True,
     "ENGINE_B_LOW_VOLATILITY_GATE_ENABLED": True,
     "ENGINE_B_LOW_VOLATILITY_LOOKBACK": 50,

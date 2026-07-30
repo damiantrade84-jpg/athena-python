@@ -2367,6 +2367,15 @@ def run_full_scan(
                     )
                     if tf and tf not in {"D1", "H4", "H1"}
                 }
+                # Fast/conditional-M5 pairs need M5 bars for pullback refinement
+                # (never structure authority). Disabled-M5 groups stay off.
+                if (
+                    str(getattr(_policy_a.m5_policy, "value", _policy_a.m5_policy) or "").lower()
+                    == "conditional"
+                    or str(getattr(_policy_b.m5_policy, "value", _policy_b.m5_policy) or "").lower()
+                    == "conditional"
+                ):
+                    _required_analysis_tfs.add("M5")
                 _execution_only_tfs = {
                     tf
                     for tf in (

@@ -255,7 +255,13 @@ def _evaluate_trigger_confirmation(
     direction: str | None,
     trigger_timeframe: str | None,
 ) -> tuple[bool | None, dict[str, Any]]:
-    """Confirm policy trigger evidence against the evaluator's final direction."""
+    """Confirm policy trigger evidence against the evaluator's final direction.
+
+    On conditional-M5 (fast) policies, if the M15/setup confirmation rung does
+    not align but M5 refinement momentum aligns with direction *and* the HTF
+    trend component still supports that side, pass with
+    ``entryPath=m5_pullback_confirm``. M5 never flips direction.
+    """
     expected_tf = str(trigger_timeframe or "").strip().upper()
     resolved_direction = str(direction or "").strip().upper()
     evidence = (
@@ -267,6 +273,7 @@ def _evaluate_trigger_confirmation(
         "timeframe": expected_tf or None,
         "direction": resolved_direction or None,
         "passed": False,
+        "entryPath": None,
     }
     if not expected_tf:
         diagnostic["reason"] = "policy_trigger_timeframe_not_supplied"
@@ -308,13 +315,71 @@ def _evaluate_trigger_confirmation(
         if resolved_direction == "LONG"
         else trigger_signal < 0.0
     )
-    diagnostic["passed"] = aligned
-    diagnostic["reason"] = (
-        "trigger_direction_aligned"
-        if aligned
-        else "trigger_direction_opposed"
-    )
-    return aligned, diagnostic
+    if aligned:
+        diagnostic["passed"] = True
+        diagnostic["reason"] = "trigger_direction_aligned"
+        diagnostic["entryPath"] = "m15_aligned" if expected_tf == "M15" else "trigger_aligned"
+        return True, diagnostic
+
+    diagnostic["reason"] = "trigger_direction_opposed"
+
+    # M5 pullback refinement rescue (conditional-M5 / fast groups only).
+    try:
+        from config import CONFIG
+
+        refine_enabled = bool(CONFIG.get("ENGINE_A_M5_PULLBACK_REFINEMENT_ENABLED", True))
+    except Exception:
+        refine_enabled = True
+    m5_policy = ""
+    if isinstance(factor_diagnostics, Mapping):
+        m5_policy = str(
+            factor_diagnostics.get("m5Policy")
+            or (factor_diagnostics.get("scoringTimeframes") or {}).get("m5Policy")
+            or ""
+        ).lower()
+    if (
+        refine_enabled
+        and m5_policy == "conditional"
+        and isinstance(factor_diagnostics, Mapping)
+    ):
+        m5_ev = factor_diagnostics.get("m5RefinementEvidence")
+        comps = factor_diagnostics.get("components") or {}
+        trend = comps.get("trend") if isinstance(comps, Mapping) else None
+        try:
+            m5_signal = float((m5_ev or {}).get("signal")) if isinstance(m5_ev, Mapping) else 0.0
+            m5_quality = float((m5_ev or {}).get("quality")) if isinstance(m5_ev, Mapping) else 0.0
+            trend_signal = float((trend or {}).get("signal") or 0.0)
+        except (TypeError, ValueError):
+            m5_signal, m5_quality, trend_signal = 0.0, 0.0, 0.0
+        m5_available = bool(isinstance(m5_ev, Mapping) and m5_ev.get("available") is True)
+        m5_aligned = (
+            m5_signal > 0.0
+            if resolved_direction == "LONG"
+            else m5_signal < 0.0
+        )
+        trend_supports = (
+            trend_signal > 0.0
+            if resolved_direction == "LONG"
+            else trend_signal < 0.0
+        )
+        # M15 hard-oppose with strong quality: do not let weak M5 override.
+        m15_hard_oppose = abs(trigger_signal) >= 0.35 and trigger_quality >= 0.45
+        if (
+            m5_available
+            and m5_aligned
+            and m5_quality > 0.1
+            and trend_supports
+            and not m15_hard_oppose
+        ):
+            diagnostic["passed"] = True
+            diagnostic["reason"] = "m5_pullback_confirm"
+            diagnostic["entryPath"] = "m5_pullback_confirm"
+            diagnostic["m5Signal"] = round(m5_signal, 4)
+            diagnostic["m5Quality"] = round(m5_quality, 4)
+            return True, diagnostic
+
+    diagnostic["passed"] = False
+    return False, diagnostic
 
 
 def _build_levels(

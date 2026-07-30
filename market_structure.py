@@ -5268,6 +5268,34 @@ class NakedEngine:
                 fallback=atr,
             )
 
+        # Conditional-M5 pullback refinement (trigger stays M15 on the universal
+        # ladder): load M5 bars when present so a structure-aligned M5 turn can
+        # arm entry after a pullback. Missing M5 is fail-closed for refinement
+        # only — M15 path is unchanged.
+        _m5_refinement_candles: list = []
+        _m5_refinement_atr = 0.0
+        _m5_policy_str = str(_tfs.get("m5_policy") or "disabled").lower()
+        if (
+            _m5_policy_str == "conditional"
+            and bool(config.CONFIG.get("ENGINE_B_M5_PULLBACK_REFINEMENT_ENABLED", True))
+            and _effective_trigger_tf != "M5"
+        ):
+            _m5_refinement_candles = engine_b_candles_for_tf(
+                "M5",
+                d1_candles,
+                h4_candles,
+                h1_candles,
+                extra_by_tf=_extras if _extras is not None else {},
+            )
+            if _m5_refinement_candles:
+                _m5_refinement_atr = self._compute_atr_from_candles(
+                    _m5_refinement_candles,
+                    period=engine_b_trigger_atr_period(
+                        _pair_score_group, asset_type, "M5"
+                    ),
+                    fallback=atr,
+                )
+
         _zone_tf = str(_tfs.get("zone") or structure_tf or "H4").upper()
         _zone_fvg_candles = engine_b_candles_for_tf(
             _zone_tf, d1_candles, h4_candles, h1_candles, extra_by_tf=_extras
@@ -5601,6 +5629,8 @@ class NakedEngine:
             "m5_prereq_tf": _m5_prereq_tf if _m5_conditional_required else None,
             "m5_conditional_required": _m5_conditional_required,
             "m5_policy": str(_tfs.get("m5_policy") or "disabled"),
+            "_m5_refinement_candles": _m5_refinement_candles,
+            "m5_refinement_atr": _m5_refinement_atr,
             "_struct_candles": struct_candles,
             "_score_group": _score_group,
             "asset_type": asset_type,
@@ -5966,6 +5996,80 @@ class NakedEngine:
                     }
                 )
 
+        # Path B — M5 pullback refinement (fast/conditional only). Trigger
+        # remains M15 on the universal ladder; M5 may arm entry only when:
+        # location is OK, structure supports the side, M15 is not a hard
+        # opposite trigger, and M5 prints a direction-aligned trigger.
+        # Never flips direction — only rescues trigger_ok for the structure side.
+        entry_path = "m15_aligned" if bool(trigger_ctx.get("trigger_ok")) else None
+        m5_pullback_confirm = False
+        m5_refinement_pattern = None
+        _loc_for_refine = bool(
+            zone_ctx["zone_touched"] or zone_ctx["near_zone"] or _ob_at_zone
+        )
+        _structure_supports = bool(
+            bos_confirmed
+            or (
+                (direction == "LONG" and sequence_data["state"] == "HH_HL")
+                or (direction == "SHORT" and sequence_data["state"] == "LH_LL")
+            )
+            or (
+                (direction == "LONG" and macro_seq_data["state"] == "HH_HL")
+                or (direction == "SHORT" and macro_seq_data["state"] == "LH_LL")
+            )
+        )
+        _m5_ref_candles = precompute.get("_m5_refinement_candles") or []
+        if (
+            not bool(trigger_ctx.get("trigger_ok"))
+            and not _m5_conditional_required
+            and str(precompute.get("m5_policy") or "").lower() == "conditional"
+            and bool(config.CONFIG.get("ENGINE_B_M5_PULLBACK_REFINEMENT_ENABLED", True))
+            and _loc_for_refine
+            and _structure_supports
+            and _m5_ref_candles
+        ):
+            _opp_dir = "SHORT" if direction == "LONG" else "LONG"
+            _m15_opp = self._price_action_trigger(
+                trigger_candles,
+                _opp_dir,
+                trigger_atr,
+                _loc_for_refine,
+                (
+                    (direction == "LONG" and bool(bos_data.get("bos_bear")))
+                    or (direction == "SHORT" and bool(bos_data.get("bos_bull")))
+                ),
+                is_trending=(
+                    (_opp_dir == "LONG" and sequence_data["state"] == "HH_HL" and macro_seq_data["state"] == "HH_HL")
+                    or (_opp_dir == "SHORT" and sequence_data["state"] == "LH_LL" and macro_seq_data["state"] == "LH_LL")
+                ),
+                asset_type=asset_type,
+                score_group=_zone_score_group,
+                trigger_tf=str(tfs.get("trigger") or ""),
+            )
+            if not bool(_m15_opp.get("trigger_ok")):
+                _m5_ctx = self._price_action_trigger(
+                    _m5_ref_candles,
+                    direction,
+                    float(precompute.get("m5_refinement_atr") or trigger_atr or atr),
+                    _loc_for_refine,
+                    bos_confirmed,
+                    is_trending=_structure_supports,
+                    asset_type=asset_type,
+                    score_group=_zone_score_group,
+                    trigger_tf="M5",
+                )
+                if bool(_m5_ctx.get("trigger_ok")):
+                    trigger_ctx = dict(trigger_ctx)
+                    trigger_ctx["trigger_ok"] = True
+                    trigger_ctx["pattern"] = _m5_ctx.get("pattern") or "M5_REFINEMENT"
+                    trigger_ctx["rejection"] = bool(_m5_ctx.get("rejection"))
+                    trigger_ctx["engulfing"] = bool(_m5_ctx.get("engulfing"))
+                    trigger_ctx["inside_break"] = bool(_m5_ctx.get("inside_break"))
+                    trigger_ctx["strong_close"] = bool(_m5_ctx.get("strong_close"))
+                    m5_pullback_confirm = True
+                    m5_refinement_pattern = _m5_ctx.get("pattern")
+                    entry_path = "m5_pullback_confirm"
+
         latest_trigger_candle_time = None
         if trigger_candles:
             _last_tc = trigger_candles[-1]
@@ -6110,6 +6214,9 @@ class NakedEngine:
             "m5_prereq_tf": _m5_prereq_tf,
             "m5_setup_armed": m5_setup_armed,
             "m5_setup_armed_pattern": m5_setup_armed_pattern,
+            "entry_path": entry_path,
+            "m5_pullback_confirm": bool(m5_pullback_confirm),
+            "m5_refinement_pattern": m5_refinement_pattern,
             "bos_data": bos_data,
             "d1_bos_data": d1_bos,
             "sweep_data": sweep_data,
@@ -7707,6 +7814,9 @@ class NakedEngine:
             "m5_conditional_required": m5_conditional_required,
             "m5_prereq_tf": res.get("m5_prereq_tf"),
             "m5_setup_armed": m5_setup_armed,
+            "entry_path": res.get("entry_path"),
+            "m5_pullback_confirm": bool(res.get("m5_pullback_confirm")),
+            "m5_refinement_pattern": res.get("m5_refinement_pattern"),
             "trigger_timeframe_expected": expected_trigger_tf or None,
             "trigger_timeframe_actual": actual_trigger_tf or None,
             "trigger_type": res.get("trigger_pattern", "NONE"),

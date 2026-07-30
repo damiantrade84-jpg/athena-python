@@ -1051,6 +1051,9 @@ def score_pair(
     policy = policy_timeframes if isinstance(policy_timeframes, Mapping) else None
     policy_setup_tf = str((policy or {}).get("setup") or (policy or {}).get("setupTf") or "").upper()
     policy_trigger_tf = str((policy or {}).get("trigger") or (policy or {}).get("triggerTf") or "").upper()
+    policy_m5 = str(
+        (policy or {}).get("m5_policy") or (policy or {}).get("m5Policy") or ""
+    ).lower()
     # Entry confirmation runs on the rung that actually carries authority: the
     # M15 prerequisite when policy marks M5 conditional refinement, else the
     # trigger rung itself. See timeframe_policy.resolve_entry_confirmation_tf.
@@ -1098,6 +1101,7 @@ def score_pair(
         policy_setup_tf,
         policy_trigger_tf,
         policy_confirmation_tf,
+        policy_m5,
         getattr(profile, "profile_sha256", None),
     )
     plan = feature_cache.get(plan_key) if feature_cache is not None else None
@@ -1122,17 +1126,18 @@ def score_pair(
             tf_weights = _resolve_v3_tf_weights(group, asset_type, horizon)
             momentum_tf = _resolve_v3_momentum_tf(group, asset_type, horizon)
             tf_diagnostics = {"trendWeightSource": "profile_static"}
+        _extra_candidates = {
+            *tf_weights.keys(),
+            entry_tf,
+            momentum_tf,
+            policy_trigger_tf,
+            policy_confirmation_tf,
+        }
+        if policy_m5 == "conditional":
+            _extra_candidates.add("M5")
         extra_tfs = tuple(
             tf
-            for tf in set(
-                (
-                    *tf_weights.keys(),
-                    entry_tf,
-                    momentum_tf,
-                    policy_trigger_tf,
-                    policy_confirmation_tf,
-                )
-            )
+            for tf in _extra_candidates
             if tf and tf not in ("D1", "H4", "H1")
         )
         plan = (
@@ -1246,6 +1251,32 @@ def score_pair(
             # M5 stays refinement: recorded for diagnostics, never the gate.
             trigger_evidence["policyTriggerTf"] = policy_trigger_tf
             trigger_evidence["confirmationRung"] = "execution_prerequisite"
+    # Conditional-M5 refinement evidence (fast groups): never votes on direction;
+    # only used by evaluator trigger confirmation as pullback turn confirm.
+    m5_refinement_evidence = None
+    if policy_m5 == "conditional":
+        m5_snap = snaps.get("M5") or {}
+        if m5_snap:
+            m5_mom, m5_diag = _momentum_component(m5_snap, asset_type, group)
+            m5_inputs = any(
+                m5_diag.get(key) is not None
+                for key in ("rsiTerm", "diTerm", "macdSlopeTerm")
+            )
+            m5_refinement_evidence = {
+                "timeframe": "M5",
+                "source": "m5_pullback_refinement",
+                "available": bool(m5_mom.available and m5_inputs),
+                "signal": round(m5_mom.signal, 4),
+                "quality": round(m5_mom.quality, 4),
+            }
+        else:
+            m5_refinement_evidence = {
+                "timeframe": "M5",
+                "source": "m5_pullback_refinement",
+                "available": False,
+                "signal": 0.0,
+                "quality": 0.0,
+            }
     if mom_diag.get("adxHardAbort") and mom_diag.get("adxAbortReason") == "missing_both_abort":
         return QuantScore(
             direction="FLAT",
@@ -1612,6 +1643,7 @@ def score_pair(
                 "volume": entry_tf,
                 "setup": policy_setup_tf or entry_tf,
                 "trigger": policy_trigger_tf or momentum_tf,
+                "m5Policy": policy_m5 or "disabled",
                 # ADX reaches the score from two snapshots: the momentum anchor
                 # (gate + multiplier) and the entry rung (trend-health slope /
                 # plateau). Both are reported so a divergence is visible; the
@@ -1620,6 +1652,7 @@ def score_pair(
                 "trendHealthAdx": entry_tf,
                 **tf_diagnostics,
             },
+            "m5Policy": policy_m5 or "disabled",
             "adxValue": mom_diag.get("adxValue"),
             "adxMultiplier": mom_diag.get("adxMultiplier"),
             "diAlignMult": mom_diag.get("diAlignMult"),
@@ -1649,6 +1682,11 @@ def score_pair(
             **(
                 {"triggerEvidence": trigger_evidence}
                 if trigger_evidence is not None
+                else {}
+            ),
+            **(
+                {"m5RefinementEvidence": m5_refinement_evidence}
+                if m5_refinement_evidence is not None
                 else {}
             ),
             "components": {
