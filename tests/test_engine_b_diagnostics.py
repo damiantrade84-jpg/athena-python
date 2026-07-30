@@ -1678,14 +1678,10 @@ def test_calculate_confidence_d1_penalty_is_reduced():
     assert out["d1_pd_conflict_penalty"] == pytest.approx(0.25)
 
 
-def test_calculate_confidence_emits_sequence_counter_trend():
-    """Default mode: hard_counter applies a soft score penalty, not a veto.
-
-    HTF counter-trend on both H1 and H4 still emits the diagnostic code, but
-    structure_ok remains True (subject to other gates) so that a setup with
-    strong BOS/sweep/trigger can still pass with reduced total_score. Matches
-    the Engine A soft-penalty pattern from commit 3d2c3eed for DI alignment.
-    """
+def test_calculate_confidence_emits_sequence_counter_trend(monkeypatch):
+    """With sequence direction restored: hard_counter soft penalty, not veto."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF", False)
     res = _base_res_long()
     res["current_swing_sequence"] = "LH_LL"
     res["macro_swing_sequence"] = "LH_LL"
@@ -1705,6 +1701,7 @@ def test_calculate_confidence_emits_sequence_counter_trend():
 
 def test_calculate_confidence_hard_counter_veto_mode(monkeypatch):
     """Legacy veto mode: hard_counter zeroes structure_ok and signal fails."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", True)
     monkeypatch.setitem(
         config.CONFIG.setdefault("NAKED_ENGINE", {}),
         "hard_counter_mode",

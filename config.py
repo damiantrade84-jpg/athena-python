@@ -2679,6 +2679,11 @@ CONFIG: dict = {
     # false. Lagging HH_HL/LH_LL cannot emit the counter-BOS direction. Aligned
     # CHoCH remains the only reversal escape. Default ON.
     "ENGINE_B_STRUCTURE_BOS_DIRECTION_GUARD_ENABLED": True,
+    # When false (default), swing sequence HH_HL/LH_LL is diagnostic only and
+    # does not pass structure_ok, hard_counter, or independent direction votes.
+    # Structure direction evidence is BOS / CHoCH / aligned sweep. Set true only
+    # to restore legacy sequence-as-direction behaviour.
+    "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED": False,
     # Fast/conditional-M5 pairs only: when M15 trigger is not armed but location
     # is OK and structure supports the side, allow M5 to confirm pullback turn
     # (refinement — never flips direction). Default ON.

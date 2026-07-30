@@ -126,7 +126,10 @@ def test_choch_reversal_escape_allows_counter_bos(monkeypatch):
 
 
 def test_guard_disabled_restores_sequence_pass(monkeypatch):
+    """Legacy: with sequence direction ON and BOS guard OFF, HH_HL can pass."""
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_BOS_DIRECTION_GUARD_ENABLED", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF", False)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_WEIGHTED_SCORING", {"ENABLED": False})
     out = NakedEngine().calculate_confidence(
         _base_res(),

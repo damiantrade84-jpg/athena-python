@@ -50,6 +50,7 @@ def _style(**overrides):
 
 def test_structure_ok_requires_bos_mtf_when_both_oppose(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_WEIGHTED_SCORING", {"ENABLED": False})
     engine = NakedEngine()
     blocked = engine.calculate_confidence(
@@ -77,6 +78,7 @@ def test_opposing_mtf_bos_does_not_satisfy_structure_ok(monkeypatch):
     sequences already oppose. Regression for the counter-trend direction swap.
     """
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_WEIGHTED_SCORING", {"ENABLED": False})
     out = NakedEngine().calculate_confidence(
         _base_res(bos_confirmed=False, bos_mtf_confirmed=True, liquidity_sweep=False),
@@ -89,6 +91,7 @@ def test_opposing_mtf_bos_does_not_satisfy_structure_ok(monkeypatch):
 
 def test_structure_ok_legacy_allows_sweep_when_gate_off(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_WEIGHTED_SCORING", {"ENABLED": False})
     out = NakedEngine().calculate_confidence(
         _base_res(bos_confirmed=False, bos_mtf_confirmed=False, liquidity_sweep=True),
@@ -101,6 +104,7 @@ def test_structure_ok_legacy_allows_sweep_when_gate_off(monkeypatch):
 
 def test_opposing_sweep_does_not_satisfy_structure_ok(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_WEIGHTED_SCORING", {"ENABLED": False})
     out = NakedEngine().calculate_confidence(
         _base_res(
@@ -164,6 +168,7 @@ def test_follow_through_trap_blocks_entry_ok(monkeypatch):
         },
     )
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_WEIGHTED_SCORING", {"ENABLED": False})
 
     # Need >=5 candles; breakout closes above 100, then two full reversals (trap).

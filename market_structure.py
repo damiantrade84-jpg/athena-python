@@ -4889,18 +4889,23 @@ class NakedEngine:
         """
         votes: dict[str, int] = {}  # +1 = bullish, -1 = bearish, 0 = neutral
 
-        # --- H1 micro swing sequence ---
-        if h1_sequence == "HH_HL":
+        # --- H1 / H4 swing sequence ---
+        # Default OFF: lagging HH_HL/LH_LL was green-lighting the wrong side
+        # (e.g. EURNZD LONG while H4/D1 price structure was selling). Sequences
+        # remain computed for diagnostics; they no longer vote on direction.
+        _seq_dir = bool(
+            config.CONFIG.get("ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", False)
+        )
+        if _seq_dir and h1_sequence == "HH_HL":
             votes["h1_swing"] = 1
-        elif h1_sequence == "LH_LL":
+        elif _seq_dir and h1_sequence == "LH_LL":
             votes["h1_swing"] = -1
         else:
             votes["h1_swing"] = 0
 
-        # --- H4 macro swing sequence ---
-        if h4_sequence == "HH_HL":
+        if _seq_dir and h4_sequence == "HH_HL":
             votes["h4_swing"] = 1
-        elif h4_sequence == "LH_LL":
+        elif _seq_dir and h4_sequence == "LH_LL":
             votes["h4_swing"] = -1
         else:
             votes["h4_swing"] = 0
@@ -4941,12 +4946,11 @@ class NakedEngine:
             votes["sweep"] = 0
 
         # --- Weight the votes ---
-        # H4 swing carries more weight than H1/CHoCH/sweep. Structure-TF BOS is
-        # a hard break of structure and must outrank a single lagging sequence
-        # leg so independent opinion does not rubber-stamp counter-BOS sides.
+        # Structure-TF BOS is the strongest structural break. Swing sequence
+        # weights only apply when ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED.
         weights = {
-            "h4_swing": 2,
-            "h1_swing": 1,
+            "h4_swing": 2 if _seq_dir else 0,
+            "h1_swing": 1 if _seq_dir else 0,
             "choch":    1,
             "sweep":    1,
             "bos":      3,
@@ -5948,10 +5952,7 @@ class NakedEngine:
             trigger_candles, direction, trigger_atr,
             zone_ctx["zone_touched"] or zone_ctx["near_zone"],
             bos_confirmed,
-            is_trending=(
-                (direction == "LONG" and sequence_data["state"] == "HH_HL" and macro_seq_data["state"] == "HH_HL")
-                or (direction == "SHORT" and sequence_data["state"] == "LH_LL" and macro_seq_data["state"] == "LH_LL")
-            ),
+            is_trending=bool(bos_confirmed),
             asset_type=asset_type,
             score_group=_zone_score_group,
             trigger_tf=str(tfs.get("trigger") or ""),
@@ -5973,10 +5974,7 @@ class NakedEngine:
                 float(precompute.get("m5_prereq_atr") or trigger_atr or atr),
                 zone_ctx["zone_touched"] or zone_ctx["near_zone"],
                 bos_confirmed,
-                is_trending=(
-                    (direction == "LONG" and sequence_data["state"] == "HH_HL" and macro_seq_data["state"] == "HH_HL")
-                    or (direction == "SHORT" and sequence_data["state"] == "LH_LL" and macro_seq_data["state"] == "LH_LL")
-                ),
+                is_trending=bool(bos_confirmed),
                 asset_type=asset_type,
                 score_group=_zone_score_group,
                 trigger_tf=str(_m5_prereq_tf or ""),
@@ -6007,17 +6005,8 @@ class NakedEngine:
         _loc_for_refine = bool(
             zone_ctx["zone_touched"] or zone_ctx["near_zone"] or _ob_at_zone
         )
-        _structure_supports = bool(
-            bos_confirmed
-            or (
-                (direction == "LONG" and sequence_data["state"] == "HH_HL")
-                or (direction == "SHORT" and sequence_data["state"] == "LH_LL")
-            )
-            or (
-                (direction == "LONG" and macro_seq_data["state"] == "HH_HL")
-                or (direction == "SHORT" and macro_seq_data["state"] == "LH_LL")
-            )
-        )
+        # Structure support for M5 refinement: BOS/CHoCH only (not lagging swings).
+        _structure_supports = bool(bos_confirmed or choch_confirmed)
         _m5_ref_candles = precompute.get("_m5_refinement_candles") or []
         if (
             not bool(trigger_ctx.get("trigger_ok"))
@@ -6038,10 +6027,7 @@ class NakedEngine:
                     (direction == "LONG" and bool(bos_data.get("bos_bear")))
                     or (direction == "SHORT" and bool(bos_data.get("bos_bull")))
                 ),
-                is_trending=(
-                    (_opp_dir == "LONG" and sequence_data["state"] == "HH_HL" and macro_seq_data["state"] == "HH_HL")
-                    or (_opp_dir == "SHORT" and sequence_data["state"] == "LH_LL" and macro_seq_data["state"] == "LH_LL")
-                ),
+                is_trending=False,
                 asset_type=asset_type,
                 score_group=_zone_score_group,
                 trigger_tf=str(tfs.get("trigger") or ""),
@@ -6456,15 +6442,26 @@ class NakedEngine:
         if m5_conditional_required and not bool(m5_setup_armed):
             trigger_timeframe_gate_ok = False
 
-        micro_aligned = (direction == "LONG" and h1_seq == "HH_HL") or (
-            direction == "SHORT" and h1_seq == "LH_LL"
+        # Swing sequence (HH_HL/LH_LL) is diagnostic by default. It must not
+        # green-light structure_ok or hard-block the opposite side (EURNZD-class
+        # lag). Restore via ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED.
+        _seq_dir_enabled = bool(
+            config.CONFIG.get("ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", False)
         )
-        macro_aligned = (direction == "LONG" and h4_seq == "HH_HL") or (
-            direction == "SHORT" and h4_seq == "LH_LL"
-        )
-        hard_counter = (direction == "LONG" and h1_seq == "LH_LL" and h4_seq == "LH_LL") or (
-            direction == "SHORT" and h1_seq == "HH_HL" and h4_seq == "HH_HL"
-        )
+        if _seq_dir_enabled:
+            micro_aligned = (direction == "LONG" and h1_seq == "HH_HL") or (
+                direction == "SHORT" and h1_seq == "LH_LL"
+            )
+            macro_aligned = (direction == "LONG" and h4_seq == "HH_HL") or (
+                direction == "SHORT" and h4_seq == "LH_LL"
+            )
+            hard_counter = (direction == "LONG" and h1_seq == "LH_LL" and h4_seq == "LH_LL") or (
+                direction == "SHORT" and h1_seq == "HH_HL" and h4_seq == "HH_HL"
+            )
+        else:
+            micro_aligned = False
+            macro_aligned = False
+            hard_counter = False
         # hard_counter softening: default is a soft score penalty rather than
         # a structure_ok veto. Legacy veto mode remains available via the
         # NAKED_ENGINE.hard_counter_mode config key. Mirrors Engine A's soft
@@ -6477,7 +6474,7 @@ class NakedEngine:
             _hard_counter_penalty_cfg = 1.0
         _hard_counter_veto = hard_counter and _hard_counter_mode == "veto"
         bos_mtf = bool(res.get("bos_mtf_confirmed", False))
-        # bos_mtf_confirmed is direction-blind (an MTF BOS exists in *some*
+        # bos_mtf_confirmed is direction-blind (an MTF break exists in *some*
         # direction). It must only satisfy the structure gate / earn bonus when
         # the break is in the trade direction, otherwise a bullish multi-TF
         # break can pass a SHORT (and vice versa). bos_confirmed is already
@@ -6485,16 +6482,18 @@ class NakedEngine:
         # H1 and D1 BOS both breaking in the trade direction.
         bos_mtf_aligned = bos_mtf and bool(res.get("bos_confirmed", False))
         # When both micro and macro oppose, a lone BOS/sweep is not enough unless
-        # MTF BOS confirms (config-gated; default ON).
+        # MTF BOS confirms (config-gated; default ON). Only when sequence
+        # direction is enabled — otherwise sequence cannot "oppose".
         _require_align_or_mtf = bool(
             config.CONFIG.get("ENGINE_B_STRUCTURE_REQUIRE_ALIGN_OR_BOS_MTF", True)
         )
-        _both_oppose = (not micro_aligned) and (not macro_aligned)
+        _both_oppose = _seq_dir_enabled and (not micro_aligned) and (not macro_aligned)
         # Sweep only counts for structure_ok when aligned with trade direction.
         _sweep_dir = str(res.get("sweep_direction") or "").upper() or None
         _sweep_aligned = bool(res.get("liquidity_sweep", False)) and (
             _sweep_dir is None or _sweep_dir == direction
         )
+        _choch_aligned = bool(res.get("choch_confirmed", False))
         # Forex ADX is exposed as a diagnostic (engine_b_overlay / Marcus Reid /
         # tests) but no longer gates structure_ok. Consumers can use it as a
         # soft conviction signal. Computed ahead of the structure gate so the
@@ -6527,7 +6526,7 @@ class NakedEngine:
         ) and asset_type_lower == "forex" and str(
             res.get("_adx_derived_regime") or ""
         ).upper() == "RANGING"
-        if _require_align_or_mtf and _both_oppose:
+        if _seq_dir_enabled and _require_align_or_mtf and _both_oppose:
             if _forex_ranging_continuation_blocked:
                 # Continuation evidence (MTF BOS) is regime-inappropriate in a
                 # ranging forex market; only an aligned sweep may carry a
@@ -6535,12 +6534,20 @@ class NakedEngine:
                 structure_ok = (not _hard_counter_veto) and _sweep_aligned
             else:
                 structure_ok = (not _hard_counter_veto) and bos_mtf_aligned
-        else:
+        elif _seq_dir_enabled:
             structure_ok = (not _hard_counter_veto) and (
                 micro_aligned
                 or macro_aligned
                 or res.get("bos_confirmed", False)
                 or _sweep_aligned
+            )
+        else:
+            # Sequence retired from direction: exclusive break/character only.
+            # Aligned sweep remains entry/confluence aid, not sole HTF direction
+            # (EURNZD: bull_sweep on a sell-off was still passing LONG).
+            structure_ok = (not _hard_counter_veto) and (
+                bool(res.get("bos_confirmed", False))
+                or _choch_aligned
             )
         structure_gate_original_ok = bool(structure_ok)
         structure_gate_disabled = bool(profile.get("disable_structure_gate", False))
