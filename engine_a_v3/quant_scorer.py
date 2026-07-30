@@ -954,6 +954,12 @@ def _snapshots(
 
     for tf in tfs:
         rows = candles.get(tf) or []
+        if not rows and tf not in ("D1", "H4", "H1"):
+            # An optional rung the caller did not supply (e.g. M5 requested for
+            # conditional-M5 refinement while analyze_pair only carries the
+            # setup/trigger series). Indicators over zero bars raise IndexError;
+            # every read site uses snaps.get(tf) and degrades to unavailable.
+            continue
         tf_periods = _periods_for(tf)
         # The shared (tf, len) cache is only keyed by bar count, so it may only
         # hold snapshots built with the group-default periods. Any rung using

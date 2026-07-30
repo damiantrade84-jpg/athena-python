@@ -6048,10 +6048,11 @@ class NakedEngine:
                     trigger_ctx = dict(trigger_ctx)
                     trigger_ctx["trigger_ok"] = True
                     trigger_ctx["pattern"] = _m5_ctx.get("pattern") or "M5_REFINEMENT"
-                    trigger_ctx["rejection"] = bool(_m5_ctx.get("rejection"))
-                    trigger_ctx["engulfing"] = bool(_m5_ctx.get("engulfing"))
-                    trigger_ctx["inside_break"] = bool(_m5_ctx.get("inside_break"))
-                    trigger_ctx["strong_close"] = bool(_m5_ctx.get("strong_close"))
+                    # M5 confirms the entry only. Its candle-quality flags stay
+                    # out of trigger_ctx: rejection/engulfing/inside_break/
+                    # strong_close feed breakout_ok -> location_ok -> zone points,
+                    # so copying them would let an M5 candle score structural
+                    # location evidence the M15 rung never earned.
                     m5_pullback_confirm = True
                     m5_refinement_pattern = _m5_ctx.get("pattern")
                     entry_path = "m5_pullback_confirm"
