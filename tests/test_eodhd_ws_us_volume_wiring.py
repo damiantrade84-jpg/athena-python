@@ -9,8 +9,11 @@ keys volume eligibility off.
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import candle_feeds
 from candle_feeds import (
     _EODHD_WS_US_MAX_SYMBOLS,
     CandleBuilder,
@@ -23,6 +26,16 @@ from factor_scoring import (
     _h4_volume_vs_ma,
     _volume_provenance_uniform,
 )
+
+
+@pytest.fixture(autouse=True)
+def _ignore_ambient_ws_symbol_config(monkeypatch):
+    """Selection consults EODHD_WS_US_SYMBOLS in the real config.
+
+    These fixtures use synthetic tickers, so pin the list off and let the tests
+    that cover it opt back in explicitly.
+    """
+    monkeypatch.setattr(candle_feeds, "_configured_us_ws_displays", lambda: None)
 
 
 def _core_stock(symbol, display, ws=True):
@@ -210,3 +223,49 @@ def test_seed_selection_matches_the_ws_subscription():
 def test_seed_selection_honours_the_same_cap():
     pairs = [_atfx_stock(f"T{i:03d}") for i in range(_EODHD_WS_US_MAX_SYMBOLS + 10)]
     assert len(eodhd_ws_us_stock_pairs(pairs)) == _EODHD_WS_US_MAX_SYMBOLS
+
+
+def test_configured_symbols_choose_the_subscription_and_its_order(monkeypatch):
+    """Without the config list the cap takes pair order — alphabetical accident."""
+    pairs = [_atfx_stock(t) for t in ("AMC", "NVDA", "ORCL", "ATHM")]
+    monkeypatch.setattr(
+        candle_feeds, "_configured_us_ws_displays", lambda: ["ORCL", "NVDA"]
+    )
+    assert [p["display"] for p in eodhd_ws_us_stock_pairs(pairs)] == ["ORCL", "NVDA"]
+
+
+def test_configured_symbols_skip_unknown_and_ineligible_names(monkeypatch):
+    """A stale or non-US entry must not silently consume one of the 50 slots."""
+    pairs = [
+        _atfx_stock("ORCL"),
+        _core_stock("AMZN.US", "AMZN", ws=False),  # LiveV2-owned
+        {"symbol": "SAP", "type": "stock", "display": "SAP", "eodhdSymbol": "SAP.XETRA"},
+    ]
+    monkeypatch.setattr(
+        candle_feeds,
+        "_configured_us_ws_displays",
+        lambda: ["DELISTED", "AMZN", "SAP", "ORCL"],
+    )
+    assert [p["display"] for p in eodhd_ws_us_stock_pairs(pairs)] == ["ORCL"]
+
+
+def test_configured_symbols_still_respect_the_cap(monkeypatch):
+    tickers = [f"T{i:03d}" for i in range(_EODHD_WS_US_MAX_SYMBOLS + 10)]
+    pairs = [_atfx_stock(t) for t in tickers]
+    monkeypatch.setattr(candle_feeds, "_configured_us_ws_displays", lambda: tickers)
+    assert len(eodhd_ws_us_stock_pairs(pairs)) == _EODHD_WS_US_MAX_SYMBOLS
+
+
+def test_empty_config_list_falls_back_to_pair_order(monkeypatch):
+    pairs = [_atfx_stock("AMC"), _atfx_stock("ORCL")]
+    monkeypatch.setattr(candle_feeds, "_configured_us_ws_displays", lambda: None)
+    assert [p["display"] for p in eodhd_ws_us_stock_pairs(pairs)] == ["AMC", "ORCL"]
+
+
+def test_configured_selection_drives_the_actual_subscription(monkeypatch):
+    """The ticker map must follow the config, not its own scan of the pair list."""
+    pairs = [_atfx_stock(t) for t in ("AMC", "ORCL", "NVDA")]
+    monkeypatch.setattr(candle_feeds, "_configured_us_ws_displays", lambda: ["NVDA", "ORCL"])
+    info = EODHDWebSocketManager("k")._build_ticker_map(pairs)
+    assert info["us"] == ["NVDA", "ORCL"]
+    assert [p["display"] for p in eodhd_ws_us_stock_pairs(pairs)] == list(info["map"].values())

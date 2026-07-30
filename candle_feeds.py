@@ -173,24 +173,56 @@ def _eodhd_us_ws_ticker(pair: dict) -> str | None:
     return ticker or None
 
 
+def _configured_us_ws_displays() -> list[str] | None:
+    """Explicit ``EODHD_WS_US_SYMBOLS`` display list, or None when unset.
+
+    Without it the cap falls to whichever pairs happen to come first in
+    ALL_PAIRS, which is alphabetical accident rather than a choice.
+    """
+    try:
+        from config import CONFIG as _cfg
+    except ImportError:
+        return None
+    raw = _cfg.get("EODHD_WS_US_SYMBOLS")
+    if not isinstance(raw, (list, tuple)):
+        return None
+    out = [str(s).strip().upper() for s in raw if str(s or "").strip()]
+    return out or None
+
+
 def eodhd_ws_us_stock_pairs(pairs: list[dict] | None) -> list[dict]:
     """US stock pairs subscribed to the EODHD `us` stream, in subscription order.
 
-    Mirrors ``EODHDWebSocketManager._build_ticker_map`` selection so the seed
-    backfill and the live subscription cover exactly the same symbols.
+    Single source of truth for the selection: ``_build_ticker_map`` subscribes
+    exactly this list and ``cb.seed()`` backfills exactly this list, so the two
+    can never drift. ``EODHD_WS_US_SYMBOLS`` chooses the symbols when set;
+    otherwise pair order decides, as before.
     """
-    out: list[dict] = []
-    for pair in pairs or []:
-        if not pair.get("enabled", True):
-            continue
-        if not pair.get("ws", True):
-            continue
-        if _eodhd_us_ws_ticker(pair) is None:
-            continue
-        out.append(pair)
-        if len(out) >= _EODHD_WS_US_MAX_SYMBOLS:
-            break
-    return out
+    eligible = [
+        pair for pair in pairs or []
+        if pair.get("enabled", True)
+        and pair.get("ws", True)
+        and _eodhd_us_ws_ticker(pair) is not None
+    ]
+
+    wanted = _configured_us_ws_displays()
+    if wanted:
+        by_display = {str(p.get("display") or "").upper(): p for p in eligible}
+        # Configured order wins; unknown or ineligible names are skipped rather
+        # than silently consuming a slot.
+        eligible = [by_display[name] for name in wanted if name in by_display]
+        unmatched = [name for name in wanted if name not in by_display]
+        if unmatched:
+            # Silence here would look identical to a working feed: the volume
+            # factors fail closed on missing bars, so a typo'd or delisted name
+            # just quietly drops that symbol's volume scoring.
+            log.warning(
+                "[WS] EODHD_WS_US_SYMBOLS: %d of %d not eligible (disabled, "
+                "non-US, ws:False or unknown): %s",
+                len(unmatched), len(wanted), ", ".join(unmatched),
+            )
+
+    return eligible[:_EODHD_WS_US_MAX_SYMBOLS]
 
 
 def _eodhd_rt_symbol(pair):
@@ -1816,6 +1848,16 @@ class EODHDWebSocketManager:
 
         display_map = {}  # ws_ticker â†’ athena display name
 
+        # US stocks subscribe for real per-trade volume even when OHLC and live
+        # price are MT5-routed; every other class still requires source=eodhd
+        # because those streams carry no usable volume. Selection is delegated so
+        # the seed backfill cannot drift from what is actually subscribed.
+        for p in eodhd_ws_us_stock_pairs(pairs):
+            ws_t = _eodhd_us_ws_ticker(p)
+            if ws_t:
+                us_tickers.append(ws_t)
+                display_map[ws_t] = p["display"]
+
         for p in pairs:
             if not p.get("ws", True):  # default True = backward-compatible
                 continue
@@ -1828,15 +1870,8 @@ class EODHDWebSocketManager:
                 # Crypto pairs are now handled by BinanceLivePriceWS - skip EODHD mapping
                 continue
 
-            # US stocks subscribe for real per-trade volume even when OHLC and
-            # live price are MT5-routed; every other class still requires
-            # source=eodhd because those streams carry no usable volume.
-            us_ws_ticker = _eodhd_us_ws_ticker(p)
-            if us_ws_ticker is not None:
-                if len(us_tickers) < _EODHD_WS_US_MAX_SYMBOLS:
-                    us_tickers.append(us_ws_ticker)
-                    display_map[us_ws_ticker] = disp
-                continue
+            if _eodhd_us_ws_ticker(p) is not None:
+                continue  # handled above
 
             if p.get("source") != "eodhd":
                 continue

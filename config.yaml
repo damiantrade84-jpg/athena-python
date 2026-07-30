@@ -51,6 +51,14 @@ M5_CANDLES: 1000  # Policy-driven execution/refinement bars; never a higher-TF f
 # Those pairs still receive D1 via normal EOD candle fetch; CandleBuilder bulk refresh skips them only.
 CANDLE_BUILDER_BULK_D1_SKIP_EXCHANGES: ["COMM"]
 
+# Which US stocks get the EODHD `us` WebSocket, whose per-trade exchange volume
+# feeds the Engine A / Engine B H1-H4 volume overlay. EODHD caps subscriptions
+# per connection, so this is a strict subset of the eligible pairs. Empty here:
+# set EODHD_WS_US_SYMBOLS in config.local.yaml to choose deliberately, otherwise
+# the cap takes whichever pairs come first in ALL_PAIRS. Displays not present,
+# disabled, non-US or ws:False are skipped without consuming a slot.
+EODHD_WS_US_SYMBOLS: []
+
 SCAN_MAX_WORKERS: 8           # Increased scan concurrency for faster Engine A full-universe runs. (Conservative: 8 for i7/16GB)
 
 # Skip share CFDs whose exchange is not in continuous trading (CLOSED, PRE_OPEN,
