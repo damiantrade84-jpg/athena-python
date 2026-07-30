@@ -2890,6 +2890,56 @@ def run_full_scan(
                     )
                     atr_candles_b = _select_engine_b_tf_candles(_atr_tf_b, _tf_map_b)
 
+                    # M5 is Engine B's refinement rung, never a gate. A stale M5
+                    # must not block the signal — the M15 trigger still carries
+                    # entry — but it must not confirm one either. It is not in
+                    # the freshness gate's blocking set, so it is diagnosed here
+                    # and the rung is dropped when stale. Confirmed-only, so a
+                    # one-bucket lag is the expected state; anything worse drops
+                    # it and Path B falls back to the M15 trigger.
+                    if "M5" in _tf_map_b and "M5" not in {
+                        _entry_tf_b,
+                        _zone_tf_b,
+                        _atr_tf_b,
+                    }:
+                        try:
+                            from athena_app.services.data_freshness import (
+                                pre_scoring_allows_confirmed_only_stale_1,
+                            )
+                            from athena_app.services.market_state import (
+                                candle_freshness_diagnostic,
+                            )
+
+                            _m5_diag_b = candle_freshness_diagnostic(
+                                pair,
+                                "M5",
+                                _tf_map_b.get("M5") or [],
+                                source=pair.get("source"),
+                            )
+                            _m5_sev_b = _m5_diag_b.get("stalenessSeverity", "")
+                            _m5_fresh_b = (
+                                not _m5_sev_b
+                                or _m5_sev_b == "fresh"
+                                or (
+                                    _m5_sev_b == "stale_1_bucket"
+                                    and pre_scoring_allows_confirmed_only_stale_1(pair)
+                                )
+                                or _m5_sev_b == "intraday_calendar_gap_policy_ok"
+                            )
+                        except Exception as _m5_fresh_err:
+                            # Fail closed: an undiagnosable M5 cannot confirm.
+                            _m5_fresh_b = False
+                            _m5_sev_b = f"diagnostic_failed:{_m5_fresh_err}"
+                        if not _m5_fresh_b:
+                            _tf_map_b.pop("M5", None)
+                            _tf_active_map_b.pop("M5", None)
+                            _eb_funnel_extras["m5_refinement_dropped_stale"] = _m5_sev_b
+                            log.debug(
+                                "[SCAN+B] %s M5 refinement rung dropped as stale (%s)",
+                                pair.get("display", "?"),
+                                _m5_sev_b,
+                            )
+
                     _eb_funnel_extras["candles_tf_ok"] = bool(
                         zone_candles_b and entry_candles_b and atr_candles_b
                     )

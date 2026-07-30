@@ -15689,6 +15689,11 @@ def analyze_pair(
                     _policy_tf = _policy_timeframes.get(_policy_role)
                     if _policy_tf and _policy_tf not in _freshness_by_tf:
                         _freshness_by_tf[_policy_tf] = _v3_candles.get(_policy_tf, [])
+            # The M5 refinement rung is diagnosed here so a stale M5 cannot
+            # confirm an entry, but it is never added to the blocking set — see
+            # the M5 branch at the staleness verdict below.
+            if "M5" in _v3_candles and "M5" not in _freshness_by_tf:
+                _freshness_by_tf["M5"] = _v3_candles["M5"]
             for _tf, _candles in _freshness_by_tf.items():
                 _diag = candle_freshness_diagnostic(
                     pair, _tf, _candles,
@@ -15738,6 +15743,23 @@ def analyze_pair(
                     # Mon=0, Sat=5, Sun=6; allow up to 4-day D1 lag on these days
                     if _utc_weekday in (0, 5, 6) and _bucket_lag <= 4:
                         continue
+
+                # M5 is a refinement rung, never a gate. A stale M5 must not
+                # block the signal — the M15 trigger still carries entry — but it
+                # must not confirm one either. Drop the rung so
+                # m5RefinementEvidence goes unavailable and entry confirmation
+                # falls back to M15.
+                if _tf == "M5" and _tf != _v3_live_entry_tf and _tf not in {
+                    (_policy_timeframes or {}).get("setup"),
+                    (_policy_timeframes or {}).get("trigger"),
+                }:
+                    _v3_candles.pop("M5", None)
+                    log.debug(
+                        "[ANALYZE] %s M5 refinement rung dropped as stale (%s)",
+                        pair.get("display", "?"),
+                        _sev,
+                    )
+                    continue
 
                 _stale_tfs.append(f"{_tf}:{_sev}")
 
