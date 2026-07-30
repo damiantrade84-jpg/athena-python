@@ -1212,8 +1212,10 @@ ENGINE_A_ATR_ADX_PERIODS_BY_CLASS:
 #     ema_trend: 8            # flat → M15/M30/M5
 #     H1: { ema_trend: 13, ... }  # only when ENGINE_A_SETUP_TF_PERIODS_ENABLED
 # D1/H4 always use ENGINE_A_*_BY_CLASS. Missing score_group → base periods.
-# H1 setup periods are evidence-gated OFF until calibrated (no invented H1 pack).
-ENGINE_A_SETUP_TF_PERIODS_ENABLED: false
+# H1 setup periods: when true, setup=H1 uses nested H1 rows if present, else the
+# group's flat entry pack (same calibrated M15/M30 periods). Policy ladder is
+# D1/H4/H4/H1/M15 so setup is H1 and needs this path live.
+ENGINE_A_SETUP_TF_PERIODS_ENABLED: true
 ENGINE_A_ENTRY_TF_PERIODS:
   default:               { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }
   unknown:               { ema_trend: 9, ema_mom: 21, rsi: 9, macd: [8, 17, 9], adx: 10, atr: 14 }

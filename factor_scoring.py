@@ -409,6 +409,7 @@ def _resolve_entry_tf_period_override(
     if not isinstance(row, dict) or not row:
         return None
     tf_key = str(tf or "").upper()
+    flat = _flat_entry_period_fields(row)
     if tf_key:
         nested = row.get(tf_key)
         if isinstance(nested, dict) and nested:
@@ -416,11 +417,13 @@ def _resolve_entry_tf_period_override(
                 return None
             return dict(nested)
         if tf_key in ENTRY_TF_PERIOD_OVERRIDE_TFS:
-            flat = _flat_entry_period_fields(row)
+            return flat if flat else None
+        # When setup-TF periods are enabled, H1 setup reuses the group's flat
+        # entry pack until a nested H1 row is calibrated.
+        if tf_key == "H1" and _setup_tf_periods_enabled():
             return flat if flat else None
         return None
     # Legacy callers (no TF): return flat fields only.
-    flat = _flat_entry_period_fields(row)
     return flat if flat else None
 
 

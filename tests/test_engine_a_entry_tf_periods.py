@@ -56,13 +56,22 @@ def test_entry_tf_periods_differ_from_base_for_m30(group, asset_type):
     assert entry != base or group == "unknown"
 
 
-def test_d1_h4_h1_use_base_periods_forex_majors():
+def test_d1_h4_use_base_periods_h1_uses_entry_when_setup_enabled():
     group, asset = "forex_majors", "forex"
     base = _base_indicator_periods(group, asset)
-    for tf in ("D1", "H4", "H1"):
+    for tf in ("D1", "H4"):
         assert _resolved_indicator_periods_for_tf(group, asset, tf) == base
     assert base["ema_trend"] == 26
     assert base["rsi"] == 18
+    # Universal policy setup is H1; with SETUP_TF_PERIODS enabled H1 reuses
+    # the flat entry pack (same as M15/M30) unless a nested H1 row exists.
+    if CONFIG.get("ENGINE_A_SETUP_TF_PERIODS_ENABLED", False):
+        h1 = _resolved_indicator_periods_for_tf(group, asset, "H1")
+        m15 = _resolved_indicator_periods_for_tf(group, asset, "M15")
+        assert h1 == m15
+        assert h1["rsi"] == 7
+    else:
+        assert _resolved_indicator_periods_for_tf(group, asset, "H1") == base
 
 
 def test_m30_forex_majors_uses_entry_override():
@@ -118,7 +127,7 @@ def test_entry_tf_override_tfs_frozen():
     assert ENTRY_TF_PERIOD_OVERRIDE_TFS == frozenset({"M30", "M15", "M5"})
 
 
-def test_h1_setup_periods_default_off_use_base(monkeypatch):
+def test_h1_setup_periods_off_use_base(monkeypatch):
     from factor_scoring import entry_tf_uses_period_overrides
 
     monkeypatch.setitem(CONFIG, "ENGINE_A_SETUP_TF_PERIODS_ENABLED", False)
@@ -126,6 +135,22 @@ def test_h1_setup_periods_default_off_use_base(monkeypatch):
     base = _base_indicator_periods(group, asset)
     assert entry_tf_uses_period_overrides("H1") is False
     assert _resolved_indicator_periods_for_tf(group, asset, "H1") == base
+
+
+def test_h1_setup_periods_enabled_reuse_flat_entry_pack(monkeypatch):
+    """With flag on and no nested H1 row, H1 reuses the flat M15/M30 entry pack."""
+    from factor_scoring import entry_tf_uses_period_overrides
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SETUP_TF_PERIODS_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_SCORE_GROUP_ADJUSTMENTS_ENABLED", True)
+    group, asset = "forex_majors", "forex"
+    base = _base_indicator_periods(group, asset)
+    m15 = _resolved_indicator_periods_for_tf(group, asset, "M15")
+    h1 = _resolved_indicator_periods_for_tf(group, asset, "H1")
+    assert entry_tf_uses_period_overrides("H1") is True
+    assert h1 != base
+    assert h1 == m15
+    assert h1["ema_trend"] == 8
 
 
 def test_h1_setup_periods_apply_when_enabled_with_nested_row(monkeypatch):
@@ -198,6 +223,10 @@ def test_run_v3_backtest_m30_override_reports_entry_periods(monkeypatch):
     assert periods["M30"]["rsi"] == 7
     assert periods["M30"]["ema_trend"] == 8
     assert periods["M30"]["ema_momentum"] == 21
-    assert periods["H1"]["rsi"] == 18
+    # H1 setup periods follow the setup-TF gate (entry pack when enabled).
+    if CONFIG.get("ENGINE_A_SETUP_TF_PERIODS_ENABLED", False):
+        assert periods["H1"]["rsi"] == 7
+    else:
+        assert periods["H1"]["rsi"] == 18
     assert periods["H4"]["ema_trend"] == 26
     assert periods["D1"]["ema_trend"] == 26
