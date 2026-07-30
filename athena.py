@@ -823,12 +823,18 @@ US_STOCK_PAIRS = [
         "enabled": True,
     },  # SQN -0.29
     {
-        "symbol": "GOOGL.US",
+        # ATFX only lists Alphabet Class C ("Google-Alphabet Inc Class C(CFD)USA",
+        # #GOOG); there is no #GOOGL on this broker. The pair was previously
+        # labelled GOOGL while priced/executed against #GOOG (Class C) via the
+        # MT5_SYMBOL_OVERRIDES entry — display, EODHD ticker and broker symbol
+        # now all agree on Class C. SQN below predates the correction and was
+        # measured on GOOGL.US (Class A) history, not this instrument.
+        "symbol": "GOOG.US",
         "type": "stock",
-        "display": "GOOGL",
+        "display": "GOOG",
         "source": "mt5",
         "enabled": True,
-    },  # SQN +1.61, OOS:+1.01 ✓
+    },  # SQN +1.61, OOS:+1.01 (measured on GOOGL/Class A, pre-rename — not re-validated)
     {
         "symbol": "AVGO.US",
         "type": "stock",

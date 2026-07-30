@@ -36,14 +36,17 @@ def test_original_user_list_missing_members_are_in_tool_pair_universe():
         "enabled": True,
     }
 
-    assert stocks["GOOGL"] == {
-        "symbol": "GOOGL.US",
+    # Originally added as GOOGL (Class A). Renamed to GOOG (Class C) 2026-07-30:
+    # ATFX only lists "#GOOG" ("Google-Alphabet Inc Class C(CFD)USA") — there is
+    # no #GOOGL on this broker, so the pair now matches what's actually tradeable.
+    assert stocks["GOOG"] == {
+        "symbol": "GOOG.US",
         "type": "stock",
-        "display": "GOOGL",
+        "display": "GOOG",
         "source": "mt5",
         "enabled": True,
     }
-    assert "GOOG" not in stocks
+    assert "GOOGL" not in stocks
 
     assert stocks["AVGO"] == {
         "symbol": "AVGO.US",
@@ -72,10 +75,11 @@ def test_original_user_list_missing_members_are_in_tool_pair_universe():
 def test_new_us_symbols_have_supporting_tool_config_mappings():
     config_text = CONFIG_PATH.read_text(encoding="utf-8")
 
-    for symbol in ("GOOGL", "AVGO", "TQQQ", "SQQQ"):
+    for symbol in ("GOOG", "AVGO", "TQQQ", "SQQQ"):
         assert f'"{symbol}": "US"' in config_text
 
-    assert '"GOOG": "US"' not in config_text
+    # GOOGL (Class A) is not tradeable on ATFX; see the GOOG rename note above.
+    assert '"GOOGL": "US"' not in config_text
     assert "TQQQ: etf" in config_text
     assert "SQQQ: etf" in config_text
 

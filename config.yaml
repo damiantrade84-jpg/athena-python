@@ -96,7 +96,7 @@ EODHD_WS_US_SYMBOLS:
   - NFLX      # 3.61
   - SQ        # 3.56
   - PYPL      # 3.56
-  - GOOGL     # 3.45
+  - GOOG      # 3.45, renamed from GOOGL: ATFX only quotes Alphabet Class C (#GOOG)
   - OMC       # 3.44
   - UBER      # 3.43
   - ZM        # 3.35
@@ -2509,7 +2509,7 @@ MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL:
   MSFT: 0.0030
   AMZN: 0.0030
   META: 0.0030
-  GOOGL: 0.0030
+  GOOG: 0.0030        # renamed from GOOGL: ATFX only quotes Alphabet Class C
   AVGO: 0.0030
   JPM: 0.0030
   V: 0.0030
@@ -4990,7 +4990,7 @@ SCALP_ENGINE:
     "MSFT": "US"
     "AMZN": "US"
     "META": "US"
-    "GOOGL": "US"
+    "GOOG": "US"        # renamed from GOOGL: ATFX only quotes Alphabet Class C
     "AVGO": "US"
     "JPM": "US"
     "V": "US"

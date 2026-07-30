@@ -13,14 +13,14 @@ def test_mt5_symbol_overrides_precede_static_broker_map(monkeypatch):
         {
             "AUD/USD": "AUDUSD.s",
             "META": "#FB",
-            "GOOGL": "#GOOG",
+            "GOOG": "#GOOG",
             "EEM": "#ETF-EEM",
         },
     )
 
     assert mt5_executor.mt5_map_symbol("AUD/USD") == "AUDUSD.s"
     assert mt5_executor.mt5_map_symbol("META") == "#FB"
-    assert mt5_executor.mt5_map_symbol("GOOGL") == "#GOOG"
+    assert mt5_executor.mt5_map_symbol("GOOG") == "#GOOG"
     assert mt5_executor.mt5_map_symbol("EEM") == "#ETF-EEM"
     assert mt5_executor.mt5_map_symbol("USD/INR") == "USDINR"
 
