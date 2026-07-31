@@ -452,6 +452,8 @@ class PolicyDiagnostics:
     symbol_override_applied: bool = False
     symbol_override_patched_roles: tuple[str, ...] = ()
     m5_liquidity_blocked: bool = False
+    role_override_applied: bool = False
+    role_override_patched_roles: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -472,6 +474,8 @@ class PolicyDiagnostics:
             "symbolOverrideApplied": self.symbol_override_applied,
             "symbolOverridePatchedRoles": list(self.symbol_override_patched_roles),
             "m5LiquidityBlocked": self.m5_liquidity_blocked,
+            "roleOverrideApplied": self.role_override_applied,
+            "roleOverridePatchedRoles": list(self.role_override_patched_roles),
         }
 
 
@@ -1035,6 +1039,71 @@ def _clamp_adaptive_roles(
     return clamped[0], clamped[1]
 
 
+def _apply_role_override(
+    selected: _Template,
+    group: str | None,
+    style: str,
+) -> tuple[_Template, bool, tuple[str, ...]]:
+    """Apply the config-gated per-group/per-style role override, if enabled.
+
+    ``ENGINE_TF_ROLE_OVERRIDES.ENABLED`` ships enabled (True) so the shipped
+    per-group matrix is active everywhere; set it to False to restore the
+    universal role ladder (D1/H4/H4/H1/M15).  When enabled, a row for
+    the resolved policy group and style may rewrite any of the five role TFs.
+    Config is read lazily so importing this module stays side-effect free.
+    An invalid row (unknown timeframe, or roles that reverse the slower-to-faster
+    ladder) raises ``PolicyConfigurationError`` — overrides fail closed instead
+    of silently clamping.  Engine D (scalp) is never subject to these overrides.
+    """
+    if not group:
+        return selected, False, ()
+    try:
+        from config import CONFIG
+    except Exception:
+        # Config is unavailable (e.g. early boot): the default-off gate cannot be
+        # read, so preserve the base template rather than fail policy resolution.
+        return selected, False, ()
+    block = CONFIG.get("ENGINE_TF_ROLE_OVERRIDES") or {}
+    if not bool(block.get("ENABLED", False)):
+        return selected, False, ()
+    by_group = block.get("BY_GROUP") or {}
+    if not isinstance(by_group, dict):
+        return selected, False, ()
+    row = (by_group.get(group) or {}).get(style) if isinstance(by_group.get(group), dict) else None
+    if not isinstance(row, dict) or not row:
+        return selected, False, ()
+    kwargs: dict[str, Timeframe] = {}
+    for role in ("regime", "bias", "structure", "setup", "trigger"):
+        raw = row.get(role)
+        if raw is None:
+            continue
+        try:
+            tf = Timeframe(str(raw).strip().upper())
+        except ValueError:
+            raise PolicyConfigurationError(
+                f"ENGINE_TF_ROLE_OVERRIDES: unknown {role} timeframe {raw!r} for "
+                f"group {group!r} style {style!r}"
+            )
+        kwargs[role] = tf
+    patched = replace(selected, **kwargs)
+    try:
+        validate_timeframe_role_order(
+            patched.regime,
+            patched.bias,
+            patched.structure,
+            patched.setup,
+            patched.trigger,
+            patched.execution,
+            execution_mode=patched.execution_mode,
+        )
+    except ValueError as exc:
+        raise PolicyConfigurationError(
+            f"ENGINE_TF_ROLE_OVERRIDES: invalid role ladder for group {group!r} "
+            f"style {style!r}: {exc}"
+        ) from exc
+    return patched, True, tuple(kwargs)
+
+
 def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
     if engine_id == "engine_d":
         # Engine D native scalp contract: H1 context/regime, M15 confirmed
@@ -1138,6 +1207,19 @@ def resolve_timeframe_policy(
             source = PolicySource.SYMBOL_OVERRIDE
 
     selected = _engine_template(base, resolved_engine, resolved_style)
+    role_override_applied = False
+    role_override_patched_roles: tuple[str, ...] = ()
+    if resolved_engine != "engine_d":
+        (
+            selected,
+            role_override_applied,
+            role_override_patched_roles,
+        ) = _apply_role_override(selected, group, resolved_style)
+        if role_override_applied:
+            messages.append(
+                f"ROLE_OVERRIDE:{group}:{resolved_style} patched "
+                f"{','.join(role_override_patched_roles)}"
+            )
     reported_speed = (
         speed_state.live_speed_class
         if speed_state and speed_state.live_speed_class is not None
@@ -1154,8 +1236,9 @@ def resolve_timeframe_policy(
     # Execution is never adapted: no speed/liquidity input may rewrite the
     # advisory execution TF, and speed never promotes M5 execution (the v3
     # allow_dynamic_m5_execution promotion is removed in v4).
-    # Role TFs are fixed to the universal ladder (D1/H4/H4/H1/M15) for Engine
-    # A/B — speed no longer demotes setup/trigger either.
+    # Role TFs are fixed to the configured ladder (universal D1/H4/H4/H1/M15
+    # unless ENGINE_TF_ROLE_OVERRIDES patches roles) — speed no longer demotes
+    # setup/trigger either.
     execution = selected.execution
     m5_role = selected.m5_role
     m5_policy = selected.m5_policy
@@ -1253,6 +1336,8 @@ def resolve_timeframe_policy(
         symbol_override_applied=symbol_override_applied,
         symbol_override_patched_roles=symbol_override_patched_roles,
         m5_liquidity_blocked=m5_liquidity_blocked,
+        role_override_applied=role_override_applied,
+        role_override_patched_roles=role_override_patched_roles,
     )
     canonical_identity = canonical or _key(requested) or "UNKNOWN"
     policy_key = policy_key_for(canonical_identity, resolved_engine, resolved_style)
@@ -1356,6 +1441,10 @@ def describe_symbol_policy(
         "symbolOverrideApplied": policy.diagnostics.symbol_override_applied,
         "symbolOverridePatchedRoles": list(
             policy.diagnostics.symbol_override_patched_roles
+        ),
+        "roleOverrideApplied": policy.diagnostics.role_override_applied,
+        "roleOverridePatchedRoles": list(
+            policy.diagnostics.role_override_patched_roles
         ),
         "policyKey": policy.policy_key,
         "policyVersion": policy.policy_version,

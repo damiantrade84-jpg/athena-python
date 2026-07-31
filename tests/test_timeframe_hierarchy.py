@@ -31,30 +31,63 @@ def _assert_universal_roles(policy) -> None:
     assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
 
 
+def _assert_thin_m30_roles(policy) -> None:
+    """Enabled override ladder for thin/spread-expensive groups: M30 trigger."""
+    assert policy.regime_tf == Timeframe.D1
+    assert policy.bias_tf == Timeframe.H4
+    assert policy.structure_tf == Timeframe.H4
+    assert policy.setup_tf == Timeframe.H1
+    assert policy.trigger_tf == Timeframe.M30
+    assert policy.execution_tf == Timeframe.M15
+    assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
+
+
+def _assert_equity_roles(policy) -> None:
+    """Enabled override ladder for session-bound equities: H1 structure + M30 setup."""
+    assert policy.regime_tf == Timeframe.D1
+    assert policy.bias_tf == Timeframe.H4
+    assert policy.structure_tf == Timeframe.H1
+    assert policy.setup_tf == Timeframe.M30
+    assert policy.trigger_tf == Timeframe.M15
+    assert policy.execution_tf == Timeframe.M15
+    assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
+
+
+def _assert_swing_d1_roles(policy) -> None:
+    """Enabled override swing ladder: D1 structure / H4 setup / H1 trigger."""
+    assert policy.regime_tf == Timeframe.D1
+    assert policy.bias_tf == Timeframe.D1
+    assert policy.structure_tf == Timeframe.D1
+    assert policy.setup_tf == Timeframe.H4
+    assert policy.trigger_tf == Timeframe.H1
+    assert policy.execution_tf == Timeframe.M15
+    assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
+
+
 def test_usd_zar_exotic_liquid_resolution() -> None:
     policy = resolve_timeframe_policy(
         "USD/ZAR", "forex", "forex_exotics_liquid", "intraday"
     )
     assert policy.profile == "FOREX_EXOTICS_LIQUID"
-    _assert_universal_roles(policy)
+    _assert_thin_m30_roles(policy)
     assert policy.m5_role == M5Role.DISABLED
     assert policy.m5_policy == M5Policy.DISABLED
 
 
-def test_usd_brl_exotic_restricted_uses_universal_ladder() -> None:
+def test_usd_brl_exotic_restricted_uses_the_thin_m30_ladder() -> None:
     policy = resolve_timeframe_policy(
         "USD/BRL", "forex", "forex_exotics_restricted", "intraday"
     )
     assert policy.profile == "FOREX_EXOTICS_RESTRICTED"
-    _assert_universal_roles(policy)
+    _assert_thin_m30_roles(policy)
     assert policy.m5_role == M5Role.DISABLED
     assert policy.m5_policy == M5Policy.DISABLED
 
 
-def test_us_stock_single_universal_ladder() -> None:
+def test_us_stock_single_uses_the_equity_intraday_ladder() -> None:
     policy = resolve_timeframe_policy("AAPL", "stock", "us_stock_single", "intraday")
     assert policy.profile == "US_STOCK_SINGLE"
-    _assert_universal_roles(policy)
+    _assert_equity_roles(policy)
     assert policy.m5_policy == M5Policy.CONDITIONAL
 
 
@@ -96,7 +129,7 @@ def test_engine_b_swing_overlay_full_chain() -> None:
         "EUR/USD", "forex", "forex_majors", "swing", engine_id="engine_b"
     )
     assert policy.profile.startswith("ENGINE_B_SWING_")
-    _assert_universal_roles(policy)
+    _assert_swing_d1_roles(policy)
     assert policy.m5_role == M5Role.DISABLED
     assert policy.m5_policy == M5Policy.DISABLED
 
@@ -112,7 +145,8 @@ def test_engine_b_intraday_overlay_preserves_instrument_profile() -> None:
 
 
 def test_overlays_do_not_modify_unrelated_provenance() -> None:
-    # Swing only renames the profile; role TFs and provenance stay fixed.
+    # The swing overlay renames the profile and applies the D1 swing ladder;
+    # provenance stays fixed.
     intraday = resolve_timeframe_policy(
         "GBP/USD", "forex", "forex_majors", "intraday", engine_id="engine_a"
     )
@@ -130,7 +164,7 @@ def test_overlays_do_not_modify_unrelated_provenance() -> None:
         == intraday.diagnostics.symbol_override_patched_roles
     )
     _assert_universal_roles(intraday)
-    _assert_universal_roles(swing)
+    _assert_swing_d1_roles(swing)
     assert swing.profile.startswith("ENGINE_A_SWING_")
 
 

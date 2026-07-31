@@ -4347,6 +4347,193 @@ TF_POLICY_BASELINE_LIQUIDITY:
 TF_POLICY_SESSION_CALENDARS: {}
 TF_POLICY_UNDERLYING_EXCHANGE_CALENDARS: {}
 
+# Config-gated per-group/per-style role override for the timeframe policy
+# ladder (see docs/research/tf_structure_optimal_audit.md). DEFAULT-OFF: leave
+# ENABLED false and resolution stays the universal ladder (D1/H4/H4/H1/M15).
+# When enabled, BY_GROUP maps a v4 policy group (the keys used by
+# resolve_timeframe_policy) to per-style role overrides; any subset of
+# regime/bias/structure/setup/trigger may be set, in slower-to-faster order.
+# Invalid rows fail closed (PolicyConfigurationError). Engine D is never affected.
+# Policy-group taxonomy: forex_majors_standard, forex_majors_fast,
+# forex_crosses_broad, forex_crosses_liquid, forex_exotics_liquid,
+# forex_exotics_restricted, energy_oil, nat_gas, liquid_metals,
+# thin_metals_base_softs, equity_index_fast, equity_index_standard,
+# us_stock_single, cash_equity_standard_dynamic, bond_tlt_smallcap_em_etf,
+# crypto_majors_fast, crypto_alt_majors, crypto_other_thin.
+ENGINE_TF_ROLE_OVERRIDES:
+  ENABLED: true
+  BY_GROUP:
+    # Intraday: session-bound fast instruments confirm structure on H1.
+    # Swing: D1 structure + H4 setup + H1 trigger.
+    equity_index_fast:
+      intraday:
+        structure: H1
+        setup: M30
+        trigger: M15
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    equity_index_standard:
+      intraday:
+        structure: H1
+        setup: M30
+        trigger: M15
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    us_stock_single:
+      intraday:
+        structure: H1
+        setup: M30
+        trigger: M15
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    cash_equity_standard_dynamic:
+      intraday:
+        structure: H1
+        setup: M30
+        trigger: M15
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    # Intraday: thin / spread-expensive / gap-prone groups keep H4 structure and
+    # use an M30 trigger instead of M15 to avoid spread-cost erosion.
+    forex_exotics_liquid:
+      intraday:
+        structure: H4
+        setup: H1
+        trigger: M30
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    forex_exotics_restricted:
+      intraday:
+        structure: H4
+        setup: H1
+        trigger: M30
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    # Nat gas: extreme gap risk keeps the M30 intraday trigger and the swing
+    # trigger on H4.
+    nat_gas:
+      intraday:
+        structure: H4
+        setup: H1
+        trigger: M30
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H4
+    thin_metals_base_softs:
+      intraday:
+        structure: H4
+        setup: H1
+        trigger: M30
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    bond_tlt_smallcap_em_etf:
+      intraday:
+        structure: H4
+        setup: H1
+        trigger: M30
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    # Swing: D1 structure + H4 setup + H1 trigger for the remaining policy
+    # groups (D1 regime/bias/structure satisfies the slower-to-faster ladder).
+    forex_majors_standard:
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    forex_majors_fast:
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    forex_crosses_broad:
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    forex_crosses_liquid:
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    energy_oil:
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    liquid_metals:
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    crypto_majors_fast:
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    crypto_alt_majors:
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+    crypto_other_thin:
+      swing:
+        regime: D1
+        bias: D1
+        structure: D1
+        setup: H4
+        trigger: H1
+
 # Minimum ADX for forex Engine B (D1 snap preferred, else H4/zone snap; else
 
 # candle-derived). Set to 0.0 to disable the veto and restore the pre-gate

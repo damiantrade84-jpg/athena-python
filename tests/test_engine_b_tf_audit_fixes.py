@@ -115,18 +115,18 @@ def test_resolve_engine_b_tfs_exposes_m5_policy_and_prerequisite(monkeypatch):
     assert standard["execution_prerequisite"] is None
 
 
-def test_snapshot_profile_uses_h4_for_structural_scoring_zone_and_atr():
-    """The pure snapshot scorer must consume the same H4 roles as live scans."""
+def test_snapshot_profile_uses_d1_for_structural_scoring_zone_and_atr():
+    """The pure snapshot scorer must consume the same D1 swing roles as live scans."""
     style, profile = resolve_engine_b_style_profile(
         "swing", "forex_exotics_restricted", "forex", symbol="USD/ZAR"
     )
     assert style == "swing"
-    assert profile["bias_tf"] == "H4"
-    assert profile["structure_tf"] == "H4"
-    assert profile["zone_tf"] == "H4"
-    assert profile["atr_tf"] == "H4"
-    assert profile["setup_tf"] == "H1"
-    assert profile["entry_tf"] == "M15"
+    assert profile["bias_tf"] == "D1"
+    assert profile["structure_tf"] == "D1"
+    assert profile["zone_tf"] == "D1"
+    assert profile["atr_tf"] == "D1"
+    assert profile["setup_tf"] == "H4"
+    assert profile["entry_tf"] == "H1"
 
 
 # ── conditional M5 prerequisite ──────────────────────────────────────────────

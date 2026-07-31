@@ -1999,6 +1999,17 @@ CONFIG: dict = {
         "softs": {"min_directional": 0.05, "soft_span": 0.08},
         "commodity_other": {"min_directional": 0.05, "soft_span": 0.08},
     },
+    # Config-gated per-group/per-style role override for the timeframe policy
+    # ladder. Ships ENABLED=true (the shipped per-group matrix is active); set
+    # ENABLED falsy to restore the universal ladder (D1/H4/H4/H1/M15). When
+    # enabled, BY_GROUP maps a policy group (the v4 taxonomy used by
+    # resolve_timeframe_policy) to per-style role overrides; any subset of
+    # regime/bias/structure/setup/trigger may be set. Invalid rows fail closed
+    # (PolicyConfigurationError). Engine D (scalp) is never affected.
+    "ENGINE_TF_ROLE_OVERRIDES": {
+        "ENABLED": True,
+        "BY_GROUP": {},
+    },
     "ENGINE_A_V3_QUANT_SESSION_GATE": {
         "ENABLED": True,
         "MIN_SCORE": 0.40,
@@ -2983,7 +2994,10 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_A_MEAN_REVERSION",
     "ENGINE_A_RESEARCH_LAB_FACTORS",
     "ENGINE_B_BT_STRUCTURE_GATE_ENABLED",
+    "ENGINE_B_ADAPTIVE_STRUCTURE_WINDOW_ENABLED",
     "ENGINE_B_BOS_LOOKBACK_BARS",
+    "ENGINE_B_BOS_LOOKBACK_COMPRESS_RATIO",
+    "ENGINE_B_BOS_LOOKBACK_MAX_EXTRA_BARS",
     "ENGINE_B_BOS_VOLUME_FOR_TICKVOL",
     "ENGINE_B_CRYPTO_LEVELS_FEED",
     "ENGINE_B_CRYPTO_LEVELS_SIGNAL_FEED_FALLBACK",
@@ -3026,6 +3040,10 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_A_TRIGGER_CONFIRM_ON_M5_PREREQUISITE",
     "ENGINE_A_BACKTEST_ENTRY_TF",
     "ENGINE_B_USE_EXECUTION_LEVELS_FOR_SCAN_SIGNALS",
+    "ENGINE_A_V3_ADAPTIVE_STRUCTURE_WINDOW_ENABLED",
+    "ENGINE_A_V3_STRUCTURE_WINDOW_BARS",
+    "ENGINE_A_V3_STRUCTURE_WINDOW_MAX_EXTRA_BARS",
+    "ENGINE_A_V3_STRUCTURE_WINDOW_COMPRESS_RATIO",
     "ENGINE_C_AI_WEIGHT_ADJUST_ENABLED",
     "ENGINE_C_AI_WEIGHT_MAX",
     "ENGINE_C_AI_WEIGHT_MIN",

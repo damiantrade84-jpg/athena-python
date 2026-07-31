@@ -175,26 +175,32 @@ def test_unknown_symbol_resolution_is_visible_and_fail_closed_when_asset_unknown
 
 
 def test_required_baseline_matrix() -> None:
-    # Universal ladder for every pair; only m5_role still varies by profile.
+    # Intraday ladders: the enabled ENGINE_TF_ROLE_OVERRIDES matrix applies
+    # per-group optimizations; only m5_role still varies by profile.
     cases = {
-        "EUR/USD": ("forex", "forex_majors", M5Role.DISABLED),
-        "GBP/USD": ("forex", "forex_majors", M5Role.REFINEMENT),
-        "EUR/GBP": ("forex", "forex_crosses", M5Role.DISABLED),
-        "XAU/USD": ("commodity", "precious_trackers", M5Role.REFINEMENT),
-        "XPT/USD": ("commodity", "pgm_metals", M5Role.DISABLED),
-        "WTI Oil": ("commodity", "energy_oil", M5Role.REFINEMENT),
-        "S&P 500": ("index", "us_indices_trackers", M5Role.DISABLED),
-        "AAPL": ("stock", "us_stock_single", M5Role.REFINEMENT),
-        "BTC/USDT": ("crypto", "crypto_btc", M5Role.REFINEMENT),
-        "SOL/USDT": ("crypto", "crypto_alt_majors", M5Role.REFINEMENT),
+        # (asset, group, structure, setup, trigger, m5_role)
+        "EUR/USD": ("forex", "forex_majors", "H4", "H1", "M15", M5Role.DISABLED),
+        "GBP/USD": ("forex", "forex_majors", "H4", "H1", "M15", M5Role.REFINEMENT),
+        "EUR/GBP": ("forex", "forex_crosses", "H4", "H1", "M15", M5Role.DISABLED),
+        "XAU/USD": ("commodity", "precious_trackers", "H4", "H1", "M15", M5Role.REFINEMENT),
+        # pgm_metals aliases to thin_metals_base_softs: M30 trigger to avoid
+        # spread-cost erosion.
+        "XPT/USD": ("commodity", "pgm_metals", "H4", "H1", "M30", M5Role.DISABLED),
+        "WTI Oil": ("commodity", "energy_oil", "H4", "H1", "M15", M5Role.REFINEMENT),
+        # us_indices_trackers aliases to equity_index_standard: H1 structure
+        # confirmation + M30 setup for session-bound indices.
+        "S&P 500": ("index", "us_indices_trackers", "H1", "M30", "M15", M5Role.DISABLED),
+        "AAPL": ("stock", "us_stock_single", "H1", "M30", "M15", M5Role.REFINEMENT),
+        "BTC/USDT": ("crypto", "crypto_btc", "H4", "H1", "M15", M5Role.REFINEMENT),
+        "SOL/USDT": ("crypto", "crypto_alt_majors", "H4", "H1", "M15", M5Role.REFINEMENT),
     }
-    for symbol, (asset, group, m5_role) in cases.items():
+    for symbol, (asset, group, structure, setup, trigger, m5_role) in cases.items():
         policy = resolve_timeframe_policy(symbol, asset, group, "intraday")
         assert policy.regime_tf == Timeframe.D1
         assert policy.bias_tf == Timeframe.H4
-        assert policy.structure_tf == Timeframe.H4
-        assert policy.setup_tf == Timeframe.H1
-        assert policy.trigger_tf == Timeframe.M15
+        assert policy.structure_tf == Timeframe(structure)
+        assert policy.setup_tf == Timeframe(setup)
+        assert policy.trigger_tf == Timeframe(trigger)
         assert policy.execution_tf == Timeframe.M15
         assert policy.m5_role == m5_role
         assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
@@ -218,45 +224,183 @@ def test_required_baseline_matrix() -> None:
     assert oil.diagnostics.m15_confirmation_required_for_m5 is True
 
 
+def test_role_override_disabled_or_absent_preserves_universal_ladder(monkeypatch) -> None:
+    from config import CONFIG
+
+    for block in (None, {"ENABLED": False, "BY_GROUP": {}}, {"ENABLED": False, "BY_GROUP": {"forex_majors_standard": {"swing": {"structure": "D1"}}}}):
+        if block is None:
+            monkeypatch.delitem(CONFIG, "ENGINE_TF_ROLE_OVERRIDES", raising=False)
+        else:
+            monkeypatch.setitem(CONFIG, "ENGINE_TF_ROLE_OVERRIDES", block)
+        for style in ("intraday", "swing"):
+            policy = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", style)
+            assert policy.regime_tf == Timeframe.D1
+            assert policy.bias_tf == Timeframe.H4
+            assert policy.structure_tf == Timeframe.H4
+            assert policy.setup_tf == Timeframe.H1
+            assert policy.trigger_tf == Timeframe.M15
+            assert policy.diagnostics.role_override_applied is False
+            assert policy.diagnostics.role_override_patched_roles == ()
+
+
+def test_role_override_applies_per_group_and_style(monkeypatch) -> None:
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_TF_ROLE_OVERRIDES",
+        {
+            "ENABLED": True,
+            "BY_GROUP": {
+                # us_indices_trackers aliases to equity_index_standard.
+                "equity_index_standard": {
+                    "intraday": {"structure": "H1", "setup": "M30", "trigger": "M15"},
+                },
+                "forex_majors_standard": {
+                    "swing": {
+                        "regime": "D1",
+                        "bias": "D1",
+                        "structure": "D1",
+                        "setup": "H4",
+                        "trigger": "H1",
+                    },
+                },
+            },
+        },
+    )
+    intraday = resolve_timeframe_policy("NAS100", "index", "us_indices_trackers", "intraday")
+    assert intraday.structure_tf == Timeframe.H1
+    assert intraday.setup_tf == Timeframe.M30
+    assert intraday.trigger_tf == Timeframe.M15
+    assert intraday.regime_tf == Timeframe.D1
+    assert intraday.bias_tf == Timeframe.H4
+    assert intraday.diagnostics.role_override_applied is True
+    assert "structure" in intraday.diagnostics.role_override_patched_roles
+    assert any("ROLE_OVERRIDE" in message for message in intraday.diagnostics.messages)
+
+    swing = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "swing")
+    assert swing.regime_tf == Timeframe.D1
+    assert swing.bias_tf == Timeframe.D1
+    assert swing.structure_tf == Timeframe.D1
+    assert swing.setup_tf == Timeframe.H4
+    assert swing.trigger_tf == Timeframe.H1
+    assert swing.execution_mode == ExecutionMode.LIVE_QUOTE
+    assert swing.diagnostics.role_override_applied is True
+
+    # A group/style without a configured row keeps the universal ladder.
+    standard = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday")
+    assert standard.regime_tf == Timeframe.D1
+    assert standard.bias_tf == Timeframe.H4
+    assert standard.structure_tf == Timeframe.H4
+    assert standard.setup_tf == Timeframe.H1
+    assert standard.trigger_tf == Timeframe.M15
+    assert standard.diagnostics.role_override_applied is False
+
+
+def test_role_override_engine_d_never_affected(monkeypatch) -> None:
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_TF_ROLE_OVERRIDES",
+        {
+            "ENABLED": True,
+            "BY_GROUP": {
+                "crypto_majors_fast": {
+                    "scalp": {"structure": "D1", "setup": "H4", "trigger": "H1"},
+                },
+            },
+        },
+    )
+    policy = resolve_timeframe_policy("BTC/USDT", "crypto", "crypto_btc", "scalp", engine_id="engine_d")
+    assert policy.regime_tf == Timeframe.H1
+    assert policy.structure_tf == Timeframe.M15
+    assert policy.setup_tf == Timeframe.M5
+    assert policy.trigger_tf == Timeframe.M1
+    assert policy.diagnostics.role_override_applied is False
+
+
+@pytest.mark.parametrize(
+    "row",
+    (
+        # Reversed ladder: setup slower than structure.
+        {"structure": "H1", "setup": "H4"},
+        # Trigger slower than setup.
+        {"structure": "H4", "setup": "M30", "trigger": "H1"},
+        # Structure slower than bias is forbidden (D1 bias requires D1 structure).
+        {"bias": "H4", "structure": "D1"},
+    ),
+)
+def test_role_override_invalid_ladder_fails_closed(monkeypatch, row) -> None:
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_TF_ROLE_OVERRIDES",
+        {"ENABLED": True, "BY_GROUP": {"forex_majors_standard": {"intraday": row}}},
+    )
+    with pytest.raises(PolicyConfigurationError):
+        resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday")
+
+
+def test_role_override_unknown_timeframe_fails_closed(monkeypatch) -> None:
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_TF_ROLE_OVERRIDES",
+        {
+            "ENABLED": True,
+            "BY_GROUP": {"forex_majors_standard": {"intraday": {"trigger": "M90"}}},
+        },
+    )
+    with pytest.raises(PolicyConfigurationError):
+        resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday")
+
+
 def test_corrected_symbol_specific_profiles() -> None:
-    # Universal ladder for every symbol; only profile identity / m5_role vary.
+    # Intraday ladder per symbol: the universal H4/H1/M15 holds for most
+    # groups; the enabled override matrix rewrites structure/setup/trigger for
+    # session-bound equities and thin/spread-expensive groups. Profile identity
+    # and m5_role are asserted alongside.
     cases = {
-        "USD/JPY": ("forex", "forex_majors", "FOREX_MAJORS_FAST", M5Role.REFINEMENT),
-        "USD/CAD": ("forex", "forex_majors", "FOREX_MAJORS_STANDARD", M5Role.DISABLED),
-        "AUD/NZD": ("forex", "forex_crosses", "FOREX_CROSSES_BROAD", M5Role.DISABLED),
-        "GBP/JPY": ("forex", "forex_crosses", "GBPJPY_FAST_CROSS_CONDITIONAL", M5Role.REFINEMENT),
-        "EUR/JPY": ("forex", "forex_crosses", "FOREX_CROSSES_LIQUID", M5Role.DISABLED),
-        "AUD/JPY": ("forex", "forex_crosses", "FOREX_CROSSES_LIQUID", M5Role.DISABLED),
-        "EUR/CHF": ("forex", "forex_crosses", "FOREX_CROSSES_BROAD", M5Role.DISABLED),
-        "XAG/USD": ("commodity", "precious_trackers", "LIQUID_METALS", M5Role.DISABLED),
-        "XPT/USD": ("commodity", "pgm_metals", "THIN_METALS_BASE_SOFTS", M5Role.DISABLED),
-        "XPD/USD": ("commodity", "pgm_metals", "THIN_METALS_BASE_SOFTS", M5Role.DISABLED),
-        "Natural Gas": ("commodity", "nat_gas", "NAT_GAS_NO_M5", M5Role.DISABLED),
-        "NAS100": ("index", "us_indices_trackers", "EQUITY_INDEX_FAST", M5Role.REFINEMENT),
-        "US30": ("index", "us_indices_trackers", "EQUITY_INDEX_FAST", M5Role.REFINEMENT),
-        "GER40": ("index", "eu_indices", "EQUITY_INDEX_FAST", M5Role.REFINEMENT),
-        "JPN225": ("index", "asia_indices", "EQUITY_INDEX_STANDARD", M5Role.DISABLED),
-        "US500": ("index", "us_indices_trackers", "EQUITY_INDEX_STANDARD", M5Role.DISABLED),
-        "UK100": ("index", "eu_indices", "EQUITY_INDEX_STANDARD", M5Role.DISABLED),
-        "AAPL": ("stock", "us_stock_single", "US_STOCK_SINGLE", M5Role.REFINEMENT),
-        "SPY": ("etf", "us_etfs", "US_STOCK_SINGLE", M5Role.REFINEMENT),
-        "BTC/USDT": ("crypto", "crypto_btc", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT),
-        "ETH/USDT": ("crypto", "crypto_eth", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT),
-        "BNB/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED),
-        "SOL/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT),
-        "XRP/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED),
-        "DOGE/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_OTHER_THIN", M5Role.DISABLED),
-        "ADA/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED),
-        "LINK/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED),
+        # (asset, group, profile, m5_role, structure, setup, trigger)
+        "USD/JPY": ("forex", "forex_majors", "FOREX_MAJORS_FAST", M5Role.REFINEMENT, "H4", "H1", "M15"),
+        "USD/CAD": ("forex", "forex_majors", "FOREX_MAJORS_STANDARD", M5Role.DISABLED, "H4", "H1", "M15"),
+        "AUD/NZD": ("forex", "forex_crosses", "FOREX_CROSSES_BROAD", M5Role.DISABLED, "H4", "H1", "M15"),
+        "GBP/JPY": ("forex", "forex_crosses", "GBPJPY_FAST_CROSS_CONDITIONAL", M5Role.REFINEMENT, "H4", "H1", "M15"),
+        "EUR/JPY": ("forex", "forex_crosses", "FOREX_CROSSES_LIQUID", M5Role.DISABLED, "H4", "H1", "M15"),
+        "AUD/JPY": ("forex", "forex_crosses", "FOREX_CROSSES_LIQUID", M5Role.DISABLED, "H4", "H1", "M15"),
+        "EUR/CHF": ("forex", "forex_crosses", "FOREX_CROSSES_BROAD", M5Role.DISABLED, "H4", "H1", "M15"),
+        "XAG/USD": ("commodity", "precious_trackers", "LIQUID_METALS", M5Role.DISABLED, "H4", "H1", "M15"),
+        "XPT/USD": ("commodity", "pgm_metals", "THIN_METALS_BASE_SOFTS", M5Role.DISABLED, "H4", "H1", "M30"),
+        "XPD/USD": ("commodity", "pgm_metals", "THIN_METALS_BASE_SOFTS", M5Role.DISABLED, "H4", "H1", "M30"),
+        "Natural Gas": ("commodity", "nat_gas", "NAT_GAS_NO_M5", M5Role.DISABLED, "H4", "H1", "M30"),
+        "NAS100": ("index", "us_indices_trackers", "EQUITY_INDEX_FAST", M5Role.REFINEMENT, "H1", "M30", "M15"),
+        "US30": ("index", "us_indices_trackers", "EQUITY_INDEX_FAST", M5Role.REFINEMENT, "H1", "M30", "M15"),
+        "GER40": ("index", "eu_indices", "EQUITY_INDEX_FAST", M5Role.REFINEMENT, "H1", "M30", "M15"),
+        "JPN225": ("index", "asian_indices", "EQUITY_INDEX_STANDARD", M5Role.DISABLED, "H1", "M30", "M15"),
+        "US500": ("index", "us_indices_trackers", "EQUITY_INDEX_STANDARD", M5Role.DISABLED, "H1", "M30", "M15"),
+        "UK100": ("index", "eu_indices", "EQUITY_INDEX_STANDARD", M5Role.DISABLED, "H1", "M30", "M15"),
+        "AAPL": ("stock", "us_stock_single", "US_STOCK_SINGLE", M5Role.REFINEMENT, "H1", "M30", "M15"),
+        "SPY": ("etf", "us_etfs", "US_STOCK_SINGLE", M5Role.REFINEMENT, "H4", "H1", "M15"),
+        "BTC/USDT": ("crypto", "crypto_btc", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT, "H4", "H1", "M15"),
+        "ETH/USDT": ("crypto", "crypto_eth", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT, "H4", "H1", "M15"),
+        "BNB/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
+        "SOL/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT, "H4", "H1", "M15"),
+        "XRP/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
+        "DOGE/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_OTHER_THIN", M5Role.DISABLED, "H4", "H1", "M15"),
+        "ADA/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
+        "LINK/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
     }
-    for symbol, (asset, group, profile, m5_role) in cases.items():
+    for symbol, (asset, group, profile, m5_role, structure, setup, trigger) in cases.items():
         policy = resolve_timeframe_policy(symbol, asset, group, "intraday")
         assert policy.profile == profile
         assert policy.regime_tf == Timeframe.D1
         assert policy.bias_tf == Timeframe.H4
-        assert policy.structure_tf == Timeframe.H4
-        assert policy.setup_tf == Timeframe.H1
-        assert policy.trigger_tf == Timeframe.M15
+        assert policy.structure_tf == Timeframe(structure)
+        assert policy.setup_tf == Timeframe(setup)
+        assert policy.trigger_tf == Timeframe(trigger)
         assert policy.execution_tf == Timeframe.M15
         assert policy.m5_role == m5_role
 
@@ -548,9 +692,10 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     )
     engine_d = resolve_timeframe_policy("BTC/USDT", "crypto", "crypto_btc", "engine_d")
 
-    # Universal Engine A/B ladder: D1/H4/H4/H1/M15 for every style and group.
-    assert equity.structure_tf == Timeframe.H4
-    assert equity.setup_tf == Timeframe.H1
+    # Enabled role overrides: equities confirm structure on H1 with an M30
+    # setup; swing ladders step to D1 structure/H4 setup/H1 trigger.
+    assert equity.structure_tf == Timeframe.H1
+    assert equity.setup_tf == Timeframe.M30
     assert equity.trigger_tf == Timeframe.M15
     assert engine_b_intraday["bias"] == "H4"
     assert engine_b_intraday["struct"] == "H4"
@@ -560,14 +705,15 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     assert engine_b_intraday["trigger"] == "M15"
     assert engine_b_intraday["execution"] == "M15"
     assert engine_b_intraday["atr"] == "H4"
-    assert engine_b_swing["struct"] == "H4"
-    assert engine_b_swing["zone"] == "H4"
-    assert engine_b_swing["bias"] == "H4"
-    assert engine_b_swing["setup"] == "H1"
-    assert engine_b_swing["trigger"] == "M15"
-    assert engine_b_thin_swing.structure_tf == Timeframe.H4
-    assert engine_b_thin_swing.setup_tf == Timeframe.H1
-    assert engine_b_thin_swing.trigger_tf == Timeframe.M15
+    assert engine_b_swing["struct"] == "D1"
+    assert engine_b_swing["zone"] == "D1"
+    assert engine_b_swing["bias"] == "D1"
+    assert engine_b_swing["setup"] == "H4"
+    assert engine_b_swing["trigger"] == "H1"
+    assert engine_b_swing["atr"] == "D1"
+    assert engine_b_thin_swing.structure_tf == Timeframe.D1
+    assert engine_b_thin_swing.setup_tf == Timeframe.H4
+    assert engine_b_thin_swing.trigger_tf == Timeframe.H1
     assert engine_b_fast.execution_tf == Timeframe.M15
     assert engine_b_fast.trigger_tf == Timeframe.M15
     assert engine_b_fast.m5_role == M5Role.REFINEMENT
@@ -580,7 +726,7 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     for exotic in (engine_b_exotic_liquid, engine_b_exotic_restricted):
         assert exotic.structure_tf == Timeframe.H4
         assert exotic.setup_tf == Timeframe.H1
-        assert exotic.trigger_tf == Timeframe.M15
+        assert exotic.trigger_tf == Timeframe.M30
         assert exotic.execution_tf == Timeframe.M15
         assert exotic.m5_policy == M5Policy.DISABLED
     # Engine B scalp retains universal H4 structure; M5 is refinement only.
@@ -608,13 +754,19 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     eng_a_swing = resolve_timeframe_policy(
         "EUR/USD", "forex", "forex_majors", "swing", engine_id="engine_a"
     )
-    for eng_a in (eng_a_intra, eng_a_swing):
+    for eng_a in (eng_a_intra,):
         assert eng_a.regime_tf == Timeframe.D1
         assert eng_a.bias_tf == Timeframe.H4
         assert eng_a.structure_tf == Timeframe.H4
         assert eng_a.setup_tf == Timeframe.H1
         assert eng_a.trigger_tf == Timeframe.M15
         assert eng_a.execution_tf == Timeframe.M15
+    assert eng_a_swing.regime_tf == Timeframe.D1
+    assert eng_a_swing.bias_tf == Timeframe.D1
+    assert eng_a_swing.structure_tf == Timeframe.D1
+    assert eng_a_swing.setup_tf == Timeframe.H4
+    assert eng_a_swing.trigger_tf == Timeframe.H1
+    assert eng_a_swing.execution_tf == Timeframe.M15
     assert eng_a_swing.profile.startswith("ENGINE_A_SWING_")
 
 
@@ -628,31 +780,51 @@ def test_engine_a_broad_thin_groups_use_fixed_h4_h1_m15_ladder() -> None:
         m5_quality_acceptable=True,
     )
     groups = (
-        ("EUR/GBP", "forex", "forex_crosses_broad"),
-        ("USD/ZAR", "forex", "forex_exotics_liquid"),
-        ("USD/BRL", "forex", "forex_exotics_restricted"),
-        ("XPT/USD", "commodity", "thin_metals_base_softs"),
-        ("DOGE/USDT", "crypto", "crypto_other_thin"),
+        ("EUR/GBP", "forex", "forex_crosses_broad", "M15"),
+        ("USD/ZAR", "forex", "forex_exotics_liquid", "M30"),
+        ("USD/BRL", "forex", "forex_exotics_restricted", "M30"),
+        ("XPT/USD", "commodity", "thin_metals_base_softs", "M30"),
+        ("DOGE/USDT", "crypto", "crypto_other_thin", "M15"),
     )
-    for symbol, asset_type, score_group in groups:
-        for style in ("intraday", "swing", "scalp"):
-            policy = resolve_timeframe_policy(
-                symbol, asset_type, score_group, style, slow, engine_id="engine_a"
-            )
-            assert policy.regime_tf == Timeframe.D1
-            assert policy.bias_tf == Timeframe.H4
-            assert policy.structure_tf == Timeframe.H4
-            assert policy.setup_tf == Timeframe.H1
-            assert policy.trigger_tf == Timeframe.M15
-            assert policy.execution_tf == Timeframe.M15
-            assert policy.m5_policy == M5Policy.DISABLED
+    for symbol, asset_type, score_group, intraday_trigger in groups:
+        # Enabled override matrix: broad/thin groups use an M30 intraday trigger
+        # (spread-cost erosion guard) and the D1-structure swing ladder.
+        intraday = resolve_timeframe_policy(
+            symbol, asset_type, score_group, "intraday", slow, engine_id="engine_a"
+        )
+        assert intraday.regime_tf == Timeframe.D1
+        assert intraday.bias_tf == Timeframe.H4
+        assert intraday.structure_tf == Timeframe.H4
+        assert intraday.setup_tf == Timeframe.H1
+        assert intraday.trigger_tf == Timeframe(intraday_trigger)
+        assert intraday.execution_tf == Timeframe.M15
+        assert intraday.m5_policy == M5Policy.DISABLED
+
+        swing = resolve_timeframe_policy(
+            symbol, asset_type, score_group, "swing", slow, engine_id="engine_a"
+        )
+        assert swing.regime_tf == Timeframe.D1
+        assert swing.bias_tf == Timeframe.D1
+        assert swing.structure_tf == Timeframe.D1
+        assert swing.setup_tf == Timeframe.H4
+        assert swing.trigger_tf == Timeframe.H1
+        assert swing.execution_tf == Timeframe.M15
+        assert swing.m5_policy == M5Policy.DISABLED
+
+        # Scalp has no override row and keeps the universal H4/H1/M15 ladder.
+        scalp = resolve_timeframe_policy(
+            symbol, asset_type, score_group, "scalp", slow, engine_id="engine_a"
+        )
+        assert scalp.structure_tf == Timeframe.H4
+        assert scalp.setup_tf == Timeframe.H1
+        assert scalp.trigger_tf == Timeframe.M15
 
     auto_exotic = resolve_timeframe_policy(
         "USD/ZAR", "forex", "forex_exotics_liquid", "auto", slow, engine_id="engine_a"
     )
     assert auto_exotic.style == "intraday"
     assert auto_exotic.bias_tf == Timeframe.H4
-    assert auto_exotic.trigger_tf == Timeframe.M15
+    assert auto_exotic.trigger_tf == Timeframe.M30
 
 
 def test_auto_policy_preserves_legacy_intraday_default() -> None:
@@ -1125,8 +1297,9 @@ def test_payload_contract_and_warmup_derivation() -> None:
     }
     assert required <= signal.keys()
     assert signal["timeframePolicyHash"]
-    assert policy.structure_tf == Timeframe.H4
-    assert policy.setup_tf == Timeframe.H1
+    # AAPL (us_stock_single) uses the enabled H1-structure / M30-setup ladder.
+    assert policy.structure_tf == Timeframe.H1
+    assert policy.setup_tf == Timeframe.M30
     assert policy.trigger_tf == Timeframe.M15
     assert derive_warmup_bars(ema_periods=(21, 50, 200), safety_margin=20) == 220
 
