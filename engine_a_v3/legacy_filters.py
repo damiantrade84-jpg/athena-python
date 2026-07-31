@@ -81,6 +81,7 @@ def apply_legacy_filters(
     entry_tf: str,
     series_cache=None,
     level_style: str = "trend",
+    policy: Mapping[str, Any] | None = None,
 ) -> tuple[float, str, dict[str, Any]]:
     """Return (confluence, decision, diagnostics) after optional V2 filter ports.
 
@@ -99,9 +100,21 @@ def apply_legacy_filters(
         return confluence, decision, diag
 
     mult = 1.0
-    h4_snap = dict(snaps.get("H4") or snaps.get(entry_tf) or {})
-    h4_candles = candles.get("H4") or candles.get(entry_tf) or []
-    h4_tf = "H4" if candles.get("H4") else entry_tf
+    # Anchor on the policy bias rung when policy provenance is supplied — that
+    # is the rung the signal's trend judgment actually read. The historical H4
+    # anchor is only the no-policy fallback: a scalp-style signal whose bias
+    # rung is H1/M15 must not be penalised from an H4 cluster it never scored.
+    anchor_tf = str(
+        (policy or {}).get("bias") or (policy or {}).get("biasTf") or "H4"
+    ).upper() or "H4"
+    h4_snap = dict(snaps.get(anchor_tf) or snaps.get("H4") or snaps.get(entry_tf) or {})
+    h4_candles = candles.get(anchor_tf) or candles.get("H4") or candles.get(entry_tf) or []
+    h4_tf = (
+        anchor_tf
+        if candles.get(anchor_tf)
+        else ("H4" if candles.get("H4") else entry_tf)
+    )
+    diag["legacyFilterAnchorTf"] = anchor_tf
 
     # ── Forex EMA cluster penalty ───────────────────────────────────────────
     if family == "forex" and _flag("FOREX_EMA_CLUSTER", True) and direction in ("LONG", "SHORT"):

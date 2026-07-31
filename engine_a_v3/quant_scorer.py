@@ -492,6 +492,8 @@ def _trend_health_mult(
     bar_penalty = 0.03
     floor = 0.75
     adx_weakening_penalty = 0.15
+    plateau_enabled = False
+    plateau_mult = 0.85
     try:
         from config import CONFIG
 
@@ -501,6 +503,8 @@ def _trend_health_mult(
         bar_penalty = float(cfg.get("BAR_PENALTY", 0.03))
         floor = float(cfg.get("FLOOR", 0.75))
         adx_weakening_penalty = float(cfg.get("ADX_WEAKENING_PENALTY", 0.15))
+        plateau_enabled = bool(cfg.get("PLATEAU_PENALTY_ENABLED", False))
+        plateau_mult = float(cfg.get("PLATEAU_PENALTY_MULT", 0.85))
     except Exception:
         pass
     if not enabled or abs(trend_signal) < 0.34:
@@ -523,10 +527,13 @@ def _trend_health_mult(
     if adx_slope < 0:
         mult *= _clamp(1.0 + adx_weakening_penalty * adx_slope, floor, 1.0)
 
+    # Plateau penalty is off by default: a steady ADX above 25 is a stable
+    # trend, not a stale one — actual weakening is the negative-slope branch
+    # above. Re-enable via ENGINE_A_V3_TREND_HEALTH.PLATEAU_PENALTY_ENABLED.
     adx = _f(entry_snap.get("adx"), 0.0) or 0.0
     adx_prev = _f(entry_snap.get("adxPrev"))
-    if adx_prev is not None and adx > 25 and abs(adx - adx_prev) < 1.0:
-        mult *= 0.85
+    if plateau_enabled and adx_prev is not None and adx > 25 and abs(adx - adx_prev) < 1.0:
+        mult *= plateau_mult
 
     if entry_candles:
         ema_period = 21
@@ -1576,6 +1583,7 @@ def score_pair(
         entry_tf=entry_tf,
         series_cache=series_cache,
         level_style=level_style,
+        policy=policy,
     )
     confluence = _clamp(float(confluence), 0.0, MAX_SCORE)
     # After multiplier, re-tier if score fell below threshold (never upgrade).

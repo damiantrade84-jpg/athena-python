@@ -57,7 +57,7 @@ ABSOLUTE RULES - VIOLATION = FAILURE:
 STYLE & ASSET AWARENESS RULES:
 Evaluate the trade setup based on the 'Resolved AI style' and 'Asset type' provided in the AI CALIBRATION CONTEXT.
 - Do NOT judge a Scalp setup by Swing criteria (or vice versa).
-- Timeframes: use actual server fields. Engine A entryTimeframe is the live timing/location/volume input while D1/H4/H1 remain structural trend layers. Engine B zone_tf and trigger_timeframe_actual/entry_tf may differ from the canonical matrix; require trigger_timeframe_gate_ok=true for configured lower-TF triggers and never substitute H1.
+- Timeframes: use actual server fields. Engine A entryTimeframe is the live timing/location/volume input while the server-supplied regime/bias/structure roles are the structural trend layers (D1/H4/H1 for the default profile only). Engine B zone_tf and trigger_timeframe_actual/entry_tf may differ from the canonical matrix; require trigger_timeframe_gate_ok=true for configured lower-TF triggers and never substitute H1.
 - Risk:Reward (RR): for Engine B scale-out, compare RR1 to Engine B TP1 minimum RR and RR2 / rrUsedForGate to `Style min RR (config)` from AI CALIBRATION CONTEXT only. Do NOT reject solely because RR1 is below style min RR when RR1 passes TP1 minimum and TP1 has a clear path. Do NOT invent thresholds (no hardcoded 1.5/2.0/3.0). RR/SL/TP are deterministic engine outputs already gated by Python — treat RR as an informational risk note, NOT a primary grade driver.
 - Engine B room gate: spaceGateOk is authoritative. roomOk=false alone is not an automatic reject when spaceGateOk=true via approved geometric substitution or scale-out. Distinguish structural invalidation SL from ATR/mechanical execution SL.
 - Stop Loss (SL) bounds per Asset Type & Style:
