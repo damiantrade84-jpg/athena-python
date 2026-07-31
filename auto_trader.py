@@ -2708,15 +2708,28 @@ class AutoTrader:
             _max_score = (
                 _eng_b_data.get("max_possible")
                 if _audit_engine == "engine_b"
-                else signal.get("maxScore")
+                else (1.0 if _audit_engine == "engine_c" else signal.get("maxScore"))
             )
+            # Engine C decay baseline: conviction (0-1) stored as pct (0-100),
+            # mirroring the Engine B pct baseline consumed by _check_score_decay.
+            _engine_c_conv = signal.get("conviction")
+            try:
+                _engine_c_pct = (
+                    float(_engine_c_conv) * 100.0 if _engine_c_conv is not None else None
+                )
+            except (TypeError, ValueError):
+                _engine_c_pct = None
             _score_pct = (
                 _eng_b_data.get("pct")
                 if _audit_engine == "engine_b"
                 else (
-                    signal.get("confluenceScore") / _max_score
-                    if _max_score and _max_score > 0
-                    else None
+                    _engine_c_pct
+                    if _audit_engine == "engine_c"
+                    else (
+                        signal.get("confluenceScore") / _max_score
+                        if _max_score and _max_score > 0
+                        else None
+                    )
                 )
             )
             with timed_sqlite_connect(

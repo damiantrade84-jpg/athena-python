@@ -99,6 +99,40 @@ def test_unsupported_engine_fails_closed():
     assert selected["EURUSD"]["reason"] == "unsupported_decay_engine"
 
 
+def test_engine_c_rows_match_for_decay():
+    position = {
+        "venue": "mt5",
+        "pair": "EURUSD",
+        "direction": "LONG",
+        "ticket": "123",
+    }
+
+    selected = select_decay_audit_rows(
+        [_row(engine="engine_c", score_pct=65.0)],
+        [position],
+    )
+
+    assert selected["EURUSD"]["status"] == "MATCHED"
+    assert selected["EURUSD"]["row"]["engine"] == "engine_c"
+
+
+def test_scalp_rows_match_for_decay():
+    position = {
+        "venue": "mt5",
+        "pair": "EURUSD",
+        "direction": "LONG",
+        "ticket": "123",
+    }
+
+    selected = select_decay_audit_rows(
+        [_row(engine="scalp", style="scalp", score=72.0, max_score=100.0, score_pct=72.0)],
+        [position],
+    )
+
+    assert selected["EURUSD"]["status"] == "MATCHED"
+    assert selected["EURUSD"]["row"]["engine"] == "scalp"
+
+
 def test_multiple_broker_positions_for_pair_fail_closed():
     positions = [
         {"venue": "bybit", "pair": "APT/USDT", "direction": "LONG", "entryPrice": 5.0},

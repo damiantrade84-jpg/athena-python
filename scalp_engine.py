@@ -4617,6 +4617,7 @@ def run_scalp_scan(
     pairs_or_symbols: list,
     *,
     max_actionable_candidates: int | None = None,
+    include_stability_samples: bool = True,
 ) -> dict:
     """Scan a list of pairs for Fabio Valentini scalp setups.
 
@@ -4629,6 +4630,10 @@ def run_scalp_scan(
     ``max_actionable_candidates`` is a latency-oriented fast-scan control. When
     set, scanning stops after that many grade A/B candidates have been built.
     It does not change any candidate, risk, freshness, or execution gate.
+
+    ``include_stability_samples`` controls SSI stability-sample recording.
+    Monitoring callers (score-decay refresh) pass False so periodic
+    re-evaluation does not inject synthetic signal events into SSI stats.
     """
     from mt5_executor import mt5_map_symbol, mt5_get_symbol_info, mt5_connect
 
@@ -4671,6 +4676,8 @@ def run_scalp_scan(
         feature_map: dict | None = None,
         reason: str | None = None,
     ) -> None:
+        if not include_stability_samples:
+            return
         try:
             meta = {"pair": display}
             if reason:

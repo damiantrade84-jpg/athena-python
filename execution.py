@@ -366,6 +366,14 @@ def _quick_audit_context(sig: dict, engine_b: dict | None) -> dict:
                 score_pct = (float(score) / float(max_score)) * 100.0
         except (TypeError, ValueError, ZeroDivisionError):
             score_pct = None
+        if audit_engine == "engine_c":
+            # Engine C decay baseline: conviction (0-1) stored as pct (0-100).
+            max_score = 1.0
+            try:
+                _conv = sig.get("conviction")
+                score_pct = float(_conv) * 100.0 if _conv is not None else None
+            except (TypeError, ValueError):
+                score_pct = None
         trend = sig.get("trendState")
         regime = sig.get("regimeName") or sig.get("regime") or trend
         edge_prob = None
@@ -4230,6 +4238,14 @@ def api_execute():
                     
                     _audit_ts = datetime.now(timezone.utc).isoformat()
                     _ai_grade, _ai_review_id = _resolve_ai_review_for_audit(sig, _r.AUDIT_DB)
+                    # Engine C decay baseline: conviction (0-1) stored as pct (0-100),
+                    # mirroring the Engine B pct baseline consumed by _check_score_decay.
+                    _engine_c_pct = None
+                    if _audit_engine == "engine_c" and sig.get("conviction") is not None:
+                        try:
+                            _engine_c_pct = float(sig.get("conviction")) * 100.0
+                        except (TypeError, ValueError):
+                            _engine_c_pct = None
                     _audit_rows = []
                     for _leg in _execution_audit_legs(result, approval):
                         _audit_rows.append((
@@ -4256,8 +4272,8 @@ def api_execute():
                             json.dumps(_factors),
                             result.get("signalPriceRef"),
                             result.get("slippageBps"),
-                            _eng_b_data.get("max_possible") if _audit_engine == "engine_b" else sig.get("maxScore"),
-                            _eng_b_data.get("pct") if _audit_engine == "engine_b" else None,
+                            _eng_b_data.get("max_possible") if _audit_engine == "engine_b" else (1.0 if _audit_engine == "engine_c" else sig.get("maxScore")),
+                            _eng_b_data.get("pct") if _audit_engine == "engine_b" else _engine_c_pct,
                             sig.get("exit_mode"),
                             _ai_grade,
                             _ai_review_id,
@@ -4857,8 +4873,8 @@ def api_scalp_execute():
                 ) as con:
                     timed_sqlite_execute_write(
                         con,
-                        "INSERT INTO audit_log(ts,pair,score,engine,direction,grade,risk,style,entry_price,sl,tp,volume,ticket,risk_amount,risk_pct,asset_class) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO audit_log(ts,pair,score,engine,direction,grade,risk,style,entry_price,sl,tp,volume,ticket,risk_amount,risk_pct,asset_class,max_score,score_pct) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             datetime.now(timezone.utc).isoformat(),
                             sig["pair"],
@@ -4876,6 +4892,8 @@ def api_scalp_execute():
                             approval.risk_amount,
                             approval.risk_pct,
                             sig.get("type") or sig.get("asset_class"),
+                            100.0,
+                            sig.get("ai_score", 0),
                         ),
                         label="scalp_execute.audit_success.insert",
                     )

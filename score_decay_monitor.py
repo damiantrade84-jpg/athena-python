@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Any, Iterable
 
 
-SUPPORTED_DECAY_ENGINES = frozenset({"engine_a", "engine_b"})
+SUPPORTED_DECAY_ENGINES = frozenset({"engine_a", "engine_b", "engine_c", "scalp"})
 
 
 def normalize_decay_pair(value: Any) -> str:

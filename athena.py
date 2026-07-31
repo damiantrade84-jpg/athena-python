@@ -17250,7 +17250,7 @@ def _refresh_trade_score(pair_obj, engine, style, direction):
     _style = str(style or "swing").lower()
     _direction = str(direction or "LONG").upper()
 
-    if _engine not in ("engine_a", "engine_b"):
+    if _engine not in ("engine_a", "engine_b", "engine_c", "scalp"):
         return 0.0, 0.0, 0.0, None, f"unsupported_decay_engine:{_engine}"
 
     # Engine B (Naked Market Structure) re-evaluation path
@@ -17283,6 +17283,122 @@ def _refresh_trade_score(pair_obj, engine, style, direction):
         except Exception as e:
             log.debug(f"[DECAY-REFRESH] {pair_obj.get('display')} engine_b refresh failed: {e}")
             return 0.0, 0.0, 0.0, None, f"engine_b_refresh_failed:{e}"
+
+    # Engine C (consensus) re-evaluation path: re-run A and B legs, re-blend.
+    if _engine == "engine_c":
+        try:
+            btc_bias = "neutral"
+            if pair_obj.get("type") == "crypto":
+                btc_bias = _current_btc_bias()
+
+            sig_a = analyze_pair(pair_obj, btc_bias, style=_style)
+            if not sig_a:
+                return 0.0, 0.0, 0.0, None, "engine_c_refresh_engine_a_empty"
+            freshness = sig_a.get("dataFreshness") or {}
+            if isinstance(freshness, dict) and freshness.get("allowed") is False:
+                return (
+                    0.0,
+                    0.0,
+                    0.0,
+                    None,
+                    f"engine_c_refresh_blocked:{freshness.get('reason') or 'freshness'}",
+                )
+
+            sig_b_ctx = {
+                "symbol": pair_obj.get("symbol"),
+                "display": pair_obj.get("display"),
+                "direction": _direction,
+                "style": _style,
+                "price": None,  # Let engine fetch latest
+            }
+            res_b, _, err_b = _compute_naked_analysis(
+                sig_b_ctx,
+                force_ai=False,
+                overlay_only=True,
+                resolve_independent_direction=True,
+            )
+            if err_b or not res_b:
+                return 0.0, 0.0, 0.0, None, str(err_b or "engine_c_refresh_engine_b_empty")
+
+            confidence_b = {
+                "score": res_b.get("score"),
+                "max_possible": res_b.get("max_possible"),
+                "pct": res_b.get("pct"),
+                "passed": res_b.get("passed", res_b.get("checklist_passed")),
+            }
+            consensus = compute_consensus(
+                signal_a=sig_a,
+                signal_b=res_b,
+                confidence_b=confidence_b,
+                asset_type=str(pair_obj.get("type") or ""),
+                regime=str(
+                    sig_a.get("regimeName") or sig_a.get("trendState") or "RANGING"
+                ),
+                entry_price=float(sig_a.get("price") or 0.0),
+                atr=float(sig_a.get("atr") or 0.0),
+            )
+            if consensus.get("verdict") == "STALE_CHILD_DATA":
+                # Staleness is a data problem, not thesis decay - fail closed.
+                return 0.0, 0.0, 0.0, None, "engine_c_refresh_stale_child_data"
+            conviction = float(consensus.get("conviction") or 0.0)
+            return (conviction, 1.0, conviction * 100.0, consensus, None)
+        except Exception as e:
+            log.debug(f"[DECAY-REFRESH] {pair_obj.get('display')} engine_c refresh failed: {e}")
+            return 0.0, 0.0, 0.0, None, f"engine_c_refresh_failed:{e}"
+
+    # Engine D (scalp) re-evaluation path: re-run the scalp pipeline for the pair.
+    if _engine == "scalp":
+        try:
+            from scalp_engine import run_scalp_scan
+
+            scan = run_scalp_scan(
+                [pair_obj.get("display") or pair_obj.get("symbol")],
+                include_stability_samples=False,
+            )
+            if not isinstance(scan, dict):
+                return 0.0, 0.0, 0.0, None, "engine_d_refresh_empty"
+
+            signals = scan.get("signals") or []
+            matching = [
+                s
+                for s in signals
+                if str(s.get("direction") or "").upper() == _direction
+            ]
+            if matching:
+                best = max(matching, key=lambda s: float(s.get("ai_score") or 0.0))
+                cur = float(best.get("ai_score") or 0.0)
+                return (cur, 100.0, cur, {"direction": _direction, "scalp_signal": best}, None)
+
+            skipped = scan.get("skipped") or []
+            for entry in skipped:
+                if isinstance(entry, dict) and entry.get("reason"):
+                    # Data/gate problem (feed down, rate limit, daily-loss gate):
+                    # fail closed rather than reading it as thesis decay.
+                    return (
+                        0.0,
+                        0.0,
+                        0.0,
+                        None,
+                        f"engine_d_refresh_skipped:{entry.get('reason')}",
+                    )
+
+            if signals:
+                opposite = max(signals, key=lambda s: float(s.get("ai_score") or 0.0))
+                current_direction = str(opposite.get("direction") or "").upper() or None
+                return (
+                    0.0,
+                    100.0,
+                    0.0,
+                    {"direction": current_direction, "scalp_signal": opposite},
+                    None,
+                )
+
+            # Scan completed cleanly but produced no setup: the scalp thesis
+            # dissolved (or degraded below execution grade) - full decay.
+            return (0.0, 100.0, 0.0, {"direction": None, "scalp_no_setup": True}, None)
+        except Exception as e:
+            log.debug(f"[DECAY-REFRESH] {pair_obj.get('display')} engine_d refresh failed: {e}")
+            return 0.0, 0.0, 0.0, None, f"engine_d_refresh_failed:{e}"
 
     # Engine A (Confluence) re-evaluation path
     try:
@@ -17432,10 +17548,11 @@ def _check_score_decay() -> None:
                 and entry_max
             ):
                 entry_pct = entry_score / entry_max * 100.0
+            pct_based = engine in ("engine_b", "engine_c")
             baseline_invalid = (
-                engine == "engine_b" and (entry_pct is None or entry_pct <= 0)
+                pct_based and (entry_pct is None or entry_pct <= 0)
             ) or (
-                engine == "engine_a" and (entry_score is None or entry_score <= 0)
+                not pct_based and (entry_score is None or entry_score <= 0)
             )
             if baseline_invalid:
                 with _score_decay_results_lock:
@@ -17474,7 +17591,7 @@ def _check_score_decay() -> None:
                         _score_decay_results[pair_name] = unavailable
                     continue
 
-                if engine == "engine_b":
+                if engine in ("engine_b", "engine_c"):
                     assert entry_pct is not None
                     decay = entry_pct - cur_pct
                     decay_pct = decay / entry_pct * 100.0
