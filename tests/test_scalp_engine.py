@@ -2191,6 +2191,10 @@ def test_premarket_delta_proxy_levels_are_explicitly_proxy():
 
 
 def test_scalp_fetch_candles_crypto_m1_prefers_ws(monkeypatch):
+    # Exercises the Binance M1 WS preference, which only runs when Binance is the
+    # trade-bucket venue. Pin it so the test keeps covering that branch after
+    # TRADE_BUCKET_EXCHANGE moved to bybit (and so it never reaches the network).
+    monkeypatch.setattr(scalp_engine, "_scalp_trade_bucket_exchange", lambda cfg=None: "binance")
     ws_candles = [
         {"time": "2026-03-26T13:35:00+00:00", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1},
         {"time": "2026-03-26T13:36:00+00:00", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1},
@@ -2215,6 +2219,8 @@ def test_scalp_fetch_candles_crypto_m1_prefers_ws(monkeypatch):
 
 
 def test_scalp_fetch_candles_crypto_m1_falls_back_when_ws_stale(monkeypatch):
+    # Binance-venue branch — see the note in the sibling test above.
+    monkeypatch.setattr(scalp_engine, "_scalp_trade_bucket_exchange", lambda cfg=None: "binance")
     stale_ws = [{"time": "2026-03-26T13:00:00+00:00", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1}] * 5
     routed = [{"time": "2026-03-26T13:40:00+00:00", "open": 2, "high": 2, "low": 2, "close": 2, "vol": 2}]
     monkeypatch.setattr(candle_feeds, "fetch_candles_live", lambda display, tf, limit=500: {"candles": stale_ws})

@@ -360,10 +360,14 @@ ENGINE_A_V3_SUBSYSTEMS:
 ENGINE_A_V3_MICROSTRUCTURE:
   ENABLED: true
   MAX_AGE_SEC: 120
-  # EXCHANGE: binance is a deliberate opt-in (MICROSTRUCTURE_BINANCE_FEEDS_ENABLED
-  # + TRADE_BUCKET_EXCHANGE: binance). microstructure.db currently holds binance
-  # rows only - flipping this to bybit would silently disable the subsystem.
-  EXCHANGE: binance
+  # venue-linked (see SCALP_ENGINE.TRADE_BUCKET_EXCHANGE). This MUST name the venue whose
+  # sockets are actually running, because query_latest() filters microstructure.db by
+  # exchange and a mismatch returns no rows — the subsystem then reads as unavailable
+  # rather than erroring, so the failure is silent. Moved binance -> bybit on 2026-07-31
+  # with the trade-bucket flip. The db keeps the old venue's rows; they simply age out
+  # past MAX_AGE_SEC, so expect the subsystem to be unavailable for the first ~2 min
+  # after the switch until BybitMicroMultiWS has written its first metrics.
+  EXCHANGE: bybit
 
 # Richer momentum blend: RSI extremity + DI alignment + MACD histogram slope.
 ENGINE_A_V3_MOMENTUM_BLEND:
@@ -3556,11 +3560,28 @@ MICROSTRUCTURE_FEEDS_ENABLED: true
 # buckets silent >15 min repeatedly, failing the crypto aggtrade freshness gate.
 # Bybit remains primary for candles, levels, live ticks, and paper execution.
 
+# venue-linked (see SCALP_ENGINE.TRADE_BUCKET_EXCHANGE). This flag is only consulted when
+# Bybit is NOT the primary venue — the primary always gets its feed. Left false so that
+# reverting TRADE_BUCKET_EXCHANGE to binance also stops the Bybit sockets rather than
+# leaving two writers racing on the same trade-bucket store.
 MICROSTRUCTURE_BYBIT_FEEDS_ENABLED: false
 
-# Binance aggTrade microstructure re-enabled 2026-07-02 (combined multiplexed stream
-# with MICROSTRUCTURE_BINANCE_STALE_SYMBOL_SEC watchdog) as the trade-bucket source.
-MICROSTRUCTURE_BINANCE_FEEDS_ENABLED: true
+# One multiplexed Bybit connection for every micro symbol, with a per-symbol liveness
+# watchdog. Set false to roll back to the per-symbol fan-out (BybitWS) — that is the
+# configuration that went silent on 2026-07-02, so only do so to isolate a fault.
+MICROSTRUCTURE_BYBIT_COMBINED_STREAM: true
+
+# Force a full reconnect when any one symbol has delivered nothing for this long. This is
+# the check the old per-symbol path lacked: Bybit answers pings on a half-dead connection,
+# so a socket-level recv timeout never fires while individual topics are silent.
+MICROSTRUCTURE_BYBIT_STALE_SYMBOL_SEC: 120
+
+# venue-linked (see SCALP_ENGINE.TRADE_BUCKET_EXCHANGE). Was true from 2026-07-02 while
+# Binance was the trade-bucket source; set false 2026-07-31 when buckets moved back to
+# Bybit. CLAUDE.md: "Binance microstructure is off by default when Bybit is primary."
+# Setting this true alongside a bybit primary runs both venues in parallel — only do that
+# deliberately, for a comparison window, since both write the same trade-bucket store.
+MICROSTRUCTURE_BINANCE_FEEDS_ENABLED: false
 
 # F1: One multiplexed Binance Futures micro WS for ALL crypto symbols (depth+trade+aggTrade)
 # instead of one socket per symbol. The per-symbol fan-out intermittently left individual
@@ -4794,10 +4815,15 @@ SCALP_ENGINE:
     index: 0.50
     stock: 0.50
 
-  TRADE_BUCKET_EXCHANGE: binance  # Crypto trade buckets: Binance aggTrade (combined stream + staleness watchdog).
-                                  # Reverted from bybit 2026-07-02: per-symbol Bybit publicTrade sockets went silent
-                                  # >15 min on BTC/ETH/SOL (same half-closed failure the Binance combined stream fixed),
-                                  # so the majors kept failing the aggtrade freshness gate during active hours.
+  TRADE_BUCKET_EXCHANGE: bybit    # Crypto trade buckets: Bybit publicTrade (combined stream + staleness watchdog).
+                                  # Restored 2026-07-31. It was reverted to binance 2026-07-02 because the per-symbol
+                                  # Bybit sockets went silent >15 min on BTC/ETH/SOL without tripping the recv timeout;
+                                  # BybitMicroMultiWS now applies the same one-connection + per-symbol liveness watchdog
+                                  # that fixed the identical Binance failure. Bybit is the venue CLAUDE.md specifies for
+                                  # trade buckets, and it matches the candles/levels/paper-execution venue, so the
+                                  # aggTrade POC is no longer compared against structure priced on the other exchange.
+                                  # Rollback: set back to `binance` AND flip the three keys flagged `venue-linked` below
+                                  # (MICROSTRUCTURE_BINANCE_FEEDS_ENABLED, ENGINE_A_V3_MICROSTRUCTURE.EXCHANGE).
 
   TRADE_BUCKET_VP_ENABLED: true   # Crypto: prefer real exchange trade buckets for VP when fresh
 

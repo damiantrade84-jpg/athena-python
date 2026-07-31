@@ -18939,7 +18939,9 @@ def ensure_runtime_services_started() -> None:
         binance_micro_symbol_strings,
         enabled_crypto_micro_pairs,
         enabled_binance_micro_crypto_pairs,
+        primary_trade_bucket_exchange,
         should_start_binance_micro_feeds,
+        should_start_bybit_micro_feeds,
     )
 
     # Start EODHD WebSocket real-time price streaming + candle builder
@@ -19061,19 +19063,12 @@ def ensure_runtime_services_started() -> None:
 
             try:
                 from athena.datafeeds.binance_ws import BinanceMicroMultiWS, BinanceWS
-                from athena.datafeeds.bybit_ws import BybitWS
+                from athena.datafeeds.bybit_ws import BybitMicroMultiWS, BybitWS
             except ImportError as exc:
                 log.warning(f"[MICRO] Import failed: {exc}")
                 return
             binance_micro_pairs = enabled_binance_micro_crypto_pairs(CRYPTO_PAIRS)
-            scalp_cfg = CONFIG.get("SCALP_ENGINE") or {}
-            trade_bucket_exchange = str(
-                scalp_cfg.get("TRADE_BUCKET_EXCHANGE")
-                or CONFIG.get("ENGINE_B_CRYPTO_LEVELS_FEED")
-                or "bybit"
-            ).strip().lower()
-            if trade_bucket_exchange not in {"bybit", "binance"}:
-                trade_bucket_exchange = "bybit"
+            trade_bucket_exchange = primary_trade_bucket_exchange(CONFIG)
             bybit_micro_pairs = enabled_crypto_micro_pairs(CRYPTO_PAIRS)
             expected_n = sum(
                 1
@@ -19157,13 +19152,20 @@ def ensure_runtime_services_started() -> None:
                 finally:
                     loop.close()
 
-            bybit_micro_enabled = bool(CONFIG.get("MICROSTRUCTURE_BYBIT_FEEDS_ENABLED", False)) or trade_bucket_exchange == "bybit"
+            bybit_micro_enabled = should_start_bybit_micro_feeds(
+                CONFIG,
+                has_bybit_pairs=bool(bybit_micro_pairs),
+            )
             binance_micro_enabled = should_start_binance_micro_feeds(
                 CONFIG,
                 has_binance_pairs=bool(binance_micro_pairs),
             )
             use_combined = bool(CONFIG.get("MICROSTRUCTURE_BINANCE_COMBINED_STREAM", True))
             stale_after = float(CONFIG.get("MICROSTRUCTURE_BINANCE_STALE_SYMBOL_SEC", 120.0))
+            bybit_use_combined = bool(CONFIG.get("MICROSTRUCTURE_BYBIT_COMBINED_STREAM", True))
+            bybit_stale_after = float(
+                CONFIG.get("MICROSTRUCTURE_BYBIT_STALE_SYMBOL_SEC", stale_after)
+            )
 
             if binance_micro_enabled and use_combined and binance_micro_pairs:
                 # F1: One multiplexed Binance Futures connection for ALL micro symbols.
@@ -19209,7 +19211,39 @@ def ensure_runtime_services_started() -> None:
                     ).start()
 
             # Bybit publicTrade/orderbook path is independent of the Binance multiplex switch.
-            if bybit_micro_enabled:
+            if bybit_micro_enabled and bybit_use_combined and bybit_micro_pairs:
+                # One multiplexed Bybit connection for ALL micro symbols. The
+                # per-symbol fan-out below is the rollback path: individual sockets
+                # went silent for >15 min without tripping the recv timeout, which
+                # is what forced the 2026-07-02 revert to Binance.
+                bybit_multi_syms = [
+                    str(p["symbol"]).replace("/", "").upper() for p in bybit_micro_pairs
+                ]
+                try:
+                    bybit_multi = BybitMicroMultiWS(
+                        symbols=bybit_multi_syms,
+                        stale_symbol_seconds=bybit_stale_after,
+                    )
+                    _ws_clients.append(bybit_multi)
+                    threading.Thread(
+                        target=_run,
+                        args=(bybit_multi, _multi_cb),
+                        daemon=True,
+                        name="BbtMicroMulti",
+                    ).start()
+                    log.info(
+                        "[MICRO] Combined-stream Bybit feed started: %s symbols, stale_after=%.0fs",
+                        len(bybit_multi_syms),
+                        bybit_stale_after,
+                    )
+                except Exception as bybit_multi_exc:
+                    log.error(
+                        "[MICRO] BybitMicroMultiWS failed to start (%s); falling back to per-symbol",
+                        bybit_multi_exc,
+                    )
+                    bybit_use_combined = False  # trip the legacy path below
+
+            if bybit_micro_enabled and not bybit_use_combined:
                 for pair in bybit_micro_pairs:
                     sym = pair["symbol"]
                     cb = _make_cb(sym)
@@ -19223,10 +19257,13 @@ def ensure_runtime_services_started() -> None:
             if len(binance_micro_pairs) != expected_n or malformed:
                 scope_note = f" enabled_binance_crypto_expected={expected_n}"
             log.info(
-                "[MICRO] Started feeds: primary_trade_bucket_exchange=%s binance_path=%s bybit=%s pairs_total=%s%s symbols=%s",
+                "[MICRO] Started feeds: primary_trade_bucket_exchange=%s binance_path=%s bybit_path=%s bybit=%s pairs_total=%s%s symbols=%s",
                 trade_bucket_exchange,
                 "combined" if binance_micro_enabled and use_combined else (
                     "per_symbol_legacy" if binance_micro_enabled else "disabled"
+                ),
+                "combined" if bybit_micro_enabled and bybit_use_combined else (
+                    "per_symbol_legacy" if bybit_micro_enabled else "disabled"
                 ),
                 len(bybit_micro_pairs) if bybit_micro_enabled else 0,
                 expected_n,

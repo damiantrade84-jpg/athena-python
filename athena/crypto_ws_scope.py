@@ -50,6 +50,19 @@ def binance_micro_symbol_strings(crypto_pairs: Optional[list[dict[str, Any]]]) -
     ]
 
 
+def primary_trade_bucket_exchange(config: dict[str, Any] | None) -> str:
+    """Resolve the primary crypto trade-bucket venue ('bybit' or 'binance')."""
+    cfg = config if isinstance(config, dict) else {}
+    raw_scalp = cfg.get("SCALP_ENGINE")
+    scalp_cfg: dict[str, Any] = raw_scalp if isinstance(raw_scalp, dict) else {}
+    primary = str(
+        scalp_cfg.get("TRADE_BUCKET_EXCHANGE")
+        or cfg.get("ENGINE_B_CRYPTO_LEVELS_FEED")
+        or "bybit"
+    ).strip().lower()
+    return primary if primary in {"bybit", "binance"} else "bybit"
+
+
 def should_start_binance_micro_feeds(
     config: dict[str, Any] | None,
     *,
@@ -63,14 +76,27 @@ def should_start_binance_micro_feeds(
     if not has_binance_pairs:
         return False
     cfg = config if isinstance(config, dict) else {}
-    scalp_cfg = cfg.get("SCALP_ENGINE") if isinstance(cfg.get("SCALP_ENGINE"), dict) else {}
-    primary = str(
-        scalp_cfg.get("TRADE_BUCKET_EXCHANGE")
-        or cfg.get("ENGINE_B_CRYPTO_LEVELS_FEED")
-        or "bybit"
-    ).strip().lower()
-    if primary not in {"bybit", "binance"}:
-        primary = "bybit"
-    if primary == "binance":
+    if primary_trade_bucket_exchange(cfg) == "binance":
         return True
     return bool(cfg.get("MICROSTRUCTURE_BINANCE_FEEDS_ENABLED", False))
+
+
+def should_start_bybit_micro_feeds(
+    config: dict[str, Any] | None,
+    *,
+    has_bybit_pairs: bool,
+) -> bool:
+    """Return whether Bybit microstructure sockets should start.
+
+    Mirror of ``should_start_binance_micro_feeds``: the primary trade-bucket venue
+    always gets its feed, and the non-primary venue only runs on an explicit
+    parallel-feed override. Without this the two venues could both be off (no
+    trade buckets at all, every crypto pair failing the aggtrade gate) or both on
+    (two writers racing on the same bucket store).
+    """
+    if not has_bybit_pairs:
+        return False
+    cfg = config if isinstance(config, dict) else {}
+    if primary_trade_bucket_exchange(cfg) == "bybit":
+        return True
+    return bool(cfg.get("MICROSTRUCTURE_BYBIT_FEEDS_ENABLED", False))
