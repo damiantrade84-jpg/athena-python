@@ -415,6 +415,11 @@ def test_prompt_includes_engine_a_score():
     assert "2.4" in prompt
 
 
+def test_prompt_includes_chart_review_timeframe():
+    prompt = build_chart_review_prompt(_engine_a_ctx(timeframe="M30"))
+    assert "BTCUSDT M30 asset_group: crypto" in prompt
+
+
 def test_default_resolve_pair_accepts_slashless_forex_alias(monkeypatch):
     fake_athena = ModuleType("athena")
     fake_athena.ALL_PAIRS = [
@@ -941,6 +946,7 @@ def test_xai_provider_posts_png_data_url_as_image_url(monkeypatch):
         provider="grok",
     )
     assert kwargs["max_tokens"] == CONFIG["AI_CHART_REVIEW"]["XAI_MAX_TOKENS"]
+    assert kwargs["reasoning_effort"] == "low"
     assert "response_format" not in kwargs
     assert out["provider"] == "grok"
     assert out["raw_text"].startswith('{"verdict"')

@@ -90,6 +90,7 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
         provider="grok",
     )
     max_tokens = int(cfg.get("XAI_MAX_TOKENS") or cfg.get("MAX_TOKENS", 1500))
+    reasoning_effort = str(cfg.get("XAI_REASONING_EFFORT") or "low").strip().lower()
     timeout = _chart_review_timeout_sec(cfg)
 
     data_url = payload.screenshot_base64
@@ -105,6 +106,7 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
     request_kwargs: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
+        "reasoning_effort": reasoning_effort,
         "timeout": timeout,
         "messages": [
             {

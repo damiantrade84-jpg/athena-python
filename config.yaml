@@ -2731,11 +2731,13 @@ AI_REVIEW_FALLBACK_PROVIDERS: ""
 AI_CHART_REVIEW:
   PRIMARY_ENGINE: "A"
   OPENAI_MODEL: "gpt-5.6-sol"
+  XAI_REASONING_EFFORT: "low"
 
 AI_CHART_REVIEW_XAI_MODEL: "grok-4.5"  # xAI-only when provider=grok; unused with openai primary
 
 # Grok chart review (env overrides; defaults in config.py AI_CHART_REVIEW):
 # AI_CHART_REVIEW_XAI_MAX_TOKENS: 8000   # Grok-only output budget (Claude uses MAX_TOKENS)
+# AI_CHART_REVIEW_XAI_REASONING_EFFORT: low  # Grok reasoning level
 # AI_CHART_REVIEW_TIMEOUT_SEC: 120       # Grok chart review timeout seconds
 # AI_CHART_REVIEW_XAI_JSON_MODE: false   # Optional json_object mode for Grok vision (off by default)
 

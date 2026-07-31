@@ -970,6 +970,9 @@ CONFIG: dict = {
         ),
         "MAX_TOKENS": _env_int("AI_CHART_REVIEW_MAX_TOKENS", 1500),
         "XAI_MAX_TOKENS": _env_int("AI_CHART_REVIEW_XAI_MAX_TOKENS", 8000),
+        "XAI_REASONING_EFFORT": os.environ.get(
+            "AI_CHART_REVIEW_XAI_REASONING_EFFORT", "low"
+        ),
         "TIMEOUT_SEC": _env_int("AI_CHART_REVIEW_TIMEOUT_SEC", 120),
         "XAI_JSON_MODE": _env_bool("AI_CHART_REVIEW_XAI_JSON_MODE", False),
         "REQUIRE_SCREENSHOT": True,
