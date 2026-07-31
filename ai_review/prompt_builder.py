@@ -140,17 +140,15 @@ Return strict JSON only with these top-level keys:
 - tradeSkillVersion, reviewType, decision, direction, confidence, entryAllowedNow, waitReason, noTradeReason, chartReadSummary
 - locationAssessment (optional), marketState (optional), entryModel (optional), invalidationLevel, invalidationReason
 - requiredConfirmation (string[]), riskNotes (string[]), suggestedTradePlan (optional, wait-only)
-- aiReviewSummary: {{ humanAction, setupType, overallScore, tradeabilityScore, engineAlignmentScore, visualConfirmationScore, entryQualityScore, riskScore, confidence, finalReason }} (scores 0-100 integers or null)
+- aiReviewSummary: {{ humanAction, setupType, overallScore, tradeabilityScore, engineAlignmentScore, visualConfirmationScore, entryQualityScore, riskScore, confidence, finalReason }} (advisory model-proposed scores 0-100 integers or null; confidence is self-reported and uncalibrated)
 - engineAVerdictComparison: {{
-    engineAProvided, engineABiasValid, engineAPassed, engineADirection, engineAScore, engineAMaxScore,
-    engineAThreshold, engineANormalizedScore, engineAActiveFactors,
     chartConfirmsEngineADirection, chartContradictsEngineADirection,
     chartConfirmsEntryTiming, chartContradictsEntryTiming,
-    aiAgreesWithEngineA, aiDowngradedEngineA, aiUpgradedEngineA,
-    comparisonVerdict, downgradeReasons, upgradeReasons, finalDecision, finalReason
+    aiAgreesWithEngineA, aiDowngradedEngineA,
+    downgradeReasons, finalDecision, finalReason
   }}
-  comparisonVerdict one of: engine_a_confirmed | engine_a_direction_confirmed_entry_rejected |
-  engine_a_contradicted | engine_a_missing | mixed | unknown
+  Do not echo Engine A score, threshold, pass, direction, active factors, or comparisonVerdict.
+  The server owns and computes those facts. Never set aiUpgradedEngineA.
 - contextCompleteness: {{ score, status, missingRequired, missingOptional, notApplicable, metadata }}
 - missingContextDetailed: {{ required: [{{key,label,reason,impact,blocksTrade}}], optional: [...], notApplicable: [...] }}
 - visualConfirmation, visualContradiction, atrRrAssessment, entryQuality (strings)
@@ -234,6 +232,7 @@ indicator_parity: chart_tf={_fmt(indicator_parity.get("chart_timeframe"))} engin
 rendered_layers: {_fmt_list(rendered_layers)}
 visible_candle_count: {_fmt(chart_snapshot.get("visibleCandleCount"))}
 visible_range: {_fmt(chart_snapshot.get("visibleRange"))}
+chart_data_status: {_fmt(chart_snapshot.get("chartDataStatus"))} latest_chart_candle: {_fmt(chart_snapshot.get("lastCandleTs"))} age_seconds: {_fmt(chart_snapshot.get("lastCandleAgeSec"))}
 engine_b_overlay_status: {_fmt(chart_snapshot.get("engineBOverlayStatus"))}
 engine_b_overlay_count: {_fmt(chart_snapshot.get("engineBOverlayCount"))}
 indicator_layer_states: {_fmt(chart_snapshot.get("indicatorLayerStates"))}
@@ -276,17 +275,15 @@ Return strict JSON only with these top-level keys:
 - tradeSkillVersion, reviewType, decision, direction, confidence, entryAllowedNow, waitReason, noTradeReason, chartReadSummary
 - locationAssessment, invalidationLevel, invalidationReason
 - requiredConfirmation (string[]), riskNotes (string[])
-- aiReviewSummary: {{ humanAction, setupType, overallScore, tradeabilityScore, engineAlignmentScore, visualConfirmationScore, entryQualityScore, riskScore, confidence, finalReason }}
+- aiReviewSummary: {{ humanAction, setupType, overallScore, tradeabilityScore, engineAlignmentScore, visualConfirmationScore, entryQualityScore, riskScore, confidence, finalReason }} (advisory model-proposed scores; confidence is self-reported and uncalibrated)
 - engineBVerdictComparison: {{
-    engineBProvided, engineBBiasValid, engineBPassed, engineBDirection, engineBScore, engineBMaxScore,
-    engineBThreshold, engineBNormalizedScore, engineBStructuralVerdict,
     chartConfirmsEngineBDirection, chartContradictsEngineBDirection,
     chartConfirmsEntryTiming, chartContradictsEntryTiming,
-    aiAgreesWithEngineB, aiDowngradedEngineB, aiUpgradedEngineB,
-    comparisonVerdict, downgradeReasons, upgradeReasons, finalDecision, finalReason
+    aiAgreesWithEngineB, aiDowngradedEngineB,
+    downgradeReasons, finalDecision, finalReason
   }}
-  comparisonVerdict one of: engine_b_confirmed | engine_b_direction_confirmed_entry_rejected |
-  engine_b_contradicted | engine_b_missing | mixed | unknown
+  Do not echo Engine B score, threshold, pass, direction, structural verdict, or comparisonVerdict.
+  The server owns and computes those facts. Never set aiUpgradedEngineB.
 - contextCompleteness, missingContextDetailed, visualConfirmation, visualContradiction, atrRrAssessment, entryQuality
 - supportingReasons, risks (string arrays)
 - metadata: {{ chartCapturedAt, scanTimestamp, latestCandleTimestamp, chartProvider, engineProvider, providerMismatch }}
@@ -329,6 +326,7 @@ mismatch_warnings: {_fmt(mismatch_warnings)}
 == CHART CAPTURE METADATA ==
 rendered_layers: {_fmt_list(rendered_layers)}
 visible_candle_count: {_fmt(chart_snapshot.get("visibleCandleCount"))}
+chart_data_status: {_fmt(chart_snapshot.get("chartDataStatus"))} latest_chart_candle: {_fmt(chart_snapshot.get("lastCandleTs"))} age_seconds: {_fmt(chart_snapshot.get("lastCandleAgeSec"))}
 engine_b_overlay_status: {_fmt(chart_snapshot.get("engineBOverlayStatus"))}
 engine_b_overlay_count: {_fmt(chart_snapshot.get("engineBOverlayCount"))}
 

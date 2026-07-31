@@ -18577,6 +18577,7 @@ register_ai_chart_review_routes(
         ),
         btc_bias_fn=_current_btc_bias,
         naked_analysis_fn=_compute_naked_analysis,
+        last_engine_a_rows_fn=lambda: list(_last_scan_results.get("signals") or []),
         last_engine_b_rows_fn=lambda: list(_last_engine_b_scan_results.get("signals") or []),
     ),
 )

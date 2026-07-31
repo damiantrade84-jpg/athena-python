@@ -107,6 +107,8 @@ export function buildScreenshotMeta(args: {
   regime_timeframe?: string;
   execution_timeframe?: string;
   candidate_direction?: string;
+  candidate_id?: string;
+  candidate_revision?: string;
   primary_engine?: 'A' | 'B';
   signal_engine?: 'A' | 'B';
   renderedLayers?: Record<string, boolean>;
@@ -130,6 +132,8 @@ export function buildScreenshotMeta(args: {
     ...(args.regime_timeframe ? { regime_timeframe: args.regime_timeframe } : {}),
     ...(args.execution_timeframe ? { execution_timeframe: args.execution_timeframe } : {}),
     ...(args.candidate_direction ? { candidate_direction: args.candidate_direction } : {}),
+    ...(args.candidate_id ? { candidate_id: args.candidate_id } : {}),
+    ...(args.candidate_revision ? { candidate_revision: args.candidate_revision } : {}),
     ...(args.primary_engine ? { primary_engine: args.primary_engine } : {}),
     ...(args.signal_engine ? { signal_engine: args.signal_engine } : {}),
     ...(args.renderedLayers ? { renderedLayers: { ...args.renderedLayers } } : {}),

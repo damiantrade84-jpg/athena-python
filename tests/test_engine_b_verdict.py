@@ -27,7 +27,7 @@ def test_ai_upgraded_engine_b_forced_false_when_engine_b_did_not_pass():
     assert out["finalDecision"] == "trade"
 
 
-def test_ai_upgraded_engine_b_allowed_when_engine_b_passed():
+def test_ai_upgraded_engine_b_remains_advisory_when_engine_b_passed():
     out = build_engine_b_verdict_comparison(
         {
             "direction": "LONG",
@@ -44,4 +44,5 @@ def test_ai_upgraded_engine_b_allowed_when_engine_b_passed():
     )
 
     assert out["engineBPassed"] is True
-    assert out["aiUpgradedEngineB"] is True
+    assert out["aiUpgradedEngineB"] is False
+    assert out["modelClaims"]["aiUpgradedEngineB"] is True

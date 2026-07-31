@@ -10,6 +10,7 @@ from ai_review.engine_snapshots import extract_engine_snapshots
 from market_structure import build_engine_b_profile_vp_context, sanitize_engine_b_structure_profile_fields
 from scoring import get_pair_score_group
 from style_resolver import normalize_style, resolve_auto_style
+from timeframe_policy import resolve_timeframe_policy
 
 
 def _to_float(value: Any) -> float | None:
@@ -701,11 +702,17 @@ def _default_analyze_pair(
 
 
 def resolve_chart_review_analyze_style(
-    timeframe: str,
     screenshot_meta: dict[str, Any] | None,
     pair: dict[str, Any] | None,
+    candidate_signal: dict[str, Any] | None = None,
 ) -> str:
     """Resolve review style without treating the visible chart TF as trade style."""
+    candidate = candidate_signal or {}
+    for key in ("horizon", "style", "selectedStyle", "resolvedStyle"):
+        explicit = normalize_style(candidate.get(key))
+        if explicit != "auto":
+            return explicit
+
     meta = screenshot_meta or {}
     for key in (
         "analyze_style",
@@ -996,6 +1003,9 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
 
     return {
         "available": available,
+        "reviewMode": engine_a_ctx.get("review_mode"),
+        "candidateOrigin": engine_a_ctx.get("candidate_origin"),
+        "reviewDelta": engine_a_ctx.get("review_delta"),
         "score": eb.get("score"),
         "maxScore": eb.get("maxScore"),
         "threshold": eb.get("threshold"),
@@ -1256,6 +1266,7 @@ def assemble_engine_a_context(
     resolve_pair_fn: Callable[[str], dict[str, Any] | None] | None = None,
     analyze_pair_fn: Callable[..., dict[str, Any] | None] | None = None,
     btc_bias_fn: Callable[[], str] | None = None,
+    origin_signal: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     resolve_pair = resolve_pair_fn or _default_resolve_pair
     analyze_pair = analyze_pair_fn or _default_analyze_pair
@@ -1265,7 +1276,12 @@ def assemble_engine_a_context(
     if not pair:
         return None
 
-    style = resolve_chart_review_analyze_style(timeframe, screenshot_meta, pair)
+    origin = origin_signal if isinstance(origin_signal, dict) else {}
+    style = resolve_chart_review_analyze_style(
+        screenshot_meta,
+        pair,
+        candidate_signal=origin,
+    )
 
     signal = analyze_pair(pair, btc_bias, style=style)
     if not signal:
@@ -1277,6 +1293,17 @@ def assemble_engine_a_context(
     candle_meta = dict(signal.get("candleFetchMeta") or {})
 
     price = _to_float(signal.get("price"))
+    origin_entry = _to_float(origin.get("entry"))
+    if origin_entry is None:
+        origin_entry = _to_float(origin.get("price"))
+    if origin_entry is None and isinstance(origin.get("entryZone"), (list, tuple)):
+        zone_values = [
+            value
+            for value in (_to_float(item) for item in origin.get("entryZone") or [])
+            if value is not None
+        ]
+        if zone_values:
+            origin_entry = sum(zone_values) / len(zone_values)
     sl = _to_float(signal.get("sl"))
     tp = _to_float(signal.get("tp1"))
     risk_points = abs(price - sl) if price is not None and sl is not None else None
@@ -1294,7 +1321,51 @@ def assemble_engine_a_context(
     d1_ts = _last_candle_ts(signal.get("d1Candles"))
     latest_candle_ts = h1_ts or h4_ts or d1_ts
 
-    scan_timestamp = signal.get("timestamp") or datetime.now(timezone.utc).isoformat()
+    review_timestamp = datetime.now(timezone.utc).isoformat()
+    scan_timestamp = (
+        origin.get("timestamp")
+        or origin.get("decisionTime")
+        or origin.get("scan_timestamp")
+        or signal.get("timestamp")
+        or review_timestamp
+    )
+    displacement = (
+        abs(price - origin_entry)
+        if price is not None and origin_entry is not None
+        else None
+    )
+    origin_score = _to_float(origin.get("confluenceScore"))
+    origin_max_score = _to_float(origin.get("maxScore"))
+    review_score = _to_float(signal.get("confluenceScore"))
+    stamped_policy_context = {
+        "timeframePolicyVersion": signal.get("timeframePolicyVersion"),
+        "timeframePolicyHash": signal.get("timeframePolicyHash"),
+        "policyKey": signal.get("policyKey"),
+        "regimeTf": signal.get("regimeTf") or signal.get("regimeTimeframe"),
+        "biasTf": signal.get("biasTf") or signal.get("biasTimeframe"),
+        "structureTf": signal.get("structureTf") or signal.get("structureTimeframe"),
+        "setupTf": signal.get("setupTf") or signal.get("entryTimeframe"),
+        "triggerTf": signal.get("triggerTf"),
+        "executionTf": signal.get("executionTf") or signal.get("executionTimeframe"),
+        "executionMode": signal.get("executionMode") or "live_quote",
+        "m5Role": signal.get("m5Role"),
+        "m5Policy": signal.get("m5Policy"),
+    }
+    resolved_policy_context = resolve_timeframe_policy(
+        str(signal.get("symbol") or pair.get("symbol") or symbol),
+        str(pair.get("type") or ""),
+        get_pair_score_group(pair),
+        style,
+        engine_id="engine_a",
+    ).payload()
+    policy_context = {
+        **resolved_policy_context,
+        **{
+            key: value
+            for key, value in stamped_policy_context.items()
+            if value not in (None, "")
+        },
+    }
 
     rsi_value, rsi_tf = _rsi_from_signal(signal)
 
@@ -1313,12 +1384,47 @@ def assemble_engine_a_context(
         or (screenshot_meta or {}).get("regime_timeframe"),
         "execution_timeframe": signal.get("executionTimeframe")
         or (screenshot_meta or {}).get("execution_timeframe"),
+        "timeframe_policy": policy_context,
         "asset_class": pair.get("type"),
         "asset_group": get_pair_score_group(pair),
         "direction": str(signal.get("direction") or "NONE").upper(),
         "regime": signal.get("regime") or signal.get("regimeName"),
         "scan_timestamp": scan_timestamp,
         "candidate_timestamp": scan_timestamp,
+        "review_timestamp": review_timestamp,
+        "analysis_timestamp": signal.get("timestamp"),
+        "review_mode": "candidate" if origin else "exploratory",
+        "candidate_origin": {
+            "candidate_id": origin.get("signalId") or origin.get("signal_id") or origin.get("id"),
+            "revision": scan_timestamp,
+            "direction": str(origin.get("direction") or "NONE").upper(),
+            "style": origin.get("horizon") or origin.get("style"),
+            "entry": origin_entry,
+            "stop_loss": _to_float(origin.get("sl") or origin.get("stopLoss")),
+            "take_profit": _to_float(
+                origin.get("tp1") or origin.get("tp") or origin.get("takeProfit")
+            ),
+            "score": origin_score,
+            "max_score": origin_max_score,
+            "threshold": _to_float(
+                origin.get("threshold")
+                or origin.get("liveThreshold")
+                or origin.get("scanThreshold")
+            ),
+            "passed": _engine_a_passed(origin),
+        } if origin else None,
+        "review_delta": {
+            "entry_displacement": displacement,
+            "score_delta": (
+                review_score - origin_score
+                if review_score is not None and origin_score is not None
+                else None
+            ),
+            "direction_changed": (
+                str(origin.get("direction") or "NONE").upper()
+                != str(signal.get("direction") or "NONE").upper()
+            ) if origin else None,
+        },
         "latest_candle_ts": latest_candle_ts,
         "d1_candle_ts": d1_ts,
         "h4_candle_ts": h4_ts,
@@ -1359,14 +1465,14 @@ def assemble_engine_a_context(
             "max_expected_age_seconds": None,
         },
         "geometry": {
-            "candidate_entry": price,
+            "candidate_entry": origin_entry if origin_entry is not None else price,
             "current_price": price,
             "stop_loss": sl,
             "take_profit": tp,
             "risk_points": risk_points,
             "reward_points": reward_points,
             "rr": rr,
-            "price_displacement_from_candidate_entry": 0.0 if price is not None else None,
+            "price_displacement_from_candidate_entry": displacement,
             "sl_tp_source": signal.get("entryMode") or "engine_a_levels",
         },
         "freshness": _build_freshness_block(signal, data_freshness, pair=pair),
@@ -1684,6 +1790,9 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
 
     return {
         "direction": engine_a_ctx.get("direction"),
+        "reviewMode": engine_a_ctx.get("review_mode"),
+        "candidateOrigin": engine_a_ctx.get("candidate_origin"),
+        "reviewDelta": engine_a_ctx.get("review_delta"),
         "score": ea.get("score") if ea.get("score") is not None else engine_a_ctx.get("confluence_score"),
         "maxScore": ea.get("maxScore") if ea.get("maxScore") is not None else engine_a_ctx.get("max_score_override"),
         "threshold": ea.get("threshold") if ea.get("threshold") is not None else engine_a_ctx.get("threshold"),

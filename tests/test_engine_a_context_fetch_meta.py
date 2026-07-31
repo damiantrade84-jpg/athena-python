@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 import ai_review.engine_a_context as eac
 
 
@@ -153,3 +155,38 @@ def test_fix_does_not_alter_scoring_or_execution_fields():
     assert ctx["geometry"]["take_profit"] == 67000.0
     assert ctx["geometry"]["rr"] == 2.0
     assert ctx["score_attribution"]["aiReviewCanMutateScore"] is False
+
+
+def test_candidate_origin_is_server_owned_and_displacement_uses_fresh_price():
+    seen: dict[str, str] = {}
+
+    def _analyze(pair, btc_bias, style="swing"):
+        seen["style"] = style
+        return _signal_with_cache_hit()
+
+    origin = {
+        "signalId": "scan-42",
+        "timestamp": "2026-05-21T16:00:00+00:00",
+        "direction": "LONG",
+        "horizon": "intraday",
+        "entry": 64000.0,
+        "confluenceScore": 2.1,
+        "maxScore": 3.0,
+        "threshold": 2.0,
+    }
+    ctx = eac.assemble_engine_a_context(
+        "BTCUSDT",
+        "H4",
+        screenshot_meta={"analyze_style": "swing"},
+        resolve_pair_fn=lambda s: _pair(),
+        analyze_pair_fn=_analyze,
+        btc_bias_fn=lambda: "neutral",
+        origin_signal=origin,
+    )
+
+    assert seen["style"] == "intraday"
+    assert ctx["review_mode"] == "candidate"
+    assert ctx["candidate_origin"]["candidate_id"] == "scan-42"
+    assert ctx["geometry"]["candidate_entry"] == 64000.0
+    assert ctx["review_delta"]["entry_displacement"] == 1000.0
+    assert ctx["review_delta"]["score_delta"] == pytest.approx(0.3)

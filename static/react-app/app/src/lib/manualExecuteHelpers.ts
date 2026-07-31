@@ -120,20 +120,6 @@ export function normalizeSymbolKey(value: unknown): string | null {
   return key || null;
 }
 
-function normalizeBackendTf(tf: string | null | undefined): string | null {
-  if (!tf) return null;
-  const raw = tf.trim().toUpperCase().replace(/\s+/g, '');
-  if (!raw) return null;
-  if (raw === '240' || raw === '4H') return 'H4';
-  if (raw === '60' || raw === '1H') return 'H1';
-  if (raw === '15' || raw === '15M') return 'M15';
-  if (raw === '5' || raw === '5M') return 'M5';
-  if (raw === '1' || raw === '1M') return 'M1';
-  if (raw === 'D' || raw === '1D') return 'D1';
-  if (raw === 'W' || raw === '1W') return 'W1';
-  return raw;
-}
-
 export function stripEngineBFromSignal(signal: EngineASignal): EngineASignal {
   const payload = { ...signal } as Record<string, unknown>;
   delete payload.engine_b;
@@ -391,7 +377,7 @@ export function buildQuickExecutePayload(args: {
       source: isEngineBOnly ? 'engine_b' : 'engine_a',
       ...exitModePayload,
     },
-    engine_b: (engineBOverlay ?? nakedData) as Record<string, unknown>,
+    engine_b: (isEngineBOnly ? (engineBOverlay ?? nakedData) : {}) as Record<string, unknown>,
     pip_mode: effectiveStyle,
     ...volumePayload,
   };
@@ -475,36 +461,42 @@ export function isEngineBOnlySignal(signal: EngineASignal | null): boolean {
   if (!signal) return false;
   const raw = signal as Record<string, unknown>;
   const engine = String(
-    raw.engine_source ?? raw.source_engine ?? raw.engine ?? '',
-  ).toUpperCase();
-  return (
-    engine === 'B'
-    || engine === 'ENGINE_B'
-    || engine === 'NAKED'
-    || raw.is_naked === true
+    raw.engine ?? raw.engine_source ?? raw.source_engine ?? '',
+  ).trim().toLowerCase();
+  // Explicit identity is authoritative. Engine A rows intentionally carry
+  // nested Engine B diagnostics; those diagnostics must never reclassify the
+  // primary signal or its chart-review / quick-execute contract.
+  if (['engine_b', 'naked', 'naked_structure', 'structure', 'smc', 'b'].includes(engine)) {
+    return true;
+  }
+  if (
+    [
+      'engine_a',
+      'engine_a_v2',
+      'engine_a_v3',
+      'factor_scoring',
+      'forex_scoring',
+      'a',
+    ].includes(engine)
+  ) {
+    return false;
+  }
+  const contractVersion = String(raw.contractVersion ?? '').trim().toLowerCase();
+  if (
+    raw.engine_a_present === true
+    || raw.engineATradeEnabled !== undefined
+    || raw.scoringProfile !== undefined
+    || raw.componentScores !== undefined
+    || raw.factorScores !== undefined
+    || contractVersion.startsWith('engine_a')
+    || contractVersion.startsWith('3.')
+  ) {
+    return false;
+  }
+  // Backward-compatible fallback for legacy Engine B rows without identity.
+  return raw.is_naked === true
     || Boolean(raw.naked_data)
-  );
-}
-
-function reviewContextFromAiReview(review: AIChartReviewResponse | null): {
-  symbol: string | null;
-  timeframe: string | null;
-  primaryEngine: 'A' | 'B';
-  primaryPassed: boolean | null;
-} {
-  const primaryEngine = String(review?.primaryEngine || 'A').toUpperCase() === 'B' ? 'B' : 'A';
-  const ctx = primaryEngine === 'B'
-    ? (review?.engine_b_context ?? review?.engineBContext)
-    : review?.engine_a_context;
-  const record = ctx && typeof ctx === 'object' ? (ctx as Record<string, unknown>) : {};
-  return {
-    primaryEngine,
-    symbol: typeof record.symbol === 'string' ? record.symbol : null,
-    timeframe: typeof record.timeframe === 'string' ? record.timeframe : null,
-    primaryPassed: typeof record.passed === 'boolean'
-      ? record.passed
-      : null,
-  };
+    || Boolean(raw.engine_b);
 }
 
 export function canExecuteEngineASignalTier(signal: EngineASignal | null): boolean {
@@ -534,7 +526,7 @@ export function evaluateTvChartExecuteBlock(args: {
   isTestMode: boolean;
   isPaper?: boolean;
 }): string | null {
-  const { signal, chartSymbolKey, chartTimeframe, aiReview, isTestMode, isPaper } = args;
+  const { signal, chartSymbolKey, isTestMode, isPaper } = args;
   if (isTestMode) return 'Test mode';
   if (!signal) return 'No selected signal';
   const signalKey = normalizeSymbolKey(signal.symbol || signal.pair || signal.display);
@@ -557,23 +549,9 @@ export function evaluateTvChartExecuteBlock(args: {
   }
 
   if (isPaper) return 'Paper mode';
-  const reviewCtx = reviewContextFromAiReview(aiReview);
-  const reviewSymbolKey = normalizeSymbolKey(reviewCtx.symbol);
-  if (aiReview && reviewSymbolKey && chartSymbolKey && reviewSymbolKey !== chartSymbolKey) {
-    return 'Review not current (symbol mismatch)';
-  }
-  const reviewTimeframe = normalizeBackendTf(reviewCtx.timeframe);
-  const currentTf = normalizeBackendTf(chartTimeframe);
-  if (aiReview && reviewTimeframe && currentTf && reviewTimeframe !== currentTf) {
-    return 'Review not current (timeframe mismatch)';
-  }
-  if (isEngineBOnly && reviewCtx.primaryEngine === 'B' && reviewCtx.primaryPassed === false) {
-    return 'Engine B no longer confirmed after AI review';
-  }
-  if (!isEngineBOnly && reviewCtx.primaryEngine === 'A' && reviewCtx.primaryPassed === false) {
-    return 'Engine A no longer confirmed after AI review';
-  }
-  if (aiReviewBlocksManualExecute(aiReview)) return 'AI review: no trade';
+  // Chart AI is advisory only. Execution revalidates the selected engine,
+  // freshness, risk, approval and broker state on the server; no model output
+  // or chart-review response may add/remove execution permission here.
   return null;
 }
 
@@ -582,9 +560,7 @@ export function shouldHideTvChartExecuteNow(args: {
   canFlagWatch: boolean;
   suggestedAction?: string;
 }): boolean {
-  if (args.canFlagWatch && args.suggestedAction !== 'WATCH_ONLY') return true;
-  if (aiReviewEntryTimingRejected(args.aiReview)) return true;
-  if (aiReviewBlocksManualExecute(args.aiReview)) return true;
+  void args;
   return false;
 }
 

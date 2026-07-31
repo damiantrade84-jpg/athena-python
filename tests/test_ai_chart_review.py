@@ -28,7 +28,10 @@ from ai_review.summary import build_ai_review_summary
 from ai_review.context_diagnostics import build_context_diagnostics, sanitize_ai_review_missing_context
 from ai_review.timestamp_contract import evaluate_timestamp_mismatch
 from ai_review.validation import validate_request
-from athena_app.api.routes_ai_chart_review import register_ai_chart_review_routes
+from athena_app.api.routes_ai_chart_review import (
+    _resolve_server_candidate,
+    register_ai_chart_review_routes,
+)
 from config import CONFIG, get_ai_model
 
 _PNG_1X1 = base64.b64encode(
@@ -277,6 +280,40 @@ def test_route_rejects_missing_screenshot(tmp_audit_db):
         resp = client.post("/api/ai/chart-review", json=body)
         assert resp.status_code == 400
         mock_call.assert_not_called()
+
+
+def test_server_candidate_lookup_keeps_a_primary_with_nested_b_context():
+    row = {
+        "signalId": "a-17",
+        "timestamp": "2026-05-21T16:30:55+00:00",
+        "symbol": "BTCUSDT",
+        "engine": "ENGINE_A_V3",
+        "direction": "LONG",
+        "horizon": "intraday",
+        "entry": 65000.0,
+        "engine_b": {"direction": "SHORT", "score": 5.0},
+    }
+    runtime = SimpleNamespace(
+        last_engine_a_rows_fn=lambda: [row],
+        last_engine_b_rows_fn=lambda: [],
+    )
+
+    engine, candidate, error = _resolve_server_candidate(
+        "BTCUSDT",
+        {
+            "primary_engine": "A",
+            "candidate_id": "a-17",
+            "candidate_revision": row["timestamp"],
+            "candidate_direction": "LONG",
+            "signal_style": "intraday",
+        },
+        {"PRIMARY_ENGINE": "A"},
+        runtime,
+    )
+
+    assert error is None
+    assert engine == "A"
+    assert candidate is row
 
 
 def test_route_rejects_missing_symbol_or_timeframe(tmp_audit_db):
@@ -1231,7 +1268,7 @@ def test_timeframe_route_attached_to_success_response(tmp_audit_db):
     assert route["contextTf"] == "H4"
     assert route["entryTf"] == "H1"
     assert route["executionTf"] == "M15"
-    assert route["autoSelectTf"] == "H1"
+    assert route["autoSelectTf"] == "M15"
     assert route["mode"] == "entry_wait"
 
 
@@ -1258,7 +1295,7 @@ def test_timeframe_route_dedup_response_has_route(tmp_audit_db):
     assert second.status_code == 200
     data = second.get_json()
     assert data["dedup_hit"] is True
-    assert data["timeframeRoute"]["autoSelectTf"] == "H1"
+    assert data["timeframeRoute"]["autoSelectTf"] == "M15"
     assert data["timeframe_route"] == data["timeframeRoute"]
     assert data["engine_a_context"]["timeframe_route"] == data["timeframeRoute"]
     assert data["reviewInputMeta"]["symbol"] == "BTCUSDT"
@@ -1422,6 +1459,34 @@ def test_summary_engine_a_from_context():
     assert summary["engineA"]["score"] == 2.4
     assert summary["engineA"]["threshold"] == 2.0
     assert summary["engineA"]["passed"] is True
+
+
+def test_summary_keeps_model_scores_separate_from_postprocessed_headline():
+    ctx = _engine_a_ctx()
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    ai = normalize_chart_review_response(
+        json.dumps({"verdict": "VALID", "confidence": 80, "human_action": "take"})
+    )
+    concordance = compute_engine_a_ai_concordance(ctx, ai)
+    summary = build_ai_review_summary(
+        ctx,
+        ai,
+        concordance,
+        build_provider_meta(provider="anthropic", model="claude-opus-4-7"),
+        engine_snapshots=ctx["engine_snapshots"],
+        model_summary={
+            "overallScore": 1,
+            "tradeabilityScore": 2,
+            "confidence": 99,
+        },
+    )
+
+    assert summary["modelScores"]["overallScore"] == 1
+    assert summary["modelScores"]["tradeabilityScore"] == 2
+    assert summary["overallScore"] == summary["deterministicScores"]["overallScore"]
+    assert summary["overallScore"] != summary["modelScores"]["overallScore"]
+    assert summary["modelConfidence"] == 99
+    assert summary["confidenceCalibrated"] is False
 
 
 def test_summary_engine_a_missing_null():
@@ -1739,10 +1804,10 @@ def test_route_dedup_response_exposes_non_visual_context_and_score_attribution(t
 def test_resolve_chart_review_analyze_style_does_not_infer_style_from_chart_tf():
     from ai_review.engine_a_context import resolve_chart_review_analyze_style
 
-    assert resolve_chart_review_analyze_style("H4", {"chart_timeframe": "H4"}, {"type": "crypto"}) == "intraday"
-    assert resolve_chart_review_analyze_style("H4", {"chart_timeframe": "M1"}, {"type": "crypto"}) == "intraday"
-    assert resolve_chart_review_analyze_style("M1", {"signal_style": "scalp"}, {"type": "crypto"}) == "scalp"
-    assert resolve_chart_review_analyze_style("D1", {"chart_timeframe": "D1"}, {"type": "stock"}) == "swing"
+    assert resolve_chart_review_analyze_style({"chart_timeframe": "H4"}, {"type": "crypto"}) == "intraday"
+    assert resolve_chart_review_analyze_style({"chart_timeframe": "M1"}, {"type": "crypto"}) == "intraday"
+    assert resolve_chart_review_analyze_style({"signal_style": "scalp"}, {"type": "crypto"}) == "scalp"
+    assert resolve_chart_review_analyze_style({"chart_timeframe": "D1"}, {"type": "stock"}) == "swing"
 
 
 def test_build_engine_a_prompt_context_includes_factor_scores():

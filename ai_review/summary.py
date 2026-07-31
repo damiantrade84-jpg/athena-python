@@ -45,16 +45,14 @@ def _clamp(score: float) -> int:
     return int(max(0, min(100, round(score))))
 
 
-def _model_score(model_summary: dict[str, Any] | None, key: str, fallback: int) -> int:
-    if not model_summary:
-        return fallback
+def _optional_model_score(model_summary: dict[str, Any], key: str) -> int | None:
     raw = model_summary.get(key)
     if raw is None:
-        return fallback
+        return None
     try:
         return _clamp(float(raw))
     except (TypeError, ValueError):
-        return fallback
+        return None
 
 
 def _text_blob(*parts: Any) -> str:
@@ -277,20 +275,24 @@ def build_ai_review_summary(
     ms = model_summary if isinstance(model_summary, dict) else {}
     human_raw = ms.get("humanAction") or ai_review.get("human_action") or "wait"
     human_action = _map_human_action(str(human_raw))
-    visual = _model_score(ms, "visualConfirmationScore", _score_visual(ai_review))
-    entry = _model_score(ms, "entryQualityScore", _score_entry(ai_review))
-    risk = _model_score(ms, "riskScore", _score_risk(ai_review, engine_a_ctx, mismatch_warnings))
-    alignment = _model_score(
-        ms, "engineAlignmentScore", _score_engine_alignment(engine_a_ctx, concordance, ai_review)
-    )
-    tradeability = _model_score(
-        ms,
-        "tradeabilityScore",
-        _score_tradeability(alignment, visual, entry, ai_review, engine_a_ctx),
-    )
-    overall = _model_score(
-        ms, "overallScore", _overall_score(tradeability, visual, entry, risk)
-    )
+    visual = _score_visual(ai_review)
+    entry = _score_entry(ai_review)
+    risk = _score_risk(ai_review, engine_a_ctx, mismatch_warnings)
+    alignment = _score_engine_alignment(engine_a_ctx, concordance, ai_review)
+    tradeability = _score_tradeability(alignment, visual, entry, ai_review, engine_a_ctx)
+    overall = _overall_score(tradeability, visual, entry, risk)
+    deterministic_scores = {
+        "overallScore": overall,
+        "tradeabilityScore": tradeability,
+        "engineAlignmentScore": alignment,
+        "visualConfirmationScore": visual,
+        "entryQualityScore": entry,
+        "riskScore": risk,
+    }
+    model_scores = {
+        key: _optional_model_score(ms, key)
+        for key in deterministic_scores
+    }
 
     try:
         confidence = int(ms.get("confidence", ai_review.get("confidence", 0)))
@@ -317,6 +319,10 @@ def build_ai_review_summary(
         "entryQualityScore": entry,
         "riskScore": risk,
         "confidence": confidence,
+        "modelConfidence": confidence,
+        "confidenceCalibrated": False,
+        "deterministicScores": deterministic_scores,
+        "modelScores": model_scores,
         "finalReason": str(ms.get("finalReason") or "").strip()
         or _final_reason(ai_review, concordance, human_action),
         "engineA": snapshots.get("engineA"),

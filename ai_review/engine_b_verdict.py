@@ -15,18 +15,6 @@ from ai_review.engine_a_verdict import (
     _to_float,
 )
 
-_VALID_VERDICTS = frozenset(
-    {
-        "engine_b_confirmed",
-        "engine_b_direction_confirmed_entry_rejected",
-        "engine_b_contradicted",
-        "engine_b_missing",
-        "mixed",
-        "unknown",
-    }
-)
-
-
 def _infer_chart_confirms_direction(ai_review: dict[str, Any], engine_b_ctx: dict[str, Any]) -> bool | None:
     structured = ai_review.get("structured") or {}
     comparison = structured.get("engineBVerdictComparison") or structured.get("engine_b_verdict_comparison")
@@ -80,41 +68,21 @@ def build_engine_b_verdict_comparison(
     *,
     model_comparison: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build engineBVerdictComparison; merge model output with deterministic fallbacks."""
+    """Build comparison with immutable server-owned Engine B facts."""
     snapshots = engine_b_ctx.get("engine_snapshots") or {}
     eb = snapshots.get("engineB") or {}
     model = dict(model_comparison or {})
 
-    direction = str(
-        model.get("engineBDirection")
-        or eb.get("direction")
-        or engine_b_ctx.get("direction")
-        or "NONE"
-    ).upper()
-    score = _to_float(model.get("engineBScore"))
-    if score is None:
-        score = _to_float(eb.get("score") or engine_b_ctx.get("confluence_score"))
-    max_score = _to_float(model.get("engineBMaxScore"))
-    if max_score is None:
-        max_score = _to_float(eb.get("maxScore") or engine_b_ctx.get("max_score_override"))
-    threshold = _to_float(model.get("engineBThreshold"))
-    if threshold is None:
-        threshold = _to_float(eb.get("threshold") or engine_b_ctx.get("threshold"))
-    normalized = _to_float(model.get("engineBNormalizedScore"))
-    if normalized is None:
-        normalized = _to_float(eb.get("normalizedScore"))
-
-    passed = _to_bool(model.get("engineBPassed"))
-    if passed is None:
-        passed = _to_bool(eb.get("passed") if eb.get("passed") is not None else engine_b_ctx.get("passed"))
-
-    engine_b_provided = _to_bool(model.get("engineBProvided"))
-    if engine_b_provided is None:
-        engine_b_provided = direction in ("LONG", "SHORT") and score is not None
-
-    bias_valid = _to_bool(model.get("engineBBiasValid"))
-    if bias_valid is None:
-        bias_valid = direction in ("LONG", "SHORT") and (passed is True or (score is not None and threshold is not None))
+    direction = str(eb.get("direction") or engine_b_ctx.get("direction") or "NONE").upper()
+    score = _to_float(eb.get("score") if eb.get("score") is not None else engine_b_ctx.get("confluence_score"))
+    max_score = _to_float(eb.get("maxScore") if eb.get("maxScore") is not None else engine_b_ctx.get("max_score_override"))
+    threshold = _to_float(eb.get("threshold") if eb.get("threshold") is not None else engine_b_ctx.get("threshold"))
+    normalized = _to_float(eb.get("normalizedScore"))
+    passed = _to_bool(eb.get("passed") if eb.get("passed") is not None else engine_b_ctx.get("passed"))
+    engine_b_provided = direction in ("LONG", "SHORT") and score is not None
+    bias_valid = direction in ("LONG", "SHORT") and (
+        passed is True or (score is not None and threshold is not None)
+    )
 
     chart_confirms = _to_bool(model.get("chartConfirmsEngineBDirection"))
     if chart_confirms is None:
@@ -153,22 +121,17 @@ def build_engine_b_verdict_comparison(
             )
         )
 
-    ai_upgraded = _to_bool(model.get("aiUpgradedEngineB"))
-    if ai_upgraded is None:
-        ai_upgraded = bool(not passed and final_decision == "trade" and chart_confirms is True)
-    if not passed:
-        ai_upgraded = False
+    # AI review is advisory and cannot promote a deterministic Engine B failure.
+    ai_upgraded = False
 
-    comparison = str(model.get("comparisonVerdict") or "").strip()
-    if comparison not in _VALID_VERDICTS:
-        comparison = _comparison_verdict(
-            engine_b_provided=bool(engine_b_provided),
-            chart_confirms=chart_confirms,
-            chart_contradicts_dir=chart_contradicts_dir,
-            chart_contradicts_timing=timing_contradicts,
-            engine_passed=passed,
-            final_decision=final_decision,
-        )
+    comparison = _comparison_verdict(
+        engine_b_provided=bool(engine_b_provided),
+        chart_confirms=chart_confirms,
+        chart_contradicts_dir=chart_contradicts_dir,
+        chart_contradicts_timing=timing_contradicts,
+        engine_passed=passed,
+        final_decision=final_decision,
+    )
 
     downgrade_reasons = _coerce_str_list(model.get("downgradeReasons"))
     if not downgrade_reasons and ai_downgraded:
@@ -180,7 +143,7 @@ def build_engine_b_verdict_comparison(
             downgrade_reasons.append("Engine B passed but human action is wait/watch")
     downgrade_reasons = _filter_false_stale_downgrades(downgrade_reasons, engine_b_ctx)
 
-    upgrade_reasons = _coerce_str_list(model.get("upgradeReasons"))
+    upgrade_reasons: list[str] = []
 
     final_reason = str(model.get("finalReason") or "").strip() or None
     if not final_reason:
@@ -225,4 +188,21 @@ def build_engine_b_verdict_comparison(
         "upgradeReasons": upgrade_reasons,
         "finalDecision": final_decision,
         "finalReason": final_reason,
+        "modelClaims": {
+            key: model.get(key)
+            for key in (
+                "engineBProvided",
+                "engineBBiasValid",
+                "engineBPassed",
+                "engineBDirection",
+                "engineBScore",
+                "engineBMaxScore",
+                "engineBThreshold",
+                "engineBNormalizedScore",
+                "comparisonVerdict",
+                "aiUpgradedEngineB",
+                "upgradeReasons",
+            )
+            if model.get(key) is not None
+        },
     }

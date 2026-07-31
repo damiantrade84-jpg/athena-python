@@ -9,17 +9,6 @@ from ai_review.engine_a_context import freshness_is_policy_ok
 from ai_review.engine_snapshots import extract_engine_snapshots
 from ai_review.summary import _HUMAN_ACTION_MAP, _POOR_ENTRY_PATTERNS
 
-_VALID_VERDICTS = frozenset(
-    {
-        "engine_a_confirmed",
-        "engine_a_direction_confirmed_entry_rejected",
-        "engine_a_contradicted",
-        "engine_a_missing",
-        "mixed",
-        "unknown",
-    }
-)
-
 _FINAL_DECISIONS = frozenset({"trade", "wait", "reject", "watch"})
 
 _FALSE_STALE_DOWNGRADE_MARKERS = (
@@ -237,43 +226,23 @@ def build_engine_a_verdict_comparison(
     model_comparison: dict[str, Any] | None = None,
     engine_snapshots: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build engineAVerdictComparison; merge model output with deterministic fallbacks."""
+    """Build comparison with immutable server-owned Engine A facts."""
     snapshots = engine_snapshots or engine_a_ctx.get("engine_snapshots")
     if snapshots is None:
         snapshots = extract_engine_snapshots({}, engine_a_ctx)
     ea = snapshots.get("engineA") or {}
     model = dict(model_comparison or {})
 
-    direction = str(
-        model.get("engineADirection")
-        or ea.get("direction")
-        or engine_a_ctx.get("direction")
-        or "NONE"
-    ).upper()
-    score = _to_float(model.get("engineAScore"))
-    if score is None:
-        score = _to_float(ea.get("score") or engine_a_ctx.get("confluence_score"))
-    max_score = _to_float(model.get("engineAMaxScore"))
-    if max_score is None:
-        max_score = _to_float(ea.get("maxScore") or engine_a_ctx.get("max_score_override"))
-    threshold = _to_float(model.get("engineAThreshold"))
-    if threshold is None:
-        threshold = _to_float(ea.get("threshold") or engine_a_ctx.get("threshold"))
-    normalized = _to_float(model.get("engineANormalizedScore"))
-    if normalized is None:
-        normalized = _to_float(ea.get("normalizedScore"))
-
-    passed = _to_bool(model.get("engineAPassed"))
-    if passed is None:
-        passed = _to_bool(ea.get("passed") if ea.get("passed") is not None else engine_a_ctx.get("passed"))
-
-    engine_a_provided = _to_bool(model.get("engineAProvided"))
-    if engine_a_provided is None:
-        engine_a_provided = direction in ("LONG", "SHORT") and score is not None
-
-    bias_valid = _to_bool(model.get("engineABiasValid"))
-    if bias_valid is None:
-        bias_valid = direction in ("LONG", "SHORT") and (passed is True or (score is not None and threshold is not None))
+    direction = str(ea.get("direction") or engine_a_ctx.get("direction") or "NONE").upper()
+    score = _to_float(ea.get("score") if ea.get("score") is not None else engine_a_ctx.get("confluence_score"))
+    max_score = _to_float(ea.get("maxScore") if ea.get("maxScore") is not None else engine_a_ctx.get("max_score_override"))
+    threshold = _to_float(ea.get("threshold") if ea.get("threshold") is not None else engine_a_ctx.get("threshold"))
+    normalized = _to_float(ea.get("normalizedScore"))
+    passed = _to_bool(ea.get("passed") if ea.get("passed") is not None else engine_a_ctx.get("passed"))
+    engine_a_provided = direction in ("LONG", "SHORT") and score is not None
+    bias_valid = direction in ("LONG", "SHORT") and (
+        passed is True or (score is not None and threshold is not None)
+    )
 
     chart_confirms = _to_bool(model.get("chartConfirmsEngineADirection"))
     if chart_confirms is None:
@@ -315,20 +284,17 @@ def build_engine_a_verdict_comparison(
             )
         )
 
-    ai_upgraded = _to_bool(model.get("aiUpgradedEngineA"))
-    if ai_upgraded is None:
-        ai_upgraded = bool(not passed and final_decision == "trade" and chart_confirms is True)
+    # AI review is advisory and cannot promote a deterministic Engine A failure.
+    ai_upgraded = False
 
-    comparison = str(model.get("comparisonVerdict") or "").strip()
-    if comparison not in _VALID_VERDICTS:
-        comparison = _comparison_verdict(
-            engine_a_provided=bool(engine_a_provided),
-            chart_confirms=chart_confirms,
-            chart_contradicts_dir=chart_contradicts_dir,
-            chart_contradicts_timing=timing_contradicts,
-            engine_passed=passed,
-            final_decision=final_decision,
-        )
+    comparison = _comparison_verdict(
+        engine_a_provided=bool(engine_a_provided),
+        chart_confirms=chart_confirms,
+        chart_contradicts_dir=chart_contradicts_dir,
+        chart_contradicts_timing=timing_contradicts,
+        engine_passed=passed,
+        final_decision=final_decision,
+    )
 
     downgrade_reasons = _coerce_str_list(model.get("downgradeReasons"))
     if not downgrade_reasons and ai_downgraded:
@@ -340,7 +306,7 @@ def build_engine_a_verdict_comparison(
             downgrade_reasons.append("Engine A passed but human action is wait/watch")
     downgrade_reasons = _filter_false_stale_downgrades(downgrade_reasons, engine_a_ctx)
 
-    upgrade_reasons = _coerce_str_list(model.get("upgradeReasons"))
+    upgrade_reasons: list[str] = []
 
     final_reason = str(model.get("finalReason") or "").strip() or None
     if not final_reason:
@@ -360,9 +326,7 @@ def build_engine_a_verdict_comparison(
             if isinstance(reasons, list) and reasons:
                 final_reason = str(reasons[0])[:500]
 
-    active = model.get("engineAActiveFactors")
-    if active is None:
-        active = ea.get("activeFactors")
+    active = ea.get("activeFactors")
 
     return {
         "engineAProvided": bool(engine_a_provided),
@@ -386,4 +350,22 @@ def build_engine_a_verdict_comparison(
         "upgradeReasons": upgrade_reasons,
         "finalDecision": final_decision,
         "finalReason": final_reason,
+        "modelClaims": {
+            key: model.get(key)
+            for key in (
+                "engineAProvided",
+                "engineABiasValid",
+                "engineAPassed",
+                "engineADirection",
+                "engineAScore",
+                "engineAMaxScore",
+                "engineAThreshold",
+                "engineANormalizedScore",
+                "engineAActiveFactors",
+                "comparisonVerdict",
+                "aiUpgradedEngineA",
+                "upgradeReasons",
+            )
+            if model.get(key) is not None
+        },
     }

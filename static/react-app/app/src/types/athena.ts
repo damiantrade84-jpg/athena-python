@@ -126,6 +126,9 @@ export interface TvChartIntent {
   symbol: string;
   display?: string;
   signal?: unknown;
+  primaryEngine?: 'A' | 'B';
+  candidateId?: string;
+  candidateRevision?: string;
   preferredTf?: string;
   autoReview?: boolean;
   createdAt: string;
@@ -1675,6 +1678,24 @@ export interface AIChartReviewSummary {
   entryQualityScore: number | null;
   riskScore: number | null;
   confidence: number | null;
+  modelConfidence?: number | null;
+  confidenceCalibrated?: boolean;
+  deterministicScores?: {
+    overallScore: number | null;
+    tradeabilityScore: number | null;
+    engineAlignmentScore: number | null;
+    visualConfirmationScore: number | null;
+    entryQualityScore: number | null;
+    riskScore: number | null;
+  };
+  modelScores?: {
+    overallScore: number | null;
+    tradeabilityScore: number | null;
+    engineAlignmentScore: number | null;
+    visualConfirmationScore: number | null;
+    entryQualityScore: number | null;
+    riskScore: number | null;
+  };
   finalReason: string | null;
   sourceQualityScore?: number | null;
   engineA: AIChartReviewEngineSummary | null;
@@ -1865,8 +1886,19 @@ export interface TimeframeRoute {
   assetGroup?: string;
   sourceGroup?: string;
   contextTf?: string;
+  regimeTf?: string;
+  biasTf?: string;
+  structureTf?: string;
+  setupTf?: string;
+  triggerTf?: string;
   entryTf?: string;
   executionTf?: string;
+  executionMode?: string;
+  m5Role?: string;
+  m5Policy?: string;
+  policyVersion?: string;
+  policyKey?: string;
+  routeSource?: string;
   autoSelectTf?: string;
   mode?: string;
   reason?: string;
@@ -2013,6 +2045,9 @@ export interface AIChartReviewScreenshotMeta {
   execution_timeframe?: string;
   /** Advisory seed for Engine B chart review direction (server re-validates). */
   candidate_direction?: string;
+  /** Server lookup key/assertion only; never a trusted score or entry source. */
+  candidate_id?: string;
+  candidate_revision?: string;
   primary_engine?: 'A' | 'B';
   signal_engine?: 'A' | 'B';
   renderedLayers?: Record<string, boolean>;
@@ -2025,13 +2060,18 @@ export interface AIChartReviewChartSnapshot {
     to?: string | number | null;
   } | null;
   visibleCandleCount?: number | null;
+  lastCandleTs?: string | number | null;
+  lastCandleAgeSec?: number | null;
+  chartDataStatus?: 'ready' | 'stale' | 'unavailable';
   indicatorLayerStates?: Record<string, boolean>;
   engineBOverlayCount?: number;
   engineBContext?: Record<string, unknown> | null;
-  engineBOverlayStatus?: 'disabled' | 'loading' | 'ready' | 'error' | 'unavailable';
+  engineBOverlayStatus?: 'disabled' | 'loading' | 'ready' | 'stale' | 'error' | 'unavailable';
+  engineBOverlayAgeSec?: number | null;
   engineBOverlayError?: string | null;
   engineBOverlayMeta?: {
     chartTimeframe?: string | null;
+    sourceTimeframe?: string | null;
     engineBStyle?: string | null;
     overlaySource?: string | null;
     sourceTimeframes?: {
@@ -2060,6 +2100,13 @@ export interface AIChartReviewChartSnapshot {
     rsi14?: number | null;
     atr14?: number | null;
     adx14?: number | null;
+    periods?: {
+      ema?: { trend?: number | null; momentum?: number | null; long?: number | null } | null;
+      rsi?: number | null;
+      adx?: number | null;
+      atr?: number | null;
+      source?: string | null;
+    } | null;
   } | null;
 }
 

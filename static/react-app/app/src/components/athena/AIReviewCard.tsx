@@ -150,7 +150,9 @@ function AIReviewCardImpl({ response }: AIReviewCardProps) {
         <span className="panel-title mr-1">AI Chart Review</span>
         <Chip tone={verdictTone}>{ai.verdict}</Chip>
         <Chip tone={concordanceTone}>{c.concordance}</Chip>
-        <Chip title="Model self-reported confidence">conf {ai.confidence}</Chip>
+        <Chip title="Model self-reported confidence; not outcome-calibrated">
+          model conf {ai.confidence} (uncalibrated)
+        </Chip>
         {c.divergence_type !== 'none' && (
           <Chip tone="warning">{c.divergence_type.replace(/_/g, ' ')}</Chip>
         )}

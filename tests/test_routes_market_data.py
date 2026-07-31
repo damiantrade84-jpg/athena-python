@@ -212,6 +212,7 @@ def test_engine_b_overlays_preserve_legacy_structure_contract():
                 "zone_tf": "H4",
                 "entry_tf": "H1",
                 "atr_tf": "H4",
+                "latest_confirmed_trigger_candle_time": "2026-07-31T10:00:00+00:00",
             },
             {"display": "BTC/USDT"},
             None,
@@ -231,8 +232,9 @@ def test_engine_b_overlays_preserve_legacy_structure_contract():
     assert payload["overlay_source"] == "engine_b"
     assert payload["overlay_version"]
     assert payload["symbol"] == "BTCUSDT"
-    assert payload["timeframe"] == "M1"
-    assert payload["chart_timeframe"] == "M1"
+    assert payload["timeframe"] == "H4"
+    assert payload["chart_timeframe"] == "H4"
+    assert payload["requested_chart_timeframe"] == "M1"
     assert payload["engine_b_style"] == "intraday"
     assert payload["source_timeframes"] == {
         "zone_tf": "H4",
@@ -241,6 +243,8 @@ def test_engine_b_overlays_preserve_legacy_structure_contract():
         "atr_tf": "H4",
     }
     assert payload["confirmed_only"] is not None
+    assert payload["source_candle_ts"] == "2026-07-31T10:00:00+00:00"
+    assert payload["source_age_seconds"] is not None
     assert payload["nearest_support_zone"]["lower"] == 95.0
     assert payload["bos_data"]["last_broken_high"] == 103.5
     assert payload["choch_data"]["choch_level"] == 101.25
@@ -274,6 +278,20 @@ def test_engine_b_overlays_warn_when_structure_empty():
     assert resp.status_code == 200
     payload = resp.get_json()
     assert "engine_b_overlays_missing" in (payload.get("warnings") or [])
+
+
+def test_engine_b_overlays_reject_missing_direction_instead_of_defaulting_long():
+    client = _client(
+        _runtime(
+            CONFIG={"CRYPTO_EXECUTION_PROVIDER": "binance"},
+            compute_naked_analysis=lambda *_args, **_kwargs: ({}, {}, None),
+        )
+    )
+
+    resp = client.get("/api/engine-b-overlays?symbol=BTCUSDT&chart_tf=H1&style=intraday")
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "direction must be LONG or SHORT"
 
 
 def test_engine_b_hotlist_returns_group_winners_without_full_engine_b():

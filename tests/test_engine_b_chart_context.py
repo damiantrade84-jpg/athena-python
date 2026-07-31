@@ -69,6 +69,32 @@ def test_assemble_engine_b_context_fail_closed_without_direction():
     assert ctx is None
 
 
+def test_assemble_engine_b_context_auto_style_uses_shared_pair_policy():
+    stock = {
+        "symbol": "AAPL.US",
+        "display": "Apple",
+        "type": "stock",
+        "source": "mt5",
+    }
+    seen: dict[str, str] = {}
+
+    def naked_analysis_fn(sig, overlay_only=False):
+        seen["style"] = sig["style"]
+        return _naked_result(), stock, None
+
+    ctx = assemble_engine_b_context(
+        "AAPL.US",
+        "H4",
+        screenshot_meta={"candidate_direction": "LONG", "analyze_style": "auto"},
+        resolve_pair_fn=lambda _s: stock,
+        naked_analysis_fn=naked_analysis_fn,
+    )
+
+    assert ctx is not None
+    assert seen["style"] == "swing"
+    assert ctx["analyze_style"] == "swing"
+
+
 def test_build_chart_review_prompt_b_mode_uses_engine_b_playbook_only():
     ctx = {
         "primary_engine": "B",

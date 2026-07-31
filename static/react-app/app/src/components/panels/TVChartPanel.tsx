@@ -9,20 +9,15 @@ import {
   type IChartApi,
   type IPaneApi,
   type IPriceLine,
-  type IPrimitivePaneRenderer,
-  type IPrimitivePaneView,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
-  type ISeriesPrimitive,
   type CandlestickData,
   type HistogramData,
   type LineData,
-  type SeriesAttachedParameter,
   type SeriesMarker,
   type UTCTimestamp,
   type Time,
 } from 'lightweight-charts';
-import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 import { BarChart3, Camera, Layers, Play, Sparkles, SlidersHorizontal } from 'lucide-react';
 import {
   AlertDialog,
@@ -87,6 +82,11 @@ import ChartFeedHeaderChips, { type ChartFeedHeaderChipSpec } from '@/components
 import CompactSuggestedWatchStatus from '@/components/athena/CompactSuggestedWatchStatus';
 import { ChartRightEdgeLabelPrimitive } from '@/lib/chartRightEdgeLabelPrimitive';
 import {
+  buildEngineBZones,
+  ENGINE_B_ZONE_STYLE,
+  EngineBZonePrimitive,
+} from '@/lib/engineBPrimitives';
+import {
   labelPriorityForText,
   RIGHT_EDGE_LABEL_PRIORITY,
   type RightEdgeLabel,
@@ -130,10 +130,10 @@ const TF_UI_CODE_MAP: Record<string, string> = {
 // order rather than ad-hoc hues, so a series keeps its identity everywhere.
 //
 // Two deliberate constraints:
-//  · Green and red are NOT used for any indicator. On a candlestick chart
+//  - Green and red are NOT used for any indicator. On a candlestick chart
 //    those two already mean "up bar" and "down bar"; reusing them for an EMA
 //    would overload the only colours that carry price direction.
-//  · With five overlays live at once no hue set fully separates under
+//  - With five overlays live at once no hue set fully separates under
 //    deuteranopia, so the legend's direct labels are the required secondary
 //    encoding — do not remove the legend chips.
 const INDICATOR_COLORS = {
@@ -190,11 +190,17 @@ function buildStudyIndicatorDefs(periods: { rsi: number; adx: number; atr: numbe
   };
 }
 
-function overlayAgeSeconds(computedAt: string | null | undefined): number | null {
-  if (!computedAt) return null;
-  const ts = Date.parse(computedAt);
+function overlayAgeSeconds(
+  value: string | number | null | undefined,
+  nowMs = Date.now(),
+): number | null {
+  if (value == null || value === '') return null;
+  const numeric = typeof value === 'number' ? value : Number(value);
+  const ts = Number.isFinite(numeric)
+    ? (numeric > 10_000_000_000 ? numeric : numeric * 1000)
+    : Date.parse(String(value));
   if (!Number.isFinite(ts)) return null;
-  return Math.max(0, (Date.now() - ts) / 1000);
+  return Math.max(0, (nowMs - ts) / 1000);
 }
 
 const PRESET_OPTIONS = [
@@ -220,6 +226,12 @@ const TF_SECONDS: Record<string, number> = {
   D1: 24 * 60 * 60,
   W1: 7 * 24 * 60 * 60,
 };
+
+function engineBOverlayStaleThresholdSeconds(payload: EngineBOverlayPayload | null): number {
+  const triggerTf = firstString(payload?.source_timeframes?.trigger_tf)?.toUpperCase();
+  const bucketSeconds = triggerTf ? TF_SECONDS[triggerTf] : null;
+  return Math.max(ENGINE_B_OVERLAY_STALE_SEC, (bucketSeconds ?? 0) * 2.5);
+}
 
 interface ChartPricePrecision {
   score_group: string;
@@ -303,6 +315,7 @@ interface EngineBZone {
   lower?: number | string | null;
   upper?: number | string | null;
   level?: number | string | null;
+  created_at?: string | number | null;
 }
 
 interface EngineBRangeZone {
@@ -310,6 +323,8 @@ interface EngineBRangeZone {
   top?: number | string | null;
   bottom?: number | string | null;
   mitigated?: boolean | null;
+  created_at?: string | number | null;
+  bar_index?: number | null;
 }
 
 interface EngineBBreakerBlock {
@@ -321,10 +336,13 @@ interface EngineBOverlayPayload {
   symbol?: string;
   timeframe?: string;
   chart_timeframe?: string;
+  requested_chart_timeframe?: string;
   price_precision?: ChartPricePrecision;
   overlay_source?: string;
   overlay_version?: string;
   computed_at?: string;
+  source_candle_ts?: string | number | null;
+  source_age_seconds?: number | null;
   engine_b_style?: string;
   warnings?: string[];
   source_timeframes?: {
@@ -664,6 +682,32 @@ function normalizeDirection(value: unknown): string | null {
   return normalized || null;
 }
 
+function normalizeReviewStyle(value: unknown): 'scalp' | 'intraday' | 'swing' | null {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return normalized === 'scalp' || normalized === 'intraday' || normalized === 'swing'
+    ? normalized
+    : null;
+}
+
+function engineBOverlayIdentity(signal: EngineASignal | null): {
+  direction: 'LONG' | 'SHORT' | null;
+  style: 'scalp' | 'intraday' | 'swing' | null;
+} {
+  if (!signal) return { direction: null, style: null };
+  const nested = asRecord(signal.naked_data ?? signal.engine_b);
+  const nestedDirection = normalizeDirection(nested.direction);
+  const topDirection = isEngineBPrimarySignal(signal) ? normalizeDirection(signal.direction) : null;
+  const direction = nestedDirection === 'LONG' || nestedDirection === 'SHORT'
+    ? nestedDirection
+    : topDirection === 'LONG' || topDirection === 'SHORT'
+      ? topDirection
+      : null;
+  const style = normalizeReviewStyle(
+    nested.style ?? signal.horizon ?? signal.style ?? signal.trade_style,
+  );
+  return { direction, style };
+}
+
 function firstNumber(...values: unknown[]): number | null {
   for (const value of values) {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -728,13 +772,7 @@ function findEngineACandidateForSymbol(rows: EngineASignal[], symbol: string): E
 
 function isEngineBPrimarySignal(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
-  const signal = value as EngineASignal & { engine?: string; engine_source?: string; is_naked?: boolean };
-  return (
-    signal.engine === 'B'
-    || signal.engine_source === 'engine_b'
-    || signal.is_naked === true
-    || Boolean(signal.naked_data)
-  );
+  return isEngineBOnlySignal(value as EngineASignal);
 }
 
 function pickEngineBCandidate(rows: unknown[]): EngineASignal | null {
@@ -785,11 +823,20 @@ function reviewOutcomeStatus(response: AIChartReviewResponse | null): 'AI_ENTRY_
 }
 
 function reviewTimeframeFor(signal: EngineASignal | null): string {
-  const rawTimeframe = firstString(signal?.timeframe, signal?.tf, signal?.interval)?.toUpperCase();
-  if (rawTimeframe === 'H1' || rawTimeframe === '1H' || rawTimeframe === '60') return '60';
-  if (rawTimeframe === 'H4' || rawTimeframe === '4H' || rawTimeframe === '240') return '240';
+  const rawTimeframe = firstString(
+    signal?.setupTf,
+    signal?.triggerTf,
+    signal?.entryTimeframe,
+    signal?.timeframe,
+    signal?.tf,
+    signal?.interval,
+  );
+  const policyCode = tfCodeForBackend(rawTimeframe);
+  if (policyCode) return policyCode;
   const style = firstString(signal?.style, signal?.trade_style)?.toLowerCase();
-  return style === 'scalp' || style === 'intraday' ? '60' : '240';
+  if (style === 'scalp') return '15';
+  if (style === 'intraday') return '30';
+  return '240';
 }
 
 function normalizeBackendTf(tf: string | null | undefined): string | null {
@@ -798,6 +845,7 @@ function normalizeBackendTf(tf: string | null | undefined): string | null {
   if (!raw) return null;
   if (raw === '240' || raw === '4H') return 'H4';
   if (raw === '60' || raw === '1H') return 'H1';
+  if (raw === '30' || raw === '30M') return 'M30';
   if (raw === '15' || raw === '15M') return 'M15';
   if (raw === '5' || raw === '5M') return 'M5';
   if (raw === '1' || raw === '1M') return 'M1';
@@ -825,8 +873,8 @@ function reviewTimeframeRoute(response: AIChartReviewResponse | null): Timeframe
 }
 
 function timeframeRouteDisplay(route: TimeframeRoute | null): string | null {
-  if (!route?.contextTf || !route.entryTf || !route.executionTf) return null;
-  return `${route.contextTf} Context -> ${route.entryTf} Entry -> ${route.executionTf} Execution`;
+  if (!route?.contextTf || !route.setupTf || !route.triggerTf) return null;
+  return `${route.contextTf} Context -> ${route.setupTf} Setup -> ${route.triggerTf} Trigger`;
 }
 
 function timeframeRouteKey(symbol: string | null, route: TimeframeRoute): string {
@@ -860,10 +908,12 @@ function chartRenderGenerationKey(
 function resolveChartReviewBlockReason(args: {
   loading: boolean;
   engineBOverlayPending: boolean;
+  engineBOverlayBlock?: string | null;
   hasCandles: boolean;
   chartPaintReady: boolean;
   chartIndicatorsReady: boolean;
 }): string | null {
+  if (args.engineBOverlayBlock) return args.engineBOverlayBlock;
   if (args.loading) return 'Loading chart candles…';
   if (!args.hasCandles) return 'Waiting for chart candles…';
   if (args.engineBOverlayPending) return 'Loading Engine B overlays…';
@@ -1258,22 +1308,6 @@ function engineBOverlayLines(payload: EngineBOverlayPayload | null, enabled: boo
 // itself is untouched — these are render-time helpers built from the same fields
 // the existing line-based rendering consumes.
 
-type EngineBZoneCategory =
-  | 'support'
-  | 'resistance'
-  | 'fvg_bull'
-  | 'fvg_bear'
-  | 'ob_bull'
-  | 'ob_bear';
-
-interface EngineBZoneFill {
-  top: number;
-  bottom: number;
-  fill: string;
-  stroke: string;
-  category: EngineBZoneCategory;
-}
-
 interface EngineBSingleLevel {
   label: string;
   price: number;
@@ -1281,80 +1315,43 @@ interface EngineBSingleLevel {
   style?: LineStyle;
 }
 
+interface EngineAPriceLevel {
+  label: string;
+  price: number;
+  color: string;
+  style?: LineStyle;
+}
+
+function engineAPriceLevels(signal: EngineASignal | null): EngineAPriceLevel[] {
+  if (!signal || isEngineBPrimarySignal(signal)) return [];
+  const entryZone = Array.isArray(signal.entryZone)
+    ? signal.entryZone.map((value) => firstNumber(value)).filter((value): value is number => value != null)
+    : [];
+  const entry = firstNumber(
+    signal.entry,
+    signal.price,
+    entryZone.length ? entryZone.reduce((sum, value) => sum + value, 0) / entryZone.length : null,
+  );
+  const levels: EngineAPriceLevel[] = [];
+  if (entry != null) levels.push({ label: 'A Entry', price: entry, color: 'rgba(56, 189, 248, 0.95)' });
+  const stop = firstNumber(signal.sl, signal.invalidation);
+  if (stop != null) {
+    levels.push({ label: 'A SL', price: stop, color: 'rgba(244, 63, 94, 0.95)', style: LineStyle.Dashed });
+  }
+  const targetCandidates = [
+    ['A TP1', firstNumber(signal.tp1, signal.tp, signal.targets?.[0]?.price)],
+    ['A TP2', firstNumber(signal.tp2, signal.targets?.[1]?.price)],
+    ['A TP3', firstNumber(signal.tp3, signal.targets?.[2]?.price)],
+  ] as const;
+  for (const [label, price] of targetCandidates) {
+    if (price == null || levels.some((level) => level.price === price)) continue;
+    levels.push({ label, price, color: 'rgba(16, 185, 129, 0.90)', style: LineStyle.Dotted });
+  }
+  return levels;
+}
+
 // Do not replace filled support/resistance/FVG zones with line-only overlays;
 // this filled-zone style is the preferred readable Engine B visual.
-const ENGINE_B_ZONE_STYLE: Record<EngineBZoneCategory, { fill: string; stroke: string }> = {
-  support: { fill: 'rgba(16, 185, 129, 0.18)', stroke: 'rgba(16, 185, 129, 0.55)' },
-  resistance: { fill: 'rgba(244, 63, 94, 0.18)', stroke: 'rgba(244, 63, 94, 0.55)' },
-  fvg_bull: { fill: 'rgba(34, 197, 94, 0.16)', stroke: 'rgba(34, 197, 94, 0.50)' },
-  fvg_bear: { fill: 'rgba(248, 113, 113, 0.16)', stroke: 'rgba(248, 113, 113, 0.50)' },
-  ob_bull: { fill: 'rgba(20, 184, 166, 0.14)', stroke: 'rgba(20, 184, 166, 0.50)' },
-  ob_bear: { fill: 'rgba(251, 113, 133, 0.14)', stroke: 'rgba(251, 113, 133, 0.50)' },
-};
-
-function pushZoneFromPair(
-  zones: EngineBZoneFill[],
-  category: EngineBZoneCategory,
-  upper: number | null,
-  lower: number | null,
-) {
-  if (upper == null && lower == null) return;
-  const top = upper ?? lower!;
-  const bottom = lower ?? upper!;
-  if (!Number.isFinite(top) || !Number.isFinite(bottom)) return;
-  const style = ENGINE_B_ZONE_STYLE[category];
-  zones.push({
-    top: Math.max(top, bottom),
-    bottom: Math.min(top, bottom),
-    fill: style.fill,
-    stroke: style.stroke,
-    category,
-  });
-}
-
-function buildEngineBZones(payload: EngineBOverlayPayload | null, enabled: boolean): EngineBZoneFill[] {
-  if (!enabled || payload?.overlay_source !== 'engine_b') return [];
-  const zones: EngineBZoneFill[] = [];
-
-  const support = payload.nearest_support_zone;
-  if (support) {
-    pushZoneFromPair(
-      zones,
-      'support',
-      firstNumber(support.upper, support.level),
-      firstNumber(support.lower, support.level),
-    );
-  }
-
-  const resistance = payload.nearest_resistance_zone;
-  if (resistance) {
-    pushZoneFromPair(
-      zones,
-      'resistance',
-      firstNumber(resistance.upper, resistance.level),
-      firstNumber(resistance.lower, resistance.level),
-    );
-  }
-
-  for (const zone of (payload.active_fvgs || []).filter((item) => !item?.mitigated).slice(0, 2)) {
-    const top = firstNumber(zone.top);
-    const bottom = firstNumber(zone.bottom);
-    if (top == null || bottom == null) continue;
-    const type = typeof zone.type === 'string' ? zone.type.toLowerCase() : '';
-    pushZoneFromPair(zones, type.includes('bull') ? 'fvg_bull' : 'fvg_bear', top, bottom);
-  }
-
-  for (const zone of (payload.order_blocks || []).filter((item) => !item?.mitigated).slice(0, 2)) {
-    const top = firstNumber(zone.top);
-    const bottom = firstNumber(zone.bottom);
-    if (top == null || bottom == null) continue;
-    const type = typeof zone.type === 'string' ? zone.type.toLowerCase() : '';
-    pushZoneFromPair(zones, type.includes('bull') ? 'ob_bull' : 'ob_bear', top, bottom);
-  }
-
-  return zones;
-}
-
 // Engine B single-level markers that survive in clean mode as thin colored lines
 // (no axis labels). Zone-style overlays (support/resistance/FVG/OB) are skipped
 // here because the band primitive covers them.
@@ -1477,92 +1474,6 @@ function resolveRightEdgeLabels(
 // ISeriesPrimitive that paints translucent horizontal bands for Engine B zones
 // across the full pane width. Drawn at z-order 'bottom' so candles remain
 // readable on top of the band fill.
-class EngineBZonePaneView implements IPrimitivePaneView {
-  private readonly primitive: EngineBZonePrimitive;
-
-  constructor(primitive: EngineBZonePrimitive) {
-    this.primitive = primitive;
-  }
-
-  zOrder(): 'bottom' { return 'bottom'; }
-
-  renderer(): IPrimitivePaneRenderer | null {
-    return new EngineBZoneRenderer(this.primitive);
-  }
-}
-
-class EngineBZoneRenderer implements IPrimitivePaneRenderer {
-  private readonly primitive: EngineBZonePrimitive;
-
-  constructor(primitive: EngineBZonePrimitive) {
-    this.primitive = primitive;
-  }
-
-  draw(target: CanvasRenderingTarget2D): void {
-    const zones = this.primitive.zones();
-    const series = this.primitive.series();
-    if (!series || zones.length === 0) return;
-
-    // Do not replace filled support/resistance/FVG zones with line-only overlays;
-    // this filled-zone style is the preferred readable Engine B visual.
-    target.useMediaCoordinateSpace(({ context, mediaSize }) => {
-      for (const zone of zones) {
-        const yTop = series.priceToCoordinate(zone.top);
-        const yBot = series.priceToCoordinate(zone.bottom);
-        if (yTop == null || yBot == null) continue;
-        const y1 = Math.min(yTop, yBot);
-        const y2 = Math.max(yTop, yBot);
-        const h = Math.max(1, y2 - y1);
-        context.save();
-        context.fillStyle = zone.fill;
-        context.fillRect(0, y1, mediaSize.width, h);
-        context.strokeStyle = zone.stroke;
-        context.lineWidth = 1;
-        context.beginPath();
-        context.moveTo(0, y1 + 0.5);
-        context.lineTo(mediaSize.width, y1 + 0.5);
-        context.moveTo(0, y2 - 0.5);
-        context.lineTo(mediaSize.width, y2 - 0.5);
-        context.stroke();
-        context.restore();
-      }
-    });
-  }
-}
-
-class EngineBZonePrimitive implements ISeriesPrimitive<Time> {
-  private _series: ISeriesApi<'Candlestick', Time> | null = null;
-  private _requestUpdate: (() => void) | null = null;
-  private _zones: EngineBZoneFill[] = [];
-  private readonly _paneViews: readonly IPrimitivePaneView[];
-
-  constructor() {
-    this._paneViews = [new EngineBZonePaneView(this)];
-  }
-
-  attached({ series, requestUpdate }: SeriesAttachedParameter<Time>): void {
-    this._series = series as ISeriesApi<'Candlestick', Time>;
-    this._requestUpdate = requestUpdate;
-  }
-
-  detached(): void {
-    this._series = null;
-    this._requestUpdate = null;
-  }
-
-  setZones(zones: EngineBZoneFill[]): void {
-    this._zones = zones;
-    this._requestUpdate?.();
-  }
-
-  zones(): EngineBZoneFill[] { return this._zones; }
-  series(): ISeriesApi<'Candlestick', Time> | null { return this._series; }
-
-  updateAllViews(): void { /* views read directly from primitive state */ }
-
-  paneViews(): readonly IPrimitivePaneView[] { return this._paneViews; }
-}
-
 function normalizeSwingText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const text = value.replace(/_/g, ' ').trim();
@@ -2095,10 +2006,12 @@ function EngineBSidePanel({
   signal,
   liveTick,
   engineBOverlay,
+  engineBOverlayStatus,
 }: {
   signal: EngineASignal | null;
   liveTick: LiveTick | null;
   engineBOverlay: EngineBOverlayPayload | null;
+  engineBOverlayStatus: string;
 }) {
   const naked = asRecord(signal?.naked_data ?? signal?.engine_b);
   const bBreakdown = engineBScoreBreakdown(signal as Record<string, unknown>);
@@ -2158,13 +2071,14 @@ function EngineBSidePanel({
         <NumberRow label="RR" value={rr} />
       </section>
 
-      {engineBOverlay?.overlay_source === 'engine_b' && (
-        <section className="space-y-1 rounded-md border border-border/60 p-2 text-[11px]">
-          <div className="font-semibold text-xs">Chart overlays</div>
-          <TextRow label="Overlay status" value="Ready" />
-          <TextRow label="Computed at" value={engineBOverlay.computed_at} />
-        </section>
-      )}
+      <section className="space-y-1 rounded-md border border-border/60 p-2 text-[11px]">
+        <div className="font-semibold text-xs">Chart overlays</div>
+        <TextRow
+          label="Overlay status"
+          value={engineBOverlayStatus.replace(/_/g, ' ').toUpperCase()}
+        />
+        <TextRow label="Computed at" value={engineBOverlay?.computed_at} />
+      </section>
     </aside>
   );
 }
@@ -2382,7 +2296,6 @@ export default function TVChartPanel() {
   } = useStore();
   const { data: scanSettings } = useApiPoll<{ settings?: { AI_CHART_REVIEW_PRIMARY_ENGINE?: string } }>('/api/scan-settings', 60_000);
   const chartPrimaryEngine = String(scanSettings?.settings?.AI_CHART_REVIEW_PRIMARY_ENGINE || 'A').toUpperCase() === 'B' ? 'B' : 'A';
-  const useEngineBPrimary = chartPrimaryEngine === 'B';
   const { data: health } = useApiPoll<{ paper_mode?: boolean }>('/api/health', 60_000);
   const { priceEntryFor } = useLivePrices();
   const [pair, setPair] = useState('EURUSD');
@@ -2399,6 +2312,18 @@ export default function TVChartPanel() {
   const [volumeBars, setVolumeBars] = useState(true);
   const [volumeMa, setVolumeMa] = useState(true);
   const [engineAParityVisible, setEngineAParityVisible] = useState(false);
+  const [intentSignal, setIntentSignal] = useState<EngineASignal | null>(null);
+  const intentSignalMatchesPair = Boolean(
+    intentSignal
+      && symbolKey(displaySymbol(intentSignal) || intentSignal.symbol || intentSignal.pair)
+        === symbolKey(pair),
+  );
+  const intentPrimaryEngine = tvChartIntent?.primaryEngine
+    ?? (intentSignalMatchesPair && intentSignal
+      ? (isEngineBOnlySignal(intentSignal) ? 'B' : 'A')
+      : null);
+  const effectivePrimaryEngine = intentPrimaryEngine ?? chartPrimaryEngine;
+  const useEngineBPrimary = effectivePrimaryEngine === 'B';
   const [showQuantDebug, setShowQuantDebug] = useState(false);
   const [showEngineBOverlays, setShowEngineBOverlays] = useState(true);
   useEffect(() => {
@@ -2438,11 +2363,12 @@ export default function TVChartPanel() {
   const { exitMode, setExitMode } = useExitModeState('default');
   const [riskPreviewLine, setRiskPreviewLine] = useState<string | null>(null);
   const [timeframeAutoMode, setTimeframeAutoMode] = useState(true);
-  const [intentSignal, setIntentSignal] = useState<EngineASignal | null>(null);
   const lastAppliedRouteKeyRef = useRef<string | null>(null);
   const aiReviewSymbolKeyRef = useRef<string | null>(null);
   const currentPairKeyRef = useRef<string | null>(symbolKey(pair));
   const appliedIntentIdRef = useRef<string | null>(null);
+  const intentCandidateIdRef = useRef<string | null>(null);
+  const intentCandidateRevisionRef = useRef<string | null>(null);
   const pendingAutoReviewRef = useRef(false);
   const autoReviewRanForIntentRef = useRef<string | null>(null);
   const autoReviewEarliestRunAtRef = useRef<number | null>(null);
@@ -2450,6 +2376,13 @@ export default function TVChartPanel() {
   const chartPaintReadyGenerationRef = useRef<string | null>(null);
   const [chartPaintReadyTick, setChartPaintReadyTick] = useState(0);
   const [autoReviewDelayTick, setAutoReviewDelayTick] = useState(0);
+  const [reviewRefreshNonce, setReviewRefreshNonce] = useState(0);
+  const [freshnessNowMs, setFreshnessNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timerId = window.setInterval(() => setFreshnessNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(timerId);
+  }, []);
 
   const candidateRows = useMemo(() => {
     const source = useEngineBPrimary ? scanCacheB : scanCacheA;
@@ -2458,8 +2391,8 @@ export default function TVChartPanel() {
       : [];
   }, [useEngineBPrimary, scanCacheA, scanCacheB]);
   const intentCandidateRows = useMemo(
-    () => (intentSignal ? [intentSignal, ...candidateRows] : candidateRows),
-    [intentSignal, candidateRows],
+    () => (intentSignalMatchesPair && intentSignal ? [intentSignal, ...candidateRows] : candidateRows),
+    [intentSignalMatchesPair, intentSignal, candidateRows],
   );
   const defaultCandidate = useMemo(
     () => (useEngineBPrimary ? pickEngineBCandidate(intentCandidateRows) : pickEngineACandidate(intentCandidateRows)),
@@ -2477,25 +2410,46 @@ export default function TVChartPanel() {
   const currentSymbolKey = symbolKey(pair);
   const timeframeRoute = useMemo(() => reviewTimeframeRoute(aiReview), [aiReview]);
   const timeframeRouteLabel = useMemo(() => timeframeRouteDisplay(timeframeRoute), [timeframeRoute]);
-  const engineBDirection = normalizeDirection(chartCandidate?.direction) === 'SHORT' ? 'SHORT' : 'LONG';
+  const engineBIdentity = useMemo(() => engineBOverlayIdentity(chartCandidate), [chartCandidate]);
+  const engineBDirection = engineBIdentity.direction;
+  const engineBStyle = engineBIdentity.style;
+  const engineBOverlayEnabled = useEngineBPrimary || showEngineBOverlays;
+  const engineBOverlayExpected = engineBOverlayEnabled && Boolean(engineBDirection && engineBStyle);
   const isCryptoChart = chartPayload?.asset_group === 'crypto' || chartPayload?.pairType === 'crypto';
   const showVwapOnChart = isCryptoChart || Boolean(chartPayload?.engine_a_vwap_filter_enabled);
-  const engineBOverlayPendingForReview = showEngineBOverlays && engineBOverlayLoading;
-  const engineBOverlayStatus = !showEngineBOverlays
+  const engineBOverlayPendingForReview = engineBOverlayExpected && engineBOverlayLoading;
+  const engineBOverlayAgeSec = overlayAgeSeconds(engineBOverlay?.source_candle_ts, freshnessNowMs)
+    ?? firstNumber(engineBOverlay?.source_age_seconds);
+  const engineBOverlayStale = engineBOverlayAgeSec != null
+    && engineBOverlayAgeSec > engineBOverlayStaleThresholdSeconds(engineBOverlay);
+  const engineBOverlayStatus = !engineBOverlayEnabled
     ? 'disabled'
+    : !engineBOverlayExpected
+      ? 'unavailable'
     : engineBOverlayLoading
       ? 'loading'
       : engineBOverlay?.overlay_source === 'engine_b'
-        ? 'ready'
+        ? engineBOverlayAgeSec == null
+          ? 'unavailable'
+          : engineBOverlayStale
+            ? 'stale'
+            : 'ready'
         : engineBOverlayError
           ? 'error'
           : 'unavailable';
-  const engineBOverlayAgeSec = overlayAgeSeconds(engineBOverlay?.computed_at);
-  const engineBOverlayStale =
-    engineBOverlayStatus === 'ready'
-    && engineBOverlayAgeSec != null
-    && engineBOverlayAgeSec > ENGINE_B_OVERLAY_STALE_SEC;
+  const engineBOverlayRenderable = engineBOverlayStatus === 'ready';
   const lastCandleConfirmed = candles?.length ? candles[candles.length - 1]?.confirmed : null;
+  const lastChartCandleTs = chartPayload?.last_candle_ts ?? candles?.[candles.length - 1]?.t ?? null;
+  const lastChartCandleAgeSec = overlayAgeSeconds(lastChartCandleTs, freshnessNowMs);
+  const chartCandleStaleThresholdSec = Math.max(
+    300,
+    (backendTf ? TF_SECONDS[backendTf] ?? 0 : 0) * 2.5,
+  );
+  const chartDataStatus = lastChartCandleAgeSec == null
+    ? 'unavailable'
+    : lastChartCandleAgeSec > chartCandleStaleThresholdSec
+      ? 'stale'
+      : 'ready';
   const chartPayloadLiveTick = useMemo(() => liveTickFromChartPayload(chartPayload), [chartPayload]);
   const chartTickLiveTick = useMemo(() => liveTickFromChartPayload(chartTickPayload), [chartTickPayload]);
   const sharedLiveTick = useMemo(() => liveTickFromEntry(priceEntryFor(pair)), [pair, priceEntryFor]);
@@ -2558,8 +2512,12 @@ export default function TVChartPanel() {
     { key: 'symbol', label: pair, title: `Symbol ${pair}` },
     { key: 'tf', label: backendTf || timeframe, title: `Timeframe ${backendTf || timeframe}` },
     { key: 'asset', label: assetGroupLabel, title: `Asset group ${assetGroupLabel}` },
-    { key: 'engine', label: 'Engine A', title: 'Engine A chart surface' },
-  ], [pair, backendTf, timeframe, assetGroupLabel]);
+    {
+      key: 'engine',
+      label: `Engine ${effectivePrimaryEngine}`,
+      title: `Engine ${effectivePrimaryEngine} primary review surface`,
+    },
+  ], [pair, backendTf, timeframe, assetGroupLabel, effectivePrimaryEngine]);
   const chartFeedDiagnosticsChips = useMemo((): ChartFeedHeaderChipSpec[] => {
     const chips: ChartFeedHeaderChipSpec[] = [];
     if (executionProviderLabel) {
@@ -2641,16 +2599,43 @@ export default function TVChartPanel() {
     quantVolumeBars,
     quantVolumeMa,
   ]);
+  const engineBIdentityBlockReason = useEngineBPrimary && (!engineBDirection || !engineBStyle)
+    ? 'Engine B candidate direction/style provenance is unavailable; select a current Engine B candidate.'
+    : null;
+  const engineBOverlayBlockReason = engineBIdentityBlockReason
+    ?? (engineBOverlayExpected
+      && !engineBOverlayLoading
+      && engineBOverlayStatus !== 'ready'
+      ? engineBOverlayStatus === 'stale'
+        ? 'Engine B overlay source candle is stale; refresh the candidate before review.'
+        : engineBOverlayError || 'Engine B overlay source provenance is unavailable.'
+      : null);
+  const chartDataBlockReason = chartDataStatus === 'ready'
+    ? null
+    : chartDataStatus === 'stale'
+      ? 'Chart candle source is stale for the selected timeframe; refresh before review.'
+      : 'Chart candle timestamp provenance is unavailable.';
   const chartReviewPendingForReview =
     loading ||
     engineBOverlayPendingForReview ||
+    Boolean(engineBOverlayBlockReason) ||
+    Boolean(chartDataBlockReason) ||
     !candles?.length ||
     !chartPaintReadyForReview ||
     !chartIndicatorsReadyForReview;
+  const chartReviewActionPending =
+    loading
+    || engineBOverlayPendingForReview
+    || !candles?.length
+    || !chartPaintReadyForReview
+    || !chartIndicatorsReadyForReview;
+  const chartReviewRefreshNeeded = !engineBIdentityBlockReason
+    && Boolean(chartDataBlockReason || engineBOverlayBlockReason);
   const chartReviewBlockReason = chartReviewPendingForReview
     ? resolveChartReviewBlockReason({
         loading,
         engineBOverlayPending: engineBOverlayPendingForReview,
+        engineBOverlayBlock: chartDataBlockReason ?? engineBOverlayBlockReason,
         hasCandles: Boolean(candles?.length),
         chartPaintReady: chartPaintReadyForReview,
         chartIndicatorsReady: chartIndicatorsReadyForReview,
@@ -2724,10 +2709,10 @@ export default function TVChartPanel() {
       dema200: quantDema200,
       vwap: quantVwap,
       emaLabels,
-      engineBEnabled: showEngineBOverlays,
+      engineBEnabled: engineBOverlayRenderable,
       engineBPayload: engineBOverlay,
     }),
-    [isCryptoChart, showVwapOnChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, emaLabels, showEngineBOverlays, engineBOverlay],
+    [isCryptoChart, showVwapOnChart, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, emaLabels, engineBOverlayRenderable, engineBOverlay],
   );
 
   // Derived preset label: "all" only when every indicator is on, otherwise "custom".
@@ -2778,9 +2763,9 @@ export default function TVChartPanel() {
     setEma200(true);
     setDema200(!isCrypto);
     setVwapEnabled(isCrypto);
-    setAtr14(true);
+    setAtr14(!isCrypto);
     setRsi14(true);
-    setAdx14(isCrypto);
+    setAdx14(false);
     setVolumeBars(isCrypto);
     setVolumeMa(isCrypto);
   };
@@ -2792,6 +2777,8 @@ export default function TVChartPanel() {
   useEffect(() => {
     if (!tvChartIntent?.id || tvChartIntent.id === appliedIntentIdRef.current) return;
     appliedIntentIdRef.current = tvChartIntent.id;
+    intentCandidateIdRef.current = tvChartIntent.candidateId ?? null;
+    intentCandidateRevisionRef.current = tvChartIntent.candidateRevision ?? null;
     const intentSymbol = String(tvChartIntent.symbol || '').toUpperCase().trim();
     if (!intentSymbol) return;
     setIntentSignal(isEngineSignalLike(tvChartIntent.signal) ? tvChartIntent.signal : null);
@@ -2819,9 +2806,9 @@ export default function TVChartPanel() {
       setEma200(true);
       setDema200(!isCrypto);
       setRsi14(true);
-      setAtr14(true);
+      setAtr14(!isCrypto);
       setVwapEnabled(isCrypto);
-      setAdx14(isCrypto);
+      setAdx14(false);
       setVolumeBars(isCrypto);
       setVolumeMa(isCrypto);
     }
@@ -2838,7 +2825,7 @@ export default function TVChartPanel() {
   }, [tvChartIntent, clearTvChartIntent, currentSymbolKey]);
 
   useEffect(() => {
-    if (!pendingAutoReviewRef.current || loading || !candles?.length || aiReviewLoading || engineBOverlayPendingForReview) return;
+    if (!pendingAutoReviewRef.current || chartReviewPendingForReview || aiReviewLoading) return;
     const generation = chartRenderGeneration;
     if (!generation || !chartPaintReadyForReview || !chartIndicatorsReadyForReview) return;
     const intentId = appliedIntentIdRef.current;
@@ -2864,6 +2851,7 @@ export default function TVChartPanel() {
     candles,
     aiReviewLoading,
     engineBOverlayPendingForReview,
+    chartReviewPendingForReview,
     chartRenderGeneration,
     chartPaintReadyForReview,
     chartIndicatorsReadyForReview,
@@ -3002,9 +2990,7 @@ export default function TVChartPanel() {
         isEngineBOnly,
         engineBOverlay: isEngineBOnly
           ? ((chartCandidate.naked_data ?? chartCandidate.engine_b) as Record<string, unknown> | undefined)
-          : engineBOverlay
-            ? ({ ...engineBOverlay } as Record<string, unknown>)
-            : undefined,
+          : undefined,
         pipMode: String(chartCandidate.style || 'swing'),
         volumeMode,
         sizingOverride,
@@ -3132,7 +3118,7 @@ export default function TVChartPanel() {
     return () => {
       cancelled = true;
     };
-  }, [pair, backendTf]);
+  }, [pair, backendTf, reviewRefreshNonce]);
 
   useEffect(() => {
     if (!pair || !backendTf || !isBybitCryptoExecution(chartPayload)) {
@@ -3159,9 +3145,10 @@ export default function TVChartPanel() {
   }, [pair, backendTf, chartPayload?.asset_group, chartPayload?.execution_provider]);
 
   useEffect(() => {
-    if (!pair || !backendTf) {
+    if (!pair || !backendTf || !engineBOverlayEnabled || !engineBDirection || !engineBStyle) {
       setEngineBOverlay(null);
       setEngineBOverlayError(null);
+      setEngineBOverlayLoading(false);
       return;
     }
     let cancelled = false;
@@ -3169,8 +3156,9 @@ export default function TVChartPanel() {
     setEngineBOverlayError(null);
     const url =
       `/api/engine-b-overlays?symbol=${encodeURIComponent(pair)}` +
-      `&tf=${encodeURIComponent(backendTf)}` +
-      `&direction=${encodeURIComponent(engineBDirection)}&style=auto`;
+      `&chart_tf=${encodeURIComponent(backendTf)}` +
+      `&direction=${encodeURIComponent(engineBDirection)}` +
+      `&style=${encodeURIComponent(engineBStyle)}`;
     apiClient
       .getJson(url)
       .then((res) => {
@@ -3194,7 +3182,10 @@ export default function TVChartPanel() {
     return () => {
       cancelled = true;
     };
-  }, [pair, backendTf, engineBDirection]);
+  // Engine B structure is policy-timeframe derived, so chart TF changes do not
+  // recompute an identical overlay. A review refresh nonce still forces a fresh
+  // source analysis immediately before capture.
+  }, [pair, engineBOverlayEnabled, engineBDirection, engineBStyle, reviewRefreshNonce]);
 
   // --- Chart lifecycle ---------------------------------------------
   // Pane structure depends on which sub-pane studies are on; recreate the chart
@@ -3204,6 +3195,7 @@ export default function TVChartPanel() {
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const engineBMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const engineBPriceLinesRef = useRef<IPriceLine[]>([]);
+  const engineAPriceLinesRef = useRef<IPriceLine[]>([]);
   const engineBZonePrimitiveRef = useRef<EngineBZonePrimitive | null>(null);
   const rightEdgeLabelPrimitiveRef = useRef<ChartRightEdgeLabelPrimitive | null>(null);
   const chartCaptureRef = useRef<HTMLDivElement | null>(null);
@@ -3324,7 +3316,7 @@ export default function TVChartPanel() {
   async function runAIReview() {
     if (aiReviewLoading) return;
     if (chartReviewPendingForReview) {
-      setChartError('Chart is still preparing indicators for review');
+      setChartError(chartReviewBlockReason || 'Chart is still preparing indicators for review');
       return;
     }
     setAiReviewError(null);
@@ -3344,66 +3336,65 @@ export default function TVChartPanel() {
     try {
       const dataUrl = await canvasToDataUrl(downscaled);
       const tfForBackend = TF_BACKEND_MAP[timeframe] || timeframe;
-      const visibleRange = chartRef.current?.timeScale().getVisibleRange() ?? null;
-      const intentSymbolKey = symbolKey(displaySymbol(intentSignal) || intentSignal?.symbol || intentSignal?.pair);
-      const pairSymbolKey = symbolKey(pair);
-      const engineBReviewIntent =
-        (pairSymbolKey != null && intentSymbolKey === pairSymbolKey && isEngineBPrimarySignal(intentSignal))
-        || isEngineBPrimarySignal(chartCandidate);
-      const engineBOverlayExpected = engineBReviewIntent && showEngineBOverlays;
-      const engineBOverlayRendered = engineBOverlayExpected && engineBOverlay?.overlay_source === 'engine_b';
+      const logicalRange = chartRef.current?.timeScale().getVisibleLogicalRange() ?? null;
+      const visibleFromIndex = logicalRange
+        ? Math.max(0, Math.floor(logicalRange.from))
+        : Math.max(0, studySnapshot.rows.length - VISIBLE_BAR_COUNT);
+      const visibleToIndex = logicalRange
+        ? Math.min(studySnapshot.rows.length - 1, Math.ceil(logicalRange.to))
+        : studySnapshot.rows.length - 1;
+      const visibleRows = visibleToIndex >= visibleFromIndex
+        ? studySnapshot.rows.slice(visibleFromIndex, visibleToIndex + 1)
+        : [];
+      const engineBOverlayRendered = engineBOverlayRenderable;
       const overlays: string[] = ['candles'];
-      if (engineBOverlayExpected) overlays.push('engine_b');
+      if (engineBOverlayRendered) overlays.push('engine_b');
       if (quantVolumeBars) overlays.push('volume');
       if (quantVwap) overlays.push('vwap');
-      if (quantEma20) overlays.push('ema20');
-      if (quantEma21) overlays.push('ema21');
-      if (quantEma50) overlays.push('ema50');
-      if (quantEma200) overlays.push('ema200');
-      if (quantDema200) overlays.push('dema200');
-      if (quantAtr14) overlays.push('atr14');
-      if (quantRsi14) overlays.push('rsi14');
-      if (quantAdx14) overlays.push('adx14');
-      const priceValues = (candles ?? [])
-        .flatMap((row) => [toNum(row.l, NaN), toNum(row.h, NaN)])
+      if (quantEma20 || quantEma21) overlays.push(`ema${emaPeriods.trend}`);
+      if (quantEma50) overlays.push(`ema${emaPeriods.momentum}`);
+      if (quantEma200) overlays.push(`ema${emaPeriods.long}`);
+      if (quantDema200) overlays.push(`dema${emaPeriods.long}`);
+      if (quantAtr14) overlays.push(`atr${indicatorPeriods.atr}`);
+      if (quantRsi14) overlays.push(`rsi${indicatorPeriods.rsi}`);
+      if (quantAdx14) overlays.push(`adx${indicatorPeriods.adx}`);
+      const priceValues = visibleRows
+        .flatMap((row) => [row.low, row.high])
         .filter((value) => Number.isFinite(value));
+      const engineBOverlayCount = !engineBOverlayRendered
+        ? 0
+        : chartMode === 'clean'
+          ? buildEngineBZones(engineBOverlay, true).length
+            + engineBSingleLevelLines(engineBOverlay, true).length
+            + engineBMarkers(engineBOverlay, visibleRows, true).length
+          : engineBOverlayLines(engineBOverlay, true).length
+            + engineBMarkers(engineBOverlay, visibleRows, true).length;
       const renderedLayerState = {
         candles: true,
         engine_b: Boolean(engineBOverlayRendered),
         volume: Boolean(quantVolumeBars),
         volumeMa: Boolean(quantVolumeBars && quantVolumeMa),
         vwap: Boolean(quantVwap),
-        ema20: Boolean(quantEma20),
-        ema21: Boolean(quantEma21),
-        ema50: Boolean(quantEma50),
-        ema200: Boolean(quantEma200),
-        dema200: Boolean(quantDema200),
-        atr14: Boolean(quantAtr14),
-        rsi14: Boolean(quantRsi14),
-        adx14: Boolean(quantAdx14),
+        [`ema${emaPeriods.trend}`]: Boolean(quantEma20 || quantEma21),
+        [`ema${emaPeriods.momentum}`]: Boolean(quantEma50),
+        [`ema${emaPeriods.long}`]: Boolean(quantEma200),
+        [`dema${emaPeriods.long}`]: Boolean(quantDema200),
+        [`atr${indicatorPeriods.atr}`]: Boolean(quantAtr14),
+        [`rsi${indicatorPeriods.rsi}`]: Boolean(quantRsi14),
+        [`adx${indicatorPeriods.adx}`]: Boolean(quantAdx14),
       };
       const chartSnapshot: AIChartReviewChartSnapshot = {
-        renderedLayers: [
-          'candles',
-          ...(engineBOverlayRendered ? ['engine_b'] : []),
-          ...(quantVolumeBars ? ['volume'] : []),
-          ...(quantVwap ? ['vwap'] : []),
-          ...(quantEma20 ? ['ema20'] : []),
-          ...(quantEma21 ? ['ema21'] : []),
-          ...(quantEma50 ? ['ema50'] : []),
-          ...(quantEma200 ? ['ema200'] : []),
-          ...(quantDema200 ? ['dema200'] : []),
-          ...(quantAtr14 ? ['atr14'] : []),
-          ...(quantRsi14 ? ['rsi14'] : []),
-          ...(quantAdx14 ? ['adx14'] : []),
-        ],
-        visibleRange: visibleRange
+        renderedLayers: overlays,
+        visibleRange: visibleRows.length
           ? {
-              from: visibleRange.from != null ? String(visibleRange.from) : null,
-              to: visibleRange.to != null ? String(visibleRange.to) : null,
+              from: String(visibleRows[0].time),
+              to: String(visibleRows[visibleRows.length - 1].time),
             }
           : null,
-        visibleCandleCount: candles?.length ?? 0,
+        visibleCandleCount: visibleRows.length,
+        lastCandleTs: lastChartCandleTs,
+        lastCandleAgeSec: lastChartCandleAgeSec,
+        chartDataStatus,
         indicatorLayerStates: {
           engineB: engineBOverlayRendered,
           volume: Boolean(quantVolumeBars),
@@ -3418,17 +3409,16 @@ export default function TVChartPanel() {
           rsi14: Boolean(quantRsi14),
           adx14: Boolean(quantAdx14),
         },
-        engineBOverlayCount:
-          engineBOverlayRendered
-            ? engineBOverlayLines(engineBOverlay, true).length + buildEngineBZones(engineBOverlay, true).length
-            : 0,
+        engineBOverlayCount,
         engineBContext: engineBOverlayRendered
             ? (engineBOverlay as Record<string, unknown>)
             : null,
         engineBOverlayStatus,
+        engineBOverlayAgeSec,
         engineBOverlayError: engineBOverlayError ?? null,
         engineBOverlayMeta: engineBOverlayExpected ? {
-          chartTimeframe: firstString(engineBOverlay?.chart_timeframe, engineBOverlay?.timeframe),
+          chartTimeframe: tfForBackend,
+          sourceTimeframe: firstString(engineBOverlay?.chart_timeframe, engineBOverlay?.timeframe),
           engineBStyle: firstString(engineBOverlay?.engine_b_style),
           overlaySource: firstString(engineBOverlay?.overlay_source),
           sourceTimeframes: engineBOverlay?.source_timeframes
@@ -3451,24 +3441,37 @@ export default function TVChartPanel() {
         // the backend can flag chart-vs-Engine-A divergence. Not trusted for scoring.
         chartIndicators: {
           timeframe: tfForBackend,
-          emaTrend: studySnapshot.latest.ema21 ?? null,
+          emaTrend: (isCryptoChart ? studySnapshot.latest.ema21 : studySnapshot.latest.ema20) ?? null,
           ema50: studySnapshot.latest.ema50 ?? null,
           ema200: studySnapshot.latest.ema200 ?? null,
           rsi14: studySnapshot.latest.rsi14 ?? null,
           atr14: studySnapshot.latest.atr14 ?? null,
           adx14: studySnapshot.latest.adx14 ?? null,
+          periods: {
+            ema: emaPeriods,
+            rsi: indicatorPeriods.rsi,
+            adx: indicatorPeriods.adx,
+            atr: indicatorPeriods.atr,
+            source: 'server_indicator_periods',
+          },
         },
       };
-      const candidateStyle = firstString(chartCandidate?.style)?.toLowerCase();
+      const candidateStyle = normalizeReviewStyle(
+        chartCandidate?.horizon ?? chartCandidate?.style ?? chartCandidate?.trade_style,
+      );
+      const normalizedCandidateDirection = normalizeDirection(chartCandidate?.direction);
+      const candidateDirection = normalizedCandidateDirection === 'LONG' || normalizedCandidateDirection === 'SHORT'
+        ? normalizedCandidateDirection
+        : undefined;
+      const intentMatchesCurrentSymbol = symbolKey(
+        displaySymbol(intentSignal) || intentSignal?.symbol || intentSignal?.pair,
+      ) === symbolKey(pair);
       const scoringProfile = asRecord(chartCandidate?.scoringProfile);
       const meta = buildScreenshotMeta({
         width: downscaled.width,
         height: downscaled.height,
         chart_timeframe: tfForBackend,
-        analyze_style:
-          candidateStyle && ['scalp', 'intraday', 'swing'].includes(candidateStyle)
-            ? candidateStyle
-            : undefined,
+        analyze_style: candidateStyle ?? undefined,
         scoring_timeframes: Array.isArray(chartCandidate?.scoringTimeframes)
           ? chartCandidate.scoringTimeframes
           : undefined,
@@ -3487,13 +3490,23 @@ export default function TVChartPanel() {
             chartCandidate?.executionTimeframe,
             scoringProfile.executionTf as string | undefined,
           ) ?? undefined,
-        signal_style: candidateStyle,
-        candidate_direction: normalizeDirection(chartCandidate?.direction) ?? undefined,
-        primary_engine: engineBReviewIntent ? 'B' : undefined,
-        signal_engine: engineBReviewIntent ? 'B' : undefined,
+        signal_style: candidateStyle ?? undefined,
+        candidate_direction: candidateDirection,
+        candidate_id: firstString(
+          intentMatchesCurrentSymbol ? intentCandidateIdRef.current : null,
+          chartCandidate?.signalId,
+          chartCandidate?.id,
+        ) ?? undefined,
+        candidate_revision: firstString(
+          intentMatchesCurrentSymbol ? intentCandidateRevisionRef.current : null,
+          chartCandidate?.timestamp,
+          chartCandidate?.decisionTime,
+        ) ?? undefined,
+        primary_engine: effectivePrimaryEngine,
+        signal_engine: effectivePrimaryEngine,
         overlays,
-        visible_range_start: visibleRange?.from != null ? String(visibleRange.from) : undefined,
-        visible_range_end: visibleRange?.to != null ? String(visibleRange.to) : undefined,
+        visible_range_start: visibleRows.length ? String(visibleRows[0].time) : undefined,
+        visible_range_end: visibleRows.length ? String(visibleRows[visibleRows.length - 1].time) : undefined,
         chart_provider: chartPayload?.chart_provider || chartPayload?.candle_provider || undefined,
         chart_snapshot: chartSnapshot,
         renderedLayers: renderedLayerState,
@@ -3559,10 +3572,30 @@ export default function TVChartPanel() {
   }
 
   function runManualAIReview() {
-    pendingAutoReviewRef.current = false;
-    autoReviewEarliestRunAtRef.current = null;
-    if (autoReviewStatus === 'pending') setAutoReviewStatus('idle');
-    void runAIReview();
+    if (aiReviewLoading) return;
+    if (chartCandidate) {
+      applyEngineAReviewLayout();
+    } else {
+      setShowQuantDebug(true);
+      setEma20(true);
+      setEma21(true);
+      setEma50(true);
+      setEma200(true);
+      setDema200(!isCryptoChart);
+      setVwapEnabled(isCryptoChart);
+      setRsi14(true);
+      setAtr14(!isCryptoChart);
+      setAdx14(false);
+      setVolumeBars(isCryptoChart);
+      setVolumeMa(isCryptoChart);
+    }
+    const manualReviewId = `manual-review-${Date.now()}`;
+    appliedIntentIdRef.current = manualReviewId;
+    autoReviewRanForIntentRef.current = null;
+    pendingAutoReviewRef.current = true;
+    autoReviewEarliestRunAtRef.current = Date.now() + AUTO_REVIEW_CHART_SETTLE_MS;
+    setAutoReviewStatus('pending');
+    setReviewRefreshNonce((nonce) => nonce + 1);
   }
 
   useEffect(() => {
@@ -3616,7 +3649,9 @@ export default function TVChartPanel() {
     // Engine B zone primitive: paints translucent support/resistance/FVG/OB bands
     // under the candles. Lives for the chart instance's lifetime; data pushed via
     // setZones() from the data-push effect below.
-    const zonePrimitive = new EngineBZonePrimitive();
+    const zonePrimitive = new EngineBZonePrimitive(
+      (time) => chart.timeScale().timeToCoordinate(time),
+    );
     candleSeries.attachPrimitive(zonePrimitive);
     engineBZonePrimitiveRef.current = zonePrimitive;
     const labelPrimitive = new ChartRightEdgeLabelPrimitive();
@@ -3702,6 +3737,7 @@ export default function TVChartPanel() {
       candleSeriesRef.current = null;
       engineBMarkersRef.current = null;
       engineBPriceLinesRef.current = [];
+      engineAPriceLinesRef.current = [];
       engineBZonePrimitiveRef.current = null;
       rightEdgeLabelPrimitiveRef.current = null;
       ema20SeriesRef.current = null;
@@ -3732,6 +3768,10 @@ export default function TVChartPanel() {
       candleSeries.removePriceLine(line);
     }
     engineBPriceLinesRef.current = [];
+    for (const line of engineAPriceLinesRef.current) {
+      candleSeries.removePriceLine(line);
+    }
+    engineAPriceLinesRef.current = [];
 
     if (!candles || candles.length === 0) {
       candleSeries.setData([]);
@@ -3756,15 +3796,29 @@ export default function TVChartPanel() {
     const volumes = studySnapshot.volumes;
     const values = studySnapshot.seriesValues;
     candleSeries.setData(rows);
-    engineBMarkersRef.current?.setMarkers(engineBMarkers(engineBOverlay, rows, showEngineBOverlays));
+    if (effectivePrimaryEngine === 'A') {
+      for (const level of engineAPriceLevels(chartCandidate)) {
+        engineAPriceLinesRef.current.push(
+          candleSeries.createPriceLine({
+            price: level.price,
+            color: level.color,
+            lineWidth: 2,
+            lineStyle: level.style ?? LineStyle.Solid,
+            axisLabelVisible: true,
+            title: level.label,
+          }),
+        );
+      }
+    }
+    engineBMarkersRef.current?.setMarkers(engineBMarkers(engineBOverlay, rows, engineBOverlayRenderable));
     if (chartMode === 'clean') {
       // Do not replace filled support/resistance/FVG zones with line-only overlays;
       // this filled-zone style is the preferred readable Engine B visual.
       // Clean mode: render zones as translucent bands via the primitive and keep
       // only single-level structural lines (BOS / CHOCH / breaker) as thin colored
       // lines with no right-axis labels. Identity is conveyed by the legend + label primitive.
-      engineBZonePrimitiveRef.current?.setZones(buildEngineBZones(engineBOverlay, showEngineBOverlays));
-      for (const level of engineBSingleLevelLines(engineBOverlay, showEngineBOverlays)) {
+      engineBZonePrimitiveRef.current?.setZones(buildEngineBZones(engineBOverlay, engineBOverlayRenderable));
+      for (const level of engineBSingleLevelLines(engineBOverlay, engineBOverlayRenderable)) {
         engineBPriceLinesRef.current.push(
           candleSeries.createPriceLine({
             price: level.price,
@@ -3780,7 +3834,7 @@ export default function TVChartPanel() {
       // Debug mode: filled zones hidden; structural levels use the label primitive
       // instead of native right-axis titles to avoid label collisions.
       engineBZonePrimitiveRef.current?.setZones([]);
-      for (const level of engineBOverlayLines(engineBOverlay, showEngineBOverlays)) {
+      for (const level of engineBOverlayLines(engineBOverlay, engineBOverlayRenderable)) {
         engineBPriceLinesRef.current.push(
           candleSeries.createPriceLine({
             price: level.price,
@@ -3796,7 +3850,7 @@ export default function TVChartPanel() {
 
     const paneHeightPx = containerRef.current?.clientHeight ?? chartHeightPx;
     const currentPrice = firstNumber(liveTick?.price, studySnapshot.latest.close);
-    const labelInputs = buildEngineBRightEdgeLabelInputs(engineBOverlay, showEngineBOverlays, chartMode === 'clean');
+    const labelInputs = buildEngineBRightEdgeLabelInputs(engineBOverlay, engineBOverlayRenderable, chartMode === 'clean');
     rightEdgeLabelPrimitiveRef.current?.setLabels(
       resolveRightEdgeLabels(candleSeries, labelInputs, currentPrice, paneHeightPx),
       paneHeightPx,
@@ -3864,7 +3918,7 @@ export default function TVChartPanel() {
     return () => {
       cancelled = true;
     };
-  }, [pair, candles, liveTick, backendTf, isCryptoChart, showVwapOnChart, studySnapshot, chartPayload, candlePriceFormat, engineBOverlay, showEngineBOverlays, chartMode, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
+  }, [pair, candles, liveTick, backendTf, isCryptoChart, showVwapOnChart, studySnapshot, chartPayload, candlePriceFormat, engineBOverlay, engineBOverlayRenderable, chartMode, chartCandidate, effectivePrimaryEngine, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
 
   return (
     <>
@@ -3920,7 +3974,13 @@ export default function TVChartPanel() {
                 </Button>
               ))}
             </div>
-            <IndicatorSwitch label="Engine B overlays" checked={showEngineBOverlays} onCheckedChange={setShowEngineBOverlays} />
+            <IndicatorSwitch
+              label="Engine B overlays"
+              checked={engineBOverlayEnabled}
+              onCheckedChange={(checked) => {
+                if (!useEngineBPrimary || checked) setShowEngineBOverlays(checked);
+              }}
+            />
             <div className="flex items-center gap-1 rounded-md border border-input bg-background p-0.5">
               {(['clean', 'debug'] as const).map((mode) => (
                 <Button
@@ -4041,22 +4101,22 @@ export default function TVChartPanel() {
                 feedChips={chartFeedDiagnosticsChips}
               />
               {(cleanLegendChips.length > 0
-                || (showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b')
-                || (showEngineBOverlays && (engineBOverlayLoading || engineBOverlayError || engineBOverlayStale))) && (
+                || (engineBOverlayEnabled && engineBOverlay?.overlay_source === 'engine_b')
+                || (engineBOverlayEnabled && (engineBOverlayLoading || engineBOverlayError || engineBOverlayStale))) && (
                 <div className="flex flex-wrap items-center gap-1 border-t border-border/30 pt-2">
                   {cleanLegendChips.map((chip) => (
                     <LegendChip key={`legend-${chip.key}`} spec={chip} />
                   ))}
-                  {showEngineBOverlays && engineBOverlay?.overlay_source === 'engine_b' && (
+                  {engineBOverlayEnabled && engineBOverlay?.overlay_source === 'engine_b' && (
                     <CaptureLabel>{`Engine B ${engineBOverlay.overlay_version || 'overlay'}`}</CaptureLabel>
                   )}
-                  {showEngineBOverlays && engineBOverlayLoading && (
+                  {engineBOverlayEnabled && engineBOverlayLoading && (
                     <CaptureLabel>Engine B loading</CaptureLabel>
                   )}
-                  {showEngineBOverlays && engineBOverlayError && (
+                  {engineBOverlayEnabled && engineBOverlayError && (
                     <CaptureLabel>{`Engine B warning ${engineBOverlayError}`}</CaptureLabel>
                   )}
-                  {showEngineBOverlays && engineBOverlayStale && (
+                  {engineBOverlayEnabled && engineBOverlayStale && (
                     <CaptureLabel>{`Engine B stale (${Math.round(engineBOverlayAgeSec ?? 0)}s)`}</CaptureLabel>
                   )}
                 </div>
@@ -4116,12 +4176,20 @@ export default function TVChartPanel() {
                 variant="outline"
                 className="h-8 gap-2 text-xs"
                 onClick={runManualAIReview}
-                disabled={aiReviewLoading || chartReviewPendingForReview}
+                disabled={aiReviewLoading || chartReviewActionPending || Boolean(engineBIdentityBlockReason)}
                 aria-label="Run AI chart review"
-                aria-busy={aiReviewLoading || chartReviewPendingForReview}
+                aria-busy={aiReviewLoading || chartReviewActionPending}
               >
                 <Sparkles className="h-3.5 w-3.5" />
-                {chartReviewPendingForReview ? 'Preparing...' : aiReviewLoading ? 'Reviewing...' : 'AI Review'}
+                {aiReviewLoading
+                  ? 'Reviewing...'
+                  : chartReviewActionPending
+                    ? 'Preparing...'
+                    : chartReviewRefreshNeeded
+                      ? 'Refresh & Review'
+                      : engineBIdentityBlockReason
+                        ? 'Review unavailable'
+                        : 'AI Review'}
               </Button>
               {chartCandidate && (
                 <Button
@@ -4191,6 +4259,7 @@ export default function TVChartPanel() {
                     signal={chartCandidate}
                     liveTick={liveTick}
                     engineBOverlay={engineBOverlay}
+                    engineBOverlayStatus={engineBOverlayStatus}
                   />
                 ) : (
                   <EngineASidePanel signal={chartCandidate} liveTick={liveTick} chartPayload={chartPayload} />

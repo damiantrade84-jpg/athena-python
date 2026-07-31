@@ -36,7 +36,7 @@ import {
 } from '@/lib/athenaFormat';
 import { readEngineBCanonicalGatesFromNaked } from '@/lib/engineBCanonicalGates';
 import { engineAV3DecisionRank, engineAV3ListLabel, isEngineAV3Signal } from '@/lib/engineAV3';
-import { fetchVisionCandlePayload, preferredVisionReviewTf } from '@/lib/visionReview';
+import { preferredVisionReviewTf } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
 import {
   aiLevelOverrideFromReview,
@@ -59,7 +59,6 @@ import {
 import {
   EngineASignalCard,
   EngineBChecklistCard,
-  VisionReviewCard,
   H4ChartCard,
 } from '@/components/athena';
 import AITradingAgentPanel from '@/components/ai/AITradingAgentPanel';
@@ -69,7 +68,6 @@ import type {
   Direction,
   ScanResponse,
   NakedScanResponse,
-  ChartAnalysisResponse,
   AiTextReviewResponse,
 } from '@/types/athena';
 import type { HealthStatus } from '@/types';
@@ -559,11 +557,8 @@ export default function SignalsPanel() {
   const { data: health } = useApiPoll<HealthStatus>('/api/health', 60_000);
   const { post: postScanA, loading: scanningA } = useApiPost<ScanResponse>();
   const { post: postScanB, loading: scanningB } = useApiPost<NakedScanResponse>();
-  const { post: postVision, loading: visionLoading } = useApiPost<ChartAnalysisResponse>();
   const { post: postAiText, loading: textLoading } = useApiPost<AiTextReviewResponse>();
-  const [aiReview, setAiReview] = useState<ChartAnalysisResponse | null>(null);
   const [aiTextReview, setAiTextReview] = useState<AiTextReviewResponse | null>(null);
-  const [aiReviewMode, setAiReviewMode] = useState<'vision' | 'text'>('vision');
   const [agentOpen, setAgentOpen] = useState(false);
   const [executing, setExecuting] = useState(false);
   const { priceFor, ageSecFor, sourceFor } = useLivePrices();
@@ -654,7 +649,6 @@ export default function SignalsPanel() {
     const next = v as EngineSource;
     setFeedEngine(next);
     setDetailTab('overview');
-    setAiReview(null);
     setAiTextReview(null);
     setAgentOpen(false);
     setSelectedId((id) => {
@@ -749,6 +743,11 @@ export default function SignalsPanel() {
       symbol,
       display: sig.display || sig.pair || symbol,
       signal: sig,
+      primaryEngine: isEngineBOnlyRow(row) ? 'B' : 'A',
+      ...(sig.signalId || sig.id ? { candidateId: String(sig.signalId || sig.id) } : {}),
+      ...(sig.timestamp || sig.decisionTime
+        ? { candidateRevision: String(sig.timestamp || sig.decisionTime) }
+        : {}),
       preferredTf: preferredTvChartTf(sig),
       autoReview: true,
       createdAt: new Date().toISOString(),
@@ -776,45 +775,6 @@ export default function SignalsPanel() {
     [selectedRow],
   );
 
-  const runAiReview = useCallback(
-    async (sig: EngineASignal | null) => {
-      if (!sig) return;
-      const sym = sig.symbol || sig.pair || sig.display;
-      if (!sym) {
-        showToast('Selected signal has no symbol', 'error');
-        return;
-      }
-      try {
-        const reviewTf = preferredVisionReviewTf(sig);
-        const candlePayload = await fetchVisionCandlePayload(sym, reviewTf);
-        const result = await postVision('/api/chart-analysis', {
-          symbol: sym,
-          tf: reviewTf,
-          resolvedStyle: sig.style || sig.horizon,
-          signal: sig,
-          engineB: sig.naked_data || sig.engine_b,
-          server_render: true,
-          chart_source: 'signals_panel',
-          ...candlePayload,
-          entry: sig.entry ?? sig.price,
-          sl: sig.sl,
-          tp: sig.tp ?? sig.tp1,
-        });
-        if (!result || (result as ChartAnalysisResponse).error) {
-          showToast(`AI Review failed: ${(result as ChartAnalysisResponse | null)?.error || 'unknown'}`, 'error');
-          setAiReview(null);
-          return;
-        }
-        setAiReview(result);
-        setAiReviewMode('vision');
-        showToast('AI Vision review ready', 'success');
-      } catch (err) {
-        showToast(`AI Review error: ${err instanceof Error ? err.message : 'unknown'}`, 'error');
-      }
-    },
-    [postVision, showToast],
-  );
-
   const runAiTextReview = useCallback(
     async (sig: EngineASignal | null) => {
       if (!sig) return;
@@ -834,7 +794,6 @@ export default function SignalsPanel() {
           return;
         }
         setAiTextReview(result);
-        setAiReviewMode('text');
         showToast('AI Text review ready', 'success');
       } catch (err) {
         showToast(`AI Text Review error: ${err instanceof Error ? err.message : 'unknown'}`, 'error');
@@ -845,7 +804,6 @@ export default function SignalsPanel() {
 
   const handleSelect = useCallback((row: UnifiedRow) => {
     setSelectedId(row.id);
-    setAiReview(null);
     setAiTextReview(null);
     setAgentOpen(false);
     setDetailTab('overview');
@@ -1412,11 +1370,10 @@ export default function SignalsPanel() {
                         size="sm"
                         variant="outline"
                         className="h-8 text-xs gap-1"
-                        onClick={() => runAiReview(selectedRow.signal)}
-                        disabled={visionLoading}
+                        onClick={() => onOpenAndReview(selectedRow)}
                       >
-                        <Eye className={visionLoading ? 'w-3.5 h-3.5 animate-pulse' : 'w-3.5 h-3.5'} />
-                        {visionLoading ? 'AI Vision...' : 'Run AI Vision'}
+                        <Eye className="w-3.5 h-3.5" />
+                        Open TV AI Review
                       </Button>
                       <Button
                         size="sm"
@@ -1437,18 +1394,7 @@ export default function SignalsPanel() {
                         <Bot className="w-3.5 h-3.5" />
                         {agentOpen ? 'Close chat' : 'Discuss with AI'}
                       </Button>
-                      {aiReview?.structured?.right_edge_status && aiReviewMode === 'vision' && (
-                        <Badge
-                          className={
-                            aiReview.structured.right_edge_status === 'CONFIRMS' ? 'badge-long'
-                            : aiReview.structured.right_edge_status === 'POTENTIAL_REVERSAL' ? 'badge-short'
-                            : 'badge-neutral'
-                          }
-                        >
-                          RIGHT EDGE: {aiReview.structured.right_edge_status.replace('_', ' ')}
-                        </Badge>
-                      )}
-                      {aiTextReview?.grade && aiReviewMode === 'text' && (
+                      {aiTextReview?.grade && (
                         <Badge variant="outline" className="text-[10px] uppercase">
                           Grade {aiTextReview.grade}
                         </Badge>
@@ -1464,42 +1410,13 @@ export default function SignalsPanel() {
                       />
                     )}
 
-                    {(aiReview || aiTextReview) && (
-                      <div className="flex items-center gap-1 bg-muted/30 rounded-md p-1 w-fit">
-                        <button
-                          type="button"
-                          onClick={() => setAiReviewMode('vision')}
-                          className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
-                            aiReviewMode === 'vision' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
-                          }`}
-                          disabled={!aiReview}
-                        >
-                          Vision
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setAiReviewMode('text')}
-                          className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
-                            aiReviewMode === 'text' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
-                          }`}
-                          disabled={!aiTextReview}
-                        >
-                          Text
-                        </button>
-                      </div>
-                    )}
-
-                    {!aiReview && !aiTextReview && !agentOpen && (
+                    {!aiTextReview && !agentOpen && (
                       <div className="text-[11px] text-muted-foreground border border-border/40 rounded-md p-3 leading-snug">
                         Run an AI Vision or Text review to compare AI commentary against this signal. AI review is advisory only — it cannot change trade gates or scoring.
                       </div>
                     )}
 
-                    {aiReview && aiReviewMode === 'vision' && (
-                      <VisionReviewCard vision={aiReview} />
-                    )}
-
-                    {aiTextReview && aiReviewMode === 'text' && (
+                    {aiTextReview && (
                       <Card className="border-border/60 bg-card/50">
                         <CardContent className="p-3 space-y-2">
                           <div className="flex items-center justify-between">

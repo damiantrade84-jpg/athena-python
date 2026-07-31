@@ -357,7 +357,12 @@ def _classify_missing_items(
     not_applicable: list[dict[str, str]] = []
     asset_group = _asset_group(engine_a_ctx)
 
-    if not resistance.get("profileLevelsTrusted", True):
+    structure_context = engine_a_ctx.get("structure_context")
+    if not isinstance(structure_context, dict):
+        structure_context = engine_a_ctx.get("engine_b")
+    has_engine_b_structure_context = isinstance(structure_context, dict) and bool(structure_context)
+
+    if has_engine_b_structure_context and not resistance.get("profileLevelsTrusted", True):
         _append_unique(
             not_applicable,
             _not_applicable(

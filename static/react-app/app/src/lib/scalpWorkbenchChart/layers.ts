@@ -67,23 +67,29 @@ export interface ScalpSetupLike {
 }
 
 type EngineBZoneLike = {
-  lower?: number;
-  upper?: number;
-  low?: number;
-  high?: number;
-  level?: number;
+  lower?: number | string | null;
+  upper?: number | string | null;
+  low?: number | string | null;
+  high?: number | string | null;
+  level?: number | string | null;
+  created_at?: string | number | null;
 };
 
 type EngineBBlockLike = {
-  top?: number;
-  bottom?: number;
-  low?: number;
-  high?: number;
-  mitigated?: boolean;
-  type?: string;
+  top?: number | string | null;
+  bottom?: number | string | null;
+  low?: number | string | null;
+  high?: number | string | null;
+  mitigated?: boolean | null;
+  type?: string | null;
+  created_at?: string | number | null;
+  bar_index?: number | null;
 };
 
 export interface EngineBOverlayLike {
+  overlay_source?: string;
+  chart_timeframe?: string;
+  requested_chart_timeframe?: string;
   nearest_support_zone?: EngineBZoneLike | null;
   nearest_resistance_zone?: EngineBZoneLike | null;
   order_blocks?: Array<EngineBBlockLike>;
@@ -133,12 +139,22 @@ function pushLevel(
   levels.push({ label, price, color, style, layer });
 }
 
-function zoneLow(zone: EngineBZoneLike | EngineBBlockLike): number | null | undefined {
-  return (zone as EngineBZoneLike).lower ?? (zone as EngineBBlockLike).bottom ?? zone.low;
+function finiteNumber(value: number | string | null | undefined): number | null {
+  if (value == null || value === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-function zoneHigh(zone: EngineBZoneLike | EngineBBlockLike): number | null | undefined {
-  return (zone as EngineBZoneLike).upper ?? (zone as EngineBBlockLike).top ?? zone.high;
+function zoneLow(zone: EngineBZoneLike | EngineBBlockLike): number | null {
+  return finiteNumber(
+    (zone as EngineBZoneLike).lower ?? (zone as EngineBBlockLike).bottom ?? zone.low,
+  );
+}
+
+function zoneHigh(zone: EngineBZoneLike | EngineBBlockLike): number | null {
+  return finiteNumber(
+    (zone as EngineBZoneLike).upper ?? (zone as EngineBBlockLike).top ?? zone.high,
+  );
 }
 
 function pushZoneLevels(

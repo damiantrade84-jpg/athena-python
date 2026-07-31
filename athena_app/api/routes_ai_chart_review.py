@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -55,6 +56,17 @@ from ai_review.validation import decode_screenshot_bytes, validate_request
 
 log = logging.getLogger("sentinel.ai_chart_review")
 
+_TF_SECONDS = {
+    "M1": 60,
+    "M5": 300,
+    "M15": 900,
+    "M30": 1800,
+    "H1": 3600,
+    "H4": 14400,
+    "D1": 86400,
+    "W1": 604800,
+}
+
 _ALLOWED_REQUEST_KEYS = frozenset(
     {"symbol", "timeframe", "provider", "screenshot_base64", "screenshot_meta"}
 )
@@ -96,6 +108,150 @@ def _resolve_primary_engine(
         if raw not in (None, ""):
             return normalize_chart_review_primary_engine(raw)
     return normalize_chart_review_primary_engine(cfg.get("PRIMARY_ENGINE"))
+
+
+def _symbol_key(value: Any) -> str:
+    raw = str(value or "").strip().upper()
+    if raw.endswith("=X"):
+        raw = raw[:-2]
+    return "".join(ch for ch in raw if ch.isalnum())
+
+
+def _candidate_id(row: dict[str, Any]) -> str | None:
+    value = row.get("signalId") or row.get("signal_id") or row.get("id")
+    return str(value).strip() if value not in (None, "") else None
+
+
+def _candidate_revision(row: dict[str, Any]) -> str | None:
+    value = row.get("timestamp") or row.get("decisionTime") or row.get("scan_timestamp")
+    return str(value).strip() if value not in (None, "") else None
+
+
+def _timestamp_age_seconds(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            ts = float(value)
+            if ts > 10_000_000_000:
+                ts /= 1000.0
+        else:
+            parsed = datetime.fromisoformat(
+                str(value).strip().replace(" ", "T").replace("Z", "+00:00")
+            )
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            ts = parsed.timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(0.0, datetime.now(timezone.utc).timestamp() - ts)
+
+
+def _engine_b_source_fresh(engine_ctx: dict[str, Any]) -> bool:
+    age = _timestamp_age_seconds(engine_ctx.get("latest_candle_ts"))
+    policy = engine_ctx.get("timeframe_policy") or {}
+    trigger_tf = str(
+        policy.get("triggerTf")
+        or policy.get("trigger_tf")
+        or engine_ctx.get("timeframe")
+        or ""
+    ).upper()
+    bucket = _TF_SECONDS.get(trigger_tf)
+    return age is not None and bucket is not None and age <= max(300.0, bucket * 2.5)
+
+
+def _candidate_matches_symbol(row: dict[str, Any], symbol: str) -> bool:
+    target = _symbol_key(symbol)
+    return bool(target) and target in {
+        _symbol_key(row.get("symbol")),
+        _symbol_key(row.get("pair")),
+        _symbol_key(row.get("display")),
+    }
+
+
+def _runtime_rows(runtime: SimpleNamespace, attr: str) -> list[dict[str, Any]]:
+    provider = getattr(runtime, attr, None)
+    if not callable(provider):
+        return []
+    try:
+        rows = provider() or []
+    except Exception:
+        log.exception("Unable to read %s for chart-review candidate lookup", attr)
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _resolve_server_candidate(
+    symbol: str,
+    screenshot_meta: dict[str, Any],
+    cfg: dict[str, Any],
+    runtime: SimpleNamespace,
+) -> tuple[str, dict[str, Any] | None, str | None]:
+    """Resolve a client assertion to an immutable server scan row.
+
+    The browser may identify a candidate, but it never supplies authoritative
+    score, entry, style or direction. Those values come only from the matching
+    row in the server's latest per-engine scan cache.
+    """
+    requested_engine = _resolve_primary_engine(screenshot_meta, cfg)
+    requested_id = str(screenshot_meta.get("candidate_id") or "").strip() or None
+    requested_revision = str(screenshot_meta.get("candidate_revision") or "").strip() or None
+    requested_direction = str(screenshot_meta.get("candidate_direction") or "").strip().upper()
+
+    sources = {
+        "A": _runtime_rows(runtime, "last_engine_a_rows_fn"),
+        "B": _runtime_rows(runtime, "last_engine_b_rows_fn"),
+    }
+    matches: list[tuple[str, dict[str, Any]]] = []
+    for engine, rows in sources.items():
+        for row in rows:
+            if not _candidate_matches_symbol(row, symbol):
+                continue
+            if requested_id and _candidate_id(row) != requested_id:
+                continue
+            if requested_revision and _candidate_revision(row) != requested_revision:
+                continue
+            matches.append((engine, row))
+
+    if requested_id or requested_revision:
+        if not matches:
+            return requested_engine, None, "candidate_not_found_or_revision_changed"
+    else:
+        matches = [item for item in matches if item[0] == requested_engine]
+
+    if requested_direction in {"LONG", "SHORT"}:
+        directed = [
+            item for item in matches
+            if str(item[1].get("direction") or "").upper() == requested_direction
+        ]
+        if directed:
+            matches = directed
+
+    if not matches:
+        return requested_engine, None, None
+
+    engine_matches = [item for item in matches if item[0] == requested_engine]
+    if engine_matches:
+        matches = engine_matches
+    if len(matches) != 1:
+        return requested_engine, None, "candidate_lookup_ambiguous"
+
+    primary_engine, candidate = matches[0]
+    asserted_style = str(
+        screenshot_meta.get("signal_style")
+        or screenshot_meta.get("analyze_style")
+        or ""
+    ).strip().lower()
+    candidate_style = str(candidate.get("horizon") or candidate.get("style") or "").strip().lower()
+    if asserted_style and candidate_style and asserted_style != candidate_style:
+        return primary_engine, None, "candidate_style_mismatch"
+    if requested_direction in {"LONG", "SHORT"}:
+        candidate_direction = str(candidate.get("direction") or "").upper()
+        if candidate_direction and candidate_direction != requested_direction:
+            return primary_engine, None, "candidate_direction_mismatch"
+    if primary_engine != requested_engine:
+        return primary_engine, None, "candidate_engine_mismatch"
+    return primary_engine, candidate, None
 
 
 def _attach_review_input_meta(
@@ -234,7 +390,6 @@ def _attach_timeframe_route(
     *,
     engine_ctx: dict[str, Any],
     ai_review: dict[str, Any],
-    routing_cfg: dict[str, Any] | None,
     primary_engine: str = "A",
 ) -> dict[str, Any]:
     ctx_key = "engine_b_context" if primary_engine == "B" else "engine_a_context"
@@ -254,7 +409,7 @@ def _attach_timeframe_route(
         context_tf=response_ctx.get("timeframe") or response_ctx.get("chart_timeframe"),
         ai_review=ai_review,
         verdict_comparison=comparison if isinstance(comparison, dict) else None,
-        cfg=routing_cfg,
+        policy_roles=response_ctx.get("timeframe_policy"),
         primary_engine=primary_engine,
     )
     response_ctx["timeframe_route"] = route
@@ -339,7 +494,14 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         screenshot_meta = dict(data.get("screenshot_meta") or {})
         provider = _resolve_provider_name(data, cfg, runtime.CONFIG)
 
-        primary_engine = _resolve_primary_engine(screenshot_meta, cfg)
+        primary_engine, origin_signal, candidate_error = _resolve_server_candidate(
+            symbol,
+            screenshot_meta,
+            cfg,
+            runtime,
+        )
+        if candidate_error:
+            return jsonify({"error": candidate_error}), 409
         review_type = _review_type_for_primary(primary_engine)
         chart_review_type = _chart_review_type_label(primary_engine)
 
@@ -351,6 +513,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 resolve_pair_fn=getattr(runtime, "resolve_pair_fn", None),
                 naked_analysis_fn=getattr(runtime, "naked_analysis_fn", None),
                 last_engine_b_rows_fn=getattr(runtime, "last_engine_b_rows_fn", None),
+                origin_signal=origin_signal,
             )
             if engine_ctx is None:
                 return jsonify({"error": "Engine B returned no result"}), 422
@@ -362,6 +525,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 resolve_pair_fn=getattr(runtime, "resolve_pair_fn", None),
                 analyze_pair_fn=getattr(runtime, "analyze_pair_fn", None),
                 btc_bias_fn=getattr(runtime, "btc_bias_fn", None),
+                origin_signal=origin_signal,
             )
             if engine_ctx is None:
                 return jsonify({"error": "Engine A returned no result"}), 422
@@ -376,8 +540,20 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         atr["max_expected_age_seconds"] = freshness.get("max_expected_age_seconds")
 
         mismatch_warnings = evaluate_timestamp_mismatch(engine_ctx, screenshot_meta, cfg)
+        if primary_engine == "B" and not _engine_b_source_fresh(engine_ctx):
+            mismatch_warnings.append(
+                "engine_b_latest_trigger_candle_stale_or_unavailable"
+            )
         overlays = screenshot_meta.get("overlays") or []
         if isinstance(overlays, list) and "engine_b" in overlays:
+            chart_snapshot = screenshot_meta.get("chart_snapshot") or {}
+            overlay_status = (
+                chart_snapshot.get("engineBOverlayStatus")
+                if isinstance(chart_snapshot, dict)
+                else None
+            )
+            if overlay_status != "ready":
+                return jsonify({"error": "engine_b_overlay_not_fresh"}), 409
             struct = engine_ctx.get("structure_context") or {}
             if not isinstance(struct, dict) or not any(
                 struct.get(k)
@@ -413,6 +589,23 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 cached_provider
                 and requested_provider
                 and cached_provider != requested_provider
+            ):
+                dedup = None
+
+        if dedup and origin_signal is not None:
+            ctx_key = "engine_b_context" if primary_engine == "B" else "engine_a_context"
+            cached_ctx = dedup.get(ctx_key) or {}
+            cached_origin = (
+                cached_ctx.get("candidate_origin")
+                if isinstance(cached_ctx, dict)
+                else None
+            )
+            cached_origin = cached_origin if isinstance(cached_origin, dict) else {}
+            if (
+                str(cached_origin.get("candidate_id") or "")
+                != str(_candidate_id(origin_signal) or "")
+                or str(cached_origin.get("revision") or "")
+                != str(_candidate_revision(origin_signal) or "")
             ):
                 dedup = None
 
@@ -461,7 +654,6 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 dedup,
                 engine_ctx=dedup_engine_ctx,
                 ai_review=dedup_ai,
-                routing_cfg=runtime.CONFIG.get("TIMEFRAME_ROUTING"),
                 primary_engine=primary_engine,
             )
             return jsonify(runtime.json_safe(dedup))
@@ -595,7 +787,6 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             response,
             engine_ctx=engine_ctx,
             ai_review=normalized,
-            routing_cfg=runtime.CONFIG.get("TIMEFRAME_ROUTING"),
             primary_engine=primary_engine,
         )
 

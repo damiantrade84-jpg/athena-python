@@ -7,6 +7,7 @@ import {
   computeLevelOverrideRR,
   engineBExecuteBlockReason,
   evaluateTvChartExecuteBlock,
+  isEngineBOnlySignal,
   parseAiLevelString,
 } from '../manualExecuteHelpers';
 import type { AiTextReviewResponse, EngineASignal } from '@/types/athena';
@@ -249,7 +250,7 @@ describe('engine B execute gating', () => {
     expect(payload.engine_b).toEqual(actionable.naked_data);
   });
 
-  it('blocks execute when the AI review refresh no longer confirms Engine B', () => {
+  it('keeps chart AI advisory when its refresh no longer confirms Engine B', () => {
     const actionable = {
       ...bchLike,
       symbol: 'BCHUSDT',
@@ -279,11 +280,57 @@ describe('engine B execute gating', () => {
       aiReview,
       isTestMode: false,
       isPaper: false,
-    })).toBe('Engine B no longer confirmed after AI review');
+    })).toBeNull();
   });
 });
 
 describe('Engine A V3 scanner tier gating', () => {
+  it('keeps explicit Engine A primary when nested Engine B context is attached', () => {
+    const signal = {
+      engine: 'ENGINE_A_V3',
+      naked_data: { score: 4.2, passed: true },
+      engine_b: { score: 4.2, passed: true },
+    } as EngineASignal;
+
+    expect(isEngineBOnlySignal(signal)).toBe(false);
+    const payload = buildQuickExecutePayload({ signal, pipMode: 'intraday' });
+    expect((payload.signal as Record<string, unknown>).engine).toBe('ENGINE_A_V3');
+    expect((payload.signal as Record<string, unknown>).source).toBe('engine_a');
+    expect(payload.engine_b).toEqual({});
+  });
+
+  it('never sends visual-only Engine B overlays with an Engine A execution', () => {
+    const signal = {
+      engine: 'ENGINE_A_V3',
+      symbol: 'EURUSD',
+      direction: 'LONG',
+      entry: 1.1,
+      sl: 1.09,
+      tp1: 1.12,
+      horizon: 'intraday',
+    } as EngineASignal;
+
+    const payload = buildQuickExecutePayload({
+      signal,
+      pipMode: 'intraday',
+      engineBOverlay: { overlay_source: 'engine_b', bos_confirmed: true },
+    });
+
+    expect(payload.engine_b).toEqual({});
+  });
+
+  it('keeps a legacy Engine A scoring row primary when nested Engine B context is attached', () => {
+    const signal = {
+      symbol: 'EURUSD',
+      direction: 'LONG',
+      factorScores: { trend: 0.8 },
+      engineATradeEnabled: true,
+      engine_b: { direction: 'SHORT', score: 7 },
+    } as unknown as EngineASignal;
+
+    expect(isEngineBOnlySignal(signal)).toBe(false);
+  });
+
   it('blocks raw V3 TRADE fields when the scanner tier is watchlist', () => {
     const signal = {
       engine: 'ENGINE_A_V3',
@@ -297,7 +344,7 @@ describe('Engine A V3 scanner tier gating', () => {
     expect(canExecuteEngineASignalTier(signal)).toBe(false);
   });
 
-  it('blocks execute when AI review refresh no longer confirms Engine A', () => {
+  it('keeps chart AI advisory when its refresh no longer confirms Engine A', () => {
     const signal = {
       engine: 'ENGINE_A_V3',
       contractVersion: '3.1.0',
@@ -330,7 +377,7 @@ describe('Engine A V3 scanner tier gating', () => {
       aiReview,
       isTestMode: false,
       isPaper: false,
-    })).toBe('Engine A no longer confirmed after AI review');
+    })).toBeNull();
   });
 
   it('routes a V3 chart review to the policy setup timeframe', async () => {

@@ -7,6 +7,8 @@ from typing import Any, Callable
 
 from market_structure import sanitize_engine_b_structure_profile_fields
 from scoring import get_pair_score_group
+from style_resolver import resolve_auto_style
+from timeframe_policy import resolve_timeframe_policy
 
 from ai_review.engine_a_context import (
     build_engine_b_prompt_context,
@@ -55,13 +57,30 @@ def _pick_best_engine_b_row(rows: list[dict[str, Any]], symbol: str) -> dict[str
     return max(pool, key=lambda r: _to_float(r.get("confluenceScore")) or 0.0)
 
 
-def _resolve_style(screenshot_meta: dict[str, Any] | None, seed: dict[str, Any]) -> str:
+def _resolve_style(
+    screenshot_meta: dict[str, Any] | None,
+    seed: dict[str, Any],
+    pair: dict[str, Any],
+) -> str:
     meta = screenshot_meta or {}
-    for key in ("analyze_style", "signal_style", "style"):
-        raw = str(meta.get(key) or seed.get(key) or "").strip().lower()
+    for key in ("horizon", "style", "selectedStyle", "resolvedStyle"):
+        raw = str(seed.get(key) or "").strip().lower()
         if raw in ("scalp", "intraday", "swing"):
             return raw
-    return "intraday"
+    for key in ("analyze_style", "signal_style", "style"):
+        raw = str(meta.get(key) or "").strip().lower()
+        if raw in ("scalp", "intraday", "swing"):
+            return raw
+    try:
+        score_group = get_pair_score_group(pair)
+    except Exception:
+        score_group = None
+    return resolve_auto_style(
+        "auto",
+        pair,
+        score_group=score_group,
+        asset_type=pair.get("type") or pair.get("asset_type"),
+    )
 
 
 def _resolve_direction(
@@ -110,6 +129,7 @@ def assemble_engine_b_context(
     resolve_pair_fn: Callable[[str], dict[str, Any] | None] | None = None,
     naked_analysis_fn: Callable[..., tuple[Any, Any, str | None]] | None = None,
     last_engine_b_rows_fn: Callable[[], list[dict[str, Any]]] | None = None,
+    origin_signal: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not resolve_pair_fn or not naked_analysis_fn:
         return None
@@ -118,19 +138,30 @@ def assemble_engine_b_context(
     if not pair:
         return None
 
-    seed_row = None
-    if last_engine_b_rows_fn:
+    seed_row = origin_signal if isinstance(origin_signal, dict) else None
+    if seed_row is None and last_engine_b_rows_fn:
         try:
             rows = last_engine_b_rows_fn() or []
         except Exception:
             rows = []
         seed_row = _pick_best_engine_b_row([r for r in rows if isinstance(r, dict)], symbol)
 
-    direction = _resolve_direction(symbol, screenshot_meta, seed_row, last_engine_b_rows_fn=last_engine_b_rows_fn)
+    direction = None
+    if seed_row:
+        candidate_direction = str(seed_row.get("direction") or "").upper()
+        if candidate_direction in ("LONG", "SHORT"):
+            direction = candidate_direction
+    if direction is None:
+        direction = _resolve_direction(
+            symbol,
+            screenshot_meta,
+            seed_row,
+            last_engine_b_rows_fn=last_engine_b_rows_fn,
+        )
     if direction is None:
         return None
 
-    style = _resolve_style(screenshot_meta, seed_row or {})
+    style = _resolve_style(screenshot_meta, seed_row or {}, pair)
     display = pair.get("display") or pair.get("symbol") or symbol
     seed_signal: dict[str, Any] = {
         "symbol": pair.get("symbol") or display,
@@ -154,7 +185,20 @@ def assemble_engine_b_context(
     asset_group = get_pair_score_group(pair_obj or pair)
     structure = sanitize_engine_b_structure_profile_fields(dict(res), asset_type)
 
-    price = _to_float(res.get("current_price"))
+    price = _to_float(res.get("current_price") or res.get("entry") or res.get("price"))
+    origin_payload: dict[str, Any] = {}
+    if seed_row:
+        nested = seed_row.get("naked_data") or seed_row.get("engine_b")
+        origin_payload = nested if isinstance(nested, dict) else seed_row
+    origin_entry = _to_float((seed_row or {}).get("entry"))
+    if origin_entry is None:
+        origin_entry = _to_float((seed_row or {}).get("price"))
+    if origin_entry is None:
+        origin_entry = _to_float(
+            origin_payload.get("entry")
+            or origin_payload.get("price")
+            or origin_payload.get("current_price")
+        )
     sl = _to_float(res.get("final_stop_loss") or res.get("recommended_stop_loss"))
     tp = _to_float(res.get("final_take_profit") or res.get("recommended_take_profit"))
     rr = _to_float(res.get("rr_used_for_gate") or res.get("rr"))
@@ -162,7 +206,50 @@ def assemble_engine_b_context(
     max_score = _to_float(res.get("max_possible"))
     threshold = _to_float(res.get("min_score_used"))
     passed = _engine_b_passed(res)
-    scan_timestamp = datetime.now(timezone.utc).isoformat()
+    review_timestamp = datetime.now(timezone.utc).isoformat()
+    scan_timestamp = (
+        (seed_row or {}).get("timestamp")
+        or (seed_row or {}).get("decisionTime")
+        or (seed_row or {}).get("scan_timestamp")
+        or res.get("timestamp")
+        or res.get("computed_at")
+        or review_timestamp
+    )
+    displacement = (
+        abs(price - origin_entry)
+        if price is not None and origin_entry is not None
+        else None
+    )
+    origin_score = _to_float(origin_payload.get("score"))
+    stamped_policy_context = {
+        "timeframePolicyVersion": res.get("timeframePolicyVersion"),
+        "timeframePolicyHash": res.get("timeframePolicyHash"),
+        "policyKey": res.get("policyKey"),
+        "regimeTf": res.get("regimeTf") or res.get("regime_tf"),
+        "biasTf": res.get("biasTf") or res.get("bias_tf"),
+        "structureTf": res.get("structureTf") or res.get("structure_tf") or res.get("zone_tf"),
+        "setupTf": res.get("setupTf") or res.get("setup_tf"),
+        "triggerTf": res.get("triggerTf") or res.get("trigger_tf") or res.get("entry_tf"),
+        "executionTf": res.get("executionTf") or res.get("execution_tf") or res.get("entry_tf"),
+        "executionMode": res.get("executionMode") or res.get("execution_mode") or "live_quote",
+        "m5Role": res.get("m5Role") or res.get("m5_role"),
+        "m5Policy": res.get("m5Policy") or res.get("m5_policy"),
+    }
+    resolved_policy_context = resolve_timeframe_policy(
+        str(pair.get("symbol") or symbol),
+        asset_type,
+        asset_group,
+        style,
+        engine_id="engine_b",
+    ).payload()
+    policy_context = {
+        **resolved_policy_context,
+        **{
+            key: value
+            for key, value in stamped_policy_context.items()
+            if value not in (None, "")
+        },
+    }
     chart_provider = (screenshot_meta or {}).get("provider") or (screenshot_meta or {}).get("chart_provider")
 
     ctx: dict[str, Any] = {
@@ -172,13 +259,45 @@ def assemble_engine_b_context(
         "timeframe": timeframe,
         "analyze_style": style,
         "chart_timeframe": (screenshot_meta or {}).get("chart_timeframe") or timeframe,
+        "timeframe_policy": policy_context,
         "asset_class": asset_type,
         "asset_group": asset_group,
         "direction": direction,
         "regime": res.get("regime"),
         "scan_timestamp": scan_timestamp,
         "candidate_timestamp": scan_timestamp,
-        "latest_candle_ts": None,
+        "review_timestamp": review_timestamp,
+        "review_mode": "candidate" if seed_row else "exploratory",
+        "candidate_origin": {
+            "candidate_id": (seed_row or {}).get("signalId") or (seed_row or {}).get("signal_id") or (seed_row or {}).get("id"),
+            "revision": scan_timestamp,
+            "direction": direction,
+            "style": (seed_row or {}).get("horizon") or (seed_row or {}).get("style"),
+            "entry": origin_entry,
+            "stop_loss": _to_float(
+                origin_payload.get("final_stop_loss")
+                or origin_payload.get("recommended_stop_loss")
+                or (seed_row or {}).get("sl")
+            ),
+            "take_profit": _to_float(
+                origin_payload.get("final_take_profit")
+                or origin_payload.get("recommended_take_profit")
+                or (seed_row or {}).get("tp1")
+                or (seed_row or {}).get("tp")
+            ),
+            "score": origin_score,
+            "max_score": _to_float(origin_payload.get("max_possible") or origin_payload.get("maxScore")),
+            "threshold": _to_float(origin_payload.get("min_score_used") or origin_payload.get("threshold")),
+            "passed": _engine_b_passed(origin_payload),
+        } if seed_row else None,
+        "review_delta": {
+            "entry_displacement": displacement,
+            "score_delta": score - origin_score if score is not None and origin_score is not None else None,
+            "direction_changed": (
+                str((seed_row or {}).get("direction") or "NONE").upper() != direction
+            ) if seed_row else None,
+        },
+        "latest_candle_ts": res.get("latest_confirmed_trigger_candle_time"),
         "engine_b_provider": pair.get("source"),
         "chart_provider_hint": chart_provider,
         "provider_mismatch": False,
@@ -197,14 +316,14 @@ def assemble_engine_b_context(
             "max_expected_age_seconds": None,
         },
         "geometry": {
-            "candidate_entry": price,
+            "candidate_entry": origin_entry if origin_entry is not None else price,
             "current_price": price,
             "stop_loss": sl,
             "take_profit": tp,
             "risk_points": abs(price - sl) if price is not None and sl is not None else None,
             "reward_points": abs(tp - price) if price is not None and tp is not None else None,
             "rr": rr,
-            "price_displacement_from_candidate_entry": 0.0 if price is not None else None,
+            "price_displacement_from_candidate_entry": displacement,
             "sl_tp_source": "engine_b_levels",
         },
         "freshness": {},

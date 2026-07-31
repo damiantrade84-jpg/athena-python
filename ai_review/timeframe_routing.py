@@ -4,41 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-SCHEMA_VERSION = "timeframe_route.v1"
-
-DEFAULT_TIMEFRAME_ROUTING: dict[str, Any] = {
-    "ENABLED": True,
-    "DEFAULT": {
-        "D1": {"entry_tf": "H4", "execution_tf": "H1"},
-        "H4": {"entry_tf": "H1", "execution_tf": "M15"},
-        "H1": {"entry_tf": "M15", "execution_tf": "M15"},
-        "M15": {"entry_tf": "M15", "execution_tf": "M5"},
-        "M5": {"entry_tf": "M5", "execution_tf": "M5"},
-        "M1": {"entry_tf": "M1", "execution_tf": "M1"},
-    },
-    "BY_ASSET_GROUP": {
-        "forex": {
-            "H4": {"entry_tf": "H1", "execution_tf": "M15"},
-            "H1": {"entry_tf": "M15", "execution_tf": "M15"},
-        },
-        "crypto": {
-            "H4": {"entry_tf": "H1", "execution_tf": "M15"},
-            "H1": {"entry_tf": "M15", "execution_tf": "M15"},
-        },
-        "commodities": {
-            "H4": {"entry_tf": "H1", "execution_tf": "M15"},
-            "H1": {"entry_tf": "M15", "execution_tf": "M15"},
-        },
-        "indices": {
-            "H4": {"entry_tf": "H1", "execution_tf": "M15"},
-            "H1": {"entry_tf": "M15", "execution_tf": "M15"},
-        },
-        "stocks": {
-            "D1": {"entry_tf": "H4", "execution_tf": "H1"},
-            "H4": {"entry_tf": "H1", "execution_tf": "M15"},
-        },
-    },
-}
+SCHEMA_VERSION = "timeframe_route.v2"
+_POLICY_TIMEFRAMES = frozenset({"M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"})
 
 _TF_ALIASES = {
     "1": "M1",
@@ -109,16 +76,6 @@ _ASSET_GROUP_ALIASES = {
 }
 
 
-def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in overrides.items():
-        if isinstance(merged.get(key), dict) and isinstance(value, dict):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
 def normalize_timeframe(raw: Any) -> str:
     """Return the canonical backend timeframe string used by chart review."""
     text = str(raw or "").strip().upper().replace(" ", "")
@@ -141,37 +98,12 @@ def normalize_asset_route_group(raw: Any) -> str:
     return _ASSET_GROUP_ALIASES.get(key, "default")
 
 
-def _route_config(cfg: dict[str, Any] | None) -> dict[str, Any]:
-    if isinstance(cfg, dict) and isinstance(cfg.get("TIMEFRAME_ROUTING"), dict):
-        cfg = cfg.get("TIMEFRAME_ROUTING")
-    if not isinstance(cfg, dict):
-        return dict(DEFAULT_TIMEFRAME_ROUTING)
-    return _deep_merge(DEFAULT_TIMEFRAME_ROUTING, cfg)
-
-
-def _route_for(
-    cfg: dict[str, Any],
-    *,
-    asset_group: str,
-    context_tf: str,
-) -> dict[str, str]:
-    group_routes = cfg.get("BY_ASSET_GROUP") or {}
-    if isinstance(group_routes, dict):
-        candidate = group_routes.get(asset_group)
-        if isinstance(candidate, dict) and isinstance(candidate.get(context_tf), dict):
-            route = candidate[context_tf]
-            return {
-                "entry_tf": normalize_timeframe(route.get("entry_tf") or context_tf),
-                "execution_tf": normalize_timeframe(route.get("execution_tf") or route.get("entry_tf") or context_tf),
-            }
-    default_routes = cfg.get("DEFAULT") or {}
-    if isinstance(default_routes, dict) and isinstance(default_routes.get(context_tf), dict):
-        route = default_routes[context_tf]
-        return {
-            "entry_tf": normalize_timeframe(route.get("entry_tf") or context_tf),
-            "execution_tf": normalize_timeframe(route.get("execution_tf") or route.get("entry_tf") or context_tf),
-        }
-    return {"entry_tf": context_tf, "execution_tf": context_tf}
+def _policy_tf(policy: dict[str, Any], camel: str, snake: str) -> str | None:
+    value = policy.get(camel) or policy.get(snake)
+    if value in (None, ""):
+        return None
+    normalized = normalize_timeframe(value)
+    return normalized if normalized in _POLICY_TIMEFRAMES else None
 
 
 def _truthy(value: Any) -> bool:
@@ -223,18 +155,22 @@ def resolve_timeframe_route(
     context_tf: Any,
     ai_review: dict[str, Any] | None = None,
     verdict_comparison: dict[str, Any] | None = None,
-    cfg: dict[str, Any] | None = None,
+    policy_roles: dict[str, Any] | None = None,
     primary_engine: str = "A",
 ) -> dict[str, Any]:
-    """Resolve the read-only chart route from engine context and AI verdict."""
-    routing_cfg = _route_config(cfg)
-    enabled = bool(routing_cfg.get("ENABLED", True))
+    """Resolve chart navigation from the signal's authoritative policy-v4 roles."""
     source_group = str(asset_group or "").strip().lower() or "default"
     route_group = normalize_asset_route_group(source_group)
     context = normalize_timeframe(context_tf)
-    route = _route_for(routing_cfg, asset_group=route_group, context_tf=context)
-    entry = normalize_timeframe(route["entry_tf"])
-    execution = normalize_timeframe(route["execution_tf"])
+    policy = policy_roles if isinstance(policy_roles, dict) else {}
+    regime = _policy_tf(policy, "regimeTf", "regime_tf")
+    bias = _policy_tf(policy, "biasTf", "bias_tf")
+    structure = _policy_tf(policy, "structureTf", "structure_tf")
+    setup = _policy_tf(policy, "setupTf", "setup_tf")
+    trigger = _policy_tf(policy, "triggerTf", "trigger_tf")
+    execution = _policy_tf(policy, "executionTf", "execution_tf")
+    policy_available = all((regime, bias, structure, setup, trigger, execution))
+    enabled = bool(policy_available)
 
     comparison = verdict_comparison if isinstance(verdict_comparison, dict) else {}
     review = ai_review if isinstance(ai_review, dict) else {}
@@ -242,16 +178,19 @@ def resolve_timeframe_route(
     wait_action = _human_action(review, comparison) in {"wait", "watch"}
     needs_entry_wait = enabled and direction_ok and (_entry_rejected(comparison) or wait_action)
 
-    auto_select = entry if needs_entry_wait else context
+    auto_select = trigger if needs_entry_wait and trigger else context
     mode = "entry_wait" if needs_entry_wait else "context"
     if not enabled:
-        mode = "disabled"
+        mode = "policy_unavailable"
         auto_select = context
-        reason = f"Timeframe routing disabled; keeping {context} context chart selected."
+        reason = (
+            "Authoritative timeframe-policy roles are unavailable; "
+            f"keeping {context} selected without a legacy fallback."
+        )
     elif needs_entry_wait:
         reason = (
-            f"{context} direction valid but AI rejected entry timing; "
-            f"monitor {entry} for entry confirmation."
+            f"{context} direction remains valid but entry timing is not confirmed; "
+            f"monitor the policy trigger timeframe {trigger}."
         )
     else:
         reason = f"No deterministic entry-wait condition; keeping {context} context chart selected."
@@ -263,8 +202,21 @@ def resolve_timeframe_route(
         "assetGroup": route_group,
         "sourceGroup": source_group,
         "contextTf": context,
-        "entryTf": entry,
+        "regimeTf": regime,
+        "biasTf": bias,
+        "structureTf": structure,
+        "setupTf": setup,
+        "triggerTf": trigger,
+        "entryTf": setup,
         "executionTf": execution,
+        "executionMode": str(
+            policy.get("executionMode") or policy.get("execution_mode") or ""
+        ).strip().lower() or None,
+        "m5Role": policy.get("m5Role") or policy.get("m5_role"),
+        "m5Policy": policy.get("m5Policy") or policy.get("m5_policy"),
+        "policyVersion": policy.get("timeframePolicyVersion") or policy.get("policy_version"),
+        "policyKey": policy.get("policyKey") or policy.get("policy_key"),
+        "routeSource": "timeframe_policy" if policy_available else "unavailable",
         "autoSelectTf": auto_select,
         "mode": mode,
         "reason": reason,

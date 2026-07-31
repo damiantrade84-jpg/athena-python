@@ -9,6 +9,11 @@ import type {
 } from 'lightweight-charts';
 import type { EngineBOverlayLike } from './scalpWorkbenchChart/layers';
 
+type EngineBZoneOverlayLike = Pick<
+  EngineBOverlayLike,
+  'overlay_source' | 'nearest_support_zone' | 'nearest_resistance_zone' | 'active_fvgs' | 'order_blocks'
+>;
+
 export type EngineBZoneCategory =
   | 'support'
   | 'resistance'
@@ -23,6 +28,7 @@ export interface EngineBZoneFill {
   fill: string;
   stroke: string;
   category: EngineBZoneCategory;
+  startTime?: Time;
 }
 
 export const ENGINE_B_ZONE_STYLE: Record<EngineBZoneCategory, { fill: string; stroke: string }> = {
@@ -39,6 +45,7 @@ export function pushZoneFromPair(
   category: EngineBZoneCategory,
   upper: number | null,
   lower: number | null,
+  startTime?: Time,
 ) {
   if (upper == null && lower == null) return;
   const top = upper ?? lower!;
@@ -51,7 +58,20 @@ export function pushZoneFromPair(
     fill: style.fill,
     stroke: style.stroke,
     category,
+    startTime,
   });
+}
+
+function zoneStartTime(value: unknown): Time | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const seconds = value > 10_000_000_000 ? Math.floor(value / 1000) : Math.floor(value);
+    return seconds as Time;
+  }
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return zoneStartTime(numeric);
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? (Math.floor(parsed / 1000) as Time) : undefined;
 }
 
 function firstNumber(...values: (number | string | null | undefined)[]): number | null {
@@ -65,7 +85,7 @@ function firstNumber(...values: (number | string | null | undefined)[]): number 
   return null;
 }
 
-export function buildEngineBZones(payload: EngineBOverlayLike | null, enabled: boolean): EngineBZoneFill[] {
+export function buildEngineBZones(payload: EngineBZoneOverlayLike | null, enabled: boolean): EngineBZoneFill[] {
   if (!enabled || !payload || (payload as any).overlay_source !== 'engine_b') return [];
   const zones: EngineBZoneFill[] = [];
 
@@ -76,6 +96,7 @@ export function buildEngineBZones(payload: EngineBOverlayLike | null, enabled: b
       'support',
       firstNumber(support.upper, support.level),
       firstNumber(support.lower, support.level),
+      zoneStartTime(support.created_at),
     );
   }
 
@@ -86,6 +107,7 @@ export function buildEngineBZones(payload: EngineBOverlayLike | null, enabled: b
       'resistance',
       firstNumber(resistance.upper, resistance.level),
       firstNumber(resistance.lower, resistance.level),
+      zoneStartTime(resistance.created_at),
     );
   }
 
@@ -94,7 +116,13 @@ export function buildEngineBZones(payload: EngineBOverlayLike | null, enabled: b
     const bottom = firstNumber(zone.bottom);
     if (top == null || bottom == null) continue;
     const type = typeof zone.type === 'string' ? zone.type.toLowerCase() : '';
-    pushZoneFromPair(zones, type.includes('bull') ? 'fvg_bull' : 'fvg_bear', top, bottom);
+    pushZoneFromPair(
+      zones,
+      type.includes('bull') ? 'fvg_bull' : 'fvg_bear',
+      top,
+      bottom,
+      zoneStartTime(zone.created_at),
+    );
   }
 
   for (const zone of (payload.order_blocks || []).filter((item: any) => !item?.mitigated).slice(0, 2)) {
@@ -102,7 +130,13 @@ export function buildEngineBZones(payload: EngineBOverlayLike | null, enabled: b
     const bottom = firstNumber(zone.bottom);
     if (top == null || bottom == null) continue;
     const type = typeof zone.type === 'string' ? zone.type.toLowerCase() : '';
-    pushZoneFromPair(zones, type.includes('bull') ? 'ob_bull' : 'ob_bear', top, bottom);
+    pushZoneFromPair(
+      zones,
+      type.includes('bull') ? 'ob_bull' : 'ob_bear',
+      top,
+      bottom,
+      zoneStartTime(zone.created_at),
+    );
   }
 
   return zones;
@@ -143,14 +177,20 @@ export class EngineBZoneRenderer implements IPrimitivePaneRenderer {
         const y2 = Math.max(yTop, yBot);
         const h = Math.max(1, y2 - y1);
         context.save();
+        const startCoordinate = zone.startTime == null
+          ? null
+          : this.primitive.timeToCoordinate(zone.startTime);
+        const x1 = startCoordinate == null
+          ? 0
+          : Math.max(0, Math.min(mediaSize.width, startCoordinate));
         context.fillStyle = zone.fill;
-        context.fillRect(0, y1, mediaSize.width, h);
+        context.fillRect(x1, y1, Math.max(0, mediaSize.width - x1), h);
         context.strokeStyle = zone.stroke;
         context.lineWidth = 1;
         context.beginPath();
-        context.moveTo(0, y1 + 0.5);
+        context.moveTo(x1, y1 + 0.5);
         context.lineTo(mediaSize.width, y1 + 0.5);
-        context.moveTo(0, y2 - 0.5);
+        context.moveTo(x1, y2 - 0.5);
         context.lineTo(mediaSize.width, y2 - 0.5);
         context.stroke();
         context.restore();
@@ -164,8 +204,10 @@ export class EngineBZonePrimitive implements ISeriesPrimitive<Time> {
   private _requestUpdate: (() => void) | null = null;
   private _zones: EngineBZoneFill[] = [];
   private readonly _paneViews: readonly IPrimitivePaneView[];
+  private readonly _timeToCoordinate: ((time: Time) => number | null) | null;
 
-  constructor() {
+  constructor(timeToCoordinate?: (time: Time) => number | null) {
+    this._timeToCoordinate = timeToCoordinate ?? null;
     this._paneViews = [new EngineBZonePaneView(this)];
   }
 
@@ -186,6 +228,7 @@ export class EngineBZonePrimitive implements ISeriesPrimitive<Time> {
 
   zones(): EngineBZoneFill[] { return this._zones; }
   series(): ISeriesApi<'Candlestick', Time> | null { return this._series; }
+  timeToCoordinate(time: Time): number | null { return this._timeToCoordinate?.(time) ?? null; }
 
   updateAllViews(): void { /* views read directly from primitive state */ }
 

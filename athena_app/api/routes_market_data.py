@@ -583,6 +583,26 @@ def _overlay_fvg(value):
     return out
 
 
+def _overlay_timestamp_age_seconds(value) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            timestamp = float(value)
+            if timestamp > 10_000_000_000:
+                timestamp /= 1000.0
+        else:
+            parsed = datetime.fromisoformat(
+                str(value).strip().replace(" ", "T").replace("Z", "+00:00")
+            )
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            timestamp = parsed.timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return round(max(0.0, datetime.now(timezone.utc).timestamp() - timestamp), 3)
+
+
 _OVERLAY_PRECISION_BY_GROUP = {
     "forex_majors": 5,
     "forex_crosses": 5,
@@ -695,6 +715,9 @@ def _normalize_engine_b_overlay_payload(
         "trigger_tf": str(raw.get("trigger_tf") or raw.get("entry_tf") or "").upper() or None,
         "atr_tf": str(raw.get("atr_tf") or "").upper() or None,
     }
+    source_candle_ts = raw.get("latest_confirmed_trigger_candle_time")
+    source_age_seconds = _overlay_timestamp_age_seconds(source_candle_ts)
+    source_chart_timeframe = source_timeframes["zone_tf"] or source_timeframes["trigger_tf"]
     rendered_layers = {
         "candles": True,
         "engine_b": bool(has_overlay),
@@ -709,8 +732,9 @@ def _normalize_engine_b_overlay_payload(
 
     return {
         "symbol": symbol,
-        "timeframe": timeframe,
-        "chart_timeframe": timeframe,
+        "timeframe": source_chart_timeframe,
+        "chart_timeframe": source_chart_timeframe,
+        "requested_chart_timeframe": timeframe,
         "direction": direction,
         "style": style,
         "engine_b_style": str(raw.get("style") or style or "auto"),
@@ -718,6 +742,8 @@ def _normalize_engine_b_overlay_payload(
         "overlay_source": "engine_b",
         "overlay_version": "engine_b_legacy_v1",
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        "source_candle_ts": source_candle_ts,
+        "source_age_seconds": source_age_seconds,
         "source_timeframes": source_timeframes,
         "rendered_layers": rendered_layers,
         "price_precision": _overlay_precision_for(pair),
@@ -748,11 +774,16 @@ def _normalize_engine_b_overlay_payload(
 def api_engine_b_overlays():
     """Return legacy Engine B chart overlay fields normalized for native charts."""
     symbol = request.args.get("symbol")
-    tf = str(request.args.get("tf") or request.args.get("timeframe") or "H4").upper()
-    direction = str(request.args.get("direction") or "LONG").upper()
+    tf = str(
+        request.args.get("chart_tf")
+        or request.args.get("tf")
+        or request.args.get("timeframe")
+        or "H4"
+    ).upper()
+    direction = str(request.args.get("direction") or "").upper()
     style = str(request.args.get("style") or "auto").lower()
     if direction not in {"LONG", "SHORT"}:
-        direction = "LONG"
+        return jsonify({"error": "direction must be LONG or SHORT"}), 400
 
     if not symbol:
         return jsonify({"error": "Missing symbol parameter"}), 400

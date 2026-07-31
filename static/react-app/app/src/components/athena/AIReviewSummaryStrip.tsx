@@ -98,7 +98,7 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
     <div className="space-y-2 border border-border/50 rounded-md p-2 bg-muted/20">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
-          Review summary
+          Deterministic review postprocessor
         </span>
         <Badge className={`${actionClass} text-[10px] border`}>
           {humanAction}
@@ -116,14 +116,22 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
             provider mismatch
           </Badge>
         )}
+        <Badge variant="outline" className="text-[10px]">
+          model confidence {fmtReviewNum(s.modelConfidence ?? s.confidence)} / 100
+        </Badge>
+        {s.confidenceCalibrated !== true && (
+          <Badge variant="outline" className="text-[10px] border-amber-500/50 text-amber-300">
+            uncalibrated
+          </Badge>
+        )}
         <span className="text-[10px] text-muted-foreground font-mono ml-auto truncate max-w-[50%]">
           {provider}/{model}
         </span>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-7 gap-1.5">
-        <ScoreCell label="Overall" value={s.overallScore} />
-        <ScoreCell label="Tradeability" value={s.tradeabilityScore} />
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-1.5">
+        <ScoreCell label="Postprocessed overall" value={s.overallScore} />
+        <ScoreCell label="Postprocessed tradeability" value={s.tradeabilityScore} />
         <ScoreCell
           label={s.sourceQualityScore != null && s.engineAlignmentScore == null ? 'Source' : 'Engine align'}
           value={s.sourceQualityScore ?? s.engineAlignmentScore}
@@ -131,8 +139,17 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
         <ScoreCell label="Visual" value={s.visualConfirmationScore} />
         <ScoreCell label="Entry" value={s.entryQualityScore} />
         <ScoreCell label="Risk" value={s.riskScore} />
-        <ScoreCell label="Confidence" value={s.confidence} />
       </div>
+
+      {s.modelScores && Object.values(s.modelScores).some((value) => value != null) && (
+        <SummaryKV
+          label="Model-proposed scores (advisory)"
+          value={Object.entries(s.modelScores)
+            .filter(([, value]) => value != null)
+            .map(([key, value]) => `${key.replace(/Score$/, '')} ${fmtReviewNum(value)}`)
+            .join(`${AI_REVIEW_SEP}`)}
+        />
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5 text-[10px]">
         <SummaryKV label="Human action" value={showReviewValue(humanAction)} />

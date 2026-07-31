@@ -299,7 +299,7 @@ def test_tv_chart_panel_auto_review_waits_for_engine_b_overlay_state():
     source = _read(TV_PANEL)
 
     assert "engineBOverlayPendingForReview" in source
-    assert "if (!pendingAutoReviewRef.current || loading || !candles?.length || aiReviewLoading || engineBOverlayPendingForReview) return" in source
+    assert "if (!pendingAutoReviewRef.current || chartReviewPendingForReview || aiReviewLoading) return" in source
     assert "engineBOverlayStatus" in source
 
 
@@ -325,7 +325,7 @@ def test_tv_chart_panel_manual_review_cancels_pending_auto_review():
 def test_tv_chart_panel_ai_review_sends_visible_range_meta():
     source = _read(TV_PANEL)
 
-    assert "getVisibleRange()" in source
+    assert "getVisibleLogicalRange()" in source
     assert "visible_range_start" in source
     assert "visible_range_end" in source
 
@@ -373,7 +373,7 @@ def test_tv_chart_panel_execute_does_not_send_visual_engine_b_overlay():
     assert "buildQuickExecutePayload" in confirm_section
     assert "isEngineBOnly" in confirm_section
     assert "naked_data ?? chartCandidate.engine_b" in confirm_section
-    assert "engineBOverlay ?? undefined" in confirm_section
+    assert "\n          : undefined," in confirm_section
 
 
 def test_tv_chart_panel_execute_shown_when_can_flag_watch():
@@ -480,7 +480,8 @@ def test_tv_chart_panel_displays_timeframe_route_badge():
 
     assert "timeframeRouteLabel" in source
     assert "Context ->" in source
-    assert "Entry ->" in source
+    assert "Setup ->" in source
+    assert "Trigger" in source
     assert "Auto TF:" in source
     assert "timeframeRoute?.reason" in source
 
@@ -550,7 +551,8 @@ def test_tv_chart_auto_review_enables_required_lean_indicators():
     assert "setEma200(true)" in auto_review_block
     assert "setDema200(!isCrypto)" in auto_review_block
     assert "setVwapEnabled(isCrypto)" in auto_review_block
-    assert "setAdx14(isCrypto)" in auto_review_block
+    assert "setAdx14(false)" in auto_review_block
+    assert "setAtr14(!isCrypto)" in auto_review_block
     assert "setVolumeBars(isCrypto)" in auto_review_block
     assert "setVolumeMa(isCrypto)" in auto_review_block
 
@@ -724,7 +726,7 @@ def test_engine_a_side_panel_follows_current_chart_symbol_not_first_candidate():
     assert "function findEngineACandidateForSymbol" in source
     assert "function findEngineBCandidateForSymbol" in source
     assert "const intentCandidateRows = useMemo(" in source
-    assert "() => (intentSignal ? [intentSignal, ...candidateRows] : candidateRows)" in source
+    assert "intentSignalMatchesPair && intentSignal ? [intentSignal, ...candidateRows] : candidateRows" in source
     assert "useEngineBPrimary" in source
     assert "findEngineBCandidateForSymbol(intentCandidateRows, pair)" in source
     assert "findEngineACandidateForSymbol(intentCandidateRows, pair)" in source
@@ -953,13 +955,14 @@ def test_key_engine_a_diagnostics_are_not_truncated_or_hidden():
 
 def test_engine_b_filled_zone_style_preserved():
     source = _read(TV_PANEL)
+    primitive = _read(ROOT / "static/react-app/app/src/lib/engineBPrimitives.ts")
 
     assert "Do not replace filled support/resistance/FVG zones with line-only overlays" in source
     assert "ENGINE_B_ZONE_STYLE" in source
-    assert "rgba(16, 185, 129, 0.18)" in source
-    assert "rgba(244, 63, 94, 0.18)" in source
+    assert "rgba(16, 185, 129, 0.18)" in primitive
+    assert "rgba(244, 63, 94, 0.18)" in primitive
     assert "EngineBZonePrimitive" in source
-    assert "context.fillRect(0, y1, mediaSize.width, h)" in source
+    assert "context.fillRect(x1, y1" in primitive
     assert "buildEngineBZones" in source
 
 
@@ -1015,6 +1018,6 @@ def test_tv_chart_engine_a_diagnostics_collapsed_by_default():
 def test_ai_review_card_collapses_verbose_sections():
     source = _read(ROOT / "static/react-app/app/src/components/athena/AIReviewCard.tsx")
 
-    assert "<details" in source
-    assert "Context completeness and resistance map" in source
-    assert "Timestamps and warnings" in source
+    assert "<Details" in source
+    assert 'summary="Reasoning, risks and missing context"' in source
+    assert 'summary="Evidence, context and provenance"' in source
