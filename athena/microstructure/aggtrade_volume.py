@@ -183,6 +183,58 @@ def build_trade_bucket_volume_profile(
         return {"valid": False, "reason": "trade_bucket_error"}
 
 
+def trade_bucket_profile_price_consistent(
+    vp: dict | None,
+    candles: list | None,
+    *,
+    tolerance_pct: float = 0.005,
+    lookback: int = 48,
+) -> tuple[bool, str | None]:
+    """True when a trade-bucket VP's POC sits inside the caller's own price range.
+
+    Trade buckets and OHLCV can come from different venues: buckets follow
+    ``SCALP_ENGINE.TRADE_BUCKET_EXCHANGE`` while Engine B's crypto candles,
+    zones and ATR follow ``ENGINE_AB_CRYPTO_SIGNAL_FEED``. Normal perpetual
+    basis is a few bps, so a venue-consistent POC stays well inside the candle
+    range; a venue, symbol or session mismatch puts it outside.
+
+    Returns ``(ok, reason)``; ``reason`` is ``None`` when ok. Unevaluable inputs
+    return ok — the caller's own candle-sufficiency gates cover that case, and
+    failing here would attribute an unrelated data gap to a venue mismatch.
+    """
+    def _num(value: Any) -> float | None:
+        try:
+            return float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+
+    if not isinstance(vp, dict) or not vp.get("valid"):
+        return True, None
+    poc = _num(vp.get("poc"))
+    if poc is None or poc <= 0 or not candles:
+        return True, None
+
+    highs: list[float] = []
+    lows: list[float] = []
+    for candle in list(candles)[-max(1, int(lookback)):]:
+        if not isinstance(candle, dict):
+            continue
+        high = _num(candle.get("high"))
+        low = _num(candle.get("low"))
+        if high is not None and low is not None and high > 0 and low > 0:
+            highs.append(high)
+            lows.append(low)
+    if not highs or not lows:
+        return True, None
+
+    tol = max(0.0, float(tolerance_pct))
+    upper = max(highs) * (1.0 + tol)
+    lower = min(lows) * (1.0 - tol)
+    if lower <= poc <= upper:
+        return True, None
+    return False, "aggtrade_vp_venue_price_mismatch"
+
+
 def check_trade_bucket_cvd(
     display: str,
     cfg: dict | None,
@@ -244,6 +296,7 @@ def source_fidelity(source: Any, *, domain: str) -> dict:
         "candle_volume": "candle_volume",
         "candles": "candles",
         "range_proxy": "range_proxy",
+        "mixed_range_proxy": "mixed_range_proxy",
         "mt5_tick": "mt5_tick",
         "mt5_tick_proxy": "mt5_tick",
         "binance_ws": "binance_candle",
@@ -260,7 +313,7 @@ def source_fidelity(source: Any, *, domain: str) -> dict:
         fidelity = "real_trade_bucket"
     elif normalized in {"candle_volume", "binance_candle"}:
         fidelity = f"{domain}_candle_volume_proxy"
-    elif normalized in {"range_proxy", "mt5_tick", "candles"}:
+    elif normalized in {"range_proxy", "mixed_range_proxy", "mt5_tick", "candles"}:
         fidelity = f"{domain}_{normalized}_proxy"
     else:
         fidelity = f"{domain}_proxy"

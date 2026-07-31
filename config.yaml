@@ -3053,6 +3053,13 @@ ENGINE_B_CRYPTO_AGGTRADE_TRUSTED_MODE: required
 ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY: 0.5
 ENGINE_B_CRYPTO_REQUIRE_AGGTRADE_FOR_PASS: true
 ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED: true
+# Trade buckets follow SCALP_ENGINE.TRADE_BUCKET_EXCHANGE (binance) while Engine B
+# candles/zones/ATR follow ENGINE_AB_CRYPTO_SIGNAL_FEED (bybit). The aggTrade POC is
+# emitted as prev_session_poc/vah/val, so reject a profile whose POC falls outside our
+# own candle range — normal perp basis is a few bps and stays well inside; a venue,
+# symbol, or session mismatch does not. Set false to restore the unguarded behaviour.
+ENGINE_B_CRYPTO_AGGTRADE_VENUE_PRICE_GUARD: true
+ENGINE_B_CRYPTO_AGGTRADE_VENUE_PRICE_TOLERANCE_PCT: 0.005
 
 ENGINE_B_WEIGHTED_SCORING:
   ENABLED: true
@@ -3278,7 +3285,8 @@ INDICATOR_WEIGHTS:
 
   # MOMENTUM: RSI is more responsive for forex; MACD lags but confirms.
 
-  # Crypto: VMS stays here; live WS microstructure is a separate factor (gated).
+  # Crypto: live WS microstructure is a separate factor (gated) — see the note under
+  # `crypto:` for why the volume-momentum-spread weight was removed.
 
   momentum:
 
@@ -3294,7 +3302,9 @@ INDICATOR_WEIGHTS:
 
       macdLine_z: 0.3
 
-      volume_momentum_spread: 0.2
+      # volume_momentum_spread: 0.2 removed — no producer ever wrote the key onto a
+      # snapshot, so this weight advertised a crypto momentum input that does not
+      # exist. See the matching note in config.py INDICATOR_WEIGHTS.
 
 
 
@@ -4792,6 +4802,14 @@ SCALP_ENGINE:
   TRADE_BUCKET_VP_ENABLED: true   # Crypto: prefer real exchange trade buckets for VP when fresh
 
   TRADE_BUCKET_CVD_ENABLED: true  # Crypto: prefer real exchange trade buckets for CVD when fresh
+
+  # Buckets follow TRADE_BUCKET_EXCHANGE; Engine D crypto OHLCV follows the same
+  # setting via _scalp_crypto_pair_dict, so these normally agree. The guard catches
+  # the case where they drift apart (routing fallback, symbol mismatch, stale session)
+  # by rejecting a VP whose POC sits outside our own M15 range.
+  TRADE_BUCKET_VENUE_PRICE_GUARD: true
+  TRADE_BUCKET_VENUE_PRICE_TOLERANCE_PCT: 0.005
+
   REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT: true
   # F3: when REQUIRE_AGGTRADE_FOR_CRYPTO_STRICT trips because trade-bucket VP/CVD fell back to
   # candle volume, skip the pair entirely (BT-parity) instead of emitting a Not-executable card.

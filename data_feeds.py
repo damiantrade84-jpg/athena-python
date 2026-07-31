@@ -55,10 +55,14 @@ _OI_CACHE_TTL = 300
 
 # Live Bybit kline cache — short TTL that only collapses duplicate REST calls
 # within a scan (Engine C candles + ATR-for-levels re-fetch the same series).
-# Point-in-time fetches (end_ms set) are never cached. Confirmed flags are
-# recomputed at read time so a cache hit is indistinguishable from a fresh
-# fetch of the same rows; worst case a newly closed bar appears up to TTL
-# seconds late, which confirmed-only consumers tolerate (fail-conservative).
+# Point-in-time fetches (end_ms set) are never cached.
+#
+# The entry also expires at the cached forming bar's close. Without that the
+# read-time confirmed-flag recomputation would flip the cached forming bar to
+# confirmed=True while its OHLCV is still the partial snapshot taken up to TTL
+# seconds before the close — Engine A's relative-volume term and Engine B's BOS
+# volume ratio would then divide a truncated bar's volume by the 20-bar mean.
+# Expiring on the boundary forces a refetch so the real closed bar is served.
 _bybit_kline_cache: dict[tuple[str, str, int], tuple[list[dict], float]] = {}
 _BYBIT_KLINE_CACHE_TTL = 30.0  # seconds
 
@@ -147,6 +151,26 @@ def _bybit_kline_to_candle(
     }
 
 
+def _bybit_kline_cache_expiry(candles: list[dict], tf: str, now: float) -> float:
+    """Expiry for a cached kline series: TTL, capped at the forming bar's close.
+
+    A cached forming bar must never outlive its own bucket — see the
+    ``_bybit_kline_cache`` comment. Series whose last row is already closed keep
+    the plain TTL.
+    """
+    expiry = now + _BYBIT_KLINE_CACHE_TTL
+    interval_ms = _bybit_interval_ms(tf)
+    if not candles or not interval_ms:
+        return expiry
+    try:
+        close_s = (int(candles[-1].get("open_time") or 0) + interval_ms) / 1000.0
+    except (TypeError, ValueError):
+        return expiry
+    if close_s <= now:
+        return expiry
+    return min(expiry, close_s)
+
+
 def _bybit_kline_cache_copy(candles: list[dict], tf: str) -> list[dict]:
     """Copy cached klines with confirmed/closed flags recomputed for 'now'."""
     interval_ms = _bybit_interval_ms(tf)
@@ -232,7 +256,7 @@ def _fetch_bybit_klines(
             # Store private copies so caller-side mutation cannot taint the cache.
             _bybit_kline_cache[cache_key] = (
                 [dict(c) for c in candles],
-                time.time() + _BYBIT_KLINE_CACHE_TTL,
+                _bybit_kline_cache_expiry(candles, tf, time.time()),
             )
         return candles or None
     except Exception as exc:

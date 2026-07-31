@@ -2233,10 +2233,15 @@ CONFIG: dict = {
         },
         "momentum": {
             "default": {"rsi_z": 0.6, "macdLine_z": 0.4},
+            # "volume_momentum_spread": 0.2 was declared here but no writer ever
+            # populated the key on a snapshot (the microstructure cache carries
+            # order_book_imbalance / orderflow_delta / liquidity_wall_detection /
+            # liquidity_pressure only), so crypto momentum has always been RSI+MACD.
+            # Removed rather than left advertising an input that does not exist; the
+            # consumers below still read defensively if a producer is ever added.
             "crypto": {
                 "rsi_z": 0.5,
                 "macdLine_z": 0.3,
-                "volume_momentum_spread": 0.2,
             },
         },
     },

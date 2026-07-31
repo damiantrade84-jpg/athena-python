@@ -361,6 +361,7 @@ def compute_fixed_range_volume_profile(
     edges = np.linspace(session_low, session_high, bins + 1)
     volumes = np.zeros(bins, dtype=float)
 
+    proxied_bars = 0
     for candle in session_candles:
         high = _candle_num(candle, "high", "h")
         low = _candle_num(candle, "low", "l")
@@ -369,9 +370,13 @@ def compute_fixed_range_volume_profile(
             continue
         if high < low:
             high, low = low, high
-        # Use candle range as proxy volume when tick volume is zero
+        # Use candle range as proxy volume when tick volume is zero. When only
+        # *some* bars need this, price-range units land in the same bins as real
+        # volume, so the substitution has to be reported (see volume_source below)
+        # or the fidelity gates read a partly synthetic profile as real volume.
         if vol <= 0:
             vol = max(float(high) - float(low), 1e-10)
+            proxied_bars += 1
         if high == low:
             idx = int(np.searchsorted(edges, high, side="right") - 1)
             idx = max(0, min(bins - 1, idx))
@@ -439,7 +444,12 @@ def compute_fixed_range_volume_profile(
         "profile_valid": True,
         "total_volume": round(total_volume, 4),
         "bin_count": bins,
-        "volume_source": "range_proxy" if used_range_proxy else "candle_volume",
+        "volume_source": (
+            "range_proxy"
+            if used_range_proxy
+            else "mixed_range_proxy" if proxied_bars else "candle_volume"
+        ),
+        "range_proxy_bars": proxied_bars,
     })
     return out
 

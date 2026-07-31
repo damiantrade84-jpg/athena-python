@@ -235,6 +235,38 @@ def _scalp_fetch_candles(pair: dict, tf: str, limit: int):
     return None, "routed"
 
 
+_SCALP_TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}
+
+
+def _scalp_drop_forming_bar(candles: list, tf: str) -> list:
+    """Drop a trailing forming bar so a role sees closed bars only.
+
+    Mirrors ``mt5_fetch_scalp_candles(include_forming=False)`` for the crypto
+    branch, which fetches straight from Bybit/Binance and always carries the
+    live bar. Bybit klines flag it (``confirmed``); Binance/routed candles do
+    not, so fall back to a current-bucket comparison.
+
+    A forming bar's volume is only the fraction of the bucket elapsed so far,
+    which both suppresses absorption on that bar and drags the volume SMA down
+    for every other bar in the window.
+    """
+    if not candles or len(candles) < 2:
+        return candles
+    last = candles[-1] or {}
+    if last.get("confirmed") is False or last.get("closed") is False:
+        return candles[:-1]
+    tf_sec = _SCALP_TF_SECONDS.get(str(tf or "").upper())
+    if not tf_sec:
+        return candles
+    ts = _coerce_utc_datetime(last.get("time"))
+    if ts is None:
+        return candles
+    bucket_start = int(_current_utc_datetime().timestamp() // tf_sec) * tf_sec
+    if int(ts.timestamp()) >= bucket_start:
+        return candles[:-1]
+    return candles
+
+
 def _rate_value(rate, field: str, default=0.0):
     if isinstance(rate, dict):
         return rate.get(field, default)
@@ -518,8 +550,10 @@ def _merge_vp_volume_source_tag(vp: dict, dominant: str) -> dict:
     raw = str(vp.get("volume_source") or "").strip().lower()
     if raw in ("", "candles", "candle_volume"):
         vp["volume_source"] = dom
-    elif raw.startswith("range_proxy"):
-        vp["volume_source"] = f"range_proxy({dom})"
+    elif "range_proxy" in raw:
+        # Substring, not prefix: compute_fixed_range_volume_profile now also emits
+        # "mixed_range_proxy" when only part of the window fell back to range units.
+        vp["volume_source"] = f"{raw}({dom})"
     elif dom and dom not in raw:
         vp["volume_source"] = f"{raw}|{dom}"
     return vp
@@ -711,7 +745,11 @@ def _scalp_candles_fresh(candles: list, timeframe: str, role: str = "execution",
     # before the next bar closes.
     tf_sec = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}.get(str(timeframe).upper(), 60)
     role_name = str(role or "data").strip().lower()
-    confirmed_only = asset_type != "crypto" and (
+    # Crypto used to be excluded here because its branch never trimmed the
+    # forming bar. It now honours the same USE_FORMING_* flags (see
+    # _scalp_drop_forming_bar), so the confirmed-only age allowance must apply
+    # to it too or every trimmed crypto series would read one bucket stale.
+    confirmed_only = (
         (role_name == "structure" and not bool(cfg.get("USE_FORMING_FOR_STRUCTURE", False)))
         or (role_name == "bias" and not bool(cfg.get("USE_FORMING_FOR_BIAS", False)))
         or (
@@ -733,8 +771,10 @@ def _scalp_candles_fresh(candles: list, timeframe: str, role: str = "execution",
     return True, "fresh"
 
 
-def _execution_candles_fresh(candles: list, timeframe: str) -> tuple[bool, str]:
-    return _scalp_candles_fresh(candles, timeframe, "execution")
+def _execution_candles_fresh(
+    candles: list, timeframe: str, asset_type: str = "forex"
+) -> tuple[bool, str]:
+    return _scalp_candles_fresh(candles, timeframe, "execution", asset_type)
 
 
 def _retry_stale_mt5_scalp_candles(
@@ -1561,17 +1601,41 @@ def _trade_bucket_max_last_ts(reference_ts=None, require_fresh: bool = True) -> 
     return trade_bucket_max_last_ts(reference_ts, require_fresh=require_fresh)
 
 
-def _build_trade_bucket_volume_profile(display: str, reference_ts=None, require_fresh: bool = True) -> dict:
-    """Build crypto VP from configured real exchange trade buckets."""
-    from athena.microstructure.aggtrade_volume import build_trade_bucket_volume_profile
+def _build_trade_bucket_volume_profile(
+    display: str,
+    reference_ts=None,
+    require_fresh: bool = True,
+    price_reference_candles: list | None = None,
+) -> dict:
+    """Build crypto VP from configured real exchange trade buckets.
 
-    return build_trade_bucket_volume_profile(
+    ``price_reference_candles`` are our own OHLCV for the same symbol. Buckets
+    follow ``TRADE_BUCKET_EXCHANGE`` and the candles follow the routed feed, so
+    a POC outside our own price range means the two disagree on venue, symbol
+    or session and the profile must not anchor levels.
+    """
+    from athena.microstructure.aggtrade_volume import (
+        build_trade_bucket_volume_profile,
+        trade_bucket_profile_price_consistent,
+    )
+
+    cfg = CONFIG.get("SCALP_ENGINE", {}) or {}
+    vp = build_trade_bucket_volume_profile(
         display,
-        CONFIG.get("SCALP_ENGINE", {}),
+        cfg,
         reference_ts=reference_ts,
         require_fresh=require_fresh,
         now_fn=_time.time,
     )
+    if price_reference_candles and bool(cfg.get("TRADE_BUCKET_VENUE_PRICE_GUARD", True)):
+        ok, reason = trade_bucket_profile_price_consistent(
+            vp,
+            price_reference_candles,
+            tolerance_pct=float(cfg.get("TRADE_BUCKET_VENUE_PRICE_TOLERANCE_PCT", 0.005)),
+        )
+        if not ok:
+            return {"valid": False, "reason": reason}
+    return vp
 
 
 def _calc_balance_ratio(vp: dict) -> float | None:
@@ -4732,8 +4796,18 @@ def run_scalp_scan(
             _vol_src_exec = _vol_src_structure
             candles_bias = None
             if asset_type == "crypto":
+                # Same forming-bar policy as the MT5 branch below. Crypto feeds
+                # always return the live bar, so trim per role here instead of
+                # via an include_forming fetch argument.
+                structure_include_forming = bool(cfg.get("USE_FORMING_FOR_STRUCTURE", False))
+                trigger_include_forming = bool(cfg.get("USE_FORMING_FOR_TRIGGER", True))
+                bias_include_forming = bool(
+                    cfg.get("USE_FORMING_FOR_BIAS", structure_include_forming)
+                )
                 pair_dict = _scalp_crypto_pair_dict(display)
                 candles_m15, src_m15 = _scalp_fetch_candles(pair_dict, "M15", m15_count)
+                if not structure_include_forming:
+                    candles_m15 = _scalp_drop_forming_bar(candles_m15, "M15")
                 _vol_src_structure = src_m15
                 if not candles_m15 or len(candles_m15) < 30:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m15_candles")
@@ -4746,6 +4820,8 @@ def run_scalp_scan(
                     continue
 
                 candles_m5, src_m5 = _scalp_fetch_candles(pair_dict, "M5", m5_count)
+                if not trigger_include_forming:
+                    candles_m5 = _scalp_drop_forming_bar(candles_m5, "M5")
                 _vol_src_dominant = src_m5
                 if not candles_m5 or len(candles_m5) < 10:
                     _record_stability_sample(display, asset_type, False, reason="insufficient_m5_candles")
@@ -4759,6 +4835,8 @@ def run_scalp_scan(
 
                 if execution_tf == "M1":
                     candles_exec, src_exec = _scalp_fetch_candles(pair_dict, "M1", m1_count)
+                    if not trigger_include_forming:
+                        candles_exec = _scalp_drop_forming_bar(candles_exec, "M1")
                     _vol_src_exec = src_exec
                     if not candles_exec or len(candles_exec) < 30:
                         _record_stability_sample(display, asset_type, False, reason="insufficient_m1_candles")
@@ -4767,7 +4845,9 @@ def run_scalp_scan(
                 else:
                     candles_exec = candles_m5
 
-                fresh, stale_reason = _execution_candles_fresh(candles_exec, execution_tf)
+                fresh, stale_reason = _execution_candles_fresh(
+                    candles_exec, execution_tf, asset_type
+                )
                 if not fresh:
                     _record_stability_sample(display, asset_type, False, reason=stale_reason)
                     skipped.append({"pair": display, "reason": stale_reason})
@@ -4780,6 +4860,8 @@ def run_scalp_scan(
 
                 if use_bias:
                     candles_bias, src_bias = _scalp_fetch_candles(pair_dict, bias_tf, h1_count)
+                    if not bias_include_forming:
+                        candles_bias = _scalp_drop_forming_bar(candles_bias, bias_tf)
                     if not candles_bias or len(candles_bias) < 200:
                         bias_require = bool(cfg.get("BIAS_REQUIRE_CONFIRMATION", True))
                         if bias_require:
@@ -4981,7 +5063,9 @@ def run_scalp_scan(
                 except Exception:
                     pass
             vp = (
-                _build_trade_bucket_volume_profile(display)
+                _build_trade_bucket_volume_profile(
+                    display, price_reference_candles=candles_m15
+                )
                 if asset_type == "crypto" and cfg.get("TRADE_BUCKET_VP_ENABLED", True)
                 else {"valid": False}
             )

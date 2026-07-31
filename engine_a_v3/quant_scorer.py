@@ -879,8 +879,12 @@ def _volume_component(
         signal = 1.0 if delta > 0 else -1.0 if delta < 0 else 0.0
         quality = min(1.0, abs(delta) / max(1.0, sum(float(c.get("vol") or 0) for c in valid[midpoint:])))
 
-    # Relative volume: prefer feed-provided ratio (Bybit crypto / EOD stock /
-    # Dukascopy forex), else derive from candle volume.
+    # Relative volume from the context ratio when a feed supplies one, else
+    # derived from candle volume. Only forex populates context["volume_ratio"]
+    # (athena.analyze_pair -> duka_volume.get_forex_vr); crypto and stocks always
+    # take the derived path, which reads the same Bybit/EODHD volume off the
+    # candles. This component sees the entry rung only — there is no D1/H4 volume
+    # confirmation in V3, which matters most for crypto (family weight 0.19).
     vr = _f((context or {}).get("volume_ratio"))
     if vr is None and candles:
         vols = [_f(c.get("vol")) for c in candles[-21:]]

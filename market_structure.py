@@ -1713,6 +1713,7 @@ def _engine_b_crypto_aggtrade_context(
     reference_ts=None,
     require_fresh: bool = True,
     historical_mode: bool = False,
+    price_reference_candles: list | None = None,
 ) -> dict:
     """Read-only crypto aggTrade VP/CVD context for Engine B.
 
@@ -1773,6 +1774,7 @@ def _engine_b_crypto_aggtrade_context(
             build_trade_bucket_volume_profile,
             check_trade_bucket_cvd,
             source_fidelity,
+            trade_bucket_profile_price_consistent,
         )
 
         scalp_cfg = config.CONFIG.get("SCALP_ENGINE", {}) or {}
@@ -1782,6 +1784,23 @@ def _engine_b_crypto_aggtrade_context(
             reference_ts=reference_ts,
             require_fresh=require_fresh,
         )
+        # Buckets follow SCALP_ENGINE.TRADE_BUCKET_EXCHANGE while Engine B's
+        # candles/zones/ATR follow ENGINE_AB_CRYPTO_SIGNAL_FEED. When those name
+        # different venues the POC is emitted as prev_session_poc/vah/val and
+        # compared against structure priced on the other venue, so reject a
+        # profile whose POC falls outside our own candle range.
+        if bool(config.CONFIG.get("ENGINE_B_CRYPTO_AGGTRADE_VENUE_PRICE_GUARD", True)):
+            _venue_ok, _venue_reason = trade_bucket_profile_price_consistent(
+                vp,
+                price_reference_candles,
+                tolerance_pct=float(
+                    config.CONFIG.get(
+                        "ENGINE_B_CRYPTO_AGGTRADE_VENUE_PRICE_TOLERANCE_PCT", 0.005
+                    )
+                ),
+            )
+            if not _venue_ok:
+                vp = {"valid": False, "reason": _venue_reason}
         cvd = check_trade_bucket_cvd(
             str(display),
             scalp_cfg,
@@ -3991,15 +4010,24 @@ class NakedEngine:
             if bos_bull or bos_bear:
                 bos_volume_status = "unavailable"
                 if volumes is not None and len(volumes) >= 20:
-                    positive_vols = [float(v) for v in volumes[-20:] if float(v) > 0]
-                    avg_vol_20 = float(np.mean(positive_vols)) if positive_vols else 0.0
                     ref_idx = bos_bull_vol_ref if bos_bull else bos_bear_vol_ref
+                    # Baseline is the 20 bars *preceding* the break bar. Using the
+                    # series tail instead meant a BOS several bars back was ratioed
+                    # against a window that post-dated it and included the break bar
+                    # itself, damping the ratio.
+                    ref_end = ref_idx if ref_idx is not None else len(volumes) - 1
+                    if not (0 <= ref_end < len(volumes)):
+                        ref_end = len(volumes) - 1
+                    _baseline = volumes[max(0, ref_end - 20):ref_end]
+                    if len(_baseline) < 10:
+                        bos_volume_status = "insufficient_history"
+                        positive_vols = []
+                    else:
+                        positive_vols = [float(v) for v in _baseline if float(v) > 0]
+                    avg_vol_20 = float(np.mean(positive_vols)) if positive_vols else 0.0
                     if avg_vol_20 > 0:
                         bos_average_volume_20 = avg_vol_20
-                        if ref_idx is not None and 0 <= ref_idx < len(volumes):
-                            bos_bar_volume = float(volumes[ref_idx])
-                        elif ref_idx is None and len(volumes):
-                            bos_bar_volume = float(volumes[-1])
+                        bos_bar_volume = float(volumes[ref_end])
                     if bos_bar_volume is not None and bos_bar_volume > 0 and avg_vol_20 > 0:
                         bos_volume_available = True
                         bos_volume_ratio = bos_bar_volume / avg_vol_20
@@ -5601,6 +5629,7 @@ class NakedEngine:
             reference_ts=trade_bucket_reference_ts,
             require_fresh=trade_bucket_require_fresh,
             historical_mode=trade_bucket_historical_mode,
+            price_reference_candles=(h1_candles or h4_candles or struct_candles),
         )
         if enable_profile_context:
             if _aggtrade_context.get("aggtrade_profile"):

@@ -165,8 +165,11 @@ def test_detect_bos_emits_measured_below_threshold_volume_diagnostics(monkeypatc
     assert out["bos_volume_confirmed"] is False
     assert out["bos_volume_status"] == "below_threshold"
     assert out["bos_bar_volume"] == pytest.approx(120.0)
-    assert out["bos_average_volume_20"] == pytest.approx(101.0)
-    assert out["bos_volume_ratio"] == pytest.approx(1.1881)
+    # Baseline is the 19 bars preceding the break, all at 100.0. It used to be
+    # volumes[-20:], which included the 120.0 break bar itself and produced a
+    # self-damped 101.0 mean (ratio 1.1881 instead of 1.20).
+    assert out["bos_average_volume_20"] == pytest.approx(100.0)
+    assert out["bos_volume_ratio"] == pytest.approx(1.20)
     assert out["bos_volume_threshold"] == pytest.approx(1.3)
 
     confirmed_volumes = volumes.copy()
@@ -183,7 +186,9 @@ def test_detect_bos_emits_measured_below_threshold_volume_diagnostics(monkeypatc
     assert confirmed["bos_volume_available"] is True
     assert confirmed["bos_volume_confirmed"] is True
     assert confirmed["bos_volume_status"] == "confirmed"
-    assert confirmed["bos_volume_ratio"] == pytest.approx(1.9048)
+    # 200.0 break bar over the same 100.0 preceding baseline (was 1.9048 when the
+    # break bar was folded into its own denominator).
+    assert confirmed["bos_volume_ratio"] == pytest.approx(2.0)
 
 
 def test_forex_asset_structure_adjustment_applies_configured_bos_min_break(monkeypatch):

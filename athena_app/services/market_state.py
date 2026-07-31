@@ -327,10 +327,25 @@ def split_market_state(
             return False
         return None
 
+    def _explicit_confirm_flag(candle: dict[str, Any]) -> bool | None:
+        """Read the producer's own closed-bar flag, whatever it named it.
+
+        Bybit REST klines (``data_feeds._bybit_kline_to_candle``) emit
+        ``confirmed``/``closed``; the Bybit v5 WS kline payload uses ``confirm``.
+        Only checking ``confirm`` left every REST-sourced bar classified purely
+        by bucket comparison, so a cached partial bar could be read as closed.
+        """
+        for key in ("confirm", "confirmed", "closed"):
+            if key in candle:
+                flag = _explicit_confirm(candle.get(key))
+                if flag is not None:
+                    return flag
+        return None
+
     confirmed: list[dict[str, Any]] = []
     forming_candidates: list[dict[str, Any]] = []
     for candle in candles or []:
-        explicit = _explicit_confirm(candle.get("confirm")) if "confirm" in candle else None
+        explicit = _explicit_confirm_flag(candle)
         candle_bucket = get_bucket_start_epoch(
             tf,
             candle_timestamp_epoch(candle),
@@ -340,7 +355,7 @@ def split_market_state(
             # Bybit confirm=false is authoritative even if the local clock is
             # near a boundary; it must never enter a closed-candle series.
             forming_candidates.append(candle)
-        elif explicit is True:
+        elif explicit is True and candle_bucket != current_bucket:
             confirmed.append(candle)
         elif candle_bucket == current_bucket:
             forming_candidates.append(candle)
