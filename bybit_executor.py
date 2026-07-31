@@ -122,10 +122,14 @@ def _engine_b_scale_out_plan(signal: dict) -> str | None:
         # unmanaged; degrade to the fixed TP2 bracket.
         return exit_policy.RUNNER_TO_TP2
     if directive == exit_policy.RUNNER_TIMED:
-        # The timed-exit monitor does not yet dispatch Engine B exit modes; the
-        # fixed TP2 bracket is the safe live equivalent until it does.
-        return exit_policy.RUNNER_TO_TP2
-    if directive not in (exit_policy.RUNNER_TO_TP2, exit_policy.RUNNER_TRAIL):
+        # Keep TP2 as the broker-side profit bracket while the live monitor owns
+        # the additional Engine B time horizon.
+        return exit_policy.RUNNER_TIMED
+    if directive not in (
+        exit_policy.RUNNER_TO_TP2,
+        exit_policy.RUNNER_TRAIL,
+        exit_policy.RUNNER_TIMED,
+    ):
         return None
     return directive
 

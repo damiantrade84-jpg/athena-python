@@ -370,8 +370,8 @@ export function buildQuickExecutePayload(args: {
     ? String(resolved.horizon || resolved.style || pipMode || 'swing')
     : (pipMode || resolved.style || 'swing');
   const volumePayload = buildExecutionVolumePayload({ volumeMode, sizingOverride });
-  // Per-trade exit-mode override is Engine-A only (backend no-ops it for engine_b).
-  const exitModePayload = isEngineBOnly ? {} : buildExitModePayload({ exitMode });
+  // Both Engine A and Engine B resolve per-trade -> score-group -> global mode.
+  const exitModePayload = buildExitModePayload({ exitMode });
   const payload: Record<string, unknown> = {
     signal: {
       ...signalPayload,

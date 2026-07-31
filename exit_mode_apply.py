@@ -35,6 +35,7 @@ def apply_engine_a_exit_mode(
     cfg: dict,
     level_override: dict | None = None,
     score_group_resolver=None,
+    apply_level_clamp: bool = True,
 ) -> str | None:
     """Resolve + stamp the Engine A exit mode and (non-manual) apply the
     advisable-pip clamp. No-op unless ``engine`` is Engine A.
@@ -66,8 +67,8 @@ def apply_engine_a_exit_mode(
     )
     sig["exit_mode"] = mode
 
-    if mode == exit_policy.EXIT_MODE_MANUAL:
-        return mode  # manual: user's exact levels win, no clamp (spec Open Q3)
+    if mode == exit_policy.EXIT_MODE_MANUAL or not apply_level_clamp:
+        return mode  # manual or authoritative upstream levels: mode only, no clamp
 
     bounds = (cfg.get("ENGINE_A_ADVISABLE_PIP_BY_SCORE_GROUP") or {}).get(score_group) or {}
     psize = pip_size(symbol_info, sig.get("type") or sig.get("asset_class"))
@@ -112,6 +113,7 @@ def apply_engine_b_exit_strategy(
     """
     if str(engine or "").strip().lower() not in (
         "engine_b",
+        "engine b",
         "b",
         "naked",
         "naked_structure",

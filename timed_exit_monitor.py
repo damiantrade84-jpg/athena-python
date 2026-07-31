@@ -29,6 +29,7 @@ All windows are read from CONFIG["TIMED_EXIT"] — edit in config.yaml, not here
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 import threading
 import time
@@ -828,8 +829,31 @@ def _get_timed_cfg(config_fn) -> dict:
         merged["trail_clear_broker_tp_on_activation"] = False
     scalp_raw = cfg.get("SCALP_ENGINE") or {}
     merged["scalp_live_profit_protect"] = bool(scalp_raw.get("LIVE_PROFIT_PROTECT", True))
-    # Engine A time_based exit: bars-per-style for the timed close (Plan 2).
-    merged["engine_a_time_exit_bars"] = cfg.get("ENGINE_A_TIME_EXIT_BARS") or _TIME_EXIT_BARS_DEFAULT
+    # Explicit time_based exits use elapsed minutes. Keep the older bar maps
+    # separately because adaptive-trail stagnation uses its own longer horizon.
+    _engine_a_minutes = cfg.get(
+        "ENGINE_A_TIME_EXIT_MINUTES", _TIME_EXIT_MINUTES_DEFAULT
+    )
+    _engine_b_minutes = cfg.get(
+        "ENGINE_B_TIME_EXIT_MINUTES", _TIME_EXIT_MINUTES_DEFAULT
+    )
+    _engine_a_bars = cfg.get("ENGINE_A_TIME_EXIT_BARS", _TIME_EXIT_BARS_DEFAULT)
+    _engine_b_bars = cfg.get("ENGINE_B_TIME_EXIT_BARS", _TIME_EXIT_BARS_DEFAULT)
+    merged["engine_a_time_exit_minutes"] = (
+        _TIME_EXIT_MINUTES_DEFAULT if _engine_a_minutes is None else _engine_a_minutes
+    )
+    merged["engine_b_time_exit_minutes"] = (
+        _TIME_EXIT_MINUTES_DEFAULT if _engine_b_minutes is None else _engine_b_minutes
+    )
+    merged["engine_a_time_exit_bars"] = (
+        _TIME_EXIT_BARS_DEFAULT if _engine_a_bars is None else _engine_a_bars
+    )
+    merged["engine_b_time_exit_bars"] = (
+        _TIME_EXIT_BARS_DEFAULT if _engine_b_bars is None else _engine_b_bars
+    )
+    merged["engine_b_exit_mode_global_default"] = cfg.get(
+        "ENGINE_B_EXIT_MODE_GLOBAL_DEFAULT", exit_policy.DEFAULT_EXIT_MODE
+    )
     return merged
 
 
@@ -837,29 +861,51 @@ def _is_engine_d_engine(engine: str) -> bool:
     return str(engine or "").strip().lower() in ("scalp", "engine d", "scalp_vp")
 
 
-# Style-timeframe minutes for time_based exit (N bars * tf minutes).
+# Adaptive-trail max-hold/stagnation uses N management bars. Explicit
+# time_based exits use elapsed-minute defaults and do not use these candle TFs.
 _TF_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
 _TIME_EXIT_BARS_DEFAULT = {"scalp": 12, "intraday": 18, "swing": 10}
+_TIME_EXIT_MINUTES_DEFAULT = {"scalp": 30, "intraday": 60, "swing": 14400}
 
 
 def _is_engine_a_engine(engine: str | None) -> bool:
     return str(engine or "").strip().lower() in ("engine_a", "engine a")
 
 
-def _engine_a_exit_dispatch(
-    engine, exit_mode, mins_open: float, close_after_min: float
+def _is_engine_b_engine(engine: str | None) -> bool:
+    return str(engine or "").strip().lower() in (
+        "engine_b",
+        "engine b",
+        "b",
+        "naked",
+        "naked_structure",
+        "structure",
+        "smc",
+    )
+
+
+def _exit_mode_dispatch(
+    engine,
+    exit_mode,
+    mins_open: float,
+    close_after_min: float,
+    default_exit_mode: str | None = None,
 ) -> str:
     """Decide monitor handling for one trade row. Returns:
-      'trail'       -> run today's trail/profit-protect logic (adaptive Engine A,
-                       any non-Engine-A, or an unknown/legacy mode — fail-safe to
-                       current behavior).
+      'trail'       -> run trail/profit-protect logic (adaptive Engine A/B,
+                       any other engine, or an unknown legacy Engine A mode).
       'hold'        -> broker SL/TP bracket only; monitor takes no action this tick
                        (traditional_static / manual).
-      'timed_close' -> close now (time_based and the N-bar window has elapsed).
+      'timed_close' -> close now (time_based elapsed-minute deadline reached).
     """
-    if not _is_engine_a_engine(engine):
+    if not (_is_engine_a_engine(engine) or _is_engine_b_engine(engine)):
         return "trail"
     em = exit_policy.normalize_mode(exit_mode)
+    if em is None and _is_engine_b_engine(engine):
+        # Historical Engine B audit rows were not stamped even though their
+        # configured contract was static. Resolve ambiguous B rows to the
+        # fail-safe broker bracket instead of silently enabling a trail.
+        em = exit_policy.resolve_exit_mode(global_default=default_exit_mode)
     if em is None or exit_policy.uses_trail_management(em):
         return "trail"
     if exit_policy.uses_timed_close(em):
@@ -867,12 +913,58 @@ def _engine_a_exit_dispatch(
     return "hold"  # traditional_static / manual
 
 
-def _time_close_after_min(tcfg: dict, style: str) -> float:
-    """N bars * style-timeframe minutes. Bars from the merged tcfg
-    ('engine_a_time_exit_bars'); timeframe from tcfg['trail_timeframe'][style]
-    (falls back to H4=240)."""
-    bars_map = (tcfg or {}).get("engine_a_time_exit_bars") or _TIME_EXIT_BARS_DEFAULT
-    bars = float(bars_map.get(style, bars_map.get("intraday", 18)))
+def _engine_a_exit_dispatch(
+    engine, exit_mode, mins_open: float, close_after_min: float
+) -> str:
+    """Backward-compatible alias for the original Engine-A-only helper name."""
+    return _exit_mode_dispatch(engine, exit_mode, mins_open, close_after_min)
+
+
+def _time_close_after_min(
+    tcfg: dict, style: str, engine: str | None = "engine_a"
+) -> float:
+    """Return the explicit elapsed-minute deadline for Engine A or Engine B.
+
+    A non-positive scalar/map value disables that time close by returning an
+    infinite horizon.
+    """
+    minutes_key = (
+        "engine_b_time_exit_minutes"
+        if _is_engine_b_engine(engine)
+        else "engine_a_time_exit_minutes"
+    )
+    raw_minutes = (tcfg or {}).get(minutes_key, _TIME_EXIT_MINUTES_DEFAULT)
+    if isinstance(raw_minutes, dict):
+        raw_minutes = raw_minutes.get(
+            style, _TIME_EXIT_MINUTES_DEFAULT.get(style, 60)
+        )
+    try:
+        minutes = float(raw_minutes)
+    except (TypeError, ValueError):
+        minutes = float(_TIME_EXIT_MINUTES_DEFAULT.get(style, 60))
+    if minutes <= 0:
+        return float("inf")
+    return minutes
+
+
+def _adaptive_max_hold_after_min(
+    tcfg: dict, style: str, engine: str | None = "engine_a"
+) -> float:
+    """Return the separate adaptive stagnation horizon in management bars."""
+    bars_key = (
+        "engine_b_time_exit_bars"
+        if _is_engine_b_engine(engine)
+        else "engine_a_time_exit_bars"
+    )
+    raw_bars = (tcfg or {}).get(bars_key, _TIME_EXIT_BARS_DEFAULT)
+    if isinstance(raw_bars, dict):
+        raw_bars = raw_bars.get(style, raw_bars.get("intraday", 18))
+    try:
+        bars = float(raw_bars)
+    except (TypeError, ValueError):
+        bars = float(_TIME_EXIT_BARS_DEFAULT.get(style, 18))
+    if bars <= 0:
+        return float("inf")
     tf_map = (tcfg or {}).get("trail_timeframe") or {}
     tf = str(tf_map.get(style, "H4")).upper()
     return bars * float(_TF_MINUTES.get(tf, 240))
@@ -1673,7 +1765,9 @@ def _evaluate_trail(
         and abs(current_r) <= float(stag_cfg.get("max_abs_r", 0.25))
     ):
         stag_frac = float(stag_cfg.get("fraction_of_max_hold", 0.5))
-        close_after_min = _time_close_after_min(tcfg, style)
+        close_after_min = _adaptive_max_hold_after_min(
+            tcfg, style, row.get("engine")
+        )
         if stag_frac > 0 and close_after_min > 0 and mins_open >= close_after_min * stag_frac:
             log.info(
                 f"[TIMED_EXIT] STAGNATION close: {pair} style={style} dir={direction} "
@@ -2083,16 +2177,21 @@ def _handle_mt5_row(
     scfg = tcfg[style]
     mins = _minutes_open(row["ts"])
 
-    # Engine A exit-mode dispatch (Plan 2). Runs AFTER broker-SL repair (above) so
+    # Engine A/B exit-mode dispatch. Runs AFTER broker-SL repair (above) so
     # static/manual trades keep SL protection. static/manual -> pure broker bracket
-    # (no trail/profit-protect); time_based -> close after N bars; everything else
-    # (adaptive Engine A, non-Engine-A, unknown/legacy mode) falls through unchanged.
-    _ea_dispatch = _engine_a_exit_dispatch(
-        engine, row.get("exit_mode"), mins, _time_close_after_min(tcfg, style)
+    # (no trail/profit-protect); time_based -> close at its elapsed-minute deadline;
+    # everything else
+    # (adaptive A/B, other engines, unknown/legacy mode) falls through unchanged.
+    _exit_dispatch = _exit_mode_dispatch(
+        engine,
+        row.get("exit_mode"),
+        mins,
+        _time_close_after_min(tcfg, style, engine),
+        tcfg.get("engine_b_exit_mode_global_default"),
     )
-    if _ea_dispatch == "hold":
+    if _exit_dispatch == "hold":
         return
-    if _ea_dispatch == "timed_close":
+    if _exit_dispatch == "timed_close":
         _close = mt5_close_position(ticket)
         if _close.get("success"):
             _live_pnl = _close.get("liveProfit", 0.0)
@@ -2489,15 +2588,19 @@ def _handle_bybit_row(
     _live_sl_for_trail = _safe_float(live.get("sl"))
     state_key = _state_key("bybit", row.get("audit_id"), ticket)
 
-    # Engine A exit-mode dispatch (Plan 2): static/manual -> broker SL+TP bracket
-    # only; time_based -> close after N bars; else (adaptive / non-Engine-A /
+    # Engine A/B exit-mode dispatch: static/manual -> broker SL+TP bracket
+    # only; time_based -> close at its elapsed-minute deadline; else (adaptive / non-Engine-A /
     # unknown mode) fall through unchanged.
-    _ea_dispatch = _engine_a_exit_dispatch(
-        engine, row.get("exit_mode"), mins, _time_close_after_min(tcfg, style)
+    _exit_dispatch = _exit_mode_dispatch(
+        engine,
+        row.get("exit_mode"),
+        mins,
+        _time_close_after_min(tcfg, style, engine),
+        tcfg.get("engine_b_exit_mode_global_default"),
     )
-    if _ea_dispatch == "hold":
+    if _exit_dispatch == "hold":
         return
-    if _ea_dispatch == "timed_close":
+    if _exit_dispatch == "timed_close":
         result = bybit_close_position(pair, direction, volume)
         if result.get("success"):
             pnl_r = _live_pnl_r(row, entry, _sl_raw, volume, profit)
@@ -2917,15 +3020,23 @@ class TimedExitMonitor:
         self._thread: threading.Thread | None = None
         self._db_path: str = ""
         self._config_fn = None
+        self._start_lock = threading.Lock()
 
     def start(self, db_path: str, config_fn) -> None:
-        self._db_path  = db_path
-        self._config_fn = config_fn
-        self._thread   = threading.Thread(
-            target=self._loop, name="TimedExitMonitor", daemon=True
-        )
-        self._thread.start()
+        with self._start_lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._db_path = db_path
+            self._config_fn = config_fn
+            self._thread = threading.Thread(
+                target=self._loop, name="TimedExitMonitor", daemon=True
+            )
+            self._thread.start()
         log.info("[TIMED_EXIT] Monitor thread started")
+
+    def is_running(self) -> bool:
+        with self._start_lock:
+            return self._thread is not None and self._thread.is_alive()
 
     def _loop(self) -> None:
         while True:
@@ -2946,3 +3057,38 @@ _monitor = TimedExitMonitor()
 def start_monitor(db_path: str, config_fn) -> None:
     """Called once at startup from auto_trader.py."""
     _monitor.start(db_path, config_fn)
+
+
+def is_monitor_running() -> bool:
+    """Return actual monitor thread health rather than configuration intent."""
+    return _monitor.is_running()
+
+
+def exit_management_block_reason(
+    *, exit_mode: str | None, engine: str | None, style: str | None, cfg: dict
+) -> str | None:
+    """Fail closed when a selected software-managed exit cannot actually run."""
+    mode = exit_policy.normalize_mode(exit_mode)
+    if not (
+        exit_policy.uses_trail_management(mode)
+        or exit_policy.uses_timed_close(mode)
+    ):
+        return None
+
+    tcfg = _get_timed_cfg(lambda: cfg or {})
+    if not bool(tcfg.get("enabled", True)):
+        return f"EXIT_MONITOR_DISABLED:{mode}"
+    if not is_monitor_running():
+        return f"EXIT_MONITOR_NOT_RUNNING:{mode}"
+
+    normalized_style = str(style or "intraday").strip().lower()
+    if normalized_style not in ("scalp", "intraday", "swing"):
+        normalized_style = "intraday"
+    if exit_policy.uses_trail_management(mode):
+        if str(tcfg.get("tp_mode") or "").strip().lower() != "trailing_atr":
+            return "ADAPTIVE_EXIT_MANAGER_DISABLED"
+    elif exit_policy.uses_timed_close(mode):
+        horizon = _time_close_after_min(tcfg, normalized_style, engine)
+        if not math.isfinite(horizon) or horizon <= 0:
+            return f"TIME_EXIT_HORIZON_DISABLED:{normalized_style}"
+    return None

@@ -182,6 +182,43 @@ def test_open_trades_timed_can_enable_sl_recompute_on_poll(monkeypatch):
     assert recompute_calls["n"] == 1
 
 
+def test_open_trades_timed_exposes_explicit_intraday_minute_deadline(monkeypatch):
+    athena_module = _open_trades_timed_client(monkeypatch)
+    import timed_exit_monitor
+
+    monkeypatch.setitem(
+        athena_module.CONFIG,
+        "ENGINE_A_TIME_EXIT_MINUTES",
+        {"scalp": 30, "intraday": 60, "swing": 14400},
+    )
+    monkeypatch.setattr(
+        timed_exit_monitor,
+        "_load_recent_audit_rows",
+        lambda _db: [
+            {
+                "ticket": "123",
+                "style": "intraday",
+                "engine": "engine_a",
+                "exit_mode": "time_based",
+                "ts": "2026-04-14T10:00:00+00:00",
+                "direction": "LONG",
+                "entry_price": 1.1,
+                "sl": 1.09,
+                "tp": 1.11,
+            }
+        ],
+    )
+
+    client = athena_module.app.test_client()
+    resp = client.get("/api/open-trades-timed")
+    assert resp.status_code == 200
+    trade = resp.get_json()["positions"][0]
+    assert trade["exit_mode"] == "time_based"
+    assert trade["explicit_time_exit"] is True
+    assert trade["close_trigger_min"] == 60.0
+    assert trade["be_trigger_min"] is None
+
+
 def test_open_trades_timed_returns_bybit_when_mt5_errors(monkeypatch):
     athena_module = _open_trades_timed_client(monkeypatch)
     import bybit_executor

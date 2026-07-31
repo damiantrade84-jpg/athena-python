@@ -25,12 +25,14 @@ def test_exit_mode_threaded_into_live_position_row():
     assert '"exit_mode": audit.get("exit_mode")' in mon_src
 
 
-def test_exit_mode_wired_into_all_three_engine_a_paths():
+def test_exit_mode_wired_into_all_three_engine_a_and_b_paths():
     exec_src = _read("execution.py")
     at_src = _read("auto_trader.py")
     # helper called in quick_execute + execute (execution.py) and auto_trader
     assert exec_src.count("apply_engine_a_exit_mode(") == 2
+    assert exec_src.count("apply_engine_b_exit_strategy(") == 2
     assert "apply_engine_a_exit_mode(" in at_src
+    assert "apply_engine_b_exit_strategy(" in at_src
     # exit_mode present in each success-INSERT column list
     assert "max_score,score_pct,exit_mode" in exec_src                       # quick_execute
     assert "signal_price_ref,slippage_bps,max_score,score_pct,exit_mode" in exec_src  # execute

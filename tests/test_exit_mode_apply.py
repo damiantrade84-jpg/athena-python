@@ -84,3 +84,33 @@ def test_manual_mode_is_not_clamped():
     )
     assert out == ep.EXIT_MODE_MANUAL
     assert sig["sl"] == 0.9995  # untouched
+
+
+def test_mode_can_be_stamped_without_clamping_authoritative_levels():
+    sig = {
+        "pair": "EUR/USD",
+        "direction": "LONG",
+        "price": 1.0,
+        "sl": 0.9995,
+        "tp1": 1.0010,
+        "tp2": 1.0015,
+        "type": "forex",
+    }
+    cfg = {
+        "ENGINE_A_EXIT_MODE_GLOBAL_DEFAULT": "adaptive_trail",
+        "ENGINE_A_ADVISABLE_PIP_BY_SCORE_GROUP": {
+            "forex_majors": {"min_pip": 10}
+        },
+    }
+    out = ema.apply_engine_a_exit_mode(
+        sig,
+        "engine_a",
+        {"point": 0.0001, "digits": 4},
+        cfg,
+        score_group_resolver=_grp,
+        apply_level_clamp=False,
+    )
+    assert out == ep.EXIT_MODE_ADAPTIVE
+    assert sig["exit_mode"] == ep.EXIT_MODE_ADAPTIVE
+    assert sig["sl"] == 0.9995
+    assert sig["tp1"] == 1.0010

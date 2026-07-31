@@ -569,6 +569,7 @@ def _signal_engine(signal: dict) -> str:
     if engine in (
         "engine_a",
         "engine_a_v2",
+        "engine_a_v3",
         "factor_scoring",
         "forex_scoring",
         "a",
@@ -2392,12 +2393,47 @@ class AutoTrader:
                 apply_engine_a_exit_mode,
                 apply_engine_b_exit_strategy,
             )
+            from engine_a_v3.execution import is_engine_a_v3_signal
+
+            _execution_engine = _signal_engine(signal)
             apply_engine_a_exit_mode(
-                signal, _signal_engine(signal), symbol_info, cfg, None
+                signal,
+                _execution_engine,
+                symbol_info,
+                cfg,
+                None,
+                apply_level_clamp=not is_engine_a_v3_signal(signal),
             )
             # Engine B exit-strategy/runner-directive stamp (no level mutation);
             # no-op for non-Engine-B signals.
-            apply_engine_b_exit_strategy(signal, _signal_engine(signal), cfg)
+            apply_engine_b_exit_strategy(signal, _execution_engine, cfg)
+            from timed_exit_monitor import exit_management_block_reason
+
+            _exit_management_error = exit_management_block_reason(
+                exit_mode=signal.get("exit_mode"),
+                engine=_execution_engine,
+                style=signal.get("style") or signal.get("horizon"),
+                cfg=cfg,
+            )
+            if _exit_management_error:
+                log.warning(
+                    f"[AUTO] {pair} EXIT MANAGEMENT BLOCKED: {_exit_management_error}"
+                )
+                signal["brokerPrecheck"] = {
+                    "allowed": False,
+                    "stage": "exit_management",
+                    "venue": _exec_venue,
+                    "reason": _exit_management_error,
+                }
+                _finalize_trace(
+                    signal,
+                    cfg,
+                    action="block",
+                    stage="exitManagement",
+                    reason=_exit_management_error,
+                )
+                self._write_error(signal, _exit_management_error)
+                return False
 
             # F2: parity with the manual paths (api_execute /
             # api_quick_execute). Route the auto path through the same
