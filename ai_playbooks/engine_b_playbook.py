@@ -20,6 +20,7 @@ def get_engine_b_playbook() -> dict:
             "Chart screenshot timeframe may differ from zone_tf — do not reject H4/D1 zone quality using only a lower-TF chart image.",
             "Assess liquidity pools, supply/demand, support/resistance.",
             "Evaluate sweep/reclaim and whether structure supports direction.",
+            "Swing sequence HH_HL/LH_LL is a lagging diagnostic only - never grade direction from it; structure direction evidence is aligned BOS/CHoCH.",
             "Nearest zone must support acceptable RR before ENTRY_NOW.",
             "Structure signal after invalidation must be rejected.",
             "Use server-supplied engineBContext flags and canonical gates only — never invent BOS/OB/FVG confirmation from the chart image alone.",

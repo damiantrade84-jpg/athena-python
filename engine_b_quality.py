@@ -111,22 +111,47 @@ def compute_structure_alignment_score(res: dict[str, Any], direction: str) -> fl
         # macro read so the "both timeframes agree" tier stays unreachable.
         macro_aligned = False
     bos = bool(res.get("bos_confirmed", False))
-    sweep = bool(res.get("liquidity_sweep", False))
+    choch = bool(res.get("choch_confirmed", False))
+    raw_sweep = bool(res.get("liquidity_sweep", False))
+    # Direction-aligned sweep only (mirrors calculate_confidence._sweep_aligned):
+    # an opposing sweep is evidence for the other side, not this candidate.
+    _sweep_dir = str(res.get("sweep_direction") or "").upper() or None
+    aligned_sweep = raw_sweep and (_sweep_dir is None or _sweep_dir == dir_u)
     # bos_mtf_confirmed is direction-blind; only credit the multi-TF break when
     # it is in the trade direction (bos_confirmed is direction-aware), so an
     # opposing MTF BOS cannot inflate a counter-trend candidate's alignment.
     bos_mtf = bool(res.get("bos_mtf_confirmed", False)) and bos
 
-    if micro_aligned and macro_aligned:
-        score = 1.0
-    elif micro_aligned:
-        score = 0.65
-    elif macro_aligned:
-        score = 0.55
-    elif bos or sweep:
-        score = 0.35
+    try:
+        from config import CONFIG
+
+        _seq_dir = bool(CONFIG.get("ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", False))
+    except Exception:
+        _seq_dir = False
+    if _seq_dir:
+        # Legacy ladder: lagging HH_HL/LH_LL outranks break evidence.
+        if micro_aligned and macro_aligned:
+            score = 1.0
+        elif micro_aligned:
+            score = 0.65
+        elif macro_aligned:
+            score = 0.55
+        elif bos or raw_sweep:
+            score = 0.35
+        else:
+            score = 0.0
     else:
-        score = 0.0
+        # Break/character evidence is direction authority. The lagging swing
+        # sequence is diagnostic only and earns no alignment credit (EURNZD:
+        # stale HH_HL maxed this component while H4/D1 structure was selling).
+        if bos:
+            score = 0.85
+        elif choch:
+            score = 0.70
+        elif aligned_sweep:
+            score = 0.45
+        else:
+            score = 0.0
 
     if bos_mtf and score > 0:
         score = min(1.0, score + 0.15)

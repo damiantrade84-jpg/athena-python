@@ -58,23 +58,21 @@ def _engine_b_tf_roles_block(
     style: str,
     engine_b_context: dict[str, Any] | None = None,
 ) -> str:
-    """Render actual server TF roles, falling back to the canonical B matrix."""
-    matrix = get_engine_b_playbook().get("timeframeMatrix") or {}
-    macro = matrix.get("macroSwing", "H4")
+    """Render actual server TF roles. No static matrix fallback: missing
+    provenance is reported as unavailable, never substituted with a legacy
+    hardcoded ladder."""
     style_key = str(style or "intraday").lower()
     if style_key == "auto":
         style_key = "intraday"
-    roles = matrix.get(style_key) or matrix.get("intraday") or {}
-    if not isinstance(roles, dict):
-        roles = {}
     ctx = engine_b_context if isinstance(engine_b_context, dict) else {}
     resolved_roles = {
-        "struct": ctx.get("structTf") or roles.get("struct", "unavailable"),
-        "zone": ctx.get("zoneTf") or roles.get("zone", "unavailable"),
-        "trigger": ctx.get("triggerTf") or roles.get("trigger", "unavailable"),
-        "atr": ctx.get("atrTf") or roles.get("atr", "unavailable"),
+        "struct": ctx.get("structTf") or "unavailable",
+        "zone": ctx.get("zoneTf") or "unavailable",
+        "trigger": ctx.get("triggerTf") or "unavailable",
+        "atr": ctx.get("atrTf") or "unavailable",
     }
-    role_source = "server" if any(ctx.get(k) for k in ("structTf", "zoneTf", "triggerTf", "atrTf")) else "canonical_fallback"
+    macro = ctx.get("biasTf") or "unavailable"
+    role_source = "server" if any(ctx.get(k) for k in ("structTf", "zoneTf", "triggerTf", "atrTf", "biasTf")) else "unavailable"
     return (
         "== ENGINE B TIMEFRAME ROLES (style-resolved) ==\n"
         f"analyze_style: {style_key}\n"
@@ -84,7 +82,7 @@ def _engine_b_tf_roles_block(
         f"trigger_tf_expected: {ctx.get('triggerTimeframeExpected', 'unavailable')} | "
         f"trigger_tf_actual: {ctx.get('triggerTimeframeActual', 'unavailable')} | "
         f"trigger_tf_gate_ok: {ctx.get('triggerTimeframeGateOk', 'unavailable')}\n"
-        f"macro_swing: {macro}\n"
+        f"macro_swing_tf (bias_tf): {macro}\n"
         "Evaluate zone retest on zone_tf; evaluate entry trigger on trigger_tf.\n"
         "Chart screenshot TF may differ — server-trusted engineBContext gates override visual zone guesses.\n"
         "When locationOk=true and entryOk=true, do not downgrade solely because price is at/near a zone band.\n"

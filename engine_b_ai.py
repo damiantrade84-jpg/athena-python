@@ -66,7 +66,7 @@ STYLE & LEVELS:
 Evaluate using Resolved AI style and Asset type from AI CALIBRATION CONTEXT. Do NOT judge Scalp by Swing criteria (or vice versa). For scale-out plans: compare RR1 to Engine B TP1 minimum RR and RR2 / rrUsedForGate to `Style min RR (config)` only; do NOT compare RR1 to style min RR when scaleOutActive=true and RR1 passes tp1MinRr with tp1PathClear=true. Do NOT invent thresholds. RR/SL/TP are deterministic engine outputs already gated by Python; treat RR as informational, not the primary grade driver. Review SL/TP structurally: distinguish structural invalidation SL from ATR/mechanical execution SL (executionSlTighterThanStructural=true is the normal design, not a levels defect); output levelsVerdict accept/adjust/reject with levelsReason citing zones/ATR; suggestedSL/suggestedTP only when adjust/reject. Do not automatically penalize Crypto for wide SL unless it exceeds MAX_SL_PCT.
 
 ZONE / ROOM / TRIGGER RULES:
-Engine B is zone-retest: when locationOk=true and entryOk=true, retest at the active zone is valid; do not reflex-downgrade as inside resistance/support. spaceGateOk is the authoritative deterministic room gate; roomOk=false alone is not an automatic reject when spaceGateOk=true via an approved and geometrically valid substitution or scale-out plan. support_too_close / resistance_too_close are warnings when spaceGateOk=true, but hard blockers when spaceGateOk=false. Reject or wait when tp1PathClear=false; such signals are also deterministically blocked. When a TP1 would overshoot the opposing zone Engine B clamps it to the wall's front edge (tp1ClampedToOpposingZone=true); the emitted TP1 is reachable, so do not reject it for the pre-clamp overshoot. Judge zones on zoneTf and triggers on triggerTf from server-trusted context; these resolved roles override the canonical playbook matrix, including M15/M30 live trigger overrides. Require triggerTimeframeGateOk=true when present and never substitute H1. Cite gateScore separately from graded qualityScore/qualityComponents; normalize with score/maxScore, never gatePct. Macro swing is always H4. Derive letter grades by weighing evidence; do NOT map a short checklist phrase to A+/A/B mechanically."""
+Engine B is zone-retest: when locationOk=true and entryOk=true, retest at the active zone is valid; do not reflex-downgrade as inside resistance/support. spaceGateOk is the authoritative deterministic room gate; roomOk=false alone is not an automatic reject when spaceGateOk=true via an approved and geometrically valid substitution or scale-out plan. support_too_close / resistance_too_close are warnings when spaceGateOk=true, but hard blockers when spaceGateOk=false. Reject or wait when tp1PathClear=false; such signals are also deterministically blocked. When a TP1 would overshoot the opposing zone Engine B clamps it to the wall's front edge (tp1ClampedToOpposingZone=true); the emitted TP1 is reachable, so do not reject it for the pre-clamp overshoot. Judge zones on zoneTf and triggers on triggerTf from server-trusted context; these resolved roles are policy-resolved per symbol and style and are authoritative, including M15/M30 live trigger overrides. Require triggerTimeframeGateOk=true when present and never substitute H1. Cite gateScore separately from graded qualityScore/qualityComponents; normalize with score/maxScore, never gatePct. The macro swing sequence timeframe is the server-resolved bias TF — never assume H4. Swing sequences (HH_HL/LH_LL) are lagging diagnostics only: structure direction evidence is aligned BOS/CHoCH, never the sequence. Derive letter grades by weighing evidence; do NOT map a short checklist phrase to A+/A/B mechanically."""
 
 _ENGINE_B_AI_EXPERT_PREFIX, _ENGINE_B_AI_PREFIX_SOURCE, _ENGINE_B_AI_PREFIX_HASH = load_prompt(
     "engine_b_ai_expert_prefix",
@@ -489,14 +489,18 @@ def build_engine_b_signal_message(
     lines.append("")
     lines.append("=== MARKET STRUCTURE ===")
 
-    # Swing sequences. The structural sequence TF varies by style (H1 scalp,
-    # H4 intraday, D1 swing) — label it accurately so the model does not judge
-    # a D1 sequence as an H1 micro-structure read. Macro is always H4.
-    _struct_tf = str(structure_result.get("structure_tf") or "H1").upper()
+    # Swing sequences are lagging diagnostics — direction evidence is aligned
+    # BOS/CHoCH. Label each with its actual server-resolved TF: the structural
+    # sequence TF varies by style, and the macro sequence comes from the
+    # policy bias TF (macro_sequence_tf) — never a hardcoded H4.
+    _struct_tf = str(structure_result.get("structure_tf") or "?").upper()
+    _macro_tf = str(structure_result.get("macro_sequence_tf") or "?").upper()
     lines.append(
-        f"{_struct_tf} Structure Swing: {structure_result.get('current_swing_sequence', 'RANGING')}"
+        f"{_struct_tf} Structure Swing (lagging diagnostic): {structure_result.get('current_swing_sequence', 'RANGING')}"
     )
-    lines.append(f"H4 Macro Swing: {structure_result.get('macro_swing_sequence', 'RANGING')}")
+    lines.append(
+        f"{_macro_tf} Macro Swing (lagging diagnostic): {structure_result.get('macro_swing_sequence', 'RANGING')}"
+    )
 
     # BOS and sweeps
     bos = structure_result.get("bos_data", {})
@@ -787,7 +791,7 @@ def get_engine_b_ai_verdict(
             _ENGINE_B_AI_EXPERT_PREFIX
             + cross_engine_note
             + " Weigh: overall structural conviction; distance to boundary; "
-            "trigger quality; multi-TF alignment (explicit Y/N with evidence from available swing sequences). "
+            "trigger quality; multi-TF alignment (explicit Y/N citing per-timeframe BOS/CHoCH — swing sequences are lagging diagnostics only). "
             f"The deterministic selected style is {resolved_style.upper()}. "
             "Judge it only from the server-supplied policy roles and configured Style min RR; "
             "never apply another style's timeframe, holding-period, or RR rules. "

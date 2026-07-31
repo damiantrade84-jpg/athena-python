@@ -46,7 +46,33 @@ def _base_res_long():
     }
 
 
-def test_structure_alignment_both_tf_beats_bare_bos():
+def test_structure_alignment_break_evidence_beats_swing_sequence():
+    # Default (sequence direction retired): a bare aligned BOS is the direction
+    # authority and must outscore stale both-TF HH_HL alignment with no break.
+    swing_only = compute_structure_alignment_score(
+        {
+            "current_swing_sequence": "HH_HL",
+            "macro_swing_sequence": "HH_HL",
+        },
+        "LONG",
+    )
+    bare_bos = compute_structure_alignment_score(
+        {
+            "current_swing_sequence": "RANGING",
+            "macro_swing_sequence": "RANGING",
+            "bos_confirmed": True,
+        },
+        "LONG",
+    )
+    assert bare_bos > swing_only
+    assert bare_bos == pytest.approx(0.85)
+    assert swing_only == pytest.approx(0.0)
+
+
+def test_structure_alignment_legacy_sequence_ladder_restorable(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", True
+    )
     both = compute_structure_alignment_score(
         {
             "current_swing_sequence": "HH_HL",

@@ -1015,6 +1015,12 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "atrTf": _first_present(
             conf.get("atr_tf"), struct.get("atr_tf"), role_defaults.get("atr")
         ),
+        "biasTf": _first_present(
+            conf.get("bias_tf"),
+            struct.get("bias_tf"),
+            conf.get("macro_sequence_tf"),
+            struct.get("macro_sequence_tf"),
+        ),
         "triggerTimeframeExpected": trigger_expected,
         "triggerTimeframeActual": trigger_actual,
         "triggerTimeframeGateOk": conf.get(

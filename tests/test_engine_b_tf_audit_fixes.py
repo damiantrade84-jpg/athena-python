@@ -273,7 +273,12 @@ def test_macro_sequence_flagged_dependent_when_bias_tf_equals_structure_tf():
     assert macro_sequence_is_independent({"structure_tf": "H1"})
 
 
-def test_structure_alignment_does_not_double_count_same_timeframe():
+def test_structure_alignment_does_not_double_count_same_timeframe(monkeypatch):
+    # Legacy ladder only: sequences earn alignment credit again when the
+    # retired direction authority is explicitly restored.
+    monkeypatch.setitem(
+        config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", True
+    )
     aligned_two_tf = compute_structure_alignment_score(
         {
             "current_swing_sequence": "HH_HL",
@@ -294,6 +299,19 @@ def test_structure_alignment_does_not_double_count_same_timeframe():
     )
     assert aligned_two_tf == pytest.approx(1.0)
     assert aligned_same_tf == pytest.approx(0.65)
+
+
+def test_structure_alignment_sequence_earns_nothing_when_retired():
+    aligned_two_tf = compute_structure_alignment_score(
+        {
+            "current_swing_sequence": "HH_HL",
+            "macro_swing_sequence": "HH_HL",
+            "structure_tf": "H1",
+            "macro_sequence_tf": "H4",
+        },
+        "LONG",
+    )
+    assert aligned_two_tf == pytest.approx(0.0)
 
 
 # ── per-timeframe trigger calibration ────────────────────────────────────────
