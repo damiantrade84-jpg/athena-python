@@ -27,16 +27,23 @@ def _load_monolith():
     with _lock:
         if _monolith is not None:
             return _monolith
+        _diagnostic_mode_before_load = os.environ.get("ATHENA_DIAGNOSTIC_MODE")
         os.environ.setdefault("ATHENA_DIAGNOSTIC_MODE", "1")
-        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if repo_root not in sys.path:
-            sys.path.insert(0, repo_root)
-        athena_path = os.path.join(repo_root, "athena.py")
-        spec = importlib.util.spec_from_file_location("athena_monolith", athena_path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"Could not load athena.py from {athena_path}")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        try:
+            repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            if repo_root not in sys.path:
+                sys.path.insert(0, repo_root)
+            athena_path = os.path.join(repo_root, "athena.py")
+            spec = importlib.util.spec_from_file_location("athena_monolith", athena_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Could not load athena.py from {athena_path}")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        finally:
+            if _diagnostic_mode_before_load is None:
+                os.environ.pop("ATHENA_DIAGNOSTIC_MODE", None)
+            else:
+                os.environ["ATHENA_DIAGNOSTIC_MODE"] = _diagnostic_mode_before_load
         _monolith = mod
         return _monolith
 

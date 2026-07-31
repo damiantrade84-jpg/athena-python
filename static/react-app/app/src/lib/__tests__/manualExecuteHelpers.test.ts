@@ -240,10 +240,12 @@ describe('engine B execute gating', () => {
       signal: actionable,
       isEngineBOnly: true,
       pipMode: 'intraday',
+      exitMode: 'time_based',
     });
 
     expect((payload.signal as Record<string, unknown>).engine).toBe('engine_b');
     expect((payload.signal as Record<string, unknown>).source).toBe('engine_b');
+    expect((payload.signal as Record<string, unknown>).exit_mode).toBe('time_based');
     expect(payload.engine_b).toEqual(actionable.naked_data);
   });
 

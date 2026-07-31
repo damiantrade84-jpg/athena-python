@@ -1423,9 +1423,10 @@ CONFIG: dict = {
     # Backtest runner-trail proxy: chandelier-style ATR trail multiple for the
     # post-TP1 runner when the resolved exit mode is adaptive_trail.
     "ENGINE_B_BT_RUNNER_TRAIL_ATR_MULT": 2.0,
-    # time_based exit mode horizon in entry-timeframe bars; 0 disables the
-    # timed close (mode then behaves like the static fixed bracket).
-    "ENGINE_B_TIME_EXIT_BARS": 0,
+    # time_based live-exit horizon in the style-management timeframe selected
+    # by TIMED_EXIT.trail_timeframe. A scalar remains accepted for backward
+    # compatibility; 0 disables the timed close.
+    "ENGINE_B_TIME_EXIT_BARS": {"scalp": 12, "intraday": 18, "swing": 10},
     # When True, Engine B skips forex on 22:00–07:00 UTC bars (backtest + live scan).
     "ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED": True,
     # Diagnostics-first forex session weighting for Engine B structure context.
@@ -2998,6 +2999,9 @@ _KNOWN_YAML_ONLY_KEYS = {
     "ENGINE_A_ENTRY_TF_PERIODS",
     "ENGINE_A_SETUP_TF_PERIODS_ENABLED",
     "ENGINE_A_TIME_EXIT_BARS",
+    "ENGINE_B_EXIT_MODE_GLOBAL_DEFAULT",
+    "ENGINE_B_EXIT_MODE_BY_SCORE_GROUP",
+    "ENGINE_B_TIME_EXIT_BARS",
     "ENGINE_B_FOLLOW_THROUGH",
     "ENGINE_B_FOREX_ADX_MIN",
     "ENGINE_B_RESEARCH_LAB_FACTORS",

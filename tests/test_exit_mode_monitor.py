@@ -1,6 +1,30 @@
 import timed_exit_monitor as tem
 
 
+def test_monitor_start_is_idempotent_and_reports_real_thread_health(monkeypatch):
+    created = []
+
+    class FakeThread:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.alive = False
+            created.append(self)
+
+        def start(self):
+            self.alive = True
+
+        def is_alive(self):
+            return self.alive
+
+    monkeypatch.setattr(tem.threading, "Thread", FakeThread)
+    monitor = tem.TimedExitMonitor()
+    assert monitor.is_running() is False
+    monitor.start("audit.db", lambda: {})
+    assert monitor.is_running() is True
+    monitor.start("other.db", lambda: {"changed": True})
+    assert len(created) == 1
+
+
 def test_is_engine_a_engine():
     assert tem._is_engine_a_engine("engine_a") is True
     assert tem._is_engine_a_engine("Engine A") is True
@@ -8,12 +32,24 @@ def test_is_engine_a_engine():
         assert tem._is_engine_a_engine(e) is False
 
 
-def test_dispatch_non_engine_a_always_trails():
-    assert tem._engine_a_exit_dispatch("engine_b", "traditional_static", 999, 10) == "trail"
+def test_dispatch_other_engines_keep_legacy_trailing_path():
+    assert tem._exit_mode_dispatch("engine_c", "traditional_static", 999, 10) == "trail"
 
 
 def test_dispatch_engine_a_adaptive_trails():
-    assert tem._engine_a_exit_dispatch("engine_a", "adaptive_trail", 999, 10) == "trail"
+    assert tem._exit_mode_dispatch("engine_a", "adaptive_trail", 999, 10) == "trail"
+
+
+def test_dispatch_engine_b_honors_static_adaptive_and_time_modes():
+    assert tem._exit_mode_dispatch("engine_b", "traditional_static", 999, 10) == "hold"
+    assert tem._exit_mode_dispatch("Engine B", "manual", 999, 10) == "hold"
+    assert tem._exit_mode_dispatch("naked", "adaptive_trail", 999, 10) == "trail"
+    assert tem._exit_mode_dispatch("engine_b", "time_based", 9, 10) == "hold"
+    assert tem._exit_mode_dispatch("engine_b", "time_based", 10, 10) == "timed_close"
+    assert tem._exit_mode_dispatch("engine_b", None, 999, 10) == "hold"
+    assert tem._exit_mode_dispatch(
+        "engine_b", None, 999, 10, "adaptive_trail"
+    ) == "trail"
 
 
 def test_dispatch_engine_a_static_and_manual_hold():
@@ -36,16 +72,109 @@ def test_dispatch_engine_a_time_based():
 def test_time_close_after_min_uses_bars_times_tf():
     tcfg = {
         "engine_a_time_exit_bars": {"scalp": 12, "intraday": 18, "swing": 10},
+        "engine_b_time_exit_bars": {"scalp": 6, "intraday": 9, "swing": 5},
         "trail_timeframe": {"scalp": "H1", "intraday": "H4", "swing": "D1"},
     }
     assert tem._time_close_after_min(tcfg, "intraday") == 18 * 240   # H4
     assert tem._time_close_after_min(tcfg, "scalp") == 12 * 60       # H1
     assert tem._time_close_after_min(tcfg, "swing") == 10 * 1440     # D1
+    assert tem._time_close_after_min(tcfg, "intraday", "engine_b") == 9 * 240
+    assert tem._time_close_after_min(tcfg, "swing", "engine_b") == 5 * 1440
 
 
 def test_time_close_after_min_falls_back_to_defaults():
     # Missing maps -> built-in bar defaults and H4 timeframe.
     assert tem._time_close_after_min({}, "intraday") == 18 * 240
+
+
+def test_time_close_after_min_zero_disables_close():
+    tcfg = {
+        "engine_b_time_exit_bars": 0,
+        "trail_timeframe": {"intraday": "H4"},
+    }
+    assert tem._time_close_after_min(tcfg, "intraday", "engine_b") == float("inf")
+
+
+def test_get_timed_cfg_loads_distinct_engine_time_maps():
+    cfg = {
+        "TIMED_EXIT": {},
+        "ENGINE_A_TIME_EXIT_BARS": {"intraday": 18},
+        "ENGINE_B_TIME_EXIT_BARS": {"intraday": 9},
+        "ENGINE_B_EXIT_MODE_GLOBAL_DEFAULT": "traditional_static",
+    }
+    merged = tem._get_timed_cfg(lambda: cfg)
+    assert merged["engine_a_time_exit_bars"] == {"intraday": 18}
+    assert merged["engine_b_time_exit_bars"] == {"intraday": 9}
+    assert merged["engine_b_exit_mode_global_default"] == "traditional_static"
+
+
+def test_software_managed_modes_fail_closed_when_monitor_is_unavailable(monkeypatch):
+    cfg = {
+        "TIMED_EXIT": {
+            "enabled": True,
+            "tp_mode": "trailing_atr",
+            "trail_timeframe": {"intraday": "H4"},
+        },
+        "ENGINE_B_TIME_EXIT_BARS": {"intraday": 18},
+    }
+    monkeypatch.setattr(tem, "is_monitor_running", lambda: False)
+    assert tem.exit_management_block_reason(
+        exit_mode="traditional_static",
+        engine="engine_b",
+        style="intraday",
+        cfg=cfg,
+    ) is None
+    assert tem.exit_management_block_reason(
+        exit_mode="adaptive_trail",
+        engine="engine_b",
+        style="intraday",
+        cfg=cfg,
+    ) == "EXIT_MONITOR_NOT_RUNNING:adaptive_trail"
+    assert tem.exit_management_block_reason(
+        exit_mode="time_based",
+        engine="engine_b",
+        style="intraday",
+        cfg=cfg,
+    ) == "EXIT_MONITOR_NOT_RUNNING:time_based"
+
+
+def test_software_managed_modes_require_active_policy_and_time_horizon(monkeypatch):
+    monkeypatch.setattr(tem, "is_monitor_running", lambda: True)
+    cfg = {
+        "TIMED_EXIT": {
+            "enabled": True,
+            "tp_mode": "fixed",
+            "trail_timeframe": {"intraday": "H4"},
+        },
+        "ENGINE_B_TIME_EXIT_BARS": 0,
+    }
+    assert tem.exit_management_block_reason(
+        exit_mode="adaptive_trail",
+        engine="engine_b",
+        style="intraday",
+        cfg=cfg,
+    ) == "ADAPTIVE_EXIT_MANAGER_DISABLED"
+    assert tem.exit_management_block_reason(
+        exit_mode="time_based",
+        engine="engine_b",
+        style="intraday",
+        cfg=cfg,
+    ) == "TIME_EXIT_HORIZON_DISABLED:intraday"
+
+    cfg["TIMED_EXIT"]["tp_mode"] = "trailing_atr"
+    cfg["ENGINE_B_TIME_EXIT_BARS"] = {"intraday": 18}
+    assert tem.exit_management_block_reason(
+        exit_mode="adaptive_trail",
+        engine="engine_b",
+        style="intraday",
+        cfg=cfg,
+    ) is None
+    assert tem.exit_management_block_reason(
+        exit_mode="time_based",
+        engine="engine_b",
+        style="intraday",
+        cfg=cfg,
+    ) is None
 
 
 def test_row_for_live_position_threads_exit_mode():

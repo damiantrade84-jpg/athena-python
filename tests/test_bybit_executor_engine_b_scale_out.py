@@ -93,11 +93,11 @@ class TestEngineBScaleOutPlan:
         # Missing direction
         assert bybit_executor._engine_b_scale_out_plan(_signal(direction="")) is None
 
-    def test_timed_mode_degrades_to_fixed_tp2_bracket(self, monkeypatch):
+    def test_timed_mode_keeps_tp2_bracket_and_exposes_timed_runner(self, monkeypatch):
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ALLOW_SINGLE_POSITION_PARTIAL", True)
         sig = _signal(exit_mode="time_based")
-        assert bybit_executor._engine_b_scale_out_plan(sig) == "runner_to_tp2"
+        assert bybit_executor._engine_b_scale_out_plan(sig) == "runner_timed"
 
     def test_trail_mode_degrades_when_no_trailing_manager(self, monkeypatch):
         monkeypatch.setitem(bybit_executor.CONFIG, "ENGINE_B_LIVE_SCALE_OUT_ENABLED", True)

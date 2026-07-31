@@ -20,8 +20,8 @@ def test_helpers_export_exit_mode_builder_and_thread_into_signal():
     src = _read("lib/manualExecuteHelpers.ts")
     assert "export function buildExitModePayload" in src
     assert "exitMode?: ExitModeSelection" in src
-    # Engine-B-only executes must not carry a per-trade exit_mode override
-    assert "isEngineBOnly ? {} : buildExitModePayload({ exitMode })" in src
+    # Engine A and Engine B both carry an explicit per-trade override.
+    assert "const exitModePayload = buildExitModePayload({ exitMode })" in src
     assert "...exitModePayload" in src
 
 
@@ -37,6 +37,7 @@ def test_signals_panel_renders_and_threads_exit_mode():
     assert "<ExitModeField" in src
     # threaded into the quick-execute payload
     assert "exitMode," in src
+    assert "exit-mode override is ignored" not in src
 
 
 def test_tvchart_panel_renders_and_threads_exit_mode():

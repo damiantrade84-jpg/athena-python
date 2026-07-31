@@ -771,11 +771,6 @@ export default function SignalsPanel() {
     ? (feedEngine === 'B' && hasEngineBFeedRow(selectedRow))
       || !isEngineAV3Signal(selectedRow.signal)
     : false;
-  // Per-trade exit-mode override is Engine-A only — buildQuickExecutePayload drops
-  // it for Engine B signals, so don't offer a selector that would be ignored.
-  const exitModeOverrideApplies = selectedRow
-    ? !isEngineBOnlySignal(preferredExecutionSignal(selectedRow))
-    : true;
   const crossEngineNotes = useMemo(
     () => (selectedRow ? crossEngineContextNotes(selectedRow) : []),
     [selectedRow],
@@ -865,9 +860,12 @@ export default function SignalsPanel() {
   );
 
   const aiOverride = useMemo(
-    () => aiLevelOverrideFromReview(aiTextReview, {
-      fallbackTp1: confirmRow?.signal.tp ?? confirmRow?.signal.tp1 ?? null,
-    }),
+    () => {
+      const execSignal = confirmRow ? preferredExecutionSignal(confirmRow) : null;
+      return aiLevelOverrideFromReview(aiTextReview, {
+        fallbackTp1: execSignal?.tp ?? execSignal?.tp1 ?? null,
+      });
+    },
     [aiTextReview, confirmRow],
   );
 
@@ -880,8 +878,8 @@ export default function SignalsPanel() {
       setRiskPreviewLine(null);
       return;
     }
-    const sig = confirmRow.signal;
-    const isEngineBOnly = confirmRow.engines.has('B') && !confirmRow.engines.has('A');
+    const sig = preferredExecutionSignal(confirmRow);
+    const isEngineBOnly = isEngineBOnlySignal(sig);
     const bLevels = resolveEngineBExecutionPreviewLevels(sig, { engineBOnly: isEngineBOnly });
     const effectiveStyle = pendingStyle === 'auto'
       ? (sig.style || (style === 'auto' ? 'swing' : style))
@@ -895,7 +893,9 @@ export default function SignalsPanel() {
       direction: sig.direction,
       entry: bLevels.entry ?? sig.entry ?? sig.price,
       price: bLevels.entry ?? sig.entry ?? sig.price,
-      sl: bLevels.sl ?? sig.sl,
+      sl: useAiLevels && aiOverride && !isEngineAV3Signal(sig)
+        ? aiOverride.sl
+        : (bLevels.sl ?? sig.sl),
       volume_mode: volumeMode,
       sizing_override: volumeMode === 'calculated' ? sizingOverride : 1.0,
       style: effectiveStyle,
@@ -910,7 +910,7 @@ export default function SignalsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [confirmRow, pendingStyle, style, volumeMode, sizingOverride]);
+  }, [confirmRow, pendingStyle, style, volumeMode, sizingOverride, useAiLevels, aiOverride]);
 
   const onConfirmExecute = useCallback(async () => {
     if (!confirmRow) return;
@@ -1316,18 +1316,11 @@ export default function SignalsPanel() {
                           sizingOverride={sizingOverride}
                           onSizingOverrideChange={setSizingOverride}
                         />
-                        {exitModeOverrideApplies ? (
-                          <ExitModeField
-                            compact
-                            exitMode={exitMode}
-                            onExitModeChange={setExitMode}
-                          />
-                        ) : (
-                          <p className="text-[10px] text-muted-foreground">
-                            Exit strategy is managed by Engine B for this signal; the per-trade
-                            exit-mode override is ignored.
-                          </p>
-                        )}
+                        <ExitModeField
+                          compact
+                          exitMode={exitMode}
+                          onExitModeChange={setExitMode}
+                        />
                         <div className="grid grid-cols-3 gap-2">
                           <Button
                             size="sm"
@@ -1738,7 +1731,9 @@ export default function SignalsPanel() {
                   {isEngineBPrimarySignal(confirmRow?.signal) ? 'Gate R:R' : 'R:R'}{' '}
                   {fmtNum(signalGateRr(confirmRow?.signal), 2)}
                 </div>
-                {aiOverride && (
+                {aiOverride
+                  && confirmRow
+                  && !isEngineAV3Signal(preferredExecutionSignal(confirmRow)) && (
                   <label className="flex items-start gap-2 text-[11px] cursor-pointer">
                     <input
                       type="checkbox"
@@ -1755,7 +1750,17 @@ export default function SignalsPanel() {
                     </span>
                   </label>
                 )}
-                {useAiLevels && aiOverride && (
+                {aiOverride
+                  && confirmRow
+                  && isEngineAV3Signal(preferredExecutionSignal(confirmRow)) && (
+                  <div className="text-[10px] text-muted-foreground">
+                    Engine A V3 SL/TP is authoritative; AI level override is unavailable.
+                  </div>
+                )}
+                {useAiLevels
+                  && aiOverride
+                  && confirmRow
+                  && !isEngineAV3Signal(preferredExecutionSignal(confirmRow)) && (
                   <div className="text-[10px] text-muted-foreground font-mono">
                     R:R {fmtNum(
                       computeLevelOverrideRR(
@@ -1776,18 +1781,11 @@ export default function SignalsPanel() {
                   sizingOverride={sizingOverride}
                   onSizingOverrideChange={setSizingOverride}
                 />
-                {confirmRow && !isEngineBOnlySignal(preferredExecutionSignal(confirmRow)) ? (
-                  <ExitModeField
-                    compact
-                    exitMode={exitMode}
-                    onExitModeChange={setExitMode}
-                  />
-                ) : (
-                  <p className="text-[10px] text-muted-foreground">
-                    Exit strategy is managed by Engine B for this signal; the per-trade
-                    exit-mode override is ignored.
-                  </p>
-                )}
+                <ExitModeField
+                  compact
+                  exitMode={exitMode}
+                  onExitModeChange={setExitMode}
+                />
                 {riskPreviewLine && (
                   <div className="font-mono text-[10px] text-muted-foreground">{riskPreviewLine}</div>
                 )}

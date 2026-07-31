@@ -55,7 +55,7 @@ from market_structure import (
 )
 from guardian import pre_trade_check as _guardian_pre_trade
 from scoring import get_pair_score_group
-from exit_mode_apply import apply_engine_a_exit_mode
+from exit_mode_apply import apply_engine_a_exit_mode, apply_engine_b_exit_strategy
 from exit_policy import engine_b_scaleout_execution_supported
 from sqlite_instrumentation import (
     timed_sqlite_connect,
@@ -2855,13 +2855,35 @@ def api_quick_execute():
 
         _hydrate_execution_candle_quality(sig, _r=_r)
 
-        # Engine A exit-mode selector (Plan 2): resolve mode + advisable-pip clamp
-        # BEFORE risk_check, so the clamped SL/TP is sized and gated normally.
-        # No-op for non-Engine-A signals (exit_mode stays unset -> monitor trails).
-        if not _is_engine_a_v3:
-            apply_engine_a_exit_mode(
-                sig, _audit_engine_from_signal(sig), symbol_info, _r.CONFIG, level_override
-            )
+        # Resolve and stamp the effective mode before risk/audit. Engine A V3
+        # keeps its authoritative refreshed levels (mode only, no pip clamp);
+        # Engine B keeps structural levels and receives its runner directive.
+        _execution_engine = _audit_engine_from_signal(sig)
+        apply_engine_a_exit_mode(
+            sig,
+            _execution_engine,
+            symbol_info,
+            _r.CONFIG,
+            level_override,
+            apply_level_clamp=not _is_engine_a_v3,
+        )
+        apply_engine_b_exit_strategy(sig, _execution_engine, _r.CONFIG)
+        from timed_exit_monitor import exit_management_block_reason
+
+        _exit_management_error = exit_management_block_reason(
+            exit_mode=sig.get("exit_mode"),
+            engine=_execution_engine,
+            style=sig.get("style") or sig.get("horizon"),
+            cfg=_r.CONFIG,
+        )
+        if _exit_management_error:
+            return jsonify(
+                {
+                    "error": _exit_management_error,
+                    "pair": sig.get("pair"),
+                    "exitMode": sig.get("exit_mode"),
+                }
+            ), 503
 
         _drift_error, _drift_diag = _engine_b_pre_risk_broker_price(
             sig, _exec_venue, _r.CONFIG
@@ -4087,12 +4109,34 @@ def api_execute():
                 _sizing_override = _payload_sizing
         _hydrate_execution_candle_quality(sig, _r=_r)
 
-        # Engine A exit-mode selector (Plan 2): resolve mode + advisable-pip clamp
-        # before risk_check (audit H1 — same as quick_execute path).
-        if not _is_engine_a_v3:
-            apply_engine_a_exit_mode(
-                sig, _audit_engine_from_signal(sig), symbol_info, _r.CONFIG, level_override
-            )
+        # Resolve/stamp both engine modes before risk_check, matching quick-execute.
+        # Engine A V3 keeps its authoritative levels; Engine B levels stay structural.
+        _execution_engine = _audit_engine_from_signal(sig)
+        apply_engine_a_exit_mode(
+            sig,
+            _execution_engine,
+            symbol_info,
+            _r.CONFIG,
+            level_override,
+            apply_level_clamp=not _is_engine_a_v3,
+        )
+        apply_engine_b_exit_strategy(sig, _execution_engine, _r.CONFIG)
+        from timed_exit_monitor import exit_management_block_reason
+
+        _exit_management_error = exit_management_block_reason(
+            exit_mode=sig.get("exit_mode"),
+            engine=_execution_engine,
+            style=sig.get("style") or sig.get("horizon"),
+            cfg=_r.CONFIG,
+        )
+        if _exit_management_error:
+            return jsonify(
+                {
+                    "error": _exit_management_error,
+                    "pair": sig.get("pair"),
+                    "exitMode": sig.get("exit_mode"),
+                }
+            ), 503
 
         _drift_error, _drift_diag = _engine_b_pre_risk_broker_price(
             sig, _exec_venue, _r.CONFIG

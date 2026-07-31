@@ -10712,7 +10712,18 @@ def _auto_toggle_pair(pair, result):
 # scalp/consensus/ASE/naked-all endpoints are served by the athena_backtest
 # blueprint. The legacy in-line handlers were removed with the old backtest
 # system; athena_backtesting_v2 keeps its own separate routes.
-from athena_backtest.api import create_backtest_v3_blueprint  # noqa: E402
+_diagnostic_mode_before_backtest_import = os.environ.get("ATHENA_DIAGNOSTIC_MODE")
+try:
+    from athena_backtest.api import create_backtest_v3_blueprint  # noqa: E402
+finally:
+    # athena_backtest enables diagnostic mode at package import so standalone
+    # backtests cannot start broker-facing services. This live host imports the
+    # package only for its blueprint, so do not let that flag leak into runtime
+    # startup and suppress the timed/adaptive exit monitor.
+    if _diagnostic_mode_before_backtest_import is None:
+        os.environ.pop("ATHENA_DIAGNOSTIC_MODE", None)
+    else:
+        os.environ["ATHENA_DIAGNOSTIC_MODE"] = _diagnostic_mode_before_backtest_import
 
 app.register_blueprint(
     create_backtest_v3_blueprint(
@@ -14746,12 +14757,15 @@ def api_open_trades_timed():
         _activation_r_for,
         _get_timed_cfg,
         _match_audit_row_for_position,
+        is_monitor_running,
     )
 
     _t_request = _time.perf_counter()
     _timing_ms: dict[str, float | int] = {}
 
     tcfg = _get_timed_cfg(lambda: CONFIG)
+    timed_global = bool(tcfg.get("enabled", True))
+    timed_running = is_monitor_running()
     _open_trades_cfg = CONFIG.get("OPEN_TRADES") or {}
     _sl_recompute_on_poll = bool(_open_trades_cfg.get("SL_RECOMPUTE_ON_POLL", False))
 
@@ -14878,7 +14892,6 @@ def api_open_trades_timed():
         be_min = None
         close_min = None
         style_cfg = tcfg.get(style) if style in ("scalp", "intraday", "swing") else {}
-        timed_global = bool(tcfg.get("enabled", True))
         timed_style_on = bool((style_cfg or {}).get("timed_close_enabled", True))
 
         if (
@@ -14932,6 +14945,7 @@ def api_open_trades_timed():
             "timed_tp_mode":   str(tcfg.get("tp_mode", "fixed")),
             "trail_activation_r": _activation_r_for(tcfg, style),
             "timed_exit_daemon_enabled": timed_global,
+            "timed_exit_daemon_running": timed_running,
             "timed_close_style_enabled": timed_style_on if style in ("scalp", "intraday", "swing") else None,
             "sl_after_partial": str(_se.get("SL_AFTER_PARTIAL", "tp_partial")),
             "live_milestone_management": bool(_se.get("LIVE_MILESTONE_MANAGEMENT", False)),
@@ -15017,6 +15031,8 @@ def api_open_trades_timed():
         "count": len(out),
         "audit_unresolved": audit_unresolved,
         "audit_unresolved_count": len(audit_unresolved),
+        "timed_exit_daemon_enabled": timed_global,
+        "timed_exit_daemon_running": timed_running,
         "_server_timing_ms": _timing_ms,
     }
     if broker_errors:
