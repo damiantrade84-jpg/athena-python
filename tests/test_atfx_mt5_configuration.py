@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import ast
+from datetime import datetime, timezone
 from pathlib import Path
 
 import mt5_executor
+import scanner
 
 
 def test_mt5_symbol_overrides_precede_static_broker_map(monkeypatch):
@@ -98,31 +100,48 @@ def test_atfx_availability_disables_configured_pairs_and_commodities():
     assert by_display["BTC/USDT"]["enabled"] is True
 
 
-def test_default_naked_scan_skips_only_explicitly_closed_mt5_equity_markets():
-    athena_path = Path(__file__).resolve().parents[1] / "athena.py"
-    tree = ast.parse(athena_path.read_text(encoding="utf-8"), filename=str(athena_path))
-    function_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "_naked_scan_market_closed_pair"
-    )
-    isolated_module = ast.Module(body=[function_node], type_ignores=[])
-    ast.fix_missing_locations(isolated_module)
-    namespace: dict[str, object] = {}
-    exec(compile(isolated_module, str(athena_path), "exec"), namespace)
-    is_closed = namespace["_naked_scan_market_closed_pair"]
+def test_engine_a_and_b_broad_scan_prefilter_uses_equity_calendar_and_mt5_state():
+    us_stock = {
+        "display": "AAPL", "symbol": "AAPL.US", "source": "mt5", "type": "stock"
+    }
+    us_etf = {
+        "display": "SPY", "symbol": "SPY.US", "source": "mt5", "type": "etf"
+    }
+    eu_stock = {
+        "display": "ADS", "symbol": "ADS", "source": "mt5", "type": "stock"
+    }
+    mt5_index = {
+        "display": "NASDAQ-100", "symbol": "NAS100", "source": "mt5", "type": "index"
+    }
+    forex = {
+        "display": "EUR/USD", "symbol": "EURUSD", "source": "mt5", "type": "forex"
+    }
+    live_prices = {
+        "AAPL": {"source": "mt5", "market_state": "open"},
+        "SPY": {"source": "mt5", "market_state": "unavailable"},
+        "NAS100": {"source": "mt5", "market_state": "closed"},
+        "EUR/USD": {"source": "mt5", "market_state": "closed"},
+    }
 
-    closed_aapl = {"AAPL": {"source": "mt5", "market_state": "closed"}}
-    assert is_closed({"display": "AAPL", "source": "mt5", "type": "stock"}, closed_aapl)
-    assert is_closed({"display": "NAS100", "source": "mt5", "type": "index"}, {
-        "NAS100": {"source": "mt5", "market_state": "closed"}
-    })
-    assert not is_closed(
-        {"display": "AAPL", "source": "mt5", "type": "stock"},
-        {"AAPL": {"source": "mt5", "market_state": "unavailable"}},
+    analyse, skipped = scanner._split_pairs_on_session_phase(
+        [us_stock, us_etf, eu_stock, mt5_index, forex],
+        at=datetime(2026, 7, 30, 11, 0, tzinfo=timezone.utc),
+        config={"SCAN_SKIP_CLOSED_EXCHANGE_PAIRS": True},
+        live_prices=live_prices,
     )
-    assert not is_closed(
-        {"display": "EUR/USD", "source": "mt5", "type": "forex"},
-        {"EUR/USD": {"source": "mt5", "market_state": "closed"}},
+
+    assert {pair["display"] for pair in analyse} == {"ADS", "EUR/USD"}
+    skipped_by_display = {pair["display"]: reason for pair, reason in skipped}
+    assert skipped_by_display["AAPL"] == "NYSE_NASDAQ PRE_OPEN"
+    assert skipped_by_display["SPY"] == "NYSE_NASDAQ PRE_OPEN"
+    assert skipped_by_display["NASDAQ-100"] == "MT5 market_state=closed"
+
+    analyse, skipped = scanner._split_pairs_on_session_phase(
+        [forex],
+        at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+        config={"SCAN_SKIP_CLOSED_EXCHANGE_PAIRS": True},
+        live_prices={"EUR/USD": {"source": "mt5", "market_state": "open"}},
     )
+
+    assert analyse == []
+    assert skipped == [(forex, "FOREX WEEKEND_CLOSED")]

@@ -218,39 +218,6 @@ def _engine_b_cache_clear_analysis() -> None:
             _engine_b_cache.pop(key, None)
 
 
-def _naked_scan_market_closed_pair(pair: dict, live_prices: dict) -> bool:
-    """Return whether a default naked scan can skip a known-closed MT5 market.
-
-    This is deliberately an optimization only: an explicit symbol scan and any
-    missing or ambiguous market state still reach Engine B's normal fail-closed
-    candle and broker-tick freshness gates.
-    """
-    if str(pair.get("source") or "").lower() != "mt5":
-        return False
-    if str(pair.get("type") or "").lower() not in {
-        "stock", "etf", "etf_bond", "index",
-    }:
-        return False
-
-    def _key(value) -> str:
-        return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
-
-    wanted = {
-        _key(pair.get("display")),
-        _key(pair.get("symbol")),
-        _key(pair.get("pair")),
-    }
-    wanted.discard("")
-    for raw_key, raw_entry in (live_prices or {}).items():
-        if _key(raw_key) not in wanted or not isinstance(raw_entry, dict):
-            continue
-        return (
-            str(raw_entry.get("source") or "").lower() == "mt5"
-            and str(raw_entry.get("market_state") or "").lower() == "closed"
-        )
-    return False
-
-
 from candle_feeds import (  # noqa: E402
     BinanceCandleWS,
     BinanceLivePriceWS,
@@ -6951,6 +6918,7 @@ from scanner import (  # noqa: E402
     run_full_scan,
     _engine_b_independent_direction_probe,
     _engine_b_scan_freshness_stale_tfs,
+    _split_pairs_on_session_phase,
 )
 
 from auto_trader import auto_trader as _auto_trader  # noqa: E402
@@ -8791,24 +8759,19 @@ def api_scan_naked():
                 continue
         candidate_pairs.append(p)
 
-    # A broad portfolio scan should not spend its worker budget fetching
-    # candles for share/index markets the MT5 poller has explicitly reported
-    # as closed. Keep explicit symbol scans diagnostic: they retain the normal
-    # fail-closed Engine B freshness result instead of silently disappearing.
+    # Apply the same known-closed calendar/broker prefilter as Engine A before
+    # spending worker capacity on candle fetches. Keep explicit symbol scans
+    # diagnostic: they retain the normal fail-closed Engine B freshness result.
     session_closed_pairs = []
     if symbol_scope is None:
         with _live_prices_lock:
             _naked_scan_live_prices = dict(_live_prices)
-        session_closed_pairs = [
-            pair
-            for pair in candidate_pairs
-            if _naked_scan_market_closed_pair(pair, _naked_scan_live_prices)
-        ]
-        if session_closed_pairs:
-            _closed_displays = {id(pair) for pair in session_closed_pairs}
-            candidate_pairs = [
-                pair for pair in candidate_pairs if id(pair) not in _closed_displays
-            ]
+        candidate_pairs, _session_skipped = _split_pairs_on_session_phase(
+            candidate_pairs,
+            at=datetime.now(timezone.utc),
+            live_prices=_naked_scan_live_prices,
+        )
+        session_closed_pairs = [pair for pair, _reason in _session_skipped]
 
     results = []
     _best_per_pair = {}

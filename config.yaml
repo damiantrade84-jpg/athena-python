@@ -122,12 +122,11 @@ EODHD_WS_US_SYMBOLS:
 
 SCAN_MAX_WORKERS: 8           # Increased scan concurrency for faster Engine A full-universe runs. (Conservative: 8 for i7/16GB)
 
-# Skip share CFDs whose exchange is not in continuous trading (CLOSED, PRE_OPEN,
-# POST_CLOSE, LUNCH_BREAK) before any candle fetch or scoring. They are rejected
-# downstream on the live-quote/freshness gates regardless, so analysing them is
-# pure cost. Set false to score them anyway (restores closed-market watchlist
-# rows at the cost of a slower scan). Only affects the four modelled cash-equity
-# calendars; forex, crypto, commodities, indices and ETFs are never skipped.
+# Skip shares and confirmed US-listed ETFs outside continuous exchange trading,
+# MT5 forex during its modelled weekend closure, and MT5 equity/index instruments
+# explicitly reported closed, before broad Engine A/B candle fetches and scoring.
+# Missing or ambiguous state still reaches the normal fail-closed gates. Set false
+# to restore those rows; explicit single-symbol diagnostics are unaffected.
 SCAN_SKIP_CLOSED_EXCHANGE_PAIRS: true
 
 

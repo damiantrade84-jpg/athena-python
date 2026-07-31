@@ -1496,46 +1496,106 @@ def _split_pairs_on_session_phase(
     *,
     at: datetime,
     config: dict | None = None,
+    live_prices: dict[str, Any] | None = None,
 ) -> tuple[list[dict], list[tuple[dict, str]]]:
-    """Split scan pairs into (analyse, skip) on cash-equity session phase.
+    """Split broad-scan pairs into (analyse, skip) when closure is known.
 
-    A share CFD whose exchange is not in continuous trading cannot produce an
+    A cash-equity CFD whose exchange is not in continuous trading cannot produce an
     executable signal — it is rejected downstream on the Engine B live-quote gate
     or the freshness gate — but only after a full D1/H4/H1 + lower-TF candle
     fetch and a complete Engine A and Engine B evaluation. Deciding it up front
     skips that work instead of paying for it and discarding the result.
 
-    Only the four modelled cash-equity calendars can be skipped. A pair whose
-    calendar or phase does not resolve is analysed, so forex, crypto,
-    commodities, indices, ETFs, and any unmapped ticker are unaffected.
+    The four modelled cash-equity calendars cover shares and confirmed US-listed
+    ETFs; the canonical MT5 forex calendar covers the weekend closure. MT5
+    equity/index instruments may also be skipped when the live poller explicitly
+    reports ``market_state=closed``. Missing or ambiguous state remains in the
+    scan so the normal fail-closed freshness gates decide.
     """
     cfg = config if config is not None else CONFIG
     if not bool(cfg.get("SCAN_SKIP_CLOSED_EXCHANGE_PAIRS", True)):
         return list(pairs), []
 
+    def _quote_key(value: Any) -> str:
+        return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+    mt5_closed_keys: set[str] = set()
+    for raw_key, raw_entry in (live_prices or {}).items():
+        if not isinstance(raw_entry, dict):
+            continue
+        if str(raw_entry.get("source") or "").strip().lower() != "mt5":
+            continue
+        if str(raw_entry.get("market_state") or "").strip().lower() != "closed":
+            continue
+        normalized = _quote_key(raw_key)
+        if normalized:
+            mt5_closed_keys.add(normalized)
+
+    resolve_calendar = compute_phase = break_phase = forex_closed_at = None
     try:
         from engine_a_groups import resolve_cash_equity_exchange_calendar
         from exchange_calendars import compute_session_phase, is_break_phase
     except Exception as _cal_err:
-        # Fail open: an unavailable calendar must never shrink scan coverage.
+        # Keep explicit broker-closed handling available. Unresolved calendars
+        # fail open and therefore never shrink scan coverage.
         log.warning("[SCAN] session-phase prefilter unavailable: %s", _cal_err)
-        return list(pairs), []
+    else:
+        resolve_calendar = resolve_cash_equity_exchange_calendar
+        compute_phase = compute_session_phase
+        break_phase = is_break_phase
+    try:
+        from athena_app.services.market_state import forex_market_closed_at
+    except Exception as _forex_cal_err:
+        log.warning("[SCAN] forex session prefilter unavailable: %s", _forex_cal_err)
+    else:
+        forex_closed_at = forex_market_closed_at
 
     analyse: list[dict] = []
     skip: list[tuple[dict, str]] = []
     for pair in pairs:
-        if str(pair.get("type") or "").strip().lower() != "stock":
+        pair_type = str(pair.get("type") or "").strip().lower()
+        pair_source = str(pair.get("source") or "").strip().lower()
+        wanted = {
+            _quote_key(pair.get("display")),
+            _quote_key(pair.get("symbol")),
+            _quote_key(pair.get("pair")),
+        }
+        wanted.discard("")
+        if (
+            pair_source == "mt5"
+            and pair_type in {"stock", "etf", "etf_bond", "index"}
+            and wanted.intersection(mt5_closed_keys)
+        ):
+            skip.append((pair, "MT5 market_state=closed"))
+            continue
+        if (
+            pair_source == "mt5"
+            and pair_type == "forex"
+            and at.tzinfo is not None
+            and callable(forex_closed_at)
+            and forex_closed_at(at.timestamp())
+        ):
+            skip.append((pair, "FOREX WEEKEND_CLOSED"))
+            continue
+
+        calendar_eligible = pair_type == "stock" or (
+            pair_type in {"etf", "etf_bond"}
+            and str(pair.get("symbol") or "").strip().upper().endswith(".US")
+        )
+        if not calendar_eligible or not all(
+            callable(fn) for fn in (resolve_calendar, compute_phase, break_phase)
+        ):
             analyse.append(pair)
             continue
         try:
-            calendar_id = resolve_cash_equity_exchange_calendar(
+            calendar_id = resolve_calendar(
                 pair.get("display") or pair.get("symbol")
             )
-            phase = compute_session_phase(calendar_id, at) if calendar_id else None
+            phase = compute_phase(calendar_id, at) if calendar_id else None
         except Exception:
             analyse.append(pair)
             continue
-        if phase is None or not is_break_phase(phase):
+        if phase is None or not break_phase(phase):
             analyse.append(pair)
             continue
         skip.append((pair, f"{calendar_id} {phase.value}"))
@@ -2073,11 +2133,18 @@ def run_full_scan(
 
         active_pairs = [p for p in candidate_pairs if p.get("enabled", True)]
 
-        # Drop share CFDs whose exchange is not in continuous trading before any
-        # candle fetch or scoring runs — they are rejected downstream regardless,
+        # Drop calendar-known or explicitly broker-closed equity markets before
+        # candle fetch or scoring runs. They are rejected downstream regardless,
         # so analysing them is pure cost. Reported below as ordinary skip rows.
+        try:
+            with r.live_prices_lock:
+                _scan_live_prices = dict(r.live_prices)
+        except (AttributeError, TypeError):
+            _scan_live_prices = {}
         analysis_pairs, session_skipped = _split_pairs_on_session_phase(
-            active_pairs, at=datetime.now(timezone.utc)
+            active_pairs,
+            at=datetime.now(timezone.utc),
+            live_prices=_scan_live_prices,
         )
 
         results, watchlist, errors, skipped = [], [], [], []
@@ -2122,7 +2189,7 @@ def run_full_scan(
             scan_funnel["closed_exchange"] += 1
         if session_skipped:
             log.info(
-                "[SCAN] session prefilter: skipped %d/%d pairs not in continuous trading",
+                "[SCAN] closed-market prefilter: skipped %d/%d pairs before candle fetch",
                 len(session_skipped),
                 len(active_pairs),
             )
@@ -3987,6 +4054,9 @@ def run_full_scan(
             "btcBias": btc_bias,
             "totalPairs": len(candidate_pairs),
             "activePairs": len(active_pairs),
+            "skippedSessionPairs": [
+                pair.get("display") for pair, _reason in session_skipped
+            ],
             "assetClass": _ac,
             "scannedAt": datetime.now(timezone.utc).isoformat(),
             "styleRequested": _requested_style,
