@@ -14,7 +14,7 @@ const OPTIONS: { value: ExitModeSelection; label: string; hint: string }[] = [
   { value: 'traditional_static', label: 'Traditional (static)', hint: 'Fixed broker SL + TP. No trail.' },
   { value: 'adaptive_trail', label: 'Adaptive trail', hint: 'Chandelier trail + profit-protect.' },
   { value: 'manual', label: 'Manual', hint: 'Uses the SL/TP you entered. No clamp.' },
-  { value: 'time_based', label: 'Time-based', hint: 'Hard style deadline; closes even if losing.' },
+  { value: 'time_based', label: 'Time-based', hint: '30m scalp / 60m intraday hard deadline.' },
 ];
 
 export default function ExitModeField({

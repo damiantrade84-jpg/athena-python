@@ -69,28 +69,43 @@ def test_dispatch_engine_a_time_based():
     assert tem._engine_a_exit_dispatch("engine_a", "time_based", 99, 10) == "timed_close"
 
 
-def test_time_close_after_min_uses_bars_times_tf():
+def test_time_close_after_min_uses_elapsed_minutes_not_trail_timeframe():
+    tcfg = {
+        "engine_a_time_exit_minutes": {"scalp": 30, "intraday": 60, "swing": 14400},
+        "engine_b_time_exit_minutes": {"scalp": 25, "intraday": 45, "swing": 7200},
+        "trail_timeframe": {"scalp": "H1", "intraday": "H4", "swing": "D1"},
+    }
+    assert tem._time_close_after_min(tcfg, "scalp") == 30
+    assert tem._time_close_after_min(tcfg, "intraday") == 60
+    assert tem._time_close_after_min(tcfg, "swing") == 14400
+    assert tem._time_close_after_min(tcfg, "intraday", "engine_b") == 45
+    assert tem._time_close_after_min(tcfg, "swing", "engine_b") == 7200
+
+
+def test_adaptive_max_hold_still_uses_management_bars():
     tcfg = {
         "engine_a_time_exit_bars": {"scalp": 12, "intraday": 18, "swing": 10},
         "engine_b_time_exit_bars": {"scalp": 6, "intraday": 9, "swing": 5},
         "trail_timeframe": {"scalp": "H1", "intraday": "H4", "swing": "D1"},
     }
-    assert tem._time_close_after_min(tcfg, "intraday") == 18 * 240   # H4
-    assert tem._time_close_after_min(tcfg, "scalp") == 12 * 60       # H1
-    assert tem._time_close_after_min(tcfg, "swing") == 10 * 1440     # D1
-    assert tem._time_close_after_min(tcfg, "intraday", "engine_b") == 9 * 240
-    assert tem._time_close_after_min(tcfg, "swing", "engine_b") == 5 * 1440
+    assert tem._adaptive_max_hold_after_min(tcfg, "intraday") == 18 * 240
+    assert tem._adaptive_max_hold_after_min(tcfg, "scalp") == 12 * 60
+    assert tem._adaptive_max_hold_after_min(tcfg, "swing") == 10 * 1440
+    assert tem._adaptive_max_hold_after_min(tcfg, "intraday", "engine_b") == 9 * 240
 
 
 def test_time_close_after_min_falls_back_to_defaults():
-    # Missing maps -> built-in bar defaults and H4 timeframe.
-    assert tem._time_close_after_min({}, "intraday") == 18 * 240
+    assert tem._time_close_after_min({}, "scalp") == 30
+    assert tem._time_close_after_min({}, "intraday") == 60
+    assert tem._time_close_after_min({}, "swing") == 14400
+    assert tem._time_close_after_min(
+        {"engine_a_time_exit_minutes": {"intraday": 45}}, "swing"
+    ) == 14400
 
 
 def test_time_close_after_min_zero_disables_close():
     tcfg = {
-        "engine_b_time_exit_bars": 0,
-        "trail_timeframe": {"intraday": "H4"},
+        "engine_b_time_exit_minutes": 0,
     }
     assert tem._time_close_after_min(tcfg, "intraday", "engine_b") == float("inf")
 
@@ -98,11 +113,15 @@ def test_time_close_after_min_zero_disables_close():
 def test_get_timed_cfg_loads_distinct_engine_time_maps():
     cfg = {
         "TIMED_EXIT": {},
+        "ENGINE_A_TIME_EXIT_MINUTES": {"intraday": 60},
+        "ENGINE_B_TIME_EXIT_MINUTES": {"intraday": 45},
         "ENGINE_A_TIME_EXIT_BARS": {"intraday": 18},
         "ENGINE_B_TIME_EXIT_BARS": {"intraday": 9},
         "ENGINE_B_EXIT_MODE_GLOBAL_DEFAULT": "traditional_static",
     }
     merged = tem._get_timed_cfg(lambda: cfg)
+    assert merged["engine_a_time_exit_minutes"] == {"intraday": 60}
+    assert merged["engine_b_time_exit_minutes"] == {"intraday": 45}
     assert merged["engine_a_time_exit_bars"] == {"intraday": 18}
     assert merged["engine_b_time_exit_bars"] == {"intraday": 9}
     assert merged["engine_b_exit_mode_global_default"] == "traditional_static"
@@ -115,7 +134,7 @@ def test_software_managed_modes_fail_closed_when_monitor_is_unavailable(monkeypa
             "tp_mode": "trailing_atr",
             "trail_timeframe": {"intraday": "H4"},
         },
-        "ENGINE_B_TIME_EXIT_BARS": {"intraday": 18},
+        "ENGINE_B_TIME_EXIT_MINUTES": {"intraday": 60},
     }
     monkeypatch.setattr(tem, "is_monitor_running", lambda: False)
     assert tem.exit_management_block_reason(
@@ -146,7 +165,7 @@ def test_software_managed_modes_require_active_policy_and_time_horizon(monkeypat
             "tp_mode": "fixed",
             "trail_timeframe": {"intraday": "H4"},
         },
-        "ENGINE_B_TIME_EXIT_BARS": 0,
+        "ENGINE_B_TIME_EXIT_MINUTES": 0,
     }
     assert tem.exit_management_block_reason(
         exit_mode="adaptive_trail",
@@ -162,7 +181,7 @@ def test_software_managed_modes_require_active_policy_and_time_horizon(monkeypat
     ) == "TIME_EXIT_HORIZON_DISABLED:intraday"
 
     cfg["TIMED_EXIT"]["tp_mode"] = "trailing_atr"
-    cfg["ENGINE_B_TIME_EXIT_BARS"] = {"intraday": 18}
+    cfg["ENGINE_B_TIME_EXIT_MINUTES"] = {"intraday": 60}
     assert tem.exit_management_block_reason(
         exit_mode="adaptive_trail",
         engine="engine_b",

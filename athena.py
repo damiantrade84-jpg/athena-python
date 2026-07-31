@@ -14757,8 +14757,10 @@ def api_open_trades_timed():
         _activation_r_for,
         _get_timed_cfg,
         _match_audit_row_for_position,
+        _time_close_after_min,
         is_monitor_running,
     )
+    import exit_policy
 
     _t_request = _time.perf_counter()
     _timing_ms: dict[str, float | int] = {}
@@ -14844,6 +14846,11 @@ def api_open_trades_timed():
             matched_audit_tickets.add(audit_ticket)
         audit_engine = str(audit.get("engine") or "").strip().lower()
         is_engine_d = audit_engine in ("scalp", "engine d", "scalp_vp")
+        audit_exit_mode = exit_policy.normalize_mode(audit.get("exit_mode"))
+        if audit_exit_mode is None and audit_engine in ("engine_b", "engine b"):
+            audit_exit_mode = exit_policy.resolve_exit_mode(
+                global_default=CONFIG.get("ENGINE_B_EXIT_MODE_GLOBAL_DEFAULT")
+            )
 
         # Resolve open time
         raw_open_time = p.get("open_time", 0)  # Unix seconds from MT5
@@ -14893,8 +14900,18 @@ def api_open_trades_timed():
         close_min = None
         style_cfg = tcfg.get(style) if style in ("scalp", "intraday", "swing") else {}
         timed_style_on = bool((style_cfg or {}).get("timed_close_enabled", True))
+        explicit_time_exit = audit_exit_mode == exit_policy.EXIT_MODE_TIME
 
         if (
+            explicit_time_exit
+            and style in ("scalp", "intraday", "swing")
+            and timed_global
+            and not is_engine_d
+        ):
+            close_min = _time_close_after_min(tcfg, style, audit_engine)
+            if not math.isfinite(close_min):
+                close_min = None
+        elif (
             style in ("scalp", "intraday", "swing")
             and timed_global
             and timed_style_on
@@ -14940,13 +14957,19 @@ def api_open_trades_timed():
             "mins_to_be":      0,
             "mins_to_close":   0,
             "audit_engine":    audit_engine or None,
+            "exit_mode":       audit_exit_mode,
             "is_engine_d":     is_engine_d,
             "tp_partial":      _tp_part_f,
             "timed_tp_mode":   str(tcfg.get("tp_mode", "fixed")),
             "trail_activation_r": _activation_r_for(tcfg, style),
             "timed_exit_daemon_enabled": timed_global,
             "timed_exit_daemon_running": timed_running,
-            "timed_close_style_enabled": timed_style_on if style in ("scalp", "intraday", "swing") else None,
+            "timed_close_style_enabled": (
+                timed_style_on or explicit_time_exit
+                if style in ("scalp", "intraday", "swing")
+                else None
+            ),
+            "explicit_time_exit": explicit_time_exit,
             "sl_after_partial": str(_se.get("SL_AFTER_PARTIAL", "tp_partial")),
             "live_milestone_management": bool(_se.get("LIVE_MILESTONE_MANAGEMENT", False)),
         }
@@ -14969,21 +14992,23 @@ def api_open_trades_timed():
         # Preserve sub-cent precision the broker reports so the UI can show it.
         res_p["profit_raw"] = _ott_float(p.get("profit_raw"), fallback=profit)
 
-        # Attach timers only if both are resolved (hides UI timer for scalps/unknowns)
-        if be_min is not None and close_min is not None:
+        if be_min is not None:
             res_p.update({
                 "be_trigger_min":  round(be_min, 1),
-                "close_trigger_min": round(close_min, 1),
                 "be_reached":      mins_open >= be_min,
-                "close_reached":   mins_open >= close_min,
                 "mins_to_be":      round(max(0, be_min - mins_open), 1),
+            })
+        else:
+            res_p["be_trigger_min"] = None
+
+        if close_min is not None:
+            res_p.update({
+                "close_trigger_min": round(close_min, 1),
+                "close_reached":   mins_open >= close_min,
                 "mins_to_close":   round(max(0, close_min - mins_open), 1),
             })
         else:
-            res_p.update({
-                "be_trigger_min":  None,
-                "close_trigger_min": None,
-            })
+            res_p["close_trigger_min"] = None
 
         _max_sl_pct = None
         if audit:

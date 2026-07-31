@@ -4563,24 +4563,35 @@ ENGINE_A_EXIT_MODE_BY_SCORE_GROUP: {}        # e.g. {forex_majors: adaptive_trai
 # Ships empty = no clamp. Applied to every mode EXCEPT manual.
 ENGINE_A_ADVISABLE_PIP_BY_SCORE_GROUP: {}    # e.g. {forex_majors: {min_pip: 8, max_pip: 60}}
 
-# Explicit time_based exit: hard hold deadline in style-management bars. The
-# broker SL/TP can close earlier; at the deadline the position closes at market
-# whether it is profitable or losing.
+# Longer adaptive-trail max-hold reference used by stagnation protection.
 ENGINE_A_TIME_EXIT_BARS:
   scalp: 12
   intraday: 18
   swing: 10
+
+# Explicit time_based exit: elapsed wall-clock minutes. The broker SL/TP can
+# close earlier; at this deadline the position closes at market regardless of P/L.
+ENGINE_A_TIME_EXIT_MINUTES:
+  scalp: 30
+  intraday: 60
+  swing: 14400
 
 # Engine B uses a fixed broker SL/TP bracket by default. A per-trade selector
 # can override this without changing the global default.
 ENGINE_B_EXIT_MODE_GLOBAL_DEFAULT: traditional_static
 ENGINE_B_EXIT_MODE_BY_SCORE_GROUP: {}
 
-# Explicit time_based exit uses the same hard-deadline behavior for Engine B.
+# Engine B adaptive-trail max-hold reference used by stagnation protection.
 ENGINE_B_TIME_EXIT_BARS:
   scalp: 12
   intraday: 18
   swing: 10
+
+# Engine B explicit time_based elapsed-minute deadline.
+ENGINE_B_TIME_EXIT_MINUTES:
+  scalp: 30
+  intraday: 60
+  swing: 14400
 
 
 
@@ -5387,7 +5398,7 @@ SCALP_ENGINE:
 # ── Timed Exit Monitor (Triple-Barrier C-barrier) ────────────────────────────
 
 # Legacy hybrid timer settings below are separate from the explicit time_based
-# mode. The explicit mode uses ENGINE_A/B_TIME_EXIT_BARS and closes at its hard
+# mode. The explicit mode uses ENGINE_A/B_TIME_EXIT_MINUTES and closes at its hard
 # deadline regardless of P/L.
 
 # Swing trades at >= tp_progress_exempt of TP distance are exempt from timed close.
