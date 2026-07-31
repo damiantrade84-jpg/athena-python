@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -7,52 +7,56 @@
 @layer base {
   :root {
     /* ════════════════════════════════════════════════════════════════════
-       OBSIDIAN — neutral near-black, one cool accent, semantic P&L only.
+       AURORA TERMINAL — deep blue-ink surfaces with ambient light.
        Rules that keep this system honest:
-         · Blue (--primary / legacy --gold) is the ONLY decorative colour.
-         · Green/red are RESERVED for direction and P&L. Never decoration.
-         · No glows, no gradient fills, no backdrop blur, no noise texture.
-           Hierarchy comes from type scale, weight and space.
+         · Azure (--primary / legacy --gold) + its cyan gradient endpoint are
+           the ONLY decorative colours. Violet appears solely as ambient
+           background light, never on data.
+         · Green/red remain RESERVED for direction and P&L. Never decoration.
+         · Depth comes from layered surfaces, gradient fills and soft glows —
+           not from extra hues.
        ════════════════════════════════════════════════════════════════════ */
 
-    /* ── Surfaces: neutral, no colour cast ── */
-    --background: 220 12% 5%;            /* #0b0c0e page */
-    --foreground: 216 12% 92%;           /* #e8eaed primary ink */
-    --card: 220 14% 9%;                  /* #131519 panel */
-    --card-foreground: 216 12% 92%;
-    --popover: 220 14% 10%;
-    --popover-foreground: 216 12% 92%;
+    /* ── Surfaces: blue-ink, layered ── */
+    --background: 224 30% 4%;            /* deep ink page */
+    --foreground: 214 22% 93%;           /* primary ink */
+    --card: 223 26% 8%;                  /* panel base */
+    --card-foreground: 214 22% 93%;
+    --popover: 223 26% 9%;
+    --popover-foreground: 214 22% 93%;
 
-    /* ── Accent: single cool blue ── */
-    --primary: 211 100% 65%;             /* #4da3ff */
-    --primary-foreground: 220 30% 7%;
+    /* ── Accent: electric azure → cyan gradient pair ── */
+    --primary: 216 100% 66%;             /* azure */
+    --primary-foreground: 222 45% 8%;
+    --primary-2: 190 95% 55%;            /* cyan — gradient endpoint only */
+    --violet: 260 85% 68%;               /* ambient background light only */
 
-    --secondary: 220 12% 12%;
-    --secondary-foreground: 219 8% 72%;
-    --muted: 220 12% 11%;
-    --muted-foreground: 219 6% 57%;      /* #8b9099 secondary ink */
-    --accent: 220 12% 14%;
-    --accent-foreground: 216 12% 92%;
-    --destructive: 358 75% 59%;
+    --secondary: 222 20% 13%;
+    --secondary-foreground: 218 14% 74%;
+    --muted: 222 18% 12%;
+    --muted-foreground: 218 12% 62%;
+    --accent: 221 20% 15%;
+    --accent-foreground: 214 22% 93%;
+    --destructive: 358 78% 61%;
     --destructive-foreground: 0 0% 98%;
-    --border: 220 11% 16%;               /* #23262c hairline */
-    --input: 220 11% 16%;
-    --ring: 211 100% 65%;
-    --radius: 0.375rem;                  /* 6px — precise, not soft */
+    --border: 220 16% 16%;
+    --input: 220 16% 18%;
+    --ring: 216 100% 66%;
+    --radius: 0.625rem;                  /* 10px — soft, modern */
 
     /* ── Semantic: direction and P&L ONLY ── */
-    --long: 148 60% 47%;                 /* #2fbf71 */
-    --short: 358 75% 59%;                /* #e5484d */
-    --warning: 38 85% 55%;               /* #eda426 */
-    --info: 211 100% 65%;                /* folded into the accent */
+    --long: 152 64% 46%;
+    --short: 358 78% 61%;
+    --warning: 38 88% 56%;
+    --info: 216 100% 66%;                /* folded into the accent */
 
-    /* ── Legacy `--gold*` token names remapped to the blue accent.
+    /* ── Legacy `--gold*` token names remapped to the azure accent.
          Panels not rebuilt by hand inherit the new theme through these. ── */
-    --gold: 211 100% 65%;
-    --gold-light: 211 100% 78%;
-    --gold-dark: 211 80% 48%;
-    --gold-muted: 214 30% 16%;
-    --platinum: 216 12% 88%;
+    --gold: 216 100% 66%;
+    --gold-light: 216 100% 78%;
+    --gold-dark: 216 85% 50%;
+    --gold-muted: 217 35% 17%;
+    --platinum: 214 22% 90%;
 
     /* ── Chart categorical ramp (fixed order, never cycled).
          Validated: OKLCH L 0.48–0.67, chroma ≥ 0.10, adjacent CVD ΔE ≥ 8,
@@ -65,14 +69,14 @@
     --chart-6: 146 58% 39%;              /* green  #2a9d5c */
 
     /* ── Sidebar ── */
-    --sidebar-background: 220 13% 7%;
-    --sidebar-foreground: 219 6% 62%;
-    --sidebar-primary: 211 100% 65%;
-    --sidebar-primary-foreground: 220 30% 7%;
-    --sidebar-accent: 220 12% 12%;
-    --sidebar-accent-foreground: 216 12% 92%;
-    --sidebar-border: 220 11% 14%;
-    --sidebar-ring: 211 100% 65%;
+    --sidebar-background: 224 28% 6%;
+    --sidebar-foreground: 218 12% 64%;
+    --sidebar-primary: 216 100% 66%;
+    --sidebar-primary-foreground: 222 45% 8%;
+    --sidebar-accent: 221 20% 14%;
+    --sidebar-accent-foreground: 214 22% 93%;
+    --sidebar-border: 220 16% 14%;
+    --sidebar-ring: 216 100% 66%;
   }
 
   * {
@@ -101,38 +105,65 @@
 
 @layer components {
   /* ════ Shell ════
-     Flat. The old build layered four radial gradients plus an SVG noise
-     texture here; both are gone — the accent has to be the brightest thing
-     on screen, and a lit background steals that. */
+     Ambient light: two cool radial glows fixed behind the content. They are
+     what lift the page off a flat black slab without touching a single
+     data-bearing surface. */
   .app-shell-bg {
     background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(1100px 560px at 12% -12%, hsl(var(--primary) / 0.11), transparent 62%),
+      radial-gradient(950px 520px at 88% -18%, hsl(var(--violet) / 0.08), transparent 58%),
+      radial-gradient(1000px 620px at 55% 115%, hsl(var(--primary-2) / 0.055), transparent 60%);
+    background-attachment: fixed;
   }
 
-  /* ════ Surfaces ════ */
+  /* ════ Surfaces ════
+     Raised glass: a faint top-lit vertical gradient, a hairline border, an
+     inner top highlight and a real drop shadow. This is the default panel
+     material for the rebuilt system. */
+  .surface-raised {
+    background: linear-gradient(180deg, hsl(222 24% 11%) 0%, hsl(223 26% 7.5%) 100%);
+    border: 1px solid hsl(220 16% 18%);
+    border-radius: var(--radius);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.05),
+      0 10px 28px hsl(224 45% 3% / 0.45);
+  }
+
+  /* Recessed well for counter tiles and inset groups. */
+  .surface-inset {
+    background: hsl(222 22% 9% / 0.7);
+    border: 1px solid hsl(220 16% 15%);
+    border-radius: var(--radius);
+    box-shadow: inset 0 1px 3px hsl(224 45% 3% / 0.35);
+  }
+
   .panel-glass,
   .surface-glass {
-    background-color: hsl(var(--card));
-    border: 1px solid hsl(var(--border));
+    background: linear-gradient(180deg, hsl(222 24% 11%) 0%, hsl(223 26% 7.5%) 100%);
+    border: 1px solid hsl(220 16% 18%);
     border-radius: var(--radius);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.05),
+      0 10px 28px hsl(224 45% 3% / 0.45);
   }
 
   /* ════ Typography ════ */
 
-  /* Section/panel heading. Was engraved Cinzel serif — now a quiet grotesk
-     caption that recedes behind the data it labels. */
+  /* Section/panel heading — Space Grotesk gives the chrome its own voice
+     without competing with the JetBrains Mono data. */
   .panel-header-title,
   .panel-title {
-    font-family: 'Inter', system-ui, sans-serif;
+    font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif;
     font-weight: 600;
     font-size: 0.6875rem;   /* 11px */
     line-height: 1.2;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.11em;
     color: hsl(var(--muted-foreground));
   }
 
-  /* Field label above a value. The single approved "tiny text" style —
-     replaces the ad-hoc [9px]/[10px]/[11px] mix. */
+  /* Field label above a value. */
   .label {
     font-size: 0.625rem;    /* 10px */
     line-height: 1.3;
@@ -157,6 +188,14 @@
     color: hsl(var(--muted-foreground));
   }
 
+  /* Gradient wordmark text (azure → cyan). */
+  .text-gradient {
+    background: linear-gradient(92deg, hsl(216 100% 74%) 0%, hsl(var(--primary-2)) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
   /* ════ Directional colour helpers ════ */
   .text-long  { color: hsl(var(--long)); }
   .text-short { color: hsl(var(--short)); }
@@ -171,32 +210,34 @@
   .border-gold  { border-color: hsl(var(--primary) / 0.35); }
 
   /* ════ Chips / badges ════
-     One shape, one size. Colour carries meaning, never decoration. */
+     One shape, one size. A soft tinted wash plus a hairline ring; colour
+     carries meaning, never decoration. */
   .chip {
-    @apply inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium leading-none;
+    @apply inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium leading-none tracking-wide;
     border: 1px solid hsl(var(--border));
-    color: hsl(var(--muted-foreground));
+    background: hsl(var(--secondary) / 0.55);
+    color: hsl(var(--secondary-foreground));
     white-space: nowrap;
   }
   .chip-long {
-    background: hsl(var(--long) / 0.12);
-    color: hsl(var(--long));
-    border-color: hsl(var(--long) / 0.30);
+    background: linear-gradient(180deg, hsl(var(--long) / 0.16), hsl(var(--long) / 0.08));
+    color: hsl(152 70% 60%);
+    border-color: hsl(var(--long) / 0.35);
   }
   .chip-short {
-    background: hsl(var(--short) / 0.12);
-    color: hsl(var(--short));
-    border-color: hsl(var(--short) / 0.30);
+    background: linear-gradient(180deg, hsl(var(--short) / 0.16), hsl(var(--short) / 0.08));
+    color: hsl(358 85% 68%);
+    border-color: hsl(var(--short) / 0.35);
   }
   .chip-accent {
-    background: hsl(var(--primary) / 0.10);
-    color: hsl(var(--primary));
-    border-color: hsl(var(--primary) / 0.30);
+    background: linear-gradient(180deg, hsl(var(--primary) / 0.18), hsl(var(--primary) / 0.08));
+    color: hsl(216 100% 74%);
+    border-color: hsl(var(--primary) / 0.38);
   }
   .chip-warning {
-    background: hsl(var(--warning) / 0.10);
-    color: hsl(var(--warning));
-    border-color: hsl(var(--warning) / 0.30);
+    background: linear-gradient(180deg, hsl(var(--warning) / 0.16), hsl(var(--warning) / 0.07));
+    color: hsl(38 90% 62%);
+    border-color: hsl(var(--warning) / 0.35);
   }
 
   /* Legacy badge names kept so un-rebuilt panels re-theme for free */
@@ -206,30 +247,38 @@
   .badge-neutral { @apply chip; }
 
   /* ════ Meter — the score / quality bar ════
-     Flat track, flat fill, optional threshold tick. No gradient, no glow:
-     the fill is a measurement, so it must read as a length, not a light. */
+     Gradient fill on an inset track, with a soft halo when the score clears
+     its threshold. The threshold stays a tick so scales remain comparable. */
   .meter {
     position: relative;
     width: 100%;
-    height: 4px;
-    border-radius: 2px;
-    background: hsl(var(--border));
+    height: 6px;
+    border-radius: 999px;
+    background: hsl(222 18% 14%);
+    box-shadow: inset 0 1px 2px hsl(224 45% 3% / 0.55);
     overflow: hidden;
   }
   .meter-fill {
     height: 100%;
-    border-radius: 2px;
+    border-radius: 999px;
     background: hsl(var(--muted-foreground));
-    transition: width 200ms ease-out;
+    transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1);
   }
-  .meter-fill-pass { background: hsl(var(--long)); }
-  .meter-fill-accent { background: hsl(var(--primary)); }
+  .meter-fill-pass {
+    background: linear-gradient(90deg, hsl(152 70% 42%), hsl(160 75% 55%));
+    box-shadow: 0 0 10px hsl(var(--long) / 0.50);
+  }
+  .meter-fill-accent {
+    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--primary-2)));
+    box-shadow: 0 0 10px hsl(var(--primary) / 0.40);
+  }
   .meter-tick {
     position: absolute;
     top: -2px;
     bottom: -2px;
-    width: 1px;
-    background: hsl(var(--foreground) / 0.55);
+    width: 2px;
+    border-radius: 1px;
+    background: hsl(var(--foreground) / 0.65);
   }
 
   /* ════ Disclosure — progressive detail ════
@@ -253,29 +302,40 @@
   .disclosure[open] > summary::before { transform: rotate(90deg); }
 
   /* ════ Key/value grid ════ */
-  .data-grid { @apply grid gap-px rounded overflow-hidden; background: hsl(var(--border)); }
+  .data-grid { @apply grid gap-px rounded-lg overflow-hidden; background: hsl(var(--border)); }
   .data-grid > * { @apply bg-card p-2.5; }
 
   /* ════ Scrollbar ════ */
-  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: hsl(var(--border)) transparent; }
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: hsl(220 16% 20%) transparent; }
   .scrollbar-thin::-webkit-scrollbar       { width: 8px; height: 8px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: hsl(220 11% 22%);
+    background-color: hsl(220 16% 20%);
     border-radius: 4px;
     border: 2px solid transparent;
     background-clip: content-box;
   }
-  .scrollbar-thin::-webkit-scrollbar-thumb:hover { background-color: hsl(220 11% 30%); }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover { background-color: hsl(218 18% 28%); }
 
   /* ════ Legacy glow classes — neutralised ════
      Deliberately kept as no-ops so panels that still reference them lose the
      glow without throwing missing-class errors or needing an edit. */
   .glow-gold, .glow-gold-sm, .glow-long-sm, .glow-short-sm { box-shadow: none; }
 
-  /* ════ Direction edge on signal cards ════ */
-  .signal-long-border  { box-shadow: inset 2px 0 0 hsl(var(--long)); }
-  .signal-short-border { box-shadow: inset 2px 0 0 hsl(var(--short)); }
+  /* ════ Direction edge on signal cards ════
+     A 3px edge plus a soft directional wash bleeding in from the side. */
+  .signal-long-border {
+    box-shadow:
+      inset 3px 0 0 hsl(var(--long) / 0.90),
+      inset 14px 0 26px -14px hsl(var(--long) / 0.30),
+      0 10px 28px hsl(224 45% 3% / 0.45);
+  }
+  .signal-short-border {
+    box-shadow:
+      inset 3px 0 0 hsl(var(--short) / 0.90),
+      inset 14px 0 26px -14px hsl(var(--short) / 0.30),
+      0 10px 28px hsl(224 45% 3% / 0.45);
+  }
 
   /* ════ Active nav marker ════ */
   .nav-active-bar::before {
@@ -283,9 +343,24 @@
     position: absolute;
     left: 0; top: 50%;
     transform: translateY(-50%);
-    width: 2px; height: 60%;
-    background: hsl(var(--primary));
-    border-radius: 0 2px 2px 0;
+    width: 3px; height: 62%;
+    border-radius: 0 3px 3px 0;
+    background: linear-gradient(180deg, hsl(var(--primary)), hsl(var(--primary-2)));
+    box-shadow: 0 0 8px hsl(var(--primary) / 0.55);
+  }
+
+  /* ════ Header status pill ════ */
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.625rem;
+    border-radius: 999px;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--secondary) / 0.5);
+    font-size: 11px;
+    color: hsl(var(--muted-foreground));
+    white-space: nowrap;
   }
 
   /* ════ Legacy decorative rules — flattened ════ */
@@ -299,7 +374,7 @@
   }
   .progress-gold [data-radix-progress-indicator],
   .progress-gold > div {
-    background: hsl(var(--primary)) !important;
+    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--primary-2))) !important;
   }
 
   /* ════ Focus ════ */
@@ -323,7 +398,7 @@
 .animate-glow-long { animation: glow-pulse-long 1.8s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-glow-gold, .animate-glow-long, .animate-slide-in, .ticker-track {
+  .animate-glow-gold, .animate-glow-long, .animate-slide-in, .ticker-track, .animate-fade-up {
     animation: none !important;
   }
   .meter-fill { transition: none; }
@@ -349,7 +424,8 @@
   position: relative;
   overflow: hidden;
   border-bottom: 1px solid hsl(var(--border));
-  background: hsl(var(--sidebar-background));
+  background: hsl(var(--sidebar-background) / 0.8);
+  backdrop-filter: blur(8px);
 }
 .ticker-strip::before,
 .ticker-strip::after {

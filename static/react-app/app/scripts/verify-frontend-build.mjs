@@ -49,21 +49,21 @@ const { jsRefs, cssRefs, allRefs } = activeBundleRefs(html);
 const jsText = jsRefs.map(readBundleText).join('\n');
 const cssText = cssRefs.map(readBundleText).join('\n');
 
-// Obsidian theme markers — proves the current design tokens and component
-// layer actually shipped, rather than a stale bundle being served.
-//   211 100% 65  → the single blue accent (--primary)
-//   148 60% 47   → the semantic long/direction token
+// Aurora Terminal theme markers — proves the current design tokens and
+// component layer actually shipped, rather than a stale bundle being served.
+//   216 100% 66  → the azure accent (--primary)
+//   152 64% 46   → the semantic long/direction token
 //   meter-fill   → the score/quality meter component class
 const requiredCssMarkers = [
-  '211 100% 65',
-  '148 60% 47',
+  '216 100% 66',
+  '152 64% 46',
   'app-shell-bg',
   'panel-glass',
   'meter-fill',
 ];
 for (const marker of requiredCssMarkers) {
   if (!cssText.includes(marker)) {
-    fail(`production CSS missing Obsidian marker: ${marker}`);
+    fail(`production CSS missing theme marker: ${marker}`);
   }
 }
 

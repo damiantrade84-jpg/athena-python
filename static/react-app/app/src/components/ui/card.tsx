@@ -9,7 +9,8 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
       // Tightened from gap-6/py-6/rounded-xl: this is a dense trading surface,
       // and the old spacing pushed roughly a third of every panel off-screen.
       className={cn(
-        "bg-card text-card-foreground flex flex-col gap-3 rounded-lg border py-3",
+        "text-card-foreground flex flex-col gap-3 rounded-xl border border-border/80 py-3 shadow-elev-1",
+        "bg-[linear-gradient(180deg,hsl(222_24%_10.5%),hsl(223_26%_7.5%))]",
         className
       )}
       {...props}

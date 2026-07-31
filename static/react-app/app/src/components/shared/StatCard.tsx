@@ -15,9 +15,8 @@ interface StatCardProps {
 /**
  * Headline KPI tile.
  *
- * Deliberately flat: the number is the only thing that should attract the
- * eye, so the tile has no gradient, no hover glow, no ambient corner light
- * and no icon ring. The icon sits at low contrast as a locator, not decor.
+ * Raised glass tile: the icon sits in a tinted locator well, the number
+ * carries the status colour, and the whole tile lifts slightly on hover.
  */
 export default function StatCard({
   title,
@@ -29,7 +28,7 @@ export default function StatCard({
   subtitle,
 }: StatCardProps) {
   return (
-    <div className="rounded-lg border border-border bg-card px-4 py-3 transition-colors hover:border-muted-foreground/25">
+    <div className="surface-raised px-4 py-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-elev-2">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="label truncate">{title}</p>
@@ -38,7 +37,7 @@ export default function StatCard({
           ) : (
             <p
               className={cn(
-                'readout mt-1 truncate text-[22px] font-semibold leading-tight tracking-tight',
+                'readout mt-1 truncate text-[24px] font-semibold leading-tight tracking-tight',
                 valueClass,
               )}
             >
@@ -49,12 +48,11 @@ export default function StatCard({
             <p className="mt-1 truncate text-[11px] text-muted-foreground">{subtitle}</p>
           )}
         </div>
-        {/* Descendant selectors deliberately override any colour/size the
-            caller set on the icon itself — the tile's value carries the
-            status colour, so a second coloured glyph is noise. */}
+        {/* Icon well: a tinted locator, not decor. Callers can still override
+            colour via iconClass. */}
         <span
           className={cn(
-            'shrink-0 [&>svg]:h-4 [&>svg]:w-4 [&>svg]:text-muted-foreground/60',
+            'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 ring-1 ring-primary/20 [&>svg]:h-4 [&>svg]:w-4 [&>svg]:text-primary',
             iconClass,
           )}
         >

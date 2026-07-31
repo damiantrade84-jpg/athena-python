@@ -101,11 +101,11 @@ export default function Sidebar() {
   }, [postAutoTrade, refreshAutoTrade, showToast]);
 
   return (
-    <aside className="flex h-full min-h-0 w-[210px] shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar">
+    <aside className="flex h-full min-h-0 w-[218px] shrink-0 flex-col overflow-hidden border-r border-border/70 bg-sidebar/80 backdrop-blur-sm">
 
       {/* ── At-a-glance counters ── */}
-      <div className="shrink-0 border-b border-border px-3 py-2.5">
-        <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+      <div className="shrink-0 border-b border-border/70 px-3 py-3">
+        <div className="grid grid-cols-2 gap-2">
           {[
             { label: 'Signals', value: activeSignals },
             { label: 'Positions', value: openPositions },
@@ -119,9 +119,9 @@ export default function Sidebar() {
               value: winRate != null && totalTrades > 0 ? `${fmtNum(winRate, 1)}%` : '—',
             },
           ].map(({ label, value, valueClass }) => (
-            <div key={label} className="min-w-0">
+            <div key={label} className="surface-inset min-w-0 px-2.5 py-2">
               <div className="label truncate">{label}</div>
-              <div className={cn('readout mt-0.5 truncate text-[13px]', valueClass || 'text-foreground')}>
+              <div className={cn('readout mt-1 truncate text-[14px] font-semibold', valueClass || 'text-foreground')}>
                 {value}
               </div>
             </div>
@@ -136,7 +136,7 @@ export default function Sidebar() {
       <ScrollArea className="min-h-0 flex-1 py-2">
         <nav className="space-y-3 px-2">
           {navSections.map((section, sectionIndex) => (
-            <div key={section.title ?? `section-${sectionIndex}`} className="space-y-px">
+            <div key={section.title ?? `section-${sectionIndex}`} className="space-y-0.5">
               {section.title && (
                 <div className="label px-2.5 pb-1 pt-1">{section.title}</div>
               )}
@@ -154,16 +154,24 @@ export default function Sidebar() {
                     title={item.title || item.label}
                     onClick={() => setActivePanel(item.id)}
                     className={cn(
-                      'group relative flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-xs transition-colors',
+                      'group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs transition-all duration-150',
                       isActive
-                        ? 'nav-active-bar bg-accent font-medium text-foreground'
-                        : 'text-sidebar-foreground hover:bg-accent/50 hover:text-foreground',
+                        ? 'nav-active-bar font-medium text-foreground'
+                        : 'text-sidebar-foreground hover:bg-accent/60 hover:text-foreground',
                     )}
+                    style={
+                      isActive
+                        ? {
+                            background:
+                              'linear-gradient(90deg, hsl(var(--primary) / 0.16), hsl(var(--primary) / 0.04) 70%, transparent)',
+                          }
+                        : undefined
+                    }
                   >
                     <Icon
                       className={cn(
-                        'h-3.5 w-3.5 shrink-0',
-                        isActive ? 'text-primary' : 'text-muted-foreground',
+                        'h-3.5 w-3.5 shrink-0 transition-colors',
+                        isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground/80',
                       )}
                     />
                     <span className="flex-1 truncate text-left">{item.label}</span>
@@ -175,7 +183,13 @@ export default function Sidebar() {
                     )}
 
                     {count > 0 && (
-                      <span className="readout shrink-0 rounded bg-primary/15 px-1 text-[10px] text-primary">
+                      <span
+                        className="readout shrink-0 rounded-md px-1.5 py-px text-[10px] text-primary"
+                        style={{
+                          background: 'hsl(var(--primary) / 0.14)',
+                          boxShadow: 'inset 0 0 0 1px hsl(var(--primary) / 0.30)',
+                        }}
+                      >
                         {count}
                       </span>
                     )}
@@ -199,11 +213,11 @@ export default function Sidebar() {
         </nav>
       </ScrollArea>
 
-      <Separator className="shrink-0 bg-border" />
+      <Separator className="shrink-0 bg-border/70" />
 
       {/* ── Footer: risk + toggles ── */}
       <div className="shrink-0 space-y-3 p-3">
-        <div className="space-y-1.5">
+        <div className="surface-inset space-y-2 px-2.5 py-2.5">
           <div className="flex items-center justify-between">
             <span className="label">Circuit Breaker</span>
             <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -212,6 +226,11 @@ export default function Sidebar() {
                   'h-1.5 w-1.5 rounded-full',
                   guardian?.circuitBreaker ? 'animate-pulse bg-short' : 'bg-long',
                 )}
+                style={{
+                  boxShadow: guardian?.circuitBreaker
+                    ? '0 0 6px hsl(var(--short))'
+                    : '0 0 6px hsl(var(--long) / 0.7)',
+                }}
               />
               {guardian?.circuitBreaker ? 'tripped' : 'armed'}
             </span>
@@ -235,7 +254,7 @@ export default function Sidebar() {
           </div>
         </div>
 
-        <div className="space-y-2 border-t border-border pt-2.5">
+        <div className="space-y-2 border-t border-border/70 pt-2.5">
           <div className="flex items-center justify-between">
             <span className="label">Auto-Trade</span>
             <Switch

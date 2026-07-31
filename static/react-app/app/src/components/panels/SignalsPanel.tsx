@@ -1097,9 +1097,9 @@ export default function SignalsPanel() {
         )}
       </div>
 
-      <div className="grid grid-cols-5 gap-4">
-        {/* ─── Signal list (left, spans 3) ─── */}
-        <Card className="col-span-3 border-border/60 bg-card/50">
+      <div className="grid grid-cols-12 gap-5">
+        {/* ─── Signal list (left) ─── */}
+        <Card className="col-span-12 xl:col-span-7 2xl:col-span-8 border-border/60 bg-card/50">
           <CardHeader className="pb-2">
             <CardTitle
               className="text-xs font-semibold flex items-center justify-between uppercase tracking-wider"
@@ -1162,16 +1162,16 @@ export default function SignalsPanel() {
                   )}
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-5">
                   {groupedRows.map(({ key, items }) => (
-                    <div key={key} className="space-y-2">
-                      <div className="sticky top-0 z-[1] flex items-center justify-between border-b border-border bg-card py-1.5">
+                    <div key={key} className="space-y-2.5">
+                      <div className="sticky top-0 z-[1] flex items-center justify-between rounded-md border-b border-border/70 bg-background/85 px-1 py-1.5 backdrop-blur-sm">
                         <span className="panel-title">{formatGroupLabel(key)}</span>
                         <span className="readout text-[10px] text-muted-foreground">
                           {items.length} · top {engineAV3ListLabel(items[0]?.signal) ?? fmtNum(engineAListScore(items[0]?.signal), 2)}
                         </span>
                       </div>
-                      <div className="space-y-2 pl-0">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1 min-[1500px]:grid-cols-2">
                         {items.map((row) => (
                           <UnifiedSignalRow
                             key={row.id}
@@ -1190,8 +1190,8 @@ export default function SignalsPanel() {
           </CardContent>
         </Card>
 
-        {/* ─── Signal detail (right, spans 2) — tabbed ─── */}
-        <Card className="col-span-2 border-border/60 bg-card/50">
+        {/* ─── Signal detail (right) — tabbed ─── */}
+        <Card className="col-span-12 xl:col-span-5 2xl:col-span-4 border-border/60 bg-card/50">
           <CardHeader className="pb-2">
             <CardTitle
               className="text-xs font-semibold flex items-center gap-2 uppercase tracking-wider"

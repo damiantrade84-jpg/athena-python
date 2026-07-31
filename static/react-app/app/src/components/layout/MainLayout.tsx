@@ -12,7 +12,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
         <Sidebar />
         <main className="flex-1 overflow-hidden">
           <ScrollArea className="h-full">
-            <div className="p-4">
+            <div className="p-5">
               {children}
             </div>
           </ScrollArea>

@@ -68,8 +68,10 @@ function CardShell({
   return (
     <div
       className={cn(
-        'rounded-lg border bg-card transition-colors',
-        selected ? 'border-primary/60' : 'border-border hover:border-muted-foreground/25',
+        'surface-raised animate-fade-up h-full transition-all duration-200',
+        selected
+          ? 'border-primary/50 shadow-glow-accent'
+          : 'hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-elev-2',
         onClick && 'cursor-pointer',
         isLong && 'signal-long-border',
         isShort && 'signal-short-border',
@@ -296,9 +298,9 @@ export default function EngineASignalCard({
       onClick={onSelect ? () => onSelect(signal) : undefined}
     >
       {/* ── Identity ── */}
-      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-border/70 px-3.5 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="readout truncate text-sm font-semibold">{pair}</span>
+          <span className="font-display truncate text-[15px] font-semibold tracking-tight">{pair}</span>
           <DirectionChip direction={signal.direction} />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -604,9 +606,9 @@ function EngineAV3SignalCard({
       onClick={onSelect ? () => onSelect(signal) : undefined}
     >
       {/* ── Identity ── */}
-      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-border/70 px-3.5 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="readout truncate text-sm font-semibold">{pair}</span>
+          <span className="font-display truncate text-[15px] font-semibold tracking-tight">{pair}</span>
           <DirectionChip direction={signal.direction} />
           <Chip tone={decisionTone as 'long' | 'warning' | 'default'}>{decision}</Chip>
         </div>

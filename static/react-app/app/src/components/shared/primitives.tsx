@@ -1,19 +1,16 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 /* ══════════════════════════════════════════════════════════════════════════
-   Obsidian primitives — the vocabulary every rebuilt surface is written in.
+   Aurora Terminal primitives — the vocabulary every rebuilt surface is
+   written in.
 
-   The point of this file is that a price, a label, a score bar and a
-   collapsed diagnostic block look identical everywhere they appear. The
-   previous build re-implemented each of them inline per card with slightly
-   different padding, tracking and font sizes, which is what made the UI
-   read as busy even when the data was thin.
+   The point of this file is that a price, a label, a score gauge and a
+   collapsed diagnostic block look identical everywhere they appear.
    ══════════════════════════════════════════════════════════════════════════ */
 
 /* ── Panel ────────────────────────────────────────────────────────────────
-   Flat card surface with a hairline border. Replaces the ad-hoc
-   `border-border/60 bg-card/50` + inline gradient/blur styles. */
+   Raised glass surface with a hairline border and soft elevation. */
 export function Panel({
   title,
   icon,
@@ -31,11 +28,11 @@ export function Panel({
 }) {
   return (
     <section
-      className={cn('rounded-lg border border-border bg-card', className)}
+      className={cn('surface-raised', className)}
     >
       {(title || action) && (
-        <header className="flex h-10 items-center gap-2 border-b border-border px-3">
-          {icon && <span className="shrink-0 text-muted-foreground">{icon}</span>}
+        <header className="flex h-10 items-center gap-2 border-b border-border/70 px-3">
+          {icon && <span className="shrink-0 text-primary/80">{icon}</span>}
           <h2 className="panel-title truncate">{title}</h2>
           {action && <div className="ml-auto flex shrink-0 items-center gap-1.5">{action}</div>}
         </header>
@@ -115,9 +112,9 @@ export function KeyValue({
 }
 
 /* ── Meter ────────────────────────────────────────────────────────────────
-   The score / quality bar. Flat fill on a flat track, with the pass
-   threshold drawn as a tick rather than by rescaling the axis — rescaling
-   is what made scores incomparable between groups in the old build. */
+   The score / quality bar. Gradient fill on an inset track, pass threshold
+   drawn as a tick rather than by rescaling the axis — rescaling is what
+   made scores incomparable between groups in the old build. */
 export function Meter({
   pct,
   thresholdPct,
@@ -155,8 +152,100 @@ export function Meter({
   );
 }
 
+/* ── ScoreRing ────────────────────────────────────────────────────────────
+   Radial gauge for headline scores. The arc is a gradient (azure→cyan while
+   earning, green sweep once the score clears its threshold) so the state is
+   readable from across the room; the exact number sits in the middle. */
+export function ScoreRing({
+  pct,
+  passed,
+  size = 56,
+  stroke = 5,
+  className,
+}: {
+  pct: number | null | undefined;
+  passed?: boolean;
+  size?: number;
+  stroke?: number;
+  className?: string;
+}) {
+  const rawId = useId();
+  const gradId = `score-ring-${rawId.replace(/[^a-zA-Z0-9]/g, '')}`;
+  const valid = pct != null && Number.isFinite(Number(pct));
+  const clamped = Math.max(0, Math.min(100, valid ? Number(pct) : 0));
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const offset = c * (1 - clamped / 100);
+  return (
+    <div
+      className={cn('relative shrink-0', className)}
+      style={{ width: size, height: size }}
+      role="img"
+      aria-label={valid ? `Score ${Math.round(clamped)} percent` : 'Score unavailable'}
+    >
+      <svg
+        width={size}
+        height={size}
+        className="-rotate-90"
+        style={{
+          filter: passed
+            ? 'drop-shadow(0 0 6px hsl(var(--long) / 0.45))'
+            : 'drop-shadow(0 0 6px hsl(var(--primary) / 0.35))',
+        }}
+      >
+        <defs>
+          <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
+            {passed ? (
+              <>
+                <stop offset="0%" stopColor="hsl(152 70% 42%)" />
+                <stop offset="100%" stopColor="hsl(160 78% 56%)" />
+              </>
+            ) : (
+              <>
+                <stop offset="0%" stopColor="hsl(var(--primary))" />
+                <stop offset="100%" stopColor="hsl(var(--primary-2))" />
+              </>
+            )}
+          </linearGradient>
+        </defs>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="hsl(222 18% 15%)"
+          strokeWidth={stroke}
+        />
+        {valid && (
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            fill="none"
+            stroke={`url(#${gradId})`}
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            strokeDasharray={c}
+            strokeDashoffset={offset}
+            style={{ transition: 'stroke-dashoffset 400ms cubic-bezier(0.22, 1, 0.36, 1)' }}
+          />
+        )}
+      </svg>
+      <span
+        className={cn(
+          'readout absolute inset-0 flex items-center justify-center font-semibold tracking-tight',
+          size >= 56 ? 'text-[13px]' : 'text-[11px]',
+          valid ? (passed ? 'text-long' : 'text-foreground') : 'text-muted-foreground',
+        )}
+      >
+        {valid ? `${Math.round(clamped)}%` : '—'}
+      </span>
+    </div>
+  );
+}
+
 /* ── ScoreLine ────────────────────────────────────────────────────────────
-   Headline score presentation: caption + fraction + percent + meter.
+   Headline score presentation: radial gauge + caption + fraction + meter.
    This is the "score / quality score" block, unified so Engine A confluence
    and Engine B quality read the same way at a glance. */
 export function ScoreLine({
@@ -177,20 +266,25 @@ export function ScoreLine({
   pctSuffix?: ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="label truncate">{caption}</span>
-        <span className="flex shrink-0 items-baseline gap-2">
-          {fraction != null && (
-            <span className={cn('readout text-xs', passed ? 'text-long' : 'text-muted-foreground')}>
-              {fraction}
-            </span>
-          )}
-          <span className="readout text-sm text-foreground">
-            {pct != null && Number.isFinite(pct) ? `${Math.round(pct)}%` : '—'}
-          </span>
-          {pctSuffix && <span className="label">{pctSuffix}</span>}
-        </span>
+    <div className="space-y-2.5">
+      <div className="flex items-center gap-3">
+        <ScoreRing pct={pct} passed={passed} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="label truncate">{caption}</span>
+            {pctSuffix && <span className="label shrink-0">{pctSuffix}</span>}
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            {fraction != null && (
+              <span className={cn('readout text-sm font-semibold', passed ? 'text-long' : 'text-muted-foreground')}>
+                {fraction}
+              </span>
+            )}
+            {passed === true && (
+              <span className="chip chip-long">PASS</span>
+            )}
+          </div>
+        </div>
       </div>
       <Meter pct={pct} thresholdPct={thresholdPct} passed={passed} thresholdTitle={thresholdTitle} />
     </div>

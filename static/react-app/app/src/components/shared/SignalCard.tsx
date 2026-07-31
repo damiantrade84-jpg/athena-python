@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { Chip, DirectionChip, Meter, Metric } from '@/components/shared/primitives';
+import { Chip, DirectionChip, Metric, ScoreRing } from '@/components/shared/primitives';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { Play } from 'lucide-react';
 import type { Signal } from '@/types';
@@ -43,7 +43,7 @@ export default function SignalCard({
     return (
       <div
         className={cn(
-          'flex items-center justify-between gap-2 rounded border border-border bg-card px-2.5 py-2 transition-colors hover:border-muted-foreground/25',
+          'flex items-center justify-between gap-2 rounded-lg border border-border/80 bg-secondary/30 px-2.5 py-2 transition-all duration-150 hover:border-primary/25 hover:bg-secondary/50',
           isLong && 'signal-long-border',
           isShort && 'signal-short-border',
         )}
@@ -53,7 +53,9 @@ export default function SignalCard({
           <span className="readout truncate text-xs">{signal.pair || '—'}</span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <span className="readout text-[11px] text-muted-foreground">{fmtNum(conf, 0)}%</span>
+          <span className={cn('readout text-[11px]', confHigh ? 'text-long' : 'text-muted-foreground')}>
+            {fmtNum(conf, 0)}%
+          </span>
           <Button
             size="sm"
             variant="ghost"
@@ -72,15 +74,18 @@ export default function SignalCard({
   return (
     <div
       className={cn(
-        'rounded-lg border border-border bg-card transition-colors hover:border-muted-foreground/25',
+        'surface-raised animate-fade-up transition-all duration-200',
+        'hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-elev-2',
         isLong && 'signal-long-border',
         isShort && 'signal-short-border',
       )}
     >
       {/* Header: identity only */}
-      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-border/70 px-3.5 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="readout truncate text-sm font-semibold">{signal.pair || '—'}</span>
+          <span className="font-display truncate text-[15px] font-semibold tracking-tight text-foreground">
+            {signal.pair || '—'}
+          </span>
           <DirectionChip direction={signal.direction} />
           {signal.engine && <Chip>{signal.engine}</Chip>}
         </div>
@@ -89,21 +94,17 @@ export default function SignalCard({
         </span>
       </div>
 
-      <div className="space-y-3 p-3">
-        {/* Conviction — caption, number, flat meter */}
-        <div className="space-y-1.5">
-          <div className="flex items-baseline justify-between">
+      <div className="space-y-3.5 p-3.5">
+        {/* Conviction — radial gauge */}
+        <div className="flex items-center gap-3">
+          <ScoreRing pct={conf} passed={confHigh} />
+          <div className="min-w-0 flex-1">
             <span className="label">Conviction</span>
-            <span
-              className={cn(
-                'readout text-sm',
-                confHigh ? 'text-long' : 'text-foreground',
-              )}
-            >
-              {fmtNum(conf, 0)}%
-            </span>
+            <div className="mt-1 flex items-center gap-2">
+              {confHigh && <Chip tone="long">HIGH</Chip>}
+              <span className="note">≥ {CONF_HIGH}% marks high conviction</span>
+            </div>
           </div>
-          <Meter pct={conf} passed={confHigh} />
         </div>
 
         {/* Levels */}
@@ -115,7 +116,7 @@ export default function SignalCard({
         </div>
 
         {(hasTp2 || (signal.factors && signal.factors.length > 0)) && (
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-2.5">
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 pt-3">
             {hasTp2 && <Chip title="Second take-profit">TP2 {fmtNum(signal.tp2, 5)}</Chip>}
             {signal.factors?.map(f => (
               <Chip key={f}>{f}</Chip>
@@ -126,7 +127,7 @@ export default function SignalCard({
         {onExecute && (
           <Button
             size="sm"
-            className="w-full gap-2"
+            className="w-full gap-2 shadow-elev-1"
             onClick={() => onExecute(signal)}
             disabled={disabled}
           >

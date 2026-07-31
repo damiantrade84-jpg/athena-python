@@ -4,7 +4,7 @@ import { Activity, Wifi } from 'lucide-react';
 import { currentSegment, nextSegment, QUALITY_META, fmtCountdown } from '@/lib/primeWindows';
 import MacroBadge from '@/components/shared/MacroBadge';
 
-/** Status pill: a 5px dot carries the state, the label stays neutral ink. */
+/** Status pill: a dot carries the state inside a soft glass chip. */
 function StatusPill({
   dotColor,
   label,
@@ -17,13 +17,10 @@ function StatusPill({
   pulse?: boolean;
 }) {
   return (
-    <div
-      className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
-      title={title}
-    >
+    <div className="status-pill" title={title}>
       <span
         className={`h-1.5 w-1.5 shrink-0 rounded-full ${pulse ? 'animate-pulse' : ''}`}
-        style={{ background: dotColor }}
+        style={{ background: dotColor, boxShadow: `0 0 6px ${dotColor}` }}
       />
       <span className="tracking-tight">{label}</span>
     </div>
@@ -52,18 +49,29 @@ export default function Header() {
   const primeMeta = QUALITY_META[seg.quality];
 
   return (
-    <header className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-sidebar px-4">
+    <header className="relative flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-sidebar/70 px-5 backdrop-blur-md">
+      {/* Accent hairline under the header */}
+      <div
+        className="pointer-events-none absolute inset-x-0 -bottom-px h-px"
+        style={{
+          background:
+            'linear-gradient(90deg, transparent, hsl(var(--primary) / 0.45), hsl(var(--primary-2) / 0.35), transparent)',
+        }}
+      />
+
       {/* ── Wordmark ── */}
       <div className="flex items-baseline gap-2">
-        <span className="text-[13px] font-semibold tracking-[0.16em] text-foreground">
+        <span className="font-display text-gradient text-[16px] font-bold tracking-[0.18em]">
           SENTINEL
         </span>
-        <span className="text-[11px] tracking-[0.16em] text-muted-foreground">PRO</span>
-        <span className="text-[10px] tracking-wide text-muted-foreground/70">v4.0</span>
+        <span className="font-display text-[12px] font-medium tracking-[0.22em] text-muted-foreground">
+          PRO
+        </span>
+        <span className="chip ml-1">v4.0</span>
       </div>
 
       {/* ── Status rail ── */}
-      <div className="flex items-center gap-5">
+      <div className="flex items-center gap-2.5">
         <MacroBadge />
 
         <StatusPill
@@ -78,16 +86,16 @@ export default function Header() {
           pulse={!isHealthy}
         />
 
-        <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+        <div className="status-pill gap-3">
           <span className="flex items-center gap-1.5">
-            <Activity className="h-3 w-3" /> MT5
+            <Activity className="h-3 w-3 text-primary/80" /> MT5
           </span>
           <span className="flex items-center gap-1.5">
-            <Wifi className="h-3 w-3" /> Bybit
+            <Wifi className="h-3 w-3 text-primary/80" /> Bybit
           </span>
         </div>
 
-        <span className="readout text-[11px] text-muted-foreground">
+        <span className="readout ml-1 text-[12px] font-medium text-foreground/90">
           {time.toLocaleTimeString()}
         </span>
       </div>
