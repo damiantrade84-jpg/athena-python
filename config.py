@@ -2060,10 +2060,10 @@ CONFIG: dict = {
     },
     "ENGINE_A_SCORING_PROFILE": {
         "ENABLED": True,
-        # Live-only lower-TF entry timing. Structural trend/momentum layers stay
-        # on D1/H4/H1; backtests keep their existing confirmed-TF contract.
+        # Policy-aligned lower-TF setup context. The canonical Engine A/B ladder
+        # uses H1 setup and M15 trigger; execution remains live-quote based.
         "LIVE_ENTRY_TF_BY_STYLE": {
-            "intraday": {"forex": "M30"},
+            "intraday": {"forex": "H1"},
         },
         "DEFAULT_BY_CLASS": {
             "default": {

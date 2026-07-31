@@ -386,6 +386,54 @@ def test_setup_upgrade_respects_quality_floor(monkeypatch):
     assert "setup_upgrade_below_quant_quality_floor" in signal.rejectionReasons
 
 
+def test_setup_upgrade_quality_floor_errors_fail_closed(monkeypatch):
+    import config as config_module
+    import engine_a_v3.evaluator as evaluator_module
+    from engine_a_v3.quant_scorer import QuantScore
+    from engine_a_v3.setups import SetupCandidate
+
+    def _fake_score_pair(
+        route, horizon, candles, *, context=None, profile=None, snapshot_cache=None, **_kwargs
+    ):
+        return QuantScore(
+            direction="FLAT",
+            confluence_score=3.0,
+            max_score=3.0,
+            score_norm=1.0,
+            conviction=1.0,
+            decision="WATCH",
+            threshold=2.1,
+            level_style="trend",
+            factor_scores={},
+            factor_diagnostics={},
+            components={},
+        )
+
+    def _fake_detect_setup(
+        route, horizon, candles, *, display=None, indicator_periods=None, **_kwargs
+    ):
+        return SetupCandidate("fx_trend_pullback", "TRADE", "LONG", (), (), "trend")
+
+    class _QualityConfig(dict):
+        def get(self, key, default=None):
+            if key == "ENGINE_A_V3_SETUP_UPGRADE":
+                raise RuntimeError("invalid setup quality config")
+            return super().get(key, default)
+
+    monkeypatch.setattr(evaluator_module, "score_pair", _fake_score_pair)
+    monkeypatch.setattr(evaluator_module, "detect_setup", _fake_detect_setup)
+    monkeypatch.setattr(config_module, "CONFIG", _QualityConfig(config_module.CONFIG))
+
+    signal = evaluate_engine_a_v3(
+        {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"},
+        _candles(),
+        horizon="intraday",
+    )
+
+    assert signal.decision == "WATCH"
+    assert "setup_quality_floor_error_fail_closed" in signal.rejectionReasons
+
+
 def test_volume_ratio_contra_expansion_biases_signal():
     rows = _rows(20, timedelta(hours=1))
     prev_close = rows[-2]["close"]

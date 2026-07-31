@@ -43,7 +43,7 @@ D1_CANDLES: 1000
 H4_CANDLES: 1000
 
 H1_CANDLES: 1000
-M30_CANDLES: 500  # Active Engine A forex intraday entry/setup bars.
+M30_CANDLES: 500  # Legacy/diagnostic bars; policy setup is H1 and trigger is M15.
 M15_CANDLES: 500  # Active Engine B forex intraday trigger bars.
 M5_CANDLES: 1000  # Policy-driven execution/refinement bars; never a higher-TF fallback.
 
@@ -1208,7 +1208,7 @@ ENGINE_A_ATR_ADX_PERIODS_BY_CLASS:
   stock_other:           { atr: 14, adx: 14 }
   unknown:               { atr: 14, adx: 14 }
 
-# Entry/setup-TF indicator periods. Flat keys apply to M5/M15/M30 (legacy).
+# Entry/setup-TF indicator periods. Flat keys apply to diagnostic M5/M15/M30 rows.
 # Optional nested TF sub-rows (M5/M15/M30/H1) override the flat keys when present:
 #   forex_majors:
 #     ema_trend: 8            # flat → M15/M30/M5
@@ -1259,9 +1259,9 @@ ENGINE_A_REVERSAL_PENDING_ENABLED: true
 ENGINE_A_REVERSAL_PENDING_MIN_TF: 2
 ENGINE_A_SCORING_PROFILE:
   ENABLED: true
-  # Live entry timing only. D1/H4/H1 trend layers and backtest routing remain unchanged.
+  # Policy-aligned setup context; canonical setup is H1 and trigger is M15.
   LIVE_ENTRY_TF_BY_STYLE:
-    intraday: { forex: M30 }
+    intraday: { forex: H1 }
   DEFAULT_BY_CLASS:
     default:
       trend_layers:
@@ -4225,7 +4225,7 @@ ENGINE_B_USE_FORMING_FOR_STRUCTURE: false
 ENGINE_B_USE_FORMING_FOR_TRIGGER: true
 
 # Trigger/setup TF only (M5/M15/M30): faster ATR/ADX periods + candle thresholds.
-# H1 structure ATR(14), H4 bias ATR, and D1/H4 regime ADX(14) are unchanged.
+# H4 structure ATR(14), H4 bias ATR, and D1 regime ADX(14) are unchanged.
 # Missing score_group → hardcoded fallback (ATR 14, ADX 14, wick 1.2, engulf 0.2, close 0.70).
 # Applied only when the resolved trigger/setup TF is M5/M15/M30. A group's
 # trigger TF is NOT constant: symbol overrides and SLOW speed adaptation move it
@@ -4274,7 +4274,8 @@ ENGINE_B_TRIGGER_TF_CALIBRATION:
 ENGINE_B_BOS_VOLUME_FOR_TICKVOL: false
 
 
-# Engine B structure / zone / trigger / ATR timeframes are resolved per
+# Engine B uses the universal D1/H4/H4/H1/M15 role ladder: regime/bias,
+# structure/zone/ATR, setup, then trigger/execution. Timeframes are resolved per
 # symbol/group/style by timeframe_policy.resolve_timeframe_policy().
 # Legacy ENGINE_B_FOREX_STRUCTURE_TF is no longer read.
 

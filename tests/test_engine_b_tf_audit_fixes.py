@@ -121,12 +121,12 @@ def test_snapshot_profile_uses_h4_for_structural_scoring_zone_and_atr():
         "swing", "forex_exotics_restricted", "forex", symbol="USD/ZAR"
     )
     assert style == "swing"
-    assert profile["bias_tf"] == "D1"
+    assert profile["bias_tf"] == "H4"
     assert profile["structure_tf"] == "H4"
     assert profile["zone_tf"] == "H4"
     assert profile["atr_tf"] == "H4"
     assert profile["setup_tf"] == "H1"
-    assert profile["entry_tf"] == "H1"
+    assert profile["entry_tf"] == "M15"
 
 
 # ── conditional M5 prerequisite ──────────────────────────────────────────────
@@ -212,15 +212,15 @@ def test_missing_authoritative_m15_trigger_fails_closed_not_substituted(monkeypa
 @pytest.mark.parametrize(
     "symbol,asset,structure,trigger",
     [
-        ("EUR/USD", "forex", "H4", "H1"),
-        ("XAU/USD", "commodity", "H4", "H1"),
-        ("NASDAQ-100", "index", "H4", "H1"),
-        ("BTC/USDT", "crypto", "H4", "H1"),
-        # Engine B swing is now H4-primary for every group; D1 is bias only.
-        ("EUR/GBP", "forex", "H4", "H1"),
-        ("USD/ZAR", "forex", "H4", "H1"),
-        ("XPT/USD", "commodity", "H4", "H1"),
-        ("DOGE/USDT", "crypto", "H4", "H1"),
+        ("EUR/USD", "forex", "H4", "M15"),
+        ("XAU/USD", "commodity", "H4", "M15"),
+        ("NASDAQ-100", "index", "H4", "M15"),
+        ("BTC/USDT", "crypto", "H4", "M15"),
+        # Universal Engine B policy keeps H4 as bias and structure for every group.
+        ("EUR/GBP", "forex", "H4", "M15"),
+        ("USD/ZAR", "forex", "H4", "M15"),
+        ("XPT/USD", "commodity", "H4", "M15"),
+        ("DOGE/USDT", "crypto", "H4", "M15"),
     ],
 )
 def test_engine_b_swing_is_group_aware(symbol, asset, structure, trigger):
@@ -229,7 +229,7 @@ def test_engine_b_swing_is_group_aware(symbol, asset, structure, trigger):
     )
     assert policy.structure_tf.value == structure
     assert policy.trigger_tf.value == trigger
-    assert policy.bias_tf.value == "D1"
+    assert policy.bias_tf.value == "H4"
 
 
 # ── volatility band timeframe normalisation ──────────────────────────────────

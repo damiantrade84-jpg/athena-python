@@ -804,8 +804,14 @@ def evaluate_engine_a_v3(
                     use_setup = False
                     setup_diagnostics["qualityFloorBlocked"] = True
                     setup_diagnostics["minConfluenceFloor"] = round(floor, 4)
-        except Exception:
-            pass
+        except Exception as quality_exc:
+            # A setup promotion must never survive an invalid or unavailable
+            # quality-floor configuration.  Preserve the diagnostic and reject
+            # the upgrade so the caller can distinguish this from an ordinary
+            # below-floor result.
+            use_setup = False
+            setup_diagnostics["qualityFloorBlocked"] = True
+            setup_diagnostics["qualityFloorError"] = type(quality_exc).__name__
 
     # Session scoring gate (config-gated, forex-only): a forex setup must also
     # pass the session context score when ENGINE_A_V3_SESSION_SCORING.ENABLED.
@@ -1005,7 +1011,10 @@ def evaluate_engine_a_v3(
 
     rejection_reasons: list[str] = []
     if setup_diagnostics.get("qualityFloorBlocked"):
-        rejection_reasons.append("setup_upgrade_below_quant_quality_floor")
+        if setup_diagnostics.get("qualityFloorError"):
+            rejection_reasons.append("setup_quality_floor_error_fail_closed")
+        else:
+            rejection_reasons.append("setup_upgrade_below_quant_quality_floor")
     if setup_diagnostics.get("sessionGateBlocked"):
         if setup_diagnostics.get("sessionGateError"):
             rejection_reasons.append("session_gate_error_fail_closed")

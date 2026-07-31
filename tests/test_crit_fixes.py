@@ -548,6 +548,10 @@ def test_scan_naked_revalidates_emitted_engine_b_cards_before_response():
 
     assert "execution_mode=True" in helper
     assert 'refreshed.get("canonical_trade_ok") is False' in helper
+    assert '"quality_pct": refreshed.get("quality_pct")' in helper
+    assert '"quality_pct": refreshed.get("pct")' not in helper
+    assert '"quality_pct": conf_data.get("quality_pct")' in src
+    assert '"quality_pct": conf_data.get("pct")' not in src
     # Scan-time entry readiness must not hard-disable UI execute buttons.
     assert '"executable": True' in helper
     assert 'entryReadiness") == "READY"' not in helper

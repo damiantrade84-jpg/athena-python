@@ -219,7 +219,7 @@ def test_engine_b_auto_matches_engine_a_pair_aware_style():
         config=CONFIG,
     )
     assert explicit_swing == "swing"
-    assert swing_profile["entry_tf"] == "H1"
+    assert swing_profile["entry_tf"] == "M15"
 
 
 def test_engine_b_cache_uses_one_canonical_symbol_and_clears_analysis_only():

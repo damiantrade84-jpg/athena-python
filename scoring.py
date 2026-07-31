@@ -4,6 +4,7 @@ Depends on: config.CONFIG, indicators (calc_* functions).
 """
 
 import logging
+import math
 import warnings
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional, TypedDict
@@ -1490,12 +1491,24 @@ def _a_only_required_score(pair: dict, signal: dict) -> float | None:
 
 
 def _signal_confidence_for_gate(signal: dict) -> float | None:
-    """Resolve Engine A confidence (0-1) for trade-tier gating."""
-    for key in ("confidence",):
+    """Resolve the Engine A confidence value used by trade-tier gating.
+
+    V3 publishes the continuous quality fields ``conviction`` and
+    ``scoreNorm``; legacy Engine A payloads publish ``confidence`` or a
+    ``confidenceDetail`` value.  Keep the contracts separate and prefer the
+    V3 fields whenever a V3 payload is identified.
+    """
+    is_v3 = (
+        str(signal.get("engine") or "").upper() == "ENGINE_A_V3"
+        or str(signal.get("contractVersion") or "").startswith("3.")
+    )
+    keys = ("conviction", "scoreNorm") if is_v3 else ("confidence",)
+    for key in keys:
         raw = signal.get(key)
         if raw is not None:
             try:
-                return float(raw)
+                value = float(raw)
+                return value if math.isfinite(value) else None
             except (TypeError, ValueError):
                 pass
     detail = signal.get("confidenceDetail")
@@ -1503,7 +1516,16 @@ def _signal_confidence_for_gate(signal: dict) -> float | None:
         raw = detail.get("confidence")
         if raw is not None:
             try:
-                return float(raw)
+                value = float(raw)
+                return value if math.isfinite(value) else None
+            except (TypeError, ValueError):
+                pass
+    if is_v3:
+        raw = signal.get("confidence")
+        if raw is not None:
+            try:
+                value = float(raw)
+                return value if math.isfinite(value) else None
             except (TypeError, ValueError):
                 pass
     return None

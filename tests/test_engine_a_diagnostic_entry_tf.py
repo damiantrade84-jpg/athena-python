@@ -87,10 +87,10 @@ def test_diagnostic_entry_kwargs_enabled(monkeypatch):
     assert engine_a_diagnostic_entry_kwargs("H4") == {}
 
 
-def test_live_forex_intraday_entry_is_m30_only_on_mt5():
+def test_live_forex_intraday_entry_matches_policy_setup_on_mt5():
     assert resolve_live_v3_entry_timeframe(
         "forex", "intraday", source="mt5"
-    ) == "M30"
+    ) == "H1"
     assert resolve_live_v3_entry_timeframe(
         "forex", "intraday", source="eodhd"
     ) is None

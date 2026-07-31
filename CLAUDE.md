@@ -33,13 +33,13 @@ Project skills are manual-only. Invoke `/athena-audit` only when the user explic
 
 ## Authoritative timeframe structure
 
-- `timeframe_policy.py` (`POLICY_VERSION = timeframe_policy.v3`) and `resolve_timeframe_policy()` are the policy source of truth. `market_structure.resolve_engine_b_tfs()` adapts that result for Engine B callers. Do not treat legacy `TIMEFRAME_ROUTING`, `ENGINE_B_FOREX_STRUCTURE_TF`, or hardcoded style tables as authoritative.
+- `timeframe_policy.py` (`POLICY_VERSION = timeframe_policy.v4`) and `resolve_timeframe_policy()` are the policy source of truth. `market_structure.resolve_engine_b_tfs()` adapts that result for Engine B callers. Do not treat legacy `TIMEFRAME_ROUTING`, `ENGINE_B_FOREX_STRUCTURE_TF`, or hardcoded style tables as authoritative.
 - The policy ladder is slow-to-fast: `D1 > H4 > H1 > M30 > M15 > M5`. Roles are distinct and ordered: `regime`, `bias`, `structure`, `setup`, `trigger`, `execution`.
 - For Engine B, `structure` controls the structural zones/space gate and structural ATR; `setup`/`trigger` control entry confirmation; `execution` controls entry timing. Never use a faster trigger or execution timeframe to replace missing structure data, ATR, or higher-timeframe bias.
-- The normal Engine B intraday policy is `D1` regime, `H4` bias, `H1` structure/zone/ATR, `M30` setup, and `M15` trigger/execution. Fast/liquid policies may promote execution to `M5` only with `M15` confirmation; thin/exotic policies may keep M5 as refinement/advisory or disable it.
+- The normal Engine B policy is the universal `D1` regime, `H4` bias, `H4` structure/zone/ATR, `H1` setup, and `M15` trigger/execution ladder. Conditional M5 remains refinement-only and cannot replace the M15 authority; production execution is live-quote based.
 - Engine D is a separate scalp contract: `H1` bias, `M15` confirmed structure/volume-profile, `M5` context/orderflow, and `M1` execution by default (`SCALP_ENGINE.EXECUTION_TIMEFRAME` may select M1 or M5). Engine B policy promotion must not alter Engine D timeframes or scoring.
 - `M1` is an Engine D operational execution timeframe, not an authoritative Engine B policy rung. Missing, stale, or ambiguous timeframe data remains fail-closed; lower-timeframe diagnostics never substitute for required higher-timeframe data.
-- Preserve the emitted provenance fields: `timeframePolicyVersion`, `policyKey`, `regimeTf`, `biasTf`, `structureTf`, `setupTf`, `triggerTf`, `executionTf`, and `m5Role`.
+- Preserve the emitted provenance fields: `timeframePolicyVersion`, `policyKey`, `regimeTf`, `biasTf`, `structureTf`, `setupTf`, `triggerTf`, `executionTf`, `m5Role`, and `executionMode`.
 
 ## Safety and edit discipline
 

@@ -73,8 +73,13 @@ def classify_engine_a_v3_signal(signal: dict[str, Any], pair: dict[str, Any]) ->
         if bool(CONFIG.get("ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", False)):
             min_conf = get_min_confidence_threshold(pair)
             conf = _signal_confidence_for_gate(signal)
-            if conf is not None and conf < min_conf:
-                score_group = get_pair_score_group(pair)
+            score_group = get_pair_score_group(pair)
+            if conf is None:
+                return (
+                    "watchlist",
+                    f"Engine A confidence unavailable for {score_group} minimum {min_conf:.2f}",
+                )
+            if conf < min_conf:
                 return (
                     "watchlist",
                     f"Engine A confidence {conf:.2f} below {score_group} minimum {min_conf:.2f}",

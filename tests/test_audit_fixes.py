@@ -170,6 +170,32 @@ def test_classify_v3_signal_demotes_below_group_min_confidence():
         assert "confidence 0.55" in reason
 
 
+def test_classify_v3_signal_blocks_when_confidence_is_missing():
+    from scoring import _classify_signal
+    from config import CONFIG
+
+    pair = {"display": "BTC/USDT", "type": "crypto", "enabled": True}
+    signal = {
+        "engine": "ENGINE_A_V3",
+        "contractVersion": "3.1.0",
+        "decision": "TRADE",
+        "qualified": True,
+        "engineATradeEnabled": True,
+    }
+    with patch.dict(
+        CONFIG,
+        {
+            "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED": True,
+            "ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE": {"crypto_btc": 0.58},
+            "ENGINE_A_TRADE_ELIGIBILITY_ENABLED": False,
+        },
+    ):
+        tier, reason = _classify_signal(signal, pair)
+
+    assert tier == "watchlist"
+    assert "confidence unavailable" in reason
+
+
 def test_correlation_clusters_can_be_configured():
     from scoring import apply_correlation_cap
     from config import CONFIG
