@@ -31,13 +31,16 @@ def _as_utc(value: Any) -> datetime:
 
 
 def _policy_roles(policy: dict[str, Any]) -> dict[str, str]:
+    # Fallbacks mirror the universal Engine A/B ladder (D1/H4/H4/H1/M15,
+    # execution advisory on the trigger rung) so a partial policy dict can
+    # never silently score on a legacy H1-everything ladder.
     return {
         "regime": str(policy.get("regime_tf") or policy.get("regimeTf") or "D1").upper(),
         "bias": str(policy.get("bias_tf") or policy.get("biasTf") or "H4").upper(),
-        "structure": str(policy.get("structure_tf") or policy.get("structureTf") or "H1").upper(),
+        "structure": str(policy.get("structure_tf") or policy.get("structureTf") or "H4").upper(),
         "setup": str(policy.get("setup_tf") or policy.get("setupTf") or "H1").upper(),
-        "trigger": str(policy.get("trigger_tf") or policy.get("triggerTf") or "H1").upper(),
-        "execution": str(policy.get("execution_tf") or policy.get("executionTf") or "H1").upper(),
+        "trigger": str(policy.get("trigger_tf") or policy.get("triggerTf") or "M15").upper(),
+        "execution": str(policy.get("execution_tf") or policy.get("executionTf") or "M15").upper(),
         # Carried so replay confirms entries on the same rung as live: policy
         # marks M5 conditional refinement behind an M15 prerequisite.
         "m5_policy": str(policy.get("m5_policy") or policy.get("m5Policy") or ""),

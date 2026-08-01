@@ -2371,6 +2371,9 @@ CONFIG: dict = {
         "etf":       0.08,
         "etf_bond":  0.08,
     },
+    # When Engine B direction opposes Engine A in the scan combined-conviction
+    # blend, Engine A's normalized score is scaled by this factor.
+    "ENGINE_AB_MISALIGNED_CONVICTION_FACTOR": 0.60,
     "MAX_SL_PCT_SCORE_GROUP_OVERRIDES": {},
     "MAX_SL_PCT_SYMBOL_OVERRIDES": {},
     # Bybit linear USDT perps reject TP triggers below ~10% of mark (retCode 10001).
@@ -2812,6 +2815,14 @@ CONFIG: dict = {
             "LOW_VOLATILITY": 0.25,
         },
         "d1_pd_array_conflict_window_atr_mult": 3.0,
+        # Structure primitives: swing pivot separation and prominence base
+        # (prominence = ATR * swing_prominence_atr_mult * per-style mult).
+        "swing_distance": 3,
+        "swing_prominence_atr_mult": 0.8,
+        # Forex ADX regime-classification boundaries (>= trending -> TRENDING,
+        # >= normal -> NORMAL, else RANGING).
+        "forex_adx_trending_threshold": 30,
+        "forex_adx_normal_threshold": 20,
         "rejection_wick_body_ratio": 1.2,
         "sweep_wick_atr_mult": 0.3,
         "equal_extrema_atr_mult": 0.15,

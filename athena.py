@@ -1970,11 +1970,16 @@ def _bybit_atr_and_candles_for_levels(
     resolved_style = _normalize_style(style or "swing")
     if resolved_style == "auto":
         resolved_style = "swing"
-    tf = str(atr_tf or "").strip().upper() or {
-        "scalp": "H1",
-        "intraday": "H4",
-        "swing": "D1",
-    }.get(resolved_style, "D1")
+    tf = str(atr_tf or "").strip().upper()
+    if not tf:
+        # Fail closed: a hardcoded style->ATR-TF fallback here would diverge
+        # from the policy-resolved ATR source (structure TF) for the same style.
+        log.warning(
+            "[ENGINE_A] %s: Bybit level ATR requested without an atr_tf; "
+            "skipping Bybit ATR feed",
+            symbol,
+        )
+        return None, None
     end_ms = None
     if as_of is not None:
         try:

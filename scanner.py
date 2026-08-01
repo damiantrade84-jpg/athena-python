@@ -334,7 +334,13 @@ def _engine_b_scan_freshness_stale_tfs(
                         if age_hours > max_hours:
                             stale_tfs.append(f"D1:crypto_stale_{int(age_hours)}h")
         except Exception:
-            pass
+            # Fail closed: an error resolving the crypto D1 age must not let a
+            # possibly-stale D1 pass the freshness gate silently.
+            log.warning(
+                "[ENGINE_B] crypto D1 staleness check failed; treating as stale",
+                exc_info=True,
+            )
+            stale_tfs.append("D1:crypto_stale_check_failed")
 
     return stale_tfs, freshness_diag
 
@@ -708,7 +714,11 @@ def _engine_b_scan_combined_conviction(
         b_val = 0.0
 
     if not direction_aligned:
-        return round(a_val * 0.60, 4)
+        try:
+            factor = float(CONFIG.get("ENGINE_AB_MISALIGNED_CONVICTION_FACTOR", 0.60))
+        except (TypeError, ValueError):
+            factor = 0.60
+        return round(a_val * max(0.0, min(1.0, factor)), 4)
 
     w = weights or ENGINE_C_AB_WEIGHTS.get("TRENDING", {"A": 0.40, "B": 0.60})
     try:

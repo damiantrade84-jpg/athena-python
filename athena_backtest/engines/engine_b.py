@@ -86,7 +86,11 @@ def run_engine_b_backtest(
     )
     from engine_a_groups import resolve_score_group_by_type
     from indicators import calc_indicators_with_normalized
-    from market_structure import NakedEngine, resolve_engine_b_h4_snap
+    from market_structure import (
+        NakedEngine,
+        engine_b_trigger_atr_period,
+        resolve_engine_b_h4_snap,
+    )
     from athena_app.services.engine_b_direction import independent_conflict_blocks_emit
     from config import CONFIG, scan_candle_limits
 
@@ -147,10 +151,14 @@ def run_engine_b_backtest(
         # Same value as NakedEngine._compute_atr_from_candles for the positive
         # case (last positive causal Wilder-ATR over the prefix); returning
         # None defers to the default walk so fallback semantics are untouched.
+        # The period must match the live trigger-TF calibration
+        # (engine_b_trigger_atr_period), not a fixed 14, or backtests would
+        # evaluate trigger evidence on a different ATR scale than production.
         try:
+            period = engine_b_trigger_atr_period(score_group, asset_type, tf)
             if len(rows) < 2 or not atr_series_cache.matches(tf, rows):
                 return None
-            value = atr_series_cache.atr_at(tf, len(rows), 14)
+            value = atr_series_cache.atr_at(tf, len(rows), period)
         except Exception:
             return None
         return value if value is not None and value > 0 else None

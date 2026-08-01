@@ -866,7 +866,9 @@ def evaluate_engine_a_v3(
                 or ""
             ).upper()
             if not structure_tf:
-                # Legacy / no-policy path: structure ladder step above entry.
+                # Legacy / no-policy path (v1 backtests): structure ladder step
+                # above entry. Reachable only when a policy dict is absent; the
+                # policy path always supplies an explicit structure rung above.
                 structure_tf = {
                     "M15": "H1",
                     "M30": "H1",

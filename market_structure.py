@@ -597,9 +597,20 @@ def resolve_engine_b_tfs(
     from timeframe_policy import policy_mode_is_authoritative
 
     if not policy_mode_is_authoritative(None, config.CONFIG):
+        # Non-authoritative mode is a latent third TF source: the legacy matrix
+        # (intraday H1 / swing H4) diverges from the universal ladder. Never use
+        # it silently — stamp the mode so consumers and backtests can detect the
+        # divergence instead of assuming policy parity.
         asset_table = _ENGINE_B_LEGACY_TF_MATRIX.get(a) or _ENGINE_B_LEGACY_TF_MATRIX["forex"]
         struct_tf, zone_tf, trigger_tf, atr_tf = asset_table.get(
             s, asset_table["intraday"]
+        )
+        log.warning(
+            "[ENGINE_B] policy mode '%s' is not authoritative; resolving TFs from the "
+            "legacy matrix (%s/%s) instead of the universal ladder",
+            config.CONFIG.get("TF_POLICY_MODE", "off"),
+            struct_tf,
+            trigger_tf,
         )
         return {
             "regime": "D1",
@@ -615,6 +626,7 @@ def resolve_engine_b_tfs(
             "policy_version": policy.policy_version,
             "policy_profile": policy.profile,
             "policy_mode": str(config.CONFIG.get("TF_POLICY_MODE", "off")).lower(),
+            "legacy_matrix_used": True,
             "proposed": policy.payload(),
         }
     # Engine B's structural ATR remains tied to its principal H4 structure
@@ -1159,6 +1171,20 @@ def _engine_b_d1_conflict_window_atr_mult() -> float:
     except (TypeError, ValueError):
         mult = 1.5
     return max(0.0, mult)
+
+
+def _engine_b_forex_adx_thresholds() -> tuple[float, float]:
+    """(trending, normal) ADX boundaries for forex regime classification."""
+    naked_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
+    try:
+        trending = float(naked_cfg.get("forex_adx_trending_threshold", 30))
+    except (TypeError, ValueError):
+        trending = 30
+    try:
+        normal = float(naked_cfg.get("forex_adx_normal_threshold", 20))
+    except (TypeError, ValueError):
+        normal = 20
+    return max(0.0, trending), max(0.0, normal)
 
 
 def _engine_b_rejection_wick_body_ratio() -> float:
@@ -3677,16 +3703,32 @@ class NakedEngine:
         highs: np.ndarray,
         lows: np.ndarray,
         atr: float,
-        distance: int = 3,
-        prominence_mult: float = 1.0,
+        distance: int | None = None,
+        prominence_mult: float | None = None,
     ) -> dict:
         if atr <= 0:
             return {"peak_idx": np.array([], dtype=int), "trough_idx": np.array([], dtype=int)}
+        # Structure primitives are config-sourced (NAKED_ENGINE.swing_distance /
+        # swing_prominence_atr_mult) with the historical in-code defaults.
+        naked_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
+        try:
+            distance = (
+                int(naked_cfg.get("swing_distance", 3))
+                if distance is None
+                else int(distance)
+            )
+        except (TypeError, ValueError):
+            distance = 3
+        try:
+            prominence_base = float(naked_cfg.get("swing_prominence_atr_mult", 0.8))
+        except (TypeError, ValueError):
+            prominence_base = 0.8
+        distance = max(1, distance)
         try:
             prominence_mult = max(1.0, float(prominence_mult or 1.0))
         except (TypeError, ValueError):
             prominence_mult = 1.0
-        prominence = atr * 0.8 * prominence_mult
+        prominence = atr * prominence_base * prominence_mult
         peak_idx, _ = find_peaks(highs, prominence=prominence, distance=distance)
         trough_idx, _ = find_peaks(-lows, prominence=prominence, distance=distance)
         return {"peak_idx": peak_idx, "trough_idx": trough_idx}
@@ -6539,9 +6581,10 @@ class NakedEngine:
                 except (TypeError, ValueError):
                     _adx_val = 0.0
                 _engine_b_adx_val = _adx_val
-                if _adx_val >= 30:
+                _adx_trending, _adx_normal = _engine_b_forex_adx_thresholds()
+                if _adx_val >= _adx_trending:
                     res["_adx_derived_regime"] = "TRENDING"
-                elif _adx_val >= 20:
+                elif _adx_val >= _adx_normal:
                     res["_adx_derived_regime"] = "NORMAL"
                 else:
                     res["_adx_derived_regime"] = "RANGING"
@@ -7268,6 +7311,7 @@ class NakedEngine:
         if not _aggtrade_cvd_bonus_enabled:
             _aggtrade_cvd_bonus_max = 0.0
 
+        _weighted_scoring_error = ""
         if _use_weighted_scoring:
             try:
                 from engine_b_quality import (
@@ -7322,7 +7366,11 @@ class NakedEngine:
                 bonus_points = _quality_score
                 max_possible = gate_max_possible + _quality_max_possible
             except Exception as exc:
-                log.debug("[ENGINE_B] weighted scoring fallback to legacy bonuses: %s", exc)
+                _weighted_scoring_error = f"{type(exc).__name__}: {exc}"
+                log.error(
+                    "[ENGINE_B] weighted scoring fallback to legacy bonuses: %s",
+                    _weighted_scoring_error,
+                )
                 _use_weighted_scoring = False
                 bonus_points = 0.0
                 if bos_mtf_aligned:
@@ -7668,6 +7716,7 @@ class NakedEngine:
             "quality_max_possible": round(_quality_max_possible, 2),
             "quality_components": _quality_components,
             "weighted_scoring_enabled": bool(_use_weighted_scoring),
+            "weighted_scoring_error": _weighted_scoring_error,
             "volume_scoring_applicable": _volume_scoring_applicable,
             "struct_points": 1.0 if structure_ok else 0.0,
             "rr_points": 1.0 if rr_ok else 0.0,
