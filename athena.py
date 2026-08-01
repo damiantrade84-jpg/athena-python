@@ -2993,6 +2993,16 @@ def fetch_eodhd(pair, tf, limit):
             ]
 
         else:
+            # EODHD intraday offers 1m/5m/1h only. Sub-hourly policy TFs are
+            # resampled from a real 5m source; anything else must fail closed
+            # rather than return mislabeled 1h bars under the requested tf key.
+            if tf not in ("H1", "H4", "M5", "M15", "M30"):
+                return {
+                    "error": True,
+                    "symbol": symbol,
+                    "detail": f"EODHD unsupported timeframe {tf}",
+                }
+            _source_interval = "5m" if tf in ("M5", "M15", "M30") else "1h"
             start_ts = int(
                 (datetime.now(timezone.utc) - timedelta(days=365)).timestamp()
             )
@@ -3002,7 +3012,7 @@ def fetch_eodhd(pair, tf, limit):
             for attempt in range(1, 4):
                 try:
                     bars = api.get_intraday_historical_data(
-                        ticker, interval="1h", from_unix_time=start_ts
+                        ticker, interval=_source_interval, from_unix_time=start_ts
                     )
                     break
                 except Exception as e:
@@ -3067,7 +3077,23 @@ def fetch_eodhd(pair, tf, limit):
                 if _resampled:
                     candles = _resampled
                 else:
-                    log.warning(f"[EODHD] {ticker} _resample_from_h1 failed, returning raw H1 candles")
+                    log.warning(f"[EODHD] {ticker} _resample_from_h1 failed")
+                    return {
+                        "error": True,
+                        "symbol": symbol,
+                        "detail": "EODHD H4 resample failed",
+                    }
+            elif tf in ("M5", "M15", "M30"):
+                _resampled = _resample_eodhd_volume_bars(candles, tf, len(candles))
+                if _resampled:
+                    candles = _resampled
+                else:
+                    log.warning(f"[EODHD] {ticker} 5m->{tf} resample failed")
+                    return {
+                        "error": True,
+                        "symbol": symbol,
+                        "detail": f"EODHD {tf} resample failed",
+                    }
 
         final_candles = candles[-limit:] if len(candles) > limit else candles
 

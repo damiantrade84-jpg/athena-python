@@ -285,7 +285,7 @@ def resample_eodhd_volume_bars(
         if not source_candles:
             return None
         return source_candles[-limit:] if len(source_candles) > limit else list(source_candles)
-    freq = {"M5": "5min", "M15": "15min", "H1": "1h", "H4": "4h", "D1": "1D"}.get(tf)
+    freq = {"M5": "5min", "M15": "15min", "M30": "30min", "H1": "1h", "H4": "4h", "D1": "1D"}.get(tf)
     if not freq or not source_candles:
         return None
     try:

@@ -183,9 +183,9 @@ def refresh_series(pair: dict, tf: str, *, store: ParquetCandleStore) -> int:
     return store.write(pair, tf, rows, provider=provider)
 
 
-# Policy v4 universal ladder needs setup H1 + trigger M15 on top of D1/H4
-# structure. Keep M30 optional for legacy Engine B completeness.
-_DEFAULT_REFRESH_TFS = ("D1", "H4", "H1", "M15")
+# Policy v4 ladders need D1/H4 structure plus H1/M30/M15 setup+trigger coverage
+# (cash-equity profiles use M30 setup). M5/M1 remain Engine-D-native only.
+_DEFAULT_REFRESH_TFS = ("D1", "H4", "H1", "M30", "M15")
 
 
 def refresh_universe(
