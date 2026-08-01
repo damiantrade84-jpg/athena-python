@@ -3,146 +3,133 @@ description:
 alwaysApply: true
 ---
 
-# AGENTS.md — Athena / Sentinel Pro v4
+# Athena / Sentinel Pro v4 - shared AI operating contract
 
-Athena is a multi-engine trading analysis and execution-support repository. Default mode is paper/demo only unless the user explicitly approves live trading.
+This repository is a multi-engine trading analysis and execution-support system. The
+same engineering contract applies regardless of model, provider, IDE, or agent
+runner. The default is paper/demo mode; live trading requires explicit user approval.
 
-## Task routing — highest priority
+Read this file and the root `SKILL.md` before substantial work. Read a nested
+`AGENTS.md` when one exists below the directory being changed. Manual workflow files
+under `.agents/skills/` and `.claude/skills/` are explicit-only and do not replace
+these always-on rules.
 
-Use the lightest workflow that can safely complete the request.
+## Evidence and scope
 
-### Direct fix (default)
+- Treat every claim, model suggestion, old audit, log, and generated artifact as
+  unverified until current source, focused tests, configuration, or runtime evidence
+  confirms it. Label conclusions as `verified`, `not verified`, or `assumption`.
+- Start at the named pair, warning, error, payload field, gate, or file. Trace the
+  actual producer -> normalizer/resolver -> evaluator/classifier -> API/UI -> risk or
+  execution consumer. Do not stop at a plausible symptom.
+- Inspect negative paths relevant to the question: missing, null, false, empty,
+  malformed, stale, delayed, duplicated, wrong-type, and conflicting inputs.
+- Use the lightest workflow that can prove the request. Use a direct edit for a
+  localized change; use a narrow path investigation when the cause is unclear; use a
+  named manual skill only when the user explicitly requests that workflow.
+- Do not broaden a small task into a repository inventory, full audit, subagent run,
+  full test suite, long backtest, service start, browser run, or broker action.
 
-For a clear explanation, mechanical edit, localized bug fix, or change normally confined to three files or fewer:
+## Worktree and secrets
 
-- Do not create a plan, checklist, `PLANS.md`, task file, coverage map, or subagent.
-- Do not load a skill unless the user explicitly invokes it by name.
-- Read only the target file and the minimum caller, consumer, config, or test needed to understand the change.
-- Patch directly, run the smallest relevant check once, and stop when the acceptance criteria are met.
+- Inspect status and the relevant diff before editing. Existing changes belong to the
+  user: preserve them, do not reset, clean, checkout, or overwrite unrelated files.
+- Use `apply_patch` for hand edits. Keep diffs minimal and traceable to the request.
+- Never read, print, copy, modify, or commit `.env`, credentials, API keys, tokens,
+  database secrets, or private connection material. Use `.env.example` and redacted
+  diagnostics only.
+- Do not stage, commit, or push unless asked. If publishing is requested, stage
+  explicit intended paths and inspect the staged diff; never include unrelated dirty
+  work.
 
-### Scoped investigation
+## Current repository boundaries
 
-Use only when the root cause is unclear. Trace the suspected path narrowly; do not scan the whole repository or inspect every engine/surface. Expand scope only when current evidence requires it.
+- `athena.py` is still the monolithic runtime and contains live scan/API wiring;
+  `app.py`, `athena_runtime.py`, and `athena_app/` provide modular/testable paths.
+  Do not assume a modular helper is the only consumer or that a passing helper test
+  proves the running monolith changed.
+- Engine A (factor confluence), Engine B (naked structure), Engine C (consensus/AI
+  blend), Engine D (scalp), and ASE are independent. Do not copy scores, gates,
+  indicators, thresholds, or execution semantics between engines unless an explicit
+  contract requires it. ASE remains standalone under `athena_ase/` and demo/paper
+  only.
+- Bybit is the primary crypto venue for candles, levels, live ticks, paper execution,
+  and the configured trade-bucket path. Binance candle/live-price support is a
+  separate path. `MICROSTRUCTURE_BINANCE_FEEDS_ENABLED` is false in the checked-in
+  configuration; do not enable or treat Binance as primary without verifying current
+  config and venue routing.
+- MT5 live candles and broker state come through the current MT5 path (including
+  `fetch_mt5`). Bounded read-only rereads can improve a small stale window, but stale,
+  ambiguous, unavailable, or broker-invalid data must still fail closed at freshness
+  and risk gates.
+- EODHD is an overlay/enrichment source, not live OHLC authority. Live scoring may
+  use only session-fresh CandleBuilder volume paths; delayed cached/REST intraday
+  history is backtest evidence only. Preserve source labels and do not let delayed
+  `eodhd_*` history pass a live gate.
+- Tunable thresholds, risk limits, gates, symbols, and routing belong in the config
+  layer (`config.yaml` plus `config.py` normalization/defaults). Do not hardcode a
+  new value in Python or silently tune a locked threshold.
 
-### Formal audit or parity workflow
+## Timeframe contract
 
-Use a repository skill only when the user explicitly invokes `$skill-name` or explicitly requests the complete formal workflow represented by that skill. Do not chain multiple skills unless the user names each one.
+- `timeframe_policy.py` (`POLICY_VERSION = timeframe_policy.v4`) and
+  `resolve_timeframe_policy()` are authoritative. `market_structure` adapters are
+  consumers, not a second policy source. Legacy routing tables and hardcoded style
+  tables are not authoritative.
+- The slow-to-fast ladder is `D1 > H4 > H1 > M30 > M15 > M5 > M1`. `M1` is permitted
+  only by scalp/Engine-D-native templates. Roles are distinct: `regime`, `bias`,
+  `structure`, `setup`, `trigger`, and `execution`.
+- The universal Engine A/B ladder is `D1` regime, `H4` bias, `H4` structure/zone/ATR,
+  `H1` setup, and `M15` trigger. Production execution is live-quote based; the
+  emitted `executionTf` is advisory execution context. M5 is conditional refinement
+  after M15 confirmation or disabled; it is not a replacement trigger or structure
+  timeframe. The v4 `allow_dynamic_m5_execution` promotion is deprecated/ignored.
+- Speed and liquidity state do not rewrite the authoritative Engine A/B role ladder
+  in v4. They are recorded for diagnostics and M5 eligibility. Only an explicit,
+  current resolver/config override may patch a role; verify that override rather than
+  inferring policy from a signal label.
+- Engine D has its own native contract: H1 regime/context, M15 bias/confirmed
+  structure, M5 setup/context, and M1 trigger/execution by default. Do not let an
+  Engine A/B policy change alter Engine D scoring or timeframes.
+- Preserve and trace policy provenance: `timeframePolicyVersion`, `policyKey`,
+  `regimeTf`, `biasTf`, `structureTf`, `setupTf`, `triggerTf`, `executionTf`,
+  `m5Role`, `m5Policy`, and `executionMode`.
 
-### Plan mode
+## Safety and cross-surface invariants
 
-Create a written plan only when the user asks for one, or when the work is a migration, architecture change, new subsystem, significant refactor, or multi-stage change spanning more than five production files. Keep small plans in the response. Do not create or update plan/task files unless requested.
+- Never bypass or weaken freshness, risk, kill-switch, guardian, execution approval,
+  broker, audit, spread, fee, RR, SL/TP, sizing, or deterministic data-quality gates.
+  Missing or ambiguous safety data rejects by default.
+- Engine A and Engine B score fields remain independent. Cross-engine annotations may
+  use explicitly named fields such as `combinedConviction` or `engine_b_*`, but use
+  graded `score / max_possible` totals. Never use binary `gate_pct` as a quality
+  blend; it is 100 for passing gates and saturates downstream scores.
+- `decision=TRADE`, `qualified=true`, or a high quality score is not executable proof.
+  Trace explicit `entryReadiness` and require `READY`, fresh live quote, valid
+  levels, and every downstream deterministic gate. Scan/UI eligibility and execute-
+  time readiness must agree.
+- ATR, entry, and SL/TP provenance must travel together. If a timeframe mismatch is
+  suspected, trace stamped signal provenance, live candle inputs, executable bid/ask
+  entry, and SL before changing calculations.
+- Spread caps and spread-to-SL checks are config-driven and have both scan/UI and
+  broker defenses. The checked-in `MAX_EXECUTION_SPREAD_TO_SL_RATIO` is currently
+  `0` (disabled); do not silently restore or tune it. If enabled by an explicit
+  change, preserve the same fail-closed gate and provenance at every consumer.
+- AI is advisory only. Any provider/model may explain, challenge, downgrade, or
+  request review; it cannot execute, approve, mutate config, alter strategy
+  parameters, or override deterministic gates.
 
-## Context and token budget
+## Verification and handoff
 
-- Current source is authoritative. Do not load old audits, plans, task files, logs, generated artifacts, archived reports, or backtest outputs unless the user names them or they are required evidence.
-- Do not enumerate or read all skills. Repository skills are manual-only.
-- No broad `rg` sweeps, repository inventories, dependency installs, service starts, database scans, browser runs, or backtest matrices unless directly required.
-- No subagents for ordinary implementation or single-surface review.
-- Do not repeat a command that already passed unless relevant code changed.
-- Stop once the requested behavior is implemented and minimally verified.
-
-## Current system boundaries
-
-- Bybit is the primary crypto venue for trade buckets, microstructure, live ticks, levels, and paper execution.
-- Binance microstructure is disabled by default when Bybit is primary. Enable only with `MICROSTRUCTURE_BINANCE_FEEDS_ENABLED: true` or `TRADE_BUCKET_EXCHANGE: binance`.
-- Binance candle/live-price support is separate from Binance microstructure.
-- MT5 D1 fetch has a bounded read-only retry for small stale-history windows; freshness and risk gates still reject stale results.
-- Engine A, B, C, D, ASE, Research Lab, UI, and execution paths remain independent unless the task explicitly requires integration.
-- ASE is standalone under `athena_ase/`, demo/paper only, and must not import Engine A scoring or indicators.
-
-## Authoritative timeframe structure
-
-- `timeframe_policy.py` (`POLICY_VERSION = timeframe_policy.v4`) and `resolve_timeframe_policy()` are the policy source of truth. `market_structure.resolve_engine_b_tfs()` adapts that result for Engine B callers. Do not treat legacy `TIMEFRAME_ROUTING`, `ENGINE_B_FOREX_STRUCTURE_TF`, or hardcoded style tables as authoritative.
-- The policy ladder is slow-to-fast: `D1 > H4 > H1 > M30 > M15 > M5 > M1`. `M1` is the terminal rung and may appear only in scalp/engine-d-native templates. Roles are distinct and ordered: `regime`, `bias`, `structure`, `setup`, `trigger`, `execution`.
-- For Engine B, `structure` controls the structural zones/space gate and structural ATR; `setup`/`trigger` control entry confirmation; `execution` controls entry timing. Never use a faster trigger or execution timeframe to replace missing structure data, ATR, or higher-timeframe bias.
-- The normal Engine B intraday policy is `D1` regime, `H4` bias, `H4` structure/zone/ATR, `H1` setup, and `M15` trigger/execution (universal Engine A/B role ladder in `timeframe_policy.py`: `_UNIVERSAL_REGIME=D1`, `_UNIVERSAL_BIAS=H4`, `_UNIVERSAL_STRUCTURE=H4`, `_UNIVERSAL_SETUP=H1`, `_UNIVERSAL_TRIGGER=M15`). M5 authority is declarative via `m5Policy` (`conditional` = M15 confirmation + M5-eligibility required, emitted with `m5Role=refinement`; `disabled` = `m5Role=disabled`); speed never promotes M5 execution, and `allow_dynamic_m5_execution` is deprecated and ignored. Production execution is live-quote based (`executionMode=live_quote`); the emitted `executionTf` is advisory execution context. Speed adaptation may modify `setup`/`trigger` only — never regime/bias/structure, never execution.
-- Engine D is a separate scalp contract: `H1` bias, `M15` confirmed structure/volume-profile, `M5` context/orderflow, and `M1` execution by default (`SCALP_ENGINE.EXECUTION_TIMEFRAME` may select M1 or M5). The policy's scalp/engine-d-native template is `H1` regime, `M15` bias/structure, `M5` setup, `M1` trigger with live-quote execution. Engine B policy promotion must not alter Engine D timeframes or scoring.
-- Missing, stale, or ambiguous timeframe data remains fail-closed; lower-timeframe diagnostics never substitute for required higher-timeframe data.
-- Preserve the emitted provenance fields: `timeframePolicyVersion`, `policyKey`, `regimeTf`, `biasTf`, `structureTf`, `setupTf`, `triggerTf`, `executionTf`, `m5Role`, `executionMode`, and `m5Policy`.
-
-## Non-negotiable safety
-
-- Read current source before claims or patches. Do not rely on memory, old audits, or generated logs unless the user names them.
-- Use the smallest safe diff. Do not alter thresholds, weights, gates, SL/TP, RR, strategy semantics, execution behavior, or unrelated code unless requested.
-- Engine A and Engine B scoring must not affect each other. Never write one engine's score, pct, or gate state into the other engine's score fields. Cross-engine consensus lives only in explicitly named blend/annotation fields (`combinedConviction`, `engine_b_*`) and must use graded totals (score/max_possible) — never binary gate outputs like `gate_pct`, which are 100 for every passing signal and silently saturate blends and headline scores.
-- Never bypass risk, freshness, kill switch, execution approval, broker, audit, or deterministic safety gates.
-- AI is advisory only. It cannot execute, approve orders, mutate config, or override deterministic gates.
-- Never read, print, modify, or commit `.env`, secrets, API keys, tokens, or credentials.
-- Treat `execution.py`, `risk_engine.py`, `guardian.py`, `auto_trader.py`, `mt5_executor.py`, `bybit_executor.py`, broker feeds, freshness checks, and config gates as safety-critical. Preserve fail-closed behavior.
-
-## Verification budget
-
-Choose one smallest relevant verification command by default:
-
-- Documentation/comment/format-only change: no pytest. Validate syntax or formatting only when applicable.
-- Localized Python behavior: one specific test case; use one test file only when a specific case is not available.
-- Localized frontend behavior: one targeted typecheck, test, or build command—not all three unless the first check cannot verify the change.
-- Config-only change: parse/load the affected config; do not run unrelated tests.
-- Safety-critical behavior: run the smallest focused test covering the modified gate or branch. A second command is allowed only when it verifies a distinct modified safety boundary.
-
-Never run full test suites, broad `-k` selections, multi-file test batches, live trading, broker actions, long research jobs, or full backtest matrices unless the user explicitly requests them or the task is specifically release/CI validation.
-
-If no suitable test exists or the environment blocks it, report `not verified`; do not create unrelated tests or broaden scope merely to produce a green command.
-
-Think Before Coding
-
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
-
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
-
-## 2. Simplicity First
-
-**Minimum code that solves the problem. Nothing speculative.**
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-## 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
-
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
-
-## 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
----
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
-## Final response
-
-Report only what is useful: summary, files changed, the exact check run, and any material unverified risk. For read-only questions or trivial edits, omit empty sections.
+- Run the smallest relevant check once: a focused test, pure-helper check, syntax
+  compile, config parse, or `git diff --check`. Do not repeat a passing command when
+  the relevant code did not change.
+- Tests should prefer modular/pure paths and must not import `athena.py` merely to
+  test a helper. If optional dependencies or live-order environment guards block a
+  full import, do not bypass production safety; test the pure path and report the
+  blocked check.
+- Code/config/universe changes are not active in an already-running Athena process.
+  Restart and perform a fresh scan or payload check before claiming runtime behavior
+  changed. Unit coverage does not prove broker or terminal activation.
+- Before declaring done, report the exact files changed, the exact check run, what is
+  verified, and material risk or runtime behavior that remains not verified.
