@@ -2001,7 +2001,7 @@ CONFIG: dict = {
     },
     # Config-gated per-group/per-style role override for the timeframe policy
     # ladder. Ships ENABLED=true (the shipped per-group matrix is active); set
-    # ENABLED falsy to restore the universal ladder (D1/H4/H4/H1/M15). When
+    # ENABLED false to restore the universal ladder (D1/H4/H4/H1/M15). When
     # enabled, BY_GROUP maps a policy group (the v4 taxonomy used by
     # resolve_timeframe_policy) to per-style role overrides; any subset of
     # regime/bias/structure/setup/trigger may be set. Invalid rows fail closed

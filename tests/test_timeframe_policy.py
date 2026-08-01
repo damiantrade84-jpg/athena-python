@@ -320,6 +320,71 @@ def test_role_override_engine_d_never_affected(monkeypatch) -> None:
     assert policy.diagnostics.role_override_applied is False
 
 
+def test_role_override_does_not_mutate_config_conflict_fallback(monkeypatch) -> None:
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_TF_ROLE_OVERRIDES",
+        {
+            "ENABLED": True,
+            "BY_GROUP": {
+                "forex_majors_standard": {
+                    "swing": {
+                        "regime": "D1",
+                        "bias": "D1",
+                        "structure": "D1",
+                        "setup": "H4",
+                        "trigger": "H1",
+                    }
+                }
+            },
+        },
+    )
+    policy = resolve_timeframe_policy(
+        "EUR/USD",
+        "forex",
+        "forex_majors",
+        "swing",
+        authoritative_group="forex_crosses",
+    )
+
+    assert policy.policy_source == PolicySource.CONFIG_CONFLICT
+    assert policy.regime_tf == Timeframe.D1
+    assert policy.bias_tf == Timeframe.H4
+    assert policy.structure_tf == Timeframe.H4
+    assert policy.setup_tf == Timeframe.H1
+    assert policy.trigger_tf == Timeframe.M15
+    assert policy.diagnostics.config_conflict is True
+    assert policy.diagnostics.role_override_applied is False
+    assert policy.diagnostics.role_override_patched_roles == ()
+
+
+@pytest.mark.parametrize(
+    "block",
+    (
+        {"ENABLED": "false", "BY_GROUP": {}},
+        {"ENABLED": True, "BY_GROUP": []},
+        {
+            "ENABLED": True,
+            "BY_GROUP": {"forex_majors_standard": {"intraday": []}},
+        },
+        {
+            "ENABLED": True,
+            "BY_GROUP": {
+                "forex_majors_standard": {"intraday": {"execution": "M15"}}
+            },
+        },
+    ),
+)
+def test_role_override_malformed_config_fails_closed(monkeypatch, block) -> None:
+    from config import CONFIG
+
+    monkeypatch.setitem(CONFIG, "ENGINE_TF_ROLE_OVERRIDES", block)
+    with pytest.raises(PolicyConfigurationError):
+        resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday")
+
+
 @pytest.mark.parametrize(
     "row",
     (
@@ -1298,6 +1363,7 @@ def test_payload_contract_and_warmup_derivation() -> None:
     assert required <= signal.keys()
     assert signal["timeframePolicyHash"]
     # AAPL (us_stock_single) uses the enabled H1-structure / M30-setup ladder.
+    assert policy.diagnostics.config_conflict is False
     assert policy.structure_tf == Timeframe.H1
     assert policy.setup_tf == Timeframe.M30
     assert policy.trigger_tf == Timeframe.M15

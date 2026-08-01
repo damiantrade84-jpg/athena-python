@@ -7,9 +7,12 @@ thresholds from `config.yaml` ADX/RANGING/score tables and `scoring.py`.
 
 ## 1. Timeframe role ladder
 
-**Universal for every Engine A/B group and pair — intraday and swing are
-identical on roles.** Only profile name (provenance), `m5_policy`, and
-`baseline_speed` vary by group/symbol. Engine D (scalp) is separate.
+The universal ladder below is the **fallback** for Engine A/B when no enabled
+per-group/per-style row applies. The checked-in `config.yaml` enables a
+selective role-override matrix: equities use a faster intraday structure/setup
+pair, thin or spread-expensive groups use an M30 trigger, and configured swing
+rows use D1 structure with H4 setup and H1 trigger. Engine D (scalp) is
+separate.
 
 | Role | TF |
 |---|---|
@@ -25,6 +28,16 @@ never execution. Intraday vs swing differences live **below** the role ladder
 (Engine A scoring weights, entry-timeframe advisory, Engine B min-score floors).
 
 ## 2. Per-group policy differences (from resolved matrix)
+
+The active role rows in `ENGINE_TF_ROLE_OVERRIDES` resolve as follows. Roles
+are listed as `R / B / S / U / T`; execution remains live-quote based.
+
+| Applied rows | Intraday | Swing |
+|---|---|---|
+| `equity_index_fast`, `equity_index_standard`, `us_stock_single`, `cash_equity_standard_dynamic` | D1 / H4 / H1 / M30 / M15 | D1 / D1 / D1 / H4 / H1 |
+| `forex_exotics_liquid`, `forex_exotics_restricted`, `nat_gas`, `thin_metals_base_softs`, `bond_tlt_smallcap_em_etf` | D1 / H4 / H4 / H1 / M30 (nat gas swing trigger is H4) | D1 / D1 / D1 / H4 / H1 (nat gas trigger is H4) |
+| Other configured swing groups | universal fallback | D1 / D1 / D1 / H4 / H1 |
+| Unconfigured intraday groups, including majors/crosses, energy oil, liquid metals, and crypto | D1 / H4 / H4 / H1 / M15 | — |
 
 Groups whose policy differs from the pure universal ladder (M5 conditional =
 M15 confirmation + M5 refinement; speed = FAST/SLOW baseline):
@@ -124,27 +137,32 @@ crypto 0.04–0.05, forex 0.045–0.05, stocks 0.06, indices/commodities 0.05.
 
 ## 5. Intraday vs swing — where they actually differ
 
-Roles are identical. The real per-horizon knobs:
+The active role matrix now creates the following role differences in addition
+to the scoring knobs:
 
-1. **Engine A trend weights** (`ENGINE_A_SCORING_PROFILE.BY_STYLE`): swing
+1. **Intraday equities** use H1 structure, M30 setup, and M15 trigger; thin
+   groups use H4 structure, H1 setup, and M30 trigger.
+2. **Swing rows** use D1 regime/bias/structure, H4 setup, and H1 trigger;
+   nat gas uses an H4 trigger.
+3. **Engine A trend weights** (`ENGINE_A_SCORING_PROFILE.BY_STYLE`): swing
    D1 0.50 / H4 0.30 / H1 0.20; intraday D1 0.42 / H4 0.33 / H1 0.25.
-2. **Engine A advisory entry TF** (`resolve_v3_entry_timeframe`): intraday H1,
+4. **Engine A advisory entry TF** (`resolve_v3_entry_timeframe`): intraday H1,
    swing H4. Superseded in the live path by the policy setup rung (H1) when the
    policy is authoritative — see `evaluator.py:511` / `quant_scorer.py:1080`.
-3. **Engine B min-score floor**: intraday 4.5 vs swing 5.0.
-4. **Per-group scoring overrides**: `energy_oil`/`commodity_other` drop D1
+5. **Engine B min-score floor**: intraday 4.5 vs swing 5.0.
+6. **Per-group scoring overrides**: `energy_oil`/`commodity_other` drop D1
    (H4 0.55 / H1 0.45); stock/index D1 0.40; `bond_tlt` momentum+regime on D1.
 
-## 6. Gap analysis (for improvement)
+## 6. Implementation and remaining evidence gaps
 
-- **Structure rung is H4 for both horizons.** For intraday, structure/zone/ATR
-  resolve to H4 while the trigger is M15 (gap of two rungs below setup H1). The
-  legacy Engine B matrix used H1 structure intraday; v4 promotes intraday to H4.
-- **Swing and intraday share the same setup rung (H1).** The advisory swing
-  entry is H4 (`resolve_v3_entry_timeframe`) but the live path scores setup on
-  H1 because the policy setup rung overrides it. Engine A swing therefore runs
-  H1 entry confirmation in production, not H4.
-- **No per-group structure differentiation exists** — only M5 policy, speed,
-  weights, and thresholds vary. Per-group structure evidence would be required
-  before introducing differentiated structure rungs (AGENTS.md: policy owns
-  roles; speed adapts setup/trigger only).
+- **The active matrix is selective, not universal.** The fallback remains
+  D1/H4/H4/H1/M15, while the configured rows above change intraday equities,
+  thin groups, and swing roles.
+- **The recommendation document is not identical to the shipped matrix.** FX
+  majors/crosses have no intraday override and therefore retain the universal
+  ladder. CHI50 resolves through `equity_index_standard`, so its active
+  intraday row is H1/M30 rather than the recommendation's H4/M30.
+- **External trading-consensus claims and profitability are not verified by
+  this source audit.** They should not be treated as proof that the promoted
+  rows are optimal without outcome evidence and a separately approved policy
+  decision.

@@ -1,11 +1,11 @@
 # Engine A / B Optimal Timeframe Structure Audit — Intraday vs Swing per Group
 
-Independent expert audit, 2026-07-31. Recomms grounded in (a) repo facts
+Independent expert audit, 2026-07-31. Recommendations are grounded in (a) repo facts
 (`VOLATILITY_SCALER_BANDS`, `SpeedClass`, indicator-period tables, legacy Engine B
 TF matrix) and (b) published professional multi-timeframe (MTF) consensus. No
-guessed values. Where evidence is thin, the change is marked MEDIUM confidence
-and remains config-gated **default-off** so runtime behavior is unchanged until
-opted in.
+guessed values. The external-source claims and profitability are not verified by
+this code audit. Commit `270ab415` promoted a selective subset of these
+recommendations; the checked-in config has `ENABLED: true` for that subset.
 
 ## 0. Evidence base
 
@@ -101,11 +101,19 @@ bias rung moves to D1 alongside regime.
   indices/stocks; M30 trigger for exotics & nat_gas; crypto/precious/oil intraday
   unchanged. All backed by vol facts + strong published consensus.
 - **MEDIUM confidence:** M30 trigger for bond/thin metals/softs (fewer sources);
-  D1-only thin alts. Config-gated default-off in any implementation.
+  D1-only thin alts. These remain policy decisions that require outcome
+  monitoring even though the selected rows are enabled in the checked-in config.
 - **Not touched:** regime always D1; execution always live-quote; M5 policy and
   speed classes unchanged; indicator periods and thresholds unchanged.
 
 ## 4. Implementation (shipped, enabled)
+
+The implementation is a selective promotion, not a verbatim copy of every
+recommendation in Section 1. Intraday FX majors/crosses, energy oil, liquid
+metals, and crypto have no role-override row and therefore retain the universal
+fallback. `index_other` (including CHI50) resolves to
+`equity_index_standard`, so its active intraday roles are H1 structure/M30
+setup/M15 trigger rather than the H4 structure/M30 trigger recommendation.
 
 - New config key `ENGINE_TF_ROLE_OVERRIDES` (`config.py` default + `config.yaml`)
   with `ENABLED: true` (the findings are the shipped default; set `false` to

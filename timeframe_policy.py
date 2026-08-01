@@ -1060,25 +1060,64 @@ def _apply_role_override(
     try:
         from config import CONFIG
     except Exception:
-        # Config is unavailable (e.g. early boot): the default-off gate cannot be
-        # read, so preserve the base template rather than fail policy resolution.
+        # Config is unavailable (e.g. early boot), so preserve the base template
+        # rather than fail policy resolution during module/bootstrap import.
         return selected, False, ()
-    block = CONFIG.get("ENGINE_TF_ROLE_OVERRIDES") or {}
-    if not bool(block.get("ENABLED", False)):
+    block = CONFIG.get("ENGINE_TF_ROLE_OVERRIDES")
+    if block is None:
         return selected, False, ()
-    by_group = block.get("BY_GROUP") or {}
-    if not isinstance(by_group, dict):
+    if not isinstance(block, Mapping):
+        raise PolicyConfigurationError(
+            "ENGINE_TF_ROLE_OVERRIDES must be a mapping"
+        )
+    enabled = block.get("ENABLED", False)
+    if not isinstance(enabled, bool):
+        raise PolicyConfigurationError(
+            "ENGINE_TF_ROLE_OVERRIDES.ENABLED must be boolean"
+        )
+    if not enabled:
         return selected, False, ()
-    row = (by_group.get(group) or {}).get(style) if isinstance(by_group.get(group), dict) else None
-    if not isinstance(row, dict) or not row:
+    by_group = block.get("BY_GROUP", {})
+    if not isinstance(by_group, Mapping):
+        raise PolicyConfigurationError(
+            "ENGINE_TF_ROLE_OVERRIDES.BY_GROUP must be a mapping"
+        )
+    group_rows = by_group.get(group)
+    if group_rows is None:
         return selected, False, ()
+    if not isinstance(group_rows, Mapping):
+        raise PolicyConfigurationError(
+            f"ENGINE_TF_ROLE_OVERRIDES group {group!r} must be a mapping"
+        )
+    row = group_rows.get(style)
+    if row is None:
+        return selected, False, ()
+    if not isinstance(row, Mapping):
+        raise PolicyConfigurationError(
+            f"ENGINE_TF_ROLE_OVERRIDES row for group {group!r} style {style!r} "
+            "must be a mapping"
+        )
+    if not row:
+        return selected, False, ()
+    allowed_roles = {"regime", "bias", "structure", "setup", "trigger"}
+    unknown_roles = set(row) - allowed_roles
+    if unknown_roles:
+        raise PolicyConfigurationError(
+            f"ENGINE_TF_ROLE_OVERRIDES: unknown role(s) "
+            f"{sorted(unknown_roles)!r} for group {group!r} style {style!r}"
+        )
     kwargs: dict[str, Timeframe] = {}
     for role in ("regime", "bias", "structure", "setup", "trigger"):
-        raw = row.get(role)
-        if raw is None:
+        if role not in row:
             continue
+        raw = row[role]
+        if not isinstance(raw, str) or not raw.strip():
+            raise PolicyConfigurationError(
+                f"ENGINE_TF_ROLE_OVERRIDES: invalid {role} timeframe {raw!r} for "
+                f"group {group!r} style {style!r}"
+            )
         try:
-            tf = Timeframe(str(raw).strip().upper())
+            tf = Timeframe(raw.strip().upper())
         except ValueError:
             raise PolicyConfigurationError(
                 f"ENGINE_TF_ROLE_OVERRIDES: unknown {role} timeframe {raw!r} for "
@@ -1209,7 +1248,7 @@ def resolve_timeframe_policy(
     selected = _engine_template(base, resolved_engine, resolved_style)
     role_override_applied = False
     role_override_patched_roles: tuple[str, ...] = ()
-    if resolved_engine != "engine_d":
+    if resolved_engine != "engine_d" and not config_conflict:
         (
             selected,
             role_override_applied,
@@ -2714,7 +2753,13 @@ def attach_timeframe_policy_payload(
             canonical = canonical_symbol(symbol)
             canonical_pair = dict(pair)
             if canonical:
-                canonical_pair["display"] = _CANONICAL_DISPLAY.get(canonical, canonical)
+                canonical_display = _CANONICAL_DISPLAY.get(canonical, canonical)
+                # The score-group resolver uses both display and provider
+                # symbol.  Keep them on the same canonical identity so a
+                # provider suffix such as ``.US`` cannot create a false
+                # authoritative-group conflict for an explicit score_group.
+                canonical_pair["display"] = canonical_display
+                canonical_pair["symbol"] = canonical_display
             authoritative_group = resolve_score_group_by_type(canonical_pair)
         except Exception:
             authoritative_group = None

@@ -4348,8 +4348,9 @@ TF_POLICY_SESSION_CALENDARS: {}
 TF_POLICY_UNDERLYING_EXCHANGE_CALENDARS: {}
 
 # Config-gated per-group/per-style role override for the timeframe policy
-# ladder (see docs/research/tf_structure_optimal_audit.md). DEFAULT-OFF: leave
-# ENABLED false and resolution stays the universal ladder (D1/H4/H4/H1/M15).
+# ladder (see docs/research/tf_structure_optimal_audit.md). The checked-in
+# config enables the selected rows below; set ENABLED false to restore the
+# universal ladder (D1/H4/H4/H1/M15).
 # When enabled, BY_GROUP maps a v4 policy group (the keys used by
 # resolve_timeframe_policy) to per-style role overrides; any subset of
 # regime/bias/structure/setup/trigger may be set, in slower-to-faster order.
