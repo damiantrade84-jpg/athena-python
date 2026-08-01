@@ -10726,6 +10726,19 @@ app.register_blueprint(
     )
 )
 
+# Tuning Lab (Engine A/B experimentation): /api/experiment/*. Separate from the
+# v3 backtester above — reuses its frozen-candle store and run_pair() but never
+# imports new candles and never mutates this process's CONFIG (each run
+# executes in its own short-lived worker process; see athena_experiment/).
+from athena_experiment.api import create_experiment_blueprint  # noqa: E402
+
+app.register_blueprint(
+    create_experiment_blueprint(
+        all_pairs_provider=lambda: ALL_PAIRS,
+        json_safe=_json_safe,
+    )
+)
+
 
 # N4: Kill-switch API - immediately blocks new scans/analyses
 

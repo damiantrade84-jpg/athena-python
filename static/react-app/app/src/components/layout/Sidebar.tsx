@@ -63,6 +63,7 @@ const navSections: NavSection[] = [
       { id: 'suggestedTrades', label: 'Suggested Trades', icon: ListChecks },
       { id: 'backtest',    label: 'Backtesting v2', icon: FlaskConical, badge: 'V2' },
       { id: 'backtestV3',  label: 'Backtest V3',  icon: FlaskConical, badge: 'V3' },
+      { id: 'experimentLab', label: 'Tuning Lab', icon: FlaskConical, badge: 'NEW' },
       { id: 'screener',    label: 'Screener',     icon: Filter },
       { id: 'lotteryLab',  label: 'Lottery Lab',  icon: Ticket },
       { id: 'performance', label: 'Performance',  icon: PieChart },

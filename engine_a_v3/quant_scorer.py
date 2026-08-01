@@ -550,6 +550,31 @@ def _trend_health_mult(
     return _clamp(mult, floor, 1.0)
 
 
+def _group_scoped_blend_weight(
+    cfg: Mapping[str, Any], score_group: str, key: str, fallback: float
+) -> float:
+    """Resolve a Tuning Lab indicator-blend weight with an optional per-group
+    override before falling back to the process-wide value.
+
+    Lookup order: ``cfg["BY_GROUP"][score_group][key]`` -> ``cfg[key]`` ->
+    ``fallback``. A group with no ``BY_GROUP`` entry gets exactly the
+    process-wide weight (today, 0.0 for every knob this feeds), so scoring for
+    every other group is unaffected by a group-specific tune-and-push.
+    """
+    by_group = cfg.get("BY_GROUP")
+    if isinstance(by_group, Mapping):
+        group_row = by_group.get(str(score_group or "").strip().lower())
+        if isinstance(group_row, Mapping) and key in group_row:
+            try:
+                return float(group_row[key])
+            except (TypeError, ValueError):
+                pass
+    try:
+        return float(cfg.get(key, fallback))
+    except (TypeError, ValueError):
+        return fallback
+
+
 # ── momentum (RSI / MACD / DI+ADX) ───────────────────────────────────────────
 def _momentum_blend_enabled() -> bool:
     try:
@@ -571,11 +596,19 @@ def _momentum_component(
         "rsiTerm": None,
         "diTerm": None,
         "macdSlopeTerm": None,
+        "stochTerm": None,
+        "cciTerm": None,
+        "williamsRTerm": None,
+        "rocTerm": None,
     }
     if not snap:
         return Component(0.0, 0.0), diag
 
     rsi_w, di_w, macd_w = 0.35, 0.35, 0.30
+    # Tuning Lab (athena_experiment) extra momentum indicators. Default 0.0 —
+    # inert unless a group's config.local.yaml explicitly weights one in, so
+    # existing scoring is unaffected until a tested variant is pushed live.
+    stoch_w = cci_w = williams_r_w = roc_w = 0.0
     if _momentum_blend_enabled():
         try:
             from config import CONFIG
@@ -584,6 +617,10 @@ def _momentum_component(
             rsi_w = float(cfg.get("RSI_WEIGHT", 0.35))
             di_w = float(cfg.get("DI_WEIGHT", 0.35))
             macd_w = float(cfg.get("MACD_SLOPE_WEIGHT", 0.30))
+            stoch_w = _group_scoped_blend_weight(cfg, score_group, "STOCH_WEIGHT", 0.0)
+            cci_w = _group_scoped_blend_weight(cfg, score_group, "CCI_WEIGHT", 0.0)
+            williams_r_w = _group_scoped_blend_weight(cfg, score_group, "WILLIAMS_R_WEIGHT", 0.0)
+            roc_w = _group_scoped_blend_weight(cfg, score_group, "ROC_WEIGHT", 0.0)
         except Exception:
             pass
     else:
@@ -647,6 +684,46 @@ def _momentum_component(
         weight_total += macd_w
         quality_terms.append(_clamp01(abs(macd_term)))
         diag["macdSlopeTerm"] = round(macd_term, 4)
+
+    # ── Tuning Lab extra momentum terms (Stochastic/CCI/Williams %R/ROC) ────
+    # Each is inert unless its *_WEIGHT is configured > 0 (see resolution above),
+    # so with no config change this loop contributes nothing and `signal` below
+    # is bit-for-bit the pre-existing RSI/DI/MACD blend.
+    if stoch_w > 0:
+        stoch_k = _f(snap.get("stochK"))
+        if stoch_k is not None:
+            stoch_term = _clamp((stoch_k - 50.0) / 40.0, -1.0, 1.0)
+            weighted_signal += stoch_w * stoch_term
+            weight_total += stoch_w
+            quality_terms.append(_clamp01(abs(stoch_k - 50.0) / 40.0))
+            diag["stochTerm"] = round(stoch_term, 4)
+
+    if cci_w > 0:
+        cci = _f(snap.get("cci"))
+        if cci is not None:
+            cci_term = _clamp(cci / 150.0, -1.0, 1.0)
+            weighted_signal += cci_w * cci_term
+            weight_total += cci_w
+            quality_terms.append(_clamp01(abs(cci) / 150.0))
+            diag["cciTerm"] = round(cci_term, 4)
+
+    if williams_r_w > 0:
+        williams_r = _f(snap.get("williamsR"))
+        if williams_r is not None:
+            williams_r_term = _clamp((williams_r + 50.0) / 40.0, -1.0, 1.0)
+            weighted_signal += williams_r_w * williams_r_term
+            weight_total += williams_r_w
+            quality_terms.append(_clamp01(abs(williams_r + 50.0) / 40.0))
+            diag["williamsRTerm"] = round(williams_r_term, 4)
+
+    if roc_w > 0:
+        roc = _f(snap.get("roc"))
+        if roc is not None:
+            roc_term = _clamp(roc / 5.0, -1.0, 1.0)
+            weighted_signal += roc_w * roc_term
+            weight_total += roc_w
+            quality_terms.append(_clamp01(abs(roc) / 5.0))
+            diag["rocTerm"] = round(roc_term, 4)
 
     signal = weighted_signal / weight_total if weight_total > 0 else 0.0
 
@@ -793,6 +870,7 @@ def _location_component(
         # Range fade: signal opposite to the stretch; quality scales with stretch.
         signal = -1.0 if (bb_u is not None and close > bb_u) else 1.0
         quality = _clamp01(abs(dist) / 3.0)
+        signal, quality = _blend_keltner_location(snap, close, signal, quality, score_group)
         return Component(signal, quality), "mean_reversion"
 
     # Trend timing: quality peaks near the EMA, decays with extension. The
@@ -804,9 +882,46 @@ def _location_component(
     extension = abs(dist)
     quality = _clamp01(1.0 - max(0.0, extension - 0.5) / 3.0)
     signal = _clamp(dist / 2.0, -0.5, 0.5)  # mild directional bias only
+    signal, quality = _blend_keltner_location(snap, close, signal, quality, score_group)
     if _location_trend_timing_only():
         return Component(signal, quality, directional=False), "trend"
     return Component(signal, quality), "trend"
+
+
+def _blend_keltner_location(
+    snap: Mapping[str, Any], close: float | None, signal: float, quality: float, score_group: str
+) -> tuple[float, float]:
+    """Tuning Lab optional Keltner-channel location term.
+
+    Inert unless ``ENGINE_A_V3_LOCATION.KELTNER_BLEND_WEIGHT`` (or a per-group
+    override under ``ENGINE_A_V3_LOCATION.BY_GROUP.<score_group>``) is
+    configured > 0 (default 0.0) — with no config change this returns
+    (signal, quality) unmodified, i.e. the pre-existing EMA-distance/
+    Bollinger location score.
+    """
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_LOCATION") or {}
+        weight = _group_scoped_blend_weight(cfg, score_group, "KELTNER_BLEND_WEIGHT", 0.0)
+    except Exception:
+        weight = 0.0
+    if weight <= 0.0 or close is None:
+        return signal, quality
+    upper = _f(snap.get("keltnerUpper"))
+    mid = _f(snap.get("keltnerMid"))
+    lower = _f(snap.get("keltnerLower"))
+    if upper is None or mid is None or lower is None:
+        return signal, quality
+    half_width = ((upper - mid) + (mid - lower)) / 2.0
+    if half_width <= 0:
+        return signal, quality
+    keltner_dist = _clamp((close - mid) / half_width, -1.0, 1.0)
+    keltner_quality = _clamp01(abs(keltner_dist))
+    weight = _clamp01(weight)
+    blended_signal = _clamp((1.0 - weight) * signal + weight * keltner_dist, -1.0, 1.0)
+    blended_quality = _clamp01((1.0 - weight) * quality + weight * keltner_quality)
+    return blended_signal, blended_quality
 
 
 # ── volatility regime (per-component quality multipliers) ────────────────────
@@ -866,7 +981,10 @@ def _volatility_mult(snap: Mapping[str, Any]) -> float:
 
 # ── volume / flow ────────────────────────────────────────────────────────────
 def _volume_component(
-    snap: Mapping[str, Any], candles: list[dict], context: Mapping[str, Any] | None
+    snap: Mapping[str, Any],
+    candles: list[dict],
+    context: Mapping[str, Any] | None,
+    score_group: str = "",
 ) -> Component:
     signal = 0.0
     quality = 0.0
@@ -913,6 +1031,27 @@ def _volume_component(
                 signal = surprise
             elif signal * surprise < 0:
                 signal = _clamp(signal * 0.6 + surprise * 0.4, -1.0, 1.0)
+
+    # Tuning Lab optional MFI (Money Flow Index) blend term. Inert unless
+    # ENGINE_A_V3_VOLUME_BLEND.MFI_WEIGHT (or a per-group override under
+    # ENGINE_A_V3_VOLUME_BLEND.BY_GROUP.<score_group>) is configured > 0
+    # (default 0.0) — with no config change signal/quality below are the
+    # pre-existing OBV/relative-volume values, unmodified.
+    try:
+        from config import CONFIG
+
+        volume_blend_cfg = CONFIG.get("ENGINE_A_V3_VOLUME_BLEND") or {}
+        mfi_w = _group_scoped_blend_weight(volume_blend_cfg, score_group, "MFI_WEIGHT", 0.0)
+    except Exception:
+        mfi_w = 0.0
+    mfi = _f(snap.get("mfi")) if snap else None
+    if mfi_w > 0 and mfi is not None:
+        mfi_term = _clamp((mfi - 50.0) / 40.0, -1.0, 1.0)
+        mfi_quality = _clamp01(abs(mfi - 50.0) / 40.0)
+        w = _clamp01(mfi_w)
+        signal = _clamp((1.0 - w) * signal + w * mfi_term, -1.0, 1.0)
+        quality = _clamp01((1.0 - w) * quality + w * mfi_quality)
+
     return Component(signal, _clamp01(quality), available=len(valid) >= 5)
 
 
@@ -1332,7 +1471,7 @@ def score_pair(
         location, level_style = _location_component(
             entry_snap, asset_type, group, corroborating_adx=corroborating_adx
         )
-        volume = _volume_component(entry_snap, entry_candles, context)
+        volume = _volume_component(entry_snap, entry_candles, context, group)
         core_result = location, level_style, volume
         if feature_cache is not None:
             previous_key = feature_cache.get("_latest_entry_core_key")

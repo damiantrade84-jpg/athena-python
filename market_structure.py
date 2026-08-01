@@ -7319,7 +7319,7 @@ class NakedEngine:
                     apply_regime_component_weights,
                     compute_confluence_subscores,
                     normalize_followthrough_bonus,
-                    weighted_scoring_config,
+                    weighted_scoring_config_for_group,
                 )
 
                 _ft_max_for_norm = (
@@ -7355,13 +7355,14 @@ class NakedEngine:
                     asset_type=asset_type_lower,
                     pair_display=res.get("pair_display"),
                     as_of_date=_subsystem_as_of,
+                    oscillator_candles=entry_candles,
                 )
                 _regime_label = str(res.get("_adx_derived_regime") or "").upper()
                 _weighted_subscores = apply_regime_component_weights(
                     _subscores, _regime_label, asset_type_lower
                 )
                 _quality_score, _quality_max_possible, _quality_components = aggregate_quality_score(
-                    _weighted_subscores, weighted_scoring_config()
+                    _weighted_subscores, weighted_scoring_config_for_group(profile.get("score_group"))
                 )
                 bonus_points = _quality_score
                 max_possible = gate_max_possible + _quality_max_possible

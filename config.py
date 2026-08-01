@@ -2060,6 +2060,33 @@ CONFIG: dict = {
         "RSI_WEIGHT": 0.35,
         "DI_WEIGHT": 0.35,
         "MACD_SLOPE_WEIGHT": 0.30,
+        # Tuning Lab (athena_experiment) extra indicator terms. Default 0.0 —
+        # inert until a group's config.local.yaml (via the Tuning Lab "push to
+        # default" action) explicitly weights one in. BY_GROUP overrides these
+        # per score_group (see _group_scoped_blend_weight); a group absent
+        # from BY_GROUP falls back to the flat value above, unchanged.
+        "STOCH_WEIGHT": 0.0,
+        "CCI_WEIGHT": 0.0,
+        "WILLIAMS_R_WEIGHT": 0.0,
+        "ROC_WEIGHT": 0.0,
+        "BY_GROUP": {},
+    },
+    # Tuning Lab optional volume-blend term (MFI). Default 0.0 — inert; BY_GROUP
+    # is a per-score_group override (falls back to MFI_WEIGHT above when a
+    # group has no entry). See engine_a_v3/quant_scorer.py::_volume_component.
+    "ENGINE_A_V3_VOLUME_BLEND": {
+        "MFI_WEIGHT": 0.0,
+        "BY_GROUP": {},
+    },
+    # ENGINE_A_V3_LOCATION.TREND_TIMING_ONLY defaults True even when this key is
+    # absent (see engine_a_v3/quant_scorer.py::_location_trend_timing_only);
+    # KELTNER_BLEND_WEIGHT is the Tuning Lab optional location-blend term,
+    # default 0.0 — inert (see _blend_keltner_location). BY_GROUP is a
+    # per-score_group override, falling back to KELTNER_BLEND_WEIGHT above.
+    "ENGINE_A_V3_LOCATION": {
+        "TREND_TIMING_ONLY": True,
+        "KELTNER_BLEND_WEIGHT": 0.0,
+        "BY_GROUP": {},
     },
     "ENGINE_A_V3_VOLATILITY_GATING": {
         "ENABLED": True,

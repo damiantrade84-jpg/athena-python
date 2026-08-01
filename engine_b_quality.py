@@ -16,6 +16,10 @@ _DEFAULT_COMPONENT_MAX: dict[str, float] = {
     "profile_reaction": 1.0,
     "session_context": 0.5,
     "orderflow": 1.0,
+    # Tuning Lab (athena_experiment) optional oscillator confluence — see
+    # _momentum_oscillator_confluence_score below. Present in the max map so a
+    # non-zero COMPONENT_WEIGHTS override normalizes correctly.
+    "momentum_oscillator_confluence": 1.0,
 }
 
 _DEFAULT_COMPONENT_WEIGHTS: dict[str, float] = {
@@ -28,6 +32,12 @@ _DEFAULT_COMPONENT_WEIGHTS: dict[str, float] = {
     "profile_reaction": 0.10,
     "session_context": 0.05,
     "orderflow": 0.05,
+    # Default 0.0 — inert. ENGINE_B_WEIGHTED_SCORING itself defaults disabled
+    # (weighted_scoring_enabled()), and even when a group enables it, this
+    # component contributes nothing until a config.local.yaml override (via the
+    # Tuning Lab "push to default" action) gives it a non-zero weight. The other
+    # nine weights above are unchanged and still sum to 1.0.
+    "momentum_oscillator_confluence": 0.0,
 }
 
 
@@ -54,6 +64,36 @@ def weighted_scoring_config() -> dict[str, Any]:
 
 def weighted_scoring_enabled() -> bool:
     return bool(weighted_scoring_config().get("ENABLED", False))
+
+
+def weighted_scoring_config_for_group(score_group: str | None) -> dict[str, Any]:
+    """``weighted_scoring_config()`` with ``COMPONENT_WEIGHTS_BY_GROUP[score_group]``
+    merged over ``COMPONENT_WEIGHTS`` for this one group.
+
+    Tuning Lab (athena_experiment) per-group override point — the same "tune
+    on one group, push only for that group" contract as
+    ``ENGINE_A_QUANT_WEIGHTS_BY_GROUP`` on the Engine A side. A group with no
+    ``COMPONENT_WEIGHTS_BY_GROUP`` entry gets exactly the process-wide config
+    unchanged.
+    """
+    cfg = dict(weighted_scoring_config())
+    group_key = str(score_group or "").strip().lower()
+    if not group_key:
+        return cfg
+    by_group = cfg.get("COMPONENT_WEIGHTS_BY_GROUP")
+    if not isinstance(by_group, dict):
+        return cfg
+    override = by_group.get(group_key)
+    if not isinstance(override, dict) or not override:
+        return cfg
+    merged_weights = dict(cfg.get("COMPONENT_WEIGHTS") or {})
+    for key, value in override.items():
+        try:
+            merged_weights[str(key)] = max(0.0, float(value))
+        except (TypeError, ValueError):
+            continue
+    cfg["COMPONENT_WEIGHTS"] = merged_weights
+    return cfg
 
 
 def _component_max_map(cfg: dict[str, Any]) -> dict[str, float]:
@@ -296,6 +336,51 @@ def _crypto_orderflow_score(
     return 0.0
 
 
+def _momentum_oscillator_confluence_score(
+    candles: list[dict] | None, direction: str
+) -> float:
+    """Tuning Lab (athena_experiment) optional Stochastic/CCI/Williams %R
+    composite. Inert by construction: this key's default weight in
+    ``_DEFAULT_COMPONENT_WEIGHTS`` is 0.0 and ``ENGINE_B_WEIGHTED_SCORING`` is
+    disabled by default, so the value computed here has no effect on the
+    aggregate quality score until a group's config.local.yaml (via the Tuning
+    Lab "push to default" action) both enables weighted scoring and gives this
+    component a non-zero weight.
+
+    0.5 = neutral (mirrors ``_session_context_score``'s signed-to-[0,1]
+    mapping); returned whenever no candles are supplied or none of the three
+    oscillators have a valid latest reading.
+    """
+    if not candles or len(candles) < 20:
+        return 0.5
+    try:
+        from indicators import calc_cci, calc_stochastic, calc_williams_r
+    except Exception:
+        return 0.5
+
+    def _clamp(value: float, lo: float, hi: float) -> float:
+        return max(lo, min(hi, value))
+
+    terms: list[float] = []
+    stoch = calc_stochastic(candles, 14, 3, 3)
+    stoch_k = next((v for v in reversed(stoch.get("k") or []) if v is not None), None)
+    if stoch_k is not None:
+        terms.append(_clamp((stoch_k - 50.0) / 40.0, -1.0, 1.0))
+    cci = next((v for v in reversed(calc_cci(candles, 20)) if v is not None), None)
+    if cci is not None:
+        terms.append(_clamp(cci / 150.0, -1.0, 1.0))
+    williams_r = next(
+        (v for v in reversed(calc_williams_r(candles, 14)) if v is not None), None
+    )
+    if williams_r is not None:
+        terms.append(_clamp((williams_r + 50.0) / 40.0, -1.0, 1.0))
+    if not terms:
+        return 0.5
+    mean_term = sum(terms) / len(terms)
+    aligned = mean_term if str(direction).upper() == "LONG" else -mean_term
+    return round(_clamp01(0.5 + aligned / 2.0), 4)
+
+
 def compute_confluence_subscores(
     res: dict[str, Any],
     direction: str,
@@ -310,6 +395,7 @@ def compute_confluence_subscores(
     asset_type: str = "",
     pair_display: str | None = None,
     as_of_date: str | None = None,
+    oscillator_candles: list[dict] | None = None,
 ) -> dict[str, float]:
     asset_lower = str(asset_type or res.get("asset_type") or "").lower()
     display = pair_display or res.get("pair_display")
@@ -337,6 +423,9 @@ def compute_confluence_subscores(
         "profile_reaction": _profile_reaction_score(res, direction),
         "session_context": _session_context_score(res),
         "orderflow": round(_clamp01(orderflow), 4),
+        "momentum_oscillator_confluence": _momentum_oscillator_confluence_score(
+            oscillator_candles, direction
+        ),
     }
     # Drop components no feed can ever supply for this asset class, rather than
     # scoring them 0 and leaving their weight in the quality denominator — an

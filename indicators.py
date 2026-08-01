@@ -600,6 +600,129 @@ def calc_stochastic_rsi(candles: list, rsi_period: int = 14, stoch_period: int =
     return {"k": kL, "d": dL}
 
 
+def calc_cci(candles: list, period: int = 20) -> list:
+    """Commodity Channel Index. Returns list aligned with input, None-padded.
+
+    CCI = (typical_price - SMA(typical_price, period)) / (0.015 * mean_deviation).
+    Used by the Tuning Lab (athena_experiment) as an optional Engine A momentum
+    blend term; not part of any default scoring path (see
+    ENGINE_A_V3_MOMENTUM_BLEND.CCI_WEIGHT, default 0.0).
+    """
+    n = len(candles)
+    out = [None] * n
+    if n < period:
+        return out
+    tp = [
+        (float(c["high"]) + float(c["low"]) + float(c["close"])) / 3.0 for c in candles
+    ]
+    for i in range(period - 1, n):
+        window = tp[i - period + 1 : i + 1]
+        mean_tp = sum(window) / period
+        mean_dev = sum(abs(v - mean_tp) for v in window) / period
+        out[i] = 0.0 if mean_dev == 0 else (tp[i] - mean_tp) / (0.015 * mean_dev)
+    return out
+
+
+def calc_williams_r(candles: list, period: int = 14) -> list:
+    """Williams %R. Returns list aligned with input, None-padded, range [-100, 0].
+
+    Tuning Lab optional Engine A momentum blend term (see
+    ENGINE_A_V3_MOMENTUM_BLEND.WILLIAMS_R_WEIGHT, default 0.0); not part of any
+    default scoring path.
+    """
+    n = len(candles)
+    out = [None] * n
+    if n < period:
+        return out
+    hi = [float(c["high"]) for c in candles]
+    lo = [float(c["low"]) for c in candles]
+    cl = [float(c["close"]) for c in candles]
+    for i in range(period - 1, n):
+        hh = max(hi[i - period + 1 : i + 1])
+        ll = min(lo[i - period + 1 : i + 1])
+        out[i] = -50.0 if hh == ll else ((hh - cl[i]) / (hh - ll)) * -100.0
+    return out
+
+
+def calc_roc(candles: list, period: int = 12) -> list:
+    """Rate of Change (percent). Returns list aligned with input, None-padded.
+
+    Tuning Lab optional Engine A momentum blend term (see
+    ENGINE_A_V3_MOMENTUM_BLEND.ROC_WEIGHT, default 0.0); not part of any default
+    scoring path.
+    """
+    n = len(candles)
+    out = [None] * n
+    if n <= period:
+        return out
+    cl = [float(c["close"]) for c in candles]
+    for i in range(period, n):
+        prior = cl[i - period]
+        out[i] = None if prior == 0 else ((cl[i] - prior) / prior) * 100.0
+    return out
+
+
+def calc_mfi(candles: list, period: int = 14) -> list:
+    """Money Flow Index (volume-weighted RSI). Returns list aligned with input,
+    None-padded, range [0, 100]. Bars with missing/zero volume leave the window
+    short and simply do not contribute a valid value (fail-closed to None rather
+    than a synthetic flow).
+
+    Tuning Lab optional Engine A volume blend term (see
+    ENGINE_A_V3_VOLUME_BLEND.MFI_WEIGHT, default 0.0); not part of any default
+    scoring path.
+    """
+    n = len(candles)
+    out = [None] * n
+    if n < period + 1:
+        return out
+    tp = [
+        (float(c["high"]) + float(c["low"]) + float(c["close"])) / 3.0 for c in candles
+    ]
+    vol = [float(c.get("vol") or 0.0) for c in candles]
+    raw_flow = [tp[i] * vol[i] for i in range(n)]
+    for i in range(period, n):
+        pos_flow = 0.0
+        neg_flow = 0.0
+        for j in range(i - period + 1, i + 1):
+            if tp[j] > tp[j - 1]:
+                pos_flow += raw_flow[j]
+            elif tp[j] < tp[j - 1]:
+                neg_flow += raw_flow[j]
+        if pos_flow == 0.0 and neg_flow == 0.0:
+            continue
+        if neg_flow == 0.0:
+            out[i] = 100.0
+        else:
+            money_ratio = pos_flow / neg_flow
+            out[i] = 100.0 - (100.0 / (1.0 + money_ratio))
+    return out
+
+
+def calc_keltner(candles: list, ema_period: int = 20, atr_period: int = 10, mult: float = 2.0) -> dict:
+    """Keltner Channel. Returns dict of {"upper", "mid", "lower"} lists, None-padded.
+
+    Middle = EMA(close, ema_period); bands = middle +/- mult * ATR(atr_period).
+
+    Tuning Lab optional Engine A location blend term (see
+    ENGINE_A_V3_LOCATION.KELTNER_BLEND_WEIGHT, default 0.0); not part of any
+    default scoring path.
+    """
+    cl = [float(c["close"]) for c in candles]
+    hi = [float(c["high"]) for c in candles]
+    lo = [float(c["low"]) for c in candles]
+    mid = calc_ema(cl, ema_period)
+    atr = calc_atr(hi, lo, cl, atr_period)
+    n = len(cl)
+    upper = [None] * n
+    lower = [None] * n
+    for i in range(n):
+        if mid[i] is not None and atr[i] is not None:
+            upper[i] = mid[i] + mult * atr[i]
+            lower[i] = mid[i] - mult * atr[i]
+    return {"upper": upper, "mid": mid, "lower": lower}
+
+
 def calc_aroon(candles: list, period: int = 14) -> dict:
     """Aroon Up/Down and Oscillator. TA-Lib standard, period=14."""
 
@@ -1056,6 +1179,17 @@ def calc_indicators(candles: list, *, _bundle: dict | None = None) -> dict:
             "bbMid": bb["mid"][L],
             "bbLower": bb["lower"][L],
             "ema200Slope10": e200_slope,
+            # Tuning Lab indicator set (see _calc_indicator_bundle) — zero-weight
+            # by default at every consumer, no default scoring effect.
+            "stochK": bundle["stoch"]["k"][L],
+            "stochD": bundle["stoch"]["d"][L],
+            "cci": bundle["cci"][L],
+            "williamsR": bundle["williamsR"][L],
+            "roc": bundle["roc"][L],
+            "mfi": bundle["mfi"][L],
+            "keltnerUpper": bundle["keltner"]["upper"][L],
+            "keltnerMid": bundle["keltner"]["mid"][L],
+            "keltnerLower": bundle["keltner"]["lower"][L],
         }
     }
 
@@ -1088,6 +1222,23 @@ def _calc_indicator_bundle(candles: list, periods: dict | None = None) -> dict:
         "atr": calc_atr(hi, lo, cl, int(p.get("atr", 14))),
         "adx": calc_adx(hi, lo, cl, int(p.get("adx", 14))),
         "bb": calc_bb(cl, 20, 2),
+        # Tuning Lab (athena_experiment) indicator set. Always computed here —
+        # same convention as bb/plusDI/minusDI above, which are also computed
+        # unconditionally regardless of whether a given group's blend uses them —
+        # so the point-in-time backtest reduction path (_snapshot_from_bundle)
+        # stays index-identical to the live path. Cheap O(n) series; consumption
+        # is gated to zero-weight-by-default at every call site (see
+        # ENGINE_A_V3_MOMENTUM_BLEND / ENGINE_A_V3_LOCATION / ENGINE_A_V3_VOLUME_BLEND),
+        # so this adds negligible compute and zero score effect until explicitly
+        # tuned via the Tuning Lab.
+        "stoch": calc_stochastic(
+            candles, int(p.get("stoch_k", 14)), int(p.get("stoch_k_smooth", 3)), int(p.get("stoch_d", 3))
+        ),
+        "cci": calc_cci(candles, int(p.get("cci", 20))),
+        "williamsR": calc_williams_r(candles, int(p.get("williams_r", 14))),
+        "roc": calc_roc(candles, int(p.get("roc", 12))),
+        "mfi": calc_mfi(candles, int(p.get("mfi", 14))),
+        "keltner": calc_keltner(candles, int(p.get("keltner_ema", 20)), int(p.get("keltner_atr", 10))),
     }
 
 

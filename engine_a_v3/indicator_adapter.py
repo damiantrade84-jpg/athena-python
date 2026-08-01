@@ -77,6 +77,8 @@ def _snapshot_from_bundle(
     atr = bundle["atr"]
     adx = bundle["adx"]
     bb = bundle["bb"]
+    stoch = bundle.get("stoch") or {}
+    keltner = bundle.get("keltner") or {}
 
     adx_pct_legacy, adx_label = _legacy_percentile_at(adx["adx"], latest, 252)
     atr_pct_legacy, atr_label = _legacy_percentile_at(atr, latest, 100)
@@ -115,6 +117,17 @@ def _snapshot_from_bundle(
         "ema200Slope10": ema200_slope,
         "adx_pct": adx_percentiles[latest],
         "atr_pct": atr_percentiles[latest],
+        # Tuning Lab indicator set — mirrors indicators.calc_indicators' snap
+        # keys so the backtest fast path stays index-identical to live.
+        "stochK": (stoch.get("k") or [None])[latest] if latest < len(stoch.get("k") or []) else None,
+        "stochD": (stoch.get("d") or [None])[latest] if latest < len(stoch.get("d") or []) else None,
+        "cci": bundle["cci"][latest] if "cci" in bundle and latest < len(bundle["cci"]) else None,
+        "williamsR": bundle["williamsR"][latest] if "williamsR" in bundle and latest < len(bundle["williamsR"]) else None,
+        "roc": bundle["roc"][latest] if "roc" in bundle and latest < len(bundle["roc"]) else None,
+        "mfi": bundle["mfi"][latest] if "mfi" in bundle and latest < len(bundle["mfi"]) else None,
+        "keltnerUpper": (keltner.get("upper") or [None])[latest] if latest < len(keltner.get("upper") or []) else None,
+        "keltnerMid": (keltner.get("mid") or [None])[latest] if latest < len(keltner.get("mid") or []) else None,
+        "keltnerLower": (keltner.get("lower") or [None])[latest] if latest < len(keltner.get("lower") or []) else None,
     }
 
 

@@ -218,6 +218,7 @@ export type PanelId =
   | 'tvChart'
   | 'backtest'
   | 'backtestV3'
+  | 'experimentLab'
   | 'screener'
   | 'lotteryLab'
   | 'researchLab'

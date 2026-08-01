@@ -621,9 +621,21 @@ def _opening_range_gap_candidate(
     # must not silently shrink the structural opening range.
     range_source = primary if opening_range_h1 is None else opening_range_h1
     range_tf = primary_tf if opening_range_h1 is None else "H1"
+    # This setup only ever needs "today's" cash-session bars plus the single
+    # prior close before them, both always within the last few days of
+    # range_source regardless of timeframe. Scanning the full confirmed
+    # prefix here (thousands to tens of thousands of bars deep into a
+    # backtest) turned every one of the two loops below into O(history), and
+    # since this function runs once per backtest bar, that made the whole
+    # backtest O(history^2) -- multi-minute hangs on index/equity pairs
+    # (forex/crypto never route through opening-range-gap setups, so this
+    # never showed up outside FOMC-audited asset classes). 500 bars covers
+    # ~5 trading days even on the fastest realistic primary_tf (M15), far
+    # more headroom than the "2 session bars + 1 prior close" this needs.
+    recent_source = range_source[-500:]
     session_rows: list[tuple[datetime, dict]] = []
     if current_time is not None:
-        for candle in range_source:
+        for candle in recent_source:
             candle_time = _parse_time(candle.get("time") or candle.get("datetime"))
             if (
                 candle_time is not None
@@ -653,7 +665,7 @@ def _opening_range_gap_candidate(
     opening_start = opening_rows[0][0]
     prior_rows = [
         candle
-        for candle in range_source
+        for candle in recent_source
         if (_parse_time(candle.get("time") or candle.get("datetime")) or opening_start)
         < opening_start
     ]
