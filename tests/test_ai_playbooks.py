@@ -90,6 +90,8 @@ def test_engine_b_playbook_documents_ob_fvg_and_gates() -> None:
     assert "structureOk" in usage
     assert "ORDER_BLOCK_REJECTION" in pb["entryModels"]
     assert "FVG_FILL_CONTINUATION" in pb["entryModels"]
+    assert "BAG_CONTINUATION" in pb["entryModels"]
+    assert "bagState" in usage
 
 
 def test_engine_b_playbook_uses_resolved_policy_timeframes() -> None:

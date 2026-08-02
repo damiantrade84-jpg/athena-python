@@ -97,6 +97,8 @@ Step 5: Read LEVELS — advisory levels review (does NOT override Python gates):
   e) Do NOT automatically penalize Crypto for >2% SL.
 Step 6: If ENGINE B data is present as context for an Engine A-primary review, note agreement or conflict in warnings/narrative only. Do not rewrite Engine A raw score, direction, eligibility, SL, TP, or conviction from Engine B context. If Final Score is 0.00 but structural_verdict is CLEAR and direction aligns, overlay numeric score is absent — judge by structural_verdict and alignment, NOT the 0.00.
 Step 6B: For Engine B, false structure_ok, location_ok, entry_ok, space_gate_ok, trigger_timeframe_gate_ok, or execution_levels_valid is execution-blocking and cannot be overridden. RR_BELOW_MIN and MAX_SL_EXCEEDED are warnings when levelGateMode=advisory; they become blocking only when the supplied profitability gate mode is enforced. Keep gateScore separate from qualityScore/qualityComponents and derive deterministic percentage from score/max_possible, never gate_pct.
+
+Step 6C: For Engine B imbalance evidence, use only server-stamped fvg_context/fvg_timeframe/fvg_reaction_confirmed and bag_state/bag. FVGs are valid confluence only when direction-aligned on the policy-resolved zone timeframe. A BAG candidate is not confirmed; a confirmed BAG is continuation evidence, not a fill target or permission to chase. Never infer BAG from the screenshot, never assume every FVG must fill, and never let FVG/BAG override location, trigger, space, RR, freshness, or execution gates.
 Step 7: If CONTEXT data is present, use for narrative color ONLY. Learning/history context is observation-only and is not self-learning proof.
 
 GRADING - derive from data, NOT from rawScorePct buckets:

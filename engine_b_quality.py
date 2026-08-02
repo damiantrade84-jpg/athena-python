@@ -10,6 +10,7 @@ _DEFAULT_COMPONENT_MAX: dict[str, float] = {
     "structure_alignment": 1.0,
     "ob_confluence": 1.0,
     "fvg_confluence": 1.0,
+    "bag_continuation": 1.0,
     "liquidity_proximity": 0.75,
     "bos_followthrough": 1.5,
     "volume_confirmation": 1.0,
@@ -23,20 +24,21 @@ _DEFAULT_COMPONENT_MAX: dict[str, float] = {
 }
 
 _DEFAULT_COMPONENT_WEIGHTS: dict[str, float] = {
-    "structure_alignment": 0.22,
-    "ob_confluence": 0.14,
-    "fvg_confluence": 0.12,
-    "liquidity_proximity": 0.08,
-    "bos_followthrough": 0.16,
+    "structure_alignment": 0.21,
+    "ob_confluence": 0.13,
+    "fvg_confluence": 0.10,
+    "bag_continuation": 0.08,
+    "liquidity_proximity": 0.07,
+    "bos_followthrough": 0.14,
     "volume_confirmation": 0.08,
-    "profile_reaction": 0.10,
+    "profile_reaction": 0.09,
     "session_context": 0.05,
     "orderflow": 0.05,
     # Default 0.0 — inert. ENGINE_B_WEIGHTED_SCORING itself defaults disabled
     # (weighted_scoring_enabled()), and even when a group enables it, this
     # component contributes nothing until a config.local.yaml override (via the
-    # Tuning Lab "push to default" action) gives it a non-zero weight. The other
-    # nine weights above are unchanged and still sum to 1.0.
+    # Tuning Lab "push to default" action) gives it a non-zero weight. The ten
+    # active weights above, including BAG continuation, sum to 1.0.
     "momentum_oscillator_confluence": 0.0,
 }
 
@@ -257,11 +259,39 @@ def _ob_confluence_score(res: dict[str, Any], direction: str) -> float:
 def _fvg_confluence_score(res: dict[str, Any], direction: str) -> float:
     if not bool(res.get("fvg_overlap", False)):
         return 0.0
+    context = res.get("fvg_context")
+    if isinstance(context, dict):
+        # The producer has already selected direction-aligned FVGs. A reaction
+        # at CE/inside the aligned gap earns more than passive zone overlap.
+        base = 0.65 if context.get("reaction_confirmed") else 0.45
+        nearest = context.get("nearest") if isinstance(context.get("nearest"), dict) else {}
+        size_atr = _float_mapping(nearest.get("gap_size_atr"), 0.0)
+        displacement = _float_mapping(nearest.get("displacement_body_atr"), 0.0)
+        fill = _float_mapping(nearest.get("fill_fraction"), 0.0)
+        quality = base + min(0.2, size_atr * 0.2) + min(0.15, displacement * 0.1)
+        quality *= max(0.0, 1.0 - min(1.0, fill))
+        return round(_clamp01(quality), 4)
     zone = _nearest_zone(res, direction)
     size_atr = 0.0
     if zone is not None:
         size_atr = _float_mapping(zone.get("fvg_size_atr"), 0.0)
     return round(_clamp01(0.5 + (size_atr / 2.0)), 4)
+
+
+def _bag_continuation_score(res: dict[str, Any], direction: str) -> float:
+    context = res.get("fvg_context")
+    if not isinstance(context, dict):
+        return 0.0
+    if str(context.get("direction") or "").upper() != str(direction or "").upper():
+        return 0.0
+    state = str(context.get("bag_state") or "none").lower()
+    bag = context.get("bag") if isinstance(context.get("bag"), dict) else {}
+    if state == "confirmed":
+        continuation = _float_mapping(bag.get("continuation_atr"), 0.0)
+        return round(_clamp01(0.75 + min(0.25, continuation * 0.1)), 4)
+    if state == "candidate":
+        return 0.35
+    return 0.0
 
 
 def _liquidity_proximity_score(res: dict[str, Any], atr: float) -> float:
@@ -417,6 +447,7 @@ def compute_confluence_subscores(
         "structure_alignment": compute_structure_alignment_score(res, direction),
         "ob_confluence": _ob_confluence_score(res, direction),
         "fvg_confluence": _fvg_confluence_score(res, direction),
+        "bag_continuation": _bag_continuation_score(res, direction),
         "liquidity_proximity": _liquidity_proximity_score(res, atr),
         "bos_followthrough": round(_clamp01(bos_followthrough_norm), 4),
         "volume_confirmation": 1.0 if volume_ok else 0.0,

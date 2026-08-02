@@ -3070,6 +3070,18 @@ ENGINE_B_CRYPTO_AGGTRADE_CVD_SCORE_ENABLED: true
 ENGINE_B_CRYPTO_AGGTRADE_VENUE_PRICE_GUARD: true
 ENGINE_B_CRYPTO_AGGTRADE_VENUE_PRICE_TOLERANCE_PCT: 0.005
 
+# Engine B imbalance lifecycle. FVG geometry is evaluated on the policy-resolved
+# zone timeframe; trigger-candle reaction remains on triggerTf. BAG weights are an
+# unvalidated conservative starting point and require replay/out-of-sample review.
+ENGINE_B_IMBALANCE:
+  FVG_MIN_SIZE_ATR: 0.05
+  BAG_MIN_DISPLACEMENT_BODY_ATR: 0.80
+  BAG_MIN_BODY_RANGE_RATIO: 0.65
+  BAG_BREAKOUT_LOOKBACK_BARS: 8
+  BAG_MIN_FOLLOWTHROUGH_BARS: 2
+  BAG_MIN_CONTINUATION_ATR: 0.50
+  BAG_MAX_FILL_FRACTION: 0.25
+
 ENGINE_B_WEIGHTED_SCORING:
   ENABLED: true
   # COMPONENT_WEIGHTS sums to 1.0 and is the weight table. Subscores are already
@@ -3088,6 +3100,7 @@ ENGINE_B_WEIGHTED_SCORING:
     structure_alignment: 1.0
     ob_confluence: 1.0
     fvg_confluence: 1.0
+    bag_continuation: 1.0
     liquidity_proximity: 0.75
     bos_followthrough: 1.5
     volume_confirmation: 1.0
@@ -3095,13 +3108,14 @@ ENGINE_B_WEIGHTED_SCORING:
     session_context: 0.5
     orderflow: 1.0
   COMPONENT_WEIGHTS:
-    structure_alignment: 0.22
-    ob_confluence: 0.14
-    fvg_confluence: 0.12
-    liquidity_proximity: 0.08
-    bos_followthrough: 0.16
+    structure_alignment: 0.21
+    ob_confluence: 0.13
+    fvg_confluence: 0.10
+    bag_continuation: 0.08
+    liquidity_proximity: 0.07
+    bos_followthrough: 0.14
     volume_confirmation: 0.08
-    profile_reaction: 0.10
+    profile_reaction: 0.09
     session_context: 0.05
     orderflow: 0.05
   REGIME_COMPONENT_MULT:

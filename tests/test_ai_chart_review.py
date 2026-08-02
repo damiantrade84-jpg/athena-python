@@ -2096,6 +2096,12 @@ def test_build_engine_b_prompt_context_includes_ob_fvg_gates():
         "bos_confirmed": True,
         "ob_at_zone": True,
         "fvg_overlap": True,
+        "fvg_timeframe": "H4",
+        "fvg_reaction_confirmed": True,
+        "fvg_context": {"direction": "LONG", "overlap": True},
+        "bag_state": "confirmed",
+        "bag": {"type": "bullish", "bag_state": "confirmed"},
+        "confirmed_bag_count": 1,
         "sweep_direction": "LONG",
         "active_fvgs": [{"midpoint": 65500.0}],
         "structure_ok": True,
@@ -2116,6 +2122,10 @@ def test_build_engine_b_prompt_context_includes_ob_fvg_gates():
     assert eb_ctx["fvgOverlap"] is True
     assert eb_ctx["activeFvgCount"] == 1
     assert eb_ctx["nearestFvgMid"] == 65500.0
+    assert eb_ctx["fvgTimeframe"] == "H4"
+    assert eb_ctx["fvgReactionConfirmed"] is True
+    assert eb_ctx["bagState"] == "confirmed"
+    assert eb_ctx["confirmedBagCount"] == 1
     assert eb_ctx["sweepDirection"] == "LONG"
     assert eb_ctx["structureOk"] is True
     assert eb_ctx["executionSl"] == 63000.0

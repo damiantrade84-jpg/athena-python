@@ -51,3 +51,20 @@ def test_zone_registry_persists_asset_type_and_prunes_deleted_rows(tmp_path, mon
     finally:
         monkeypatch.setitem(config.CONFIG, "ENGINE_B_ZONE_PERSISTENCE", original_persistence)
         monkeypatch.setitem(config.CONFIG, "SCALP_ENGINE", original_scalp)
+
+
+def test_fvg_registry_uses_consequent_encroachment_while_ob_uses_edge(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_ZONE_PERSISTENCE", False)
+    reg = zone_registry.ZoneRegistry()
+    reg.upsert_zones(
+        "TEST",
+        "H4",
+        [{"direction": "bullish", "top": 102.0, "bottom": 100.0}],
+        [{"type": "bullish", "top": 102.0, "bottom": 100.0}],
+    )
+
+    reg.mark_mitigated("TEST", "H4", current_price=101.0, atr=1.0)
+    active = reg.get_active_zones("TEST", "H4")
+
+    assert any(zone["type"] == "OB" for zone in active)
+    assert all(zone["type"] != "FVG" for zone in active)

@@ -13190,10 +13190,20 @@ def api_chart_analysis():
         active_fvgs = [f for f in (eb.get("active_fvgs") or []) if not f.get("mitigated")]
         if active_fvgs:
             fvg_str = ", ".join(
-                f"{f['type']} {float(f['bottom']):.5f}-{float(f['top']):.5f}"
+                f"{f['type']} {float(f['bottom']):.5f}-{float(f['top']):.5f} "
+                f"tf={f.get('timeframe')} fill={f.get('fill_pct')}% BAG={f.get('bag_state')}"
                 for f in active_fvgs
             )
             context_parts.append(f"ACTIVE FVGs (unmitigated imbalances): {fvg_str}")
+        if eb.get("fvg_context") or eb.get("bag_state"):
+            context_parts.append(
+                "FVG/BAG LIFECYCLE: "
+                f"fvg_tf={eb.get('fvg_timeframe')}, "
+                f"reaction={eb.get('fvg_reaction_confirmed')}, "
+                f"bag_state={eb.get('bag_state')}, "
+                f"confirmed_bags={eb.get('confirmed_bag_count')}. "
+                "BAG is continuation evidence, not a mandatory fill target."
+            )
         if eb.get("nearest_support_zone"):
             z = eb["nearest_support_zone"]
             context_parts.append(f"SUPPORT ZONE: {z.get('lower')}-{z.get('upper')}")

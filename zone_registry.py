@@ -73,15 +73,19 @@ class ZoneRegistry:
             for zone in self._zones.get(key, []):
                 if zone.get("mitigated"):
                     continue
-                # Use zone edge crossing instead of midpoint to detect wick invalidations.
-                # Bullish zone: mitigated when price crosses below the bottom edge.
-                # Bearish zone: mitigated when price crosses above the top edge.
+                # FVG lifecycle uses consequent encroachment (50%) consistently
+                # with live detection. OB lifecycle retains full edge invalidation.
                 direction = zone.get("direction")
-                if direction == "bullish" and current_price <= zone["bottom"]:
+                threshold = (
+                    (zone["top"] + zone["bottom"]) / 2.0
+                    if zone.get("type") == "FVG"
+                    else zone["bottom"] if direction == "bullish" else zone["top"]
+                )
+                if direction == "bullish" and current_price <= threshold:
                     zone["mitigated"] = True
                     zone["mitigated_at"] = _utc_now_iso()
                     touched = True
-                elif direction == "bearish" and current_price >= zone["top"]:
+                elif direction == "bearish" and current_price >= threshold:
                     zone["mitigated"] = True
                     zone["mitigated_at"] = _utc_now_iso()
                     touched = True

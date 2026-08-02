@@ -451,6 +451,12 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "quality_score": engine_b_data.get("quality_score"),
         "quality_max_possible": engine_b_data.get("quality_max_possible"),
         "quality_components": engine_b_data.get("quality_components") or {},
+        "fvg_context": engine_b_data.get("fvg_context") or {},
+        "fvg_timeframe": engine_b_data.get("fvg_timeframe"),
+        "fvg_reaction_confirmed": engine_b_data.get("fvg_reaction_confirmed"),
+        "bag_state": engine_b_data.get("bag_state"),
+        "bag": engine_b_data.get("bag"),
+        "confirmed_bag_count": engine_b_data.get("confirmed_bag_count", 0),
     }
     
     # 4. Engine C metrics
@@ -771,6 +777,15 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
                 f"gates={engine_b.get('gate_score')}/{engine_b.get('gate_max_possible')} "
                 f"quality={engine_b.get('quality_score')}/{engine_b.get('quality_max_possible')} "
                 f"components={engine_b.get('quality_components')}"
+            )
+        if engine_b.get("fvg_context") or engine_b.get("bag_state"):
+            lines.append(
+                "Engine B imbalance lifecycle: "
+                f"fvg_tf={engine_b.get('fvg_timeframe')} "
+                f"reaction={engine_b.get('fvg_reaction_confirmed')} "
+                f"bag_state={engine_b.get('bag_state')} "
+                f"confirmed_bags={engine_b.get('confirmed_bag_count')} "
+                f"context={engine_b.get('fvg_context')}"
             )
         if engine_b.get("space_gate_ok") is not None:
             lines.append(
@@ -1191,6 +1206,9 @@ def _build_engine_b_context(signal: Dict[str, Any]) -> Dict[str, Any]:
         "choch": _pick_engine_nested(engine_b, "choch"),
         "order_block": _pick_engine_nested(engine_b, "order_block", "ob"),
         "fvg": _pick_engine_nested(engine_b, "fvg"),
+        "fvg_context": _pick_engine_nested(engine_b, "fvg_context"),
+        "bag_state": _pick_engine_nested(engine_b, "bag_state"),
+        "bag": _pick_engine_nested(engine_b, "bag"),
         "liquidity_sweep": _pick_engine_nested(engine_b, "liquidity_sweep", "sweep"),
         "zone_context": _pick_engine_nested(engine_b, "zone_context", "zone_quality", "zone_ok"),
         "rr": _pick_engine_nested(engine_b, "rr", "rr1"),

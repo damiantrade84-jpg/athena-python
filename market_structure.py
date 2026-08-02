@@ -8,6 +8,7 @@ from typing import Any
 import config
 from indicators import calc_atr
 from zone_registry import get_zone_registry
+from engine_b_imbalance import directional_fvg_context, enrich_fvg_lifecycle
 
 log = logging.getLogger(__name__)
 
@@ -4554,7 +4555,18 @@ class NakedEngine:
         merged = [raw_fvgs[0]]
         for fvg in raw_fvgs[1:]:
             prev = merged[-1]
-            if fvg["type"] == prev["type"] and abs(fvg["bar_index"] - prev["bar_index"]) <= 2:
+            # Merge only adjacent detections whose price ranges genuinely overlap.
+            # Bar proximity alone can bridge two separate imbalances and fabricate
+            # one oversized zone spanning prices that were actually traded through.
+            price_overlap = not (
+                float(fvg["bottom"]) > float(prev["top"])
+                or float(fvg["top"]) < float(prev["bottom"])
+            )
+            if (
+                fvg["type"] == prev["type"]
+                and abs(fvg["bar_index"] - prev["bar_index"]) <= 2
+                and price_overlap
+            ):
                 prev["top"] = max(prev["top"], fvg["top"])
                 prev["bottom"] = min(prev["bottom"], fvg["bottom"])
                 prev["size"] = round(prev["top"] - prev["bottom"], 6)
@@ -5433,7 +5445,13 @@ class NakedEngine:
         _zf_lows = np.array([float(c["low"]) for c in _zone_fvg_candles])
         res_zones, sup_zones = self._find_zones(_zf_highs, _zf_lows, zone_atr, regime, _zone_fvg_candles, structure_tf=structure_tf, asset_type=asset_type)
 
-        fvgs = self._detect_fvg(_zone_fvg_candles)
+        fvgs = enrich_fvg_lifecycle(
+            self._detect_fvg(_zone_fvg_candles),
+            _zone_fvg_candles,
+            atr=zone_atr,
+            timeframe=_zone_tf,
+            config=config.CONFIG.get("ENGINE_B_IMBALANCE", {}),
+        )
         active_fvgs = [f for f in fvgs if not f.get("mitigated", False)]
 
         sequence_data = self._determine_sequence(struct_highs, struct_lows, struct_atr, "LONG", swings=struct_swings)
@@ -5517,7 +5535,17 @@ class NakedEngine:
         d1_fvgs_raw: list = []
         try:
             d1_order_blocks_raw = self._detect_order_blocks(d1_candles, d1_bos, d1_atr, structure_tf="D1")
-            d1_fvgs_raw = [f for f in self._detect_fvg(d1_candles) if not f.get("mitigated")]
+            d1_fvgs_raw = [
+                f
+                for f in enrich_fvg_lifecycle(
+                    self._detect_fvg(d1_candles),
+                    d1_candles,
+                    atr=d1_atr,
+                    timeframe="D1",
+                    config=config.CONFIG.get("ENGINE_B_IMBALANCE", {}),
+                )
+                if not f.get("mitigated")
+            ]
         except Exception:
             pass
         d1_conflict_window = d1_atr * _engine_b_d1_conflict_window_atr_mult()
@@ -5543,9 +5571,30 @@ class NakedEngine:
             if zone_registry.has_zones(registry_symbol, structure_tf):
                 order_blocks = self._registry_order_blocks(zone_registry.get_active_zones(registry_symbol, structure_tf))
             if zone_registry.has_zones(registry_symbol, fvg_registry_tf):
-                active_fvgs = self._registry_fvgs(
+                _registry_active_fvgs = self._registry_fvgs(
                     zone_registry.get_active_zones(registry_symbol, fvg_registry_tf)
                 )
+                # The persistence schema stores stable zone geometry, while the
+                # current candle pass owns fill/displacement/BAG lifecycle. Merge
+                # matching current evidence back onto persisted geometry so turning
+                # persistence on cannot silently remove BAG and reaction diagnostics.
+                for _persisted in _registry_active_fvgs:
+                    _matches = [
+                        _current
+                        for _current in active_fvgs
+                        if _current.get("type") == _persisted.get("type")
+                        and not (
+                            float(_current.get("bottom", 0.0)) > float(_persisted.get("top", 0.0))
+                            or float(_current.get("top", 0.0)) < float(_persisted.get("bottom", 0.0))
+                        )
+                    ]
+                    if _matches:
+                        _best = min(
+                            _matches,
+                            key=lambda item: abs(float(item.get("ce", 0.0)) - (float(_persisted.get("top", 0.0)) + float(_persisted.get("bottom", 0.0))) / 2.0),
+                        )
+                        _persisted.update(_best)
+                active_fvgs = _registry_active_fvgs
 
         for zone in res_zones + sup_zones:
             overlapping_fvgs = [fvg for fvg in active_fvgs if not (zone["upper"] < fvg["bottom"] or zone["lower"] > fvg["top"])]
@@ -5977,13 +6026,18 @@ class NakedEngine:
         bos_confirmed = (direction == "LONG" and bos_data["bos_bull"]) or (direction == "SHORT" and bos_data["bos_bear"])
         choch_confirmed = (direction == "LONG" and choch_data["choch_bull"]) or (direction == "SHORT" and choch_data["choch_bear"])
 
-        fvg_overlap = False
-        if direction == "LONG" and nearest_sup:
-            fvg_overlap = nearest_sup.get("fvg_overlap", False)
-        elif direction == "SHORT" and nearest_res:
-            fvg_overlap = nearest_res.get("fvg_overlap", False)
-
         active_zone = nearest_sup if direction == "LONG" else nearest_res
+        _fvg_context = directional_fvg_context(
+            active_fvgs,
+            direction=direction,
+            active_zone=active_zone,
+            trigger_candles=trigger_candles,
+            atr=zone_atr,
+            timeframe=(precompute.get("_tfs") or {}).get("zone"),
+        )
+        # Directional by contract: a bearish FVG cannot strengthen LONG support,
+        # and a bullish FVG cannot strengthen SHORT resistance.
+        fvg_overlap = bool(_fvg_context.get("overlap"))
         _zone_score_group = (
             (pair or {}).get("score_group")
             or (pair or {}).get("group")
@@ -6285,6 +6339,16 @@ class NakedEngine:
             "order_blocks": order_blocks,
             "ob_at_zone": _ob_at_zone,
             "fvg_overlap": fvg_overlap,
+            "fvg_context": _fvg_context,
+            "fvg_timeframe": _fvg_context.get("timeframe"),
+            "fvg_reaction_confirmed": bool(
+                _fvg_context.get("reaction_confirmed")
+            ),
+            "bag_state": _fvg_context.get("bag_state"),
+            "bag": _fvg_context.get("bag"),
+            "confirmed_bag_count": int(
+                _fvg_context.get("confirmed_bag_count") or 0
+            ),
             "active_fvgs": active_fvgs,
             "liquidity_sweep": is_sweep_event,
             "sweep_direction": sweep_data.get("sweep_direction"),
