@@ -4283,6 +4283,16 @@ ENGINE_B_USE_FORMING_FOR_STRUCTURE: false
 # a forming candle cannot create a scan/execute trade-signal flip.
 ENGINE_B_USE_FORMING_FOR_TRIGGER: true
 
+# Adverse-tape veto (added 2026-08-03 after AUD/USD LONG fired into a 4.9-ATR
+# confirmed M15 slide): refuse Engine B entries when the last
+# ENGINE_B_TAPE_VETO_BARS confirmed trigger-TF closes have moved against the
+# signal direction by >= ENGINE_B_TAPE_VETO_MIN_ADVERSE_ATR x trigger ATR.
+# Normal zone-retest pullbacks (~<=1.5 ATR) stay eligible; only collapse-grade
+# counter-tape vetoes the entry. Requires process restart to take effect.
+ENGINE_B_TAPE_VETO_ENABLED: true
+ENGINE_B_TAPE_VETO_BARS: 8
+ENGINE_B_TAPE_VETO_MIN_ADVERSE_ATR: 3.0
+
 # Trigger/setup TF only (M5/M15/M30): faster ATR/ADX periods + candle thresholds.
 # H4 structure ATR(14), H4 bias ATR, and D1 regime ADX(14) are unchanged.
 # Missing score_group → hardcoded fallback (ATR 14, ADX 14, wick 1.2, engulf 0.2, close 0.70).

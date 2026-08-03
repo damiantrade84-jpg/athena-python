@@ -2661,6 +2661,13 @@ CONFIG: dict = {
     "ENGINE_B_ZONE_PERSISTENCE": False,  # Persist Engine B OB/FVG registry to zones.db
     "ENGINE_B_USE_FORMING_FOR_STRUCTURE": False,
     "ENGINE_B_USE_FORMING_FOR_TRIGGER": True,
+    # Adverse-tape veto: when enabled, Engine B refuses entries whose last N
+    # confirmed trigger-TF closes have moved against the signal direction by
+    # >= ENGINE_B_TAPE_VETO_MIN_ADVERSE_ATR x trigger ATR (collapse-grade tape).
+    # Normal zone-retest pullbacks (~<=1.5 ATR) are unaffected.
+    "ENGINE_B_TAPE_VETO_ENABLED": False,
+    "ENGINE_B_TAPE_VETO_BARS": 8,
+    "ENGINE_B_TAPE_VETO_MIN_ADVERSE_ATR": 3.0,
     "AI_ON_DEMAND_ONLY": True,  # AI runs on user-initiated actions only, not auto-scans
     # ── Engine C B-side fallback controls ─────────────────────────────────────
     "ENGINE_C_B_ONLY_MULT": 0.65,  # Scale B-only conviction when A has no signal

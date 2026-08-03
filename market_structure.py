@@ -819,6 +819,9 @@ ENGINE_B_REASON_TP1_BLOCKED_BY_OPPOSING_ZONE = "tp1_blocked_by_opposing_zone"
 # Emitted when the forex ranging-regime entry-style gate leaves only reversal
 # evidence (aligned sweep/CHoCH) eligible for the structure/location gates.
 ENGINE_B_REASON_FOREX_RANGING_CONTINUATION_BLOCKED = "forex_ranging_continuation_blocked"
+# Adverse-tape veto: last N confirmed trigger-TF closes moved against the trade
+# direction by >= ENGINE_B_TAPE_VETO_MIN_ADVERSE_ATR x trigger ATR.
+ENGINE_B_REASON_ADVERSE_TAPE = "adverse_tape_veto"
 
 
 def _float_cfg(key: str, default: float) -> float:
@@ -2097,6 +2100,69 @@ def _follow_through_candle_series(candles: list | None) -> list:
     if len(series) < 2:
         return series
     return series[:-1]
+
+
+def _adverse_tape_veto(
+    entry_candles: list | None,
+    direction: str,
+    atr: float,
+) -> tuple[bool, dict]:
+    """Veto entries taken into collapse-grade adverse tape.
+
+    Engine B zone-retest entries legitimately follow a pullback, so a mild
+    counter-move must stay eligible. But when the last
+    ``ENGINE_B_TAPE_VETO_BARS`` confirmed trigger-TF closes have run against
+    the signal direction by >= ``ENGINE_B_TAPE_VETO_MIN_ADVERSE_ATR`` x trigger
+    ATR, the "retest" is a falling knife (2026-08-03 AUD/USD: LONG filled
+    4.9 ATR into a confirmed M15 slide) and the entry is refused.
+
+    Returns ``(tape_ok, diag)``. Disabled or insufficient data never vetoes —
+    this is an additive filter, not a freshness/safety gate.
+    """
+    diag: dict = {"enabled": False, "vetoed": False}
+    if not bool(config.CONFIG.get("ENGINE_B_TAPE_VETO_ENABLED", False)):
+        return True, diag
+    diag["enabled"] = True
+    try:
+        bars = max(2, int(config.CONFIG.get("ENGINE_B_TAPE_VETO_BARS", 8) or 8))
+    except (TypeError, ValueError):
+        bars = 8
+    try:
+        min_atr = abs(float(config.CONFIG.get("ENGINE_B_TAPE_VETO_MIN_ADVERSE_ATR", 3.0) or 3.0))
+    except (TypeError, ValueError):
+        min_atr = 3.0
+    series = _follow_through_candle_series(entry_candles)
+    closes: list[float] = []
+    for candle in series:
+        try:
+            closes.append(float(candle.get("close")))
+        except (AttributeError, TypeError, ValueError):
+            continue
+    diag["bars_required"] = bars
+    diag["min_adverse_atr"] = min_atr
+    if atr <= 0 or len(closes) < bars:
+        diag["reason"] = "insufficient_data"
+        return True, diag
+    window = closes[-bars:]
+    if direction == "LONG":
+        adverse = max(window) - window[-1]
+    elif direction == "SHORT":
+        adverse = window[-1] - min(window)
+    else:
+        diag["reason"] = "no_direction"
+        return True, diag
+    adverse_atr = adverse / atr
+    diag.update(
+        {
+            "adverse_move": round(adverse, 8),
+            "adverse_atr": round(adverse_atr, 3),
+            "window_closes": len(window),
+        }
+    )
+    if adverse_atr >= min_atr:
+        diag["vetoed"] = True
+        return False, diag
+    return True, diag
 
 
 def _breakout_follow_through(
@@ -7609,8 +7675,11 @@ class NakedEngine:
             res, current_price, direction, trigger_ok
         )
         terminal_lifecycle = lifecycle_state in {"invalidated", "expired"}
+        tape_ok, _tape_veto_diag = _adverse_tape_veto(
+            entry_candles, direction, trigger_atr_val
+        )
         if checklist_mode == "strict":
-            passed = structure_ok and zone_ok and trigger_ok and space_gate_ok and rr_ok and macro_ok
+            passed = structure_ok and zone_ok and trigger_ok and space_gate_ok and rr_ok and macro_ok and tape_ok
         else:
             # Flexible but not free — require BOTH location AND a trigger/catalyst.
             # BOS alone is not enough. You need: structure + (zone OR breakout) + trigger + room/rr.
@@ -7621,6 +7690,7 @@ class NakedEngine:
                 and entry_ok
                 and space_gate_ok
                 and rr_ok
+                and tape_ok
                 and (macro_ok if require_macro_align else True)
             )
         if terminal_lifecycle:
@@ -7653,6 +7723,8 @@ class NakedEngine:
             failed_gate_names.append(dxy_gate_reason or ENGINE_B_REASON_ADVERSE_DXY)
         if terminal_lifecycle:
             failed_gate_names.append(f"lifecycle_{lifecycle_state}")
+        if not tape_ok:
+            failed_gate_names.append(ENGINE_B_REASON_ADVERSE_TAPE)
 
         # FIX 10: Per-gate failure histogram logging
         for gate_name, gate_result in [
@@ -7668,6 +7740,8 @@ class NakedEngine:
 
         if hard_counter:
             _diag_codes.append(ENGINE_B_REASON_SEQUENCE_COUNTER_TREND)
+        if not tape_ok:
+            _diag_codes.append(ENGINE_B_REASON_ADVERSE_TAPE)
         if _structure_bos_dir_conflict:
             _diag_codes.append(ENGINE_B_REASON_STRUCTURE_BOS_DIRECTION_CONFLICT)
         if _forex_ranging_continuation_blocked and (
@@ -7877,6 +7951,8 @@ class NakedEngine:
             "trigger_ok": trigger_ok,
             "original_location_ok": original_location_ok,
             "original_trigger_ok": original_trigger_ok,
+            "tape_ok": tape_ok,
+            "tape_veto": _tape_veto_diag,
             "entry_ok": entry_ok,
             "room_ok": room_ok,
             "space_gate_ok": space_gate_ok,
