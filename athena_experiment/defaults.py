@@ -15,7 +15,12 @@ every value below is read through the exact resolver live scoring uses:
 - Engine B gates       -> NAKED_ENGINE.score_group_overrides[group][style]
                           (returns null when unset -- there is no single
                           "default" number without a live style profile, so
-                          the UI must show "no override" rather than a guess)
+                          the UI must show "no override" rather than a guess).
+                          The two SL-width clamps (min_sl_atr / max_sl_atr) are
+                          the exception: they resolve from
+                          ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES[group]
+                          with the global ENGINE_B_MIN/MAX_SL_ATR_DEFAULT
+                          fallback, so the UI shows the genuinely live clamp.
 - Indicator weights    -> engine_a_v3.quant_scorer._group_scoped_blend_weight /
                           engine_b_quality.weighted_scoring_config_for_group
                           (same per-group-with-global-fallback resolution the
@@ -43,7 +48,7 @@ def _engine_b_gate_values(group: str, style: str) -> dict[str, Any]:
     from config import CONFIG
 
     fields = (
-        "min_score", "min_rr", "min_room_atr", "max_sl_atr", "min_sl_atr",
+        "min_score", "min_rr", "min_room_atr",
         "space_rr_substitute", "profile_trusted", "macro_required",
     )
     naked_engine = CONFIG.get("NAKED_ENGINE")
@@ -56,7 +61,34 @@ def _engine_b_gate_values(group: str, style: str) -> dict[str, Any]:
                 style_row = group_row.get(str(style or "").strip().lower())
                 if isinstance(style_row, Mapping):
                     overrides = style_row
-    return {f"engine_b.gate.{field}": overrides.get(field) for field in fields}
+    values = {f"engine_b.gate.{field}": overrides.get(field) for field in fields}
+
+    # SL-width ATR clamps live on a different, flat per-group surface — the
+    # only one market_structure.py's clamp/tighten/TP1-retry paths read.
+    # Show the genuinely live value: group override -> global default key ->
+    # the code fallback (0.75 / 3.0).
+    group_key = str(group or "").strip().lower()
+    clamp_overrides = CONFIG.get("ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES")
+    clamp_row: Mapping[str, Any] = {}
+    if isinstance(clamp_overrides, Mapping):
+        candidate = clamp_overrides.get(group_key)
+        if isinstance(candidate, Mapping):
+            clamp_row = candidate
+
+    def _clamp_value(field: str, default_key: str, fallback: float) -> float:
+        raw = clamp_row.get(field, CONFIG.get(default_key, fallback))
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return fallback
+
+    values["engine_b.gate.min_sl_atr"] = _clamp_value(
+        "min_sl_atr", "ENGINE_B_MIN_SL_ATR_DEFAULT", 0.75
+    )
+    values["engine_b.gate.max_sl_atr"] = _clamp_value(
+        "max_sl_atr", "ENGINE_B_MAX_SL_ATR_DEFAULT", 3.0
+    )
+    return values
 
 
 def _tf_role_values(pair: Mapping[str, Any], group: str, style: str, engine: str) -> dict[str, Any]:

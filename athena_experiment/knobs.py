@@ -9,6 +9,11 @@ that already exists and is already read by live scoring:
 - Engine A weights     -> ``ENGINE_A_QUANT_WEIGHTS_BY_GROUP`` (engine_a_v3/profile.py)
 - Engine A threshold   -> ``ENGINE_A_SCORE_GROUP_THRESHOLDS`` (engine_a_v3/profile.py)
 - Engine B gates       -> ``NAKED_ENGINE.score_group_overrides`` (market_structure.py)
+- Engine B SL clamps   -> ``ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES``
+                          (market_structure.py ATR clamp / tighten / TP1-retry
+                          paths — the ONLY surface those fields are read from;
+                          the same-named keys under NAKED_ENGINE.score_group_overrides
+                          have no consumer and are inert)
 - New indicator terms  -> ``ENGINE_A_V3_MOMENTUM_BLEND.BY_GROUP`` /
                           ``ENGINE_A_V3_LOCATION.BY_GROUP`` /
                           ``ENGINE_A_V3_VOLUME_BLEND.BY_GROUP`` /
@@ -40,14 +45,24 @@ TF_LADDER: tuple[str, ...] = ("D1", "H4", "H1", "M30", "M15", "M5", "M1")
 _ENGINE_A_WEIGHT_COMPONENTS: tuple[str, ...] = ("trend", "momentum", "location", "volume")
 
 _ENGINE_B_GATE_FIELDS: dict[str, tuple[str, float | None, float | None]] = {
-    "min_score": ("float", 0.0, 100.0),
+    # Engine B style-profile min_score lives on a ~0-8 gate-points scale
+    # (shipped profiles use 3.0-4.0, see engine_b_snapshot.py) — a 0-100 range
+    # invited values that block every signal in the group.
+    "min_score": ("float", 0.0, 10.0),
     "min_rr": ("float", 0.0, 10.0),
     "min_room_atr": ("float", 0.0, 5.0),
-    "max_sl_atr": ("float", 0.1, 10.0),
-    "min_sl_atr": ("float", 0.05, 5.0),
     "space_rr_substitute": ("bool", None, None),
     "profile_trusted": ("bool", None, None),
     "macro_required": ("bool", None, None),
+}
+
+# SL-width ATR clamps are consumed ONLY from this flat per-group surface
+# (market_structure.py reads ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES at the
+# clamp, SL-tighten and TP1-retry sites). They are deliberately NOT under
+# NAKED_ENGINE.score_group_overrides — keys placed there are never read.
+_ENGINE_B_SL_CLAMP_FIELDS: dict[str, tuple[str, float | None, float | None]] = {
+    "max_sl_atr": ("float", 0.1, 10.0),
+    "min_sl_atr": ("float", 0.05, 5.0),
 }
 
 
@@ -145,6 +160,16 @@ def _engine_a_threshold_knobs() -> list[Knob]:
     ]
 
 
+_ENGINE_B_GATE_DESCRIPTIONS: dict[str, str] = {
+    "macro_required": (
+        "Engine B per-(group,style) gate override: macro_required. FOREX ONLY — "
+        "activates the fail-closed DXY macro-correlation gate for this group "
+        "(market_structure.py); inert for non-forex groups. This is not the "
+        "macro swing-alignment gate (require_macro_align)."
+    ),
+}
+
+
 def _engine_b_gate_knobs() -> list[Knob]:
     out: list[Knob] = []
     for field_name, (kind, lo, hi) in _ENGINE_B_GATE_FIELDS.items():
@@ -158,7 +183,27 @@ def _engine_b_gate_knobs() -> list[Knob]:
                 scope="group_style",
                 minimum=lo,
                 maximum=hi,
-                description=f"Engine B per-(group,style) gate override: {field_name}.",
+                description=_ENGINE_B_GATE_DESCRIPTIONS.get(
+                    field_name, f"Engine B per-(group,style) gate override: {field_name}."
+                ),
+            )
+        )
+    for field_name, (kind, lo, hi) in _ENGINE_B_SL_CLAMP_FIELDS.items():
+        out.append(
+            Knob(
+                id=f"engine_b.gate.{field_name}",
+                label=field_name.replace("_", " ").title(),
+                applies_to=("B",),
+                kind=kind,
+                config_path=("ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES", "{group}", field_name),
+                scope="group",
+                minimum=lo,
+                maximum=hi,
+                description=(
+                    f"Engine B per-group SL-width ATR clamp: {field_name}. Read from "
+                    "ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES by the live clamp "
+                    "paths (applies to every style in this group)."
+                ),
             )
         )
     return out

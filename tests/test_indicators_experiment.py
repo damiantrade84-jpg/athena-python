@@ -158,3 +158,49 @@ def test_engine_b_confluence_subscores_oscillator_candles_do_not_change_aggregat
     # ...but it carries zero configured weight, so it cannot move the aggregate.
     assert score_with == pytest.approx(score_without)
     assert max_with == pytest.approx(max_without)
+
+
+# ── ROC blend term: ATR-scaled normalization (Tuning Lab fix) ────────────────
+def _roc_weight_config(group: str, weight: float) -> dict:
+    return {
+        "ENABLED": True,
+        "RSI_WEIGHT": 0.35,
+        "DI_WEIGHT": 0.35,
+        "MACD_SLOPE_WEIGHT": 0.30,
+        "BY_GROUP": {group: {"ROC_WEIGHT": weight}},
+    }
+
+
+def test_roc_term_scales_with_atr_when_weighted(monkeypatch):
+    """A fixed /5 divisor saturated the ROC term on high-volatility groups
+    (a >5% move in 12 bars is routine on crypto H4/D1). The term is now
+    expressed in units of ~3 ATRs of the same snapshot."""
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_V3_MOMENTUM_BLEND",
+        _roc_weight_config("crypto_btc", 1.0),
+    )
+    # scale = 3 * (0.5 / 100) * 100 = 1.5 -> roc 1.5 / 1.5 = 1.0
+    snap = {"adx": 25.0, "roc": 1.5, "atr": 0.5, "close": 100.0}
+    _comp, diag = _momentum_component(snap, "crypto", "crypto_btc")
+    assert diag["rocTerm"] == pytest.approx(1.0)
+    # Same ROC with double the ATR halves the term — gradation preserved where
+    # the fixed divisor would have pinned both at their clamp behaviour.
+    snap_wide = {"adx": 25.0, "roc": 1.5, "atr": 1.0, "close": 100.0}
+    _comp2, diag2 = _momentum_component(snap_wide, "crypto", "crypto_btc")
+    assert diag2["rocTerm"] == pytest.approx(0.5)
+
+
+def test_roc_term_falls_back_to_fixed_divisor_without_atr(monkeypatch):
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_V3_MOMENTUM_BLEND",
+        _roc_weight_config("forex_majors", 1.0),
+    )
+    snap = {"adx": 25.0, "roc": 2.5}
+    _comp, diag = _momentum_component(snap, "forex", "forex_majors")
+    assert diag["rocTerm"] == pytest.approx(0.5)

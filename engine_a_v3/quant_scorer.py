@@ -719,10 +719,22 @@ def _momentum_component(
     if roc_w > 0:
         roc = _f(snap.get("roc"))
         if roc is not None:
-            roc_term = _clamp(roc / 5.0, -1.0, 1.0)
+            # Scale-invariant normalization: express the ROC move in units of
+            # ~3 ATRs of the same snapshot. A fixed 5% divisor saturated the
+            # term on high-volatility groups (crypto H4/D1 routinely moves >5%
+            # in 12 bars), pinning it at +/-1 and discarding all gradation.
+            # Falls back to the fixed divisor when ATR/close are unavailable.
+            atr_val = _f(snap.get("atr"))
+            close_val = _f(snap.get("close"))
+            roc_scale = (
+                3.0 * atr_val / close_val * 100.0
+                if atr_val and close_val and close_val > 0
+                else 5.0
+            )
+            roc_term = _clamp(roc / roc_scale, -1.0, 1.0)
             weighted_signal += roc_w * roc_term
             weight_total += roc_w
-            quality_terms.append(_clamp01(abs(roc) / 5.0))
+            quality_terms.append(_clamp01(abs(roc) / roc_scale))
             diag["rocTerm"] = round(roc_term, 4)
 
     signal = weighted_signal / weight_total if weight_total > 0 else 0.0

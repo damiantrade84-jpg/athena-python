@@ -98,10 +98,11 @@ type RunMetrics = {
   totalTrades?: number;
   winRate?: number;
   profitFactor?: number;
-  expectancyR?: number;
+  expectancy?: number;
   sqn?: number;
   totalR?: number;
   maxDrawdownR?: number;
+  wfSplit?: { lowSampleSqnWarning?: boolean };
   error?: string;
 };
 
@@ -110,7 +111,10 @@ type RunResult = {
   error?: string;
   group?: string;
   style?: string;
-  engine?: string;
+  engine?: EngineKey;
+  symbol?: string;
+  pair?: string;
+  knobs?: Record<string, unknown>;
   overlay?: Record<string, unknown>;
   baseline?: RunMetrics;
   variant?: RunMetrics;
@@ -124,7 +128,8 @@ function metricValue(value: number | undefined, digits = 2): string {
 function CompareTile({ label, base, variant, digits = 2, pct = false }: {
   label: string; base?: number; variant?: number; digits?: number; pct?: boolean;
 }) {
-  const fmt = (v?: number) => (pct ? (v == null ? '—' : `${(v * 100).toFixed(1)}%`) : metricValue(v, digits));
+  // Backend winRate is already a 0-100 percentage — render it as-is.
+  const fmt = (v?: number) => (pct ? (v == null ? '—' : `${v.toFixed(1)}%`) : metricValue(v, digits));
   const delta = base != null && variant != null ? variant - base : null;
   const improved = delta != null && delta > 0;
   const worsened = delta != null && delta < 0;
@@ -243,7 +248,9 @@ function ExperimentLabPanel() {
   const { showToast } = useStore();
   const [engine, setEngine] = useState<EngineKey>('A');
   const [style, setStyle] = useState('intraday');
-  const [group, setGroup] = useState('');
+  // /api/pairs groups by broad asset-class display labels. This is only a
+  // selector/filter; the API derives the canonical score group from `pair`.
+  const [assetGroup, setAssetGroup] = useState('');
   const [pair, setPair] = useState('');
   const [knobValues, setKnobValues] = useState<Record<string, string>>({});
   const [result, setResult] = useState<RunResult | null>(null);
@@ -251,7 +258,7 @@ function ExperimentLabPanel() {
   const pairsPoll = useApiPoll<PairsResponse>('/api/pairs', 0);
   const knobsPoll = useApiPoll<KnobsCatalog>(`/api/experiment/knobs?engine=${engine}`, 0);
   const defaultsUrl = pair
-    ? `/api/experiment/defaults?engine=${engine}&symbol=${encodeURIComponent(pair)}&style=${style}${group ? `&group=${encodeURIComponent(group)}` : ''}`
+    ? `/api/experiment/defaults?engine=${engine}&symbol=${encodeURIComponent(pair)}&style=${style}`
     : '';
   const defaultsPoll = useApiPoll<DefaultsResponse>(defaultsUrl, 0, Boolean(defaultsUrl));
   const runMutation = useApiPost<RunResult>();
@@ -263,22 +270,26 @@ function ExperimentLabPanel() {
     [grouped],
   );
   const groupPairs = useMemo(() => {
-    const rows = grouped[group] || [];
+    const rows = grouped[assetGroup] || [];
     const enabled = rows.filter((row) => row.enabled);
     return enabled.length ? enabled : rows;
-  }, [grouped, group]);
+  }, [grouped, assetGroup]);
 
   useEffect(() => {
     if (!groupNames.length) return;
-    if (!group || !groupNames.includes(group)) {
-      setGroup(groupNames.find((name) => name.toLowerCase().includes('forex')) || groupNames[0]);
+    if (!assetGroup || !groupNames.includes(assetGroup)) {
+      setAssetGroup(groupNames.find((name) => name.toLowerCase().includes('forex')) || groupNames[0]);
+      setResult(null);
     }
-  }, [groupNames, group]);
+  }, [groupNames, assetGroup]);
 
   useEffect(() => {
-    if (!groupPairs.length) { setPair(''); return; }
+    if (!groupPairs.length) { setPair(''); setResult(null); return; }
     const stillValid = groupPairs.some((row) => row.display === pair || row.symbol === pair);
-    if (!stillValid) setPair(groupPairs[0].display || groupPairs[0].symbol);
+    if (!stillValid) {
+      setPair(groupPairs[0].display || groupPairs[0].symbol);
+      setResult(null);
+    }
   }, [groupPairs, pair]);
 
   // Reset tuning knobs whenever the engine changes — Engine A and Engine B
@@ -295,9 +306,11 @@ function ExperimentLabPanel() {
   const gateKnobs = knobs.filter((k) => k.id.startsWith('engine_b.gate.'));
   const indicatorKnobs = knobs.filter((k) => k.id.startsWith('indicator.'));
   const currentValues = defaultsPoll.data?.values || {};
+  const scoreGroup = defaultsPoll.data?.group || '';
   const loadingCurrent = defaultsPoll.loading;
 
   const setKnob = useCallback((id: string, value: string) => {
+    setResult(null);
     setKnobValues((prev) => {
       const next = { ...prev };
       if (value === '') delete next[id];
@@ -323,11 +336,11 @@ function ExperimentLabPanel() {
   const runExperiment = useCallback(async () => {
     const token = pair.trim();
     if (!token) { showToast('Select a pair to test', 'error'); return; }
+    setResult(null);
     const response = await runMutation.post('/api/experiment/run', {
       engine,
       symbol: token,
       style,
-      group,
       overlay: buildOverlayPayload(),
     });
     if (!response || response.error) {
@@ -340,27 +353,37 @@ function ExperimentLabPanel() {
       `${token}: baseline SQN ${metricValue(response.baseline?.sqn)} → variant SQN ${metricValue(response.variant?.sqn)}`,
       'success',
     );
-  }, [pair, engine, style, group, buildOverlayPayload, runMutation, showToast]);
+  }, [pair, engine, style, buildOverlayPayload, runMutation, showToast]);
 
   const pushOverride = useCallback(async () => {
+    if (!result || result.error || !result.group || !result.knobs) {
+      showToast('Run this exact variant before pushing it', 'error');
+      return;
+    }
+    const testedSymbol = result.symbol || result.pair || pair;
     const response = await pushMutation.post('/api/experiment/push', {
-      engine,
-      group,
-      style,
+      engine: result.engine || engine,
+      symbol: testedSymbol,
+      group: result.group,
+      style: result.style || style,
       confirm: true,
-      overlay: buildOverlayPayload(),
+      knobs: result.knobs,
     });
     if (!response || response.error) {
       showToast(response?.error || pushMutation.error || 'Push failed', 'error');
       return;
     }
     showToast('Pushed to config.local.yaml. Restart Athena to apply it live.', 'success');
-  }, [engine, group, style, buildOverlayPayload, pushMutation, showToast]);
+  }, [result, pair, engine, style, pushMutation, showToast]);
 
   const improved =
     result?.baseline?.sqn != null && result?.variant?.sqn != null && result.variant.sqn > result.baseline.sqn;
-  const hasGlobalKnob = Object.keys(knobValues).some(
+  const testedKnobCount = Object.keys(result?.knobs || {}).length;
+  const hasGlobalKnob = Object.keys(result?.knobs || {}).some(
     (id) => knobs.find((k) => k.id === id)?.scope === 'global',
+  );
+  const lowSample = Boolean(
+    result?.baseline?.wfSplit?.lowSampleSqnWarning || result?.variant?.wfSplit?.lowSampleSqnWarning,
   );
 
   return (
@@ -410,7 +433,7 @@ function ExperimentLabPanel() {
               ))}
               <div className="space-y-2">
                 <Label>Style</Label>
-                <Select value={style} onValueChange={setStyle}>
+                <Select value={style} onValueChange={(value) => { setStyle(value); setResult(null); }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {['intraday', 'swing'].map((item) => (
@@ -423,9 +446,13 @@ function ExperimentLabPanel() {
 
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label>Group</Label>
-                <Select value={group || undefined} onValueChange={(value) => { setGroup(value); setPair(''); }} disabled={!groupNames.length}>
-                  <SelectTrigger><SelectValue placeholder={pairsPoll.loading ? 'Loading…' : 'Select group'} /></SelectTrigger>
+                <Label>Asset filter</Label>
+                <Select
+                  value={assetGroup || undefined}
+                  onValueChange={(value) => { setAssetGroup(value); setPair(''); setResult(null); }}
+                  disabled={!groupNames.length}
+                >
+                  <SelectTrigger><SelectValue placeholder={pairsPoll.loading ? 'Loading…' : 'Select asset class'} /></SelectTrigger>
                   <SelectContent>
                     {groupNames.map((name) => (
                       <SelectItem key={name} value={name}>{name} ({grouped[name]?.length ?? 0})</SelectItem>
@@ -435,8 +462,8 @@ function ExperimentLabPanel() {
               </div>
               <div className="space-y-2">
                 <Label>Pair</Label>
-                <Select value={pair || undefined} onValueChange={setPair} disabled={!groupPairs.length}>
-                  <SelectTrigger><SelectValue placeholder={group ? 'Select pair' : 'Pick a group first'} /></SelectTrigger>
+                <Select value={pair || undefined} onValueChange={(value) => { setPair(value); setResult(null); }} disabled={!groupPairs.length}>
+                  <SelectTrigger><SelectValue placeholder={assetGroup ? 'Select pair' : 'Pick an asset class first'} /></SelectTrigger>
                   <SelectContent>
                     {groupPairs.map((row) => (
                       <SelectItem key={`${row.group}-${row.symbol}`} value={row.display || row.symbol}>{row.display}</SelectItem>
@@ -445,6 +472,16 @@ function ExperimentLabPanel() {
                 </Select>
               </div>
             </div>
+
+            {pair && (
+              <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+                Score group:{' '}
+                <span className="font-mono font-semibold text-foreground">
+                  {loadingCurrent ? 'resolving…' : scoreGroup || 'unresolved'}
+                </span>
+                <span className="ml-2">Only this canonical score group is tuned or pushed.</span>
+              </div>
+            )}
 
             {knobsPoll.loading ? (
               <div className="rounded-xl border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
@@ -529,16 +566,23 @@ function ExperimentLabPanel() {
                   <CompareTile label="SQN" base={result.baseline?.sqn} variant={result.variant?.sqn} />
                   <CompareTile label="Total R" base={result.baseline?.totalR} variant={result.variant?.totalR} />
                   <CompareTile label="Win rate" base={result.baseline?.winRate} variant={result.variant?.winRate} pct />
-                  <CompareTile label="Expectancy" base={result.baseline?.expectancyR} variant={result.variant?.expectancyR} digits={3} />
+                  <CompareTile label="Expectancy" base={result.baseline?.expectancy} variant={result.variant?.expectancy} digits={3} />
                   <CompareTile label="Max DD (R)" base={result.baseline?.maxDrawdownR} variant={result.variant?.maxDrawdownR} />
                 </div>
+
+                {lowSample && (
+                  <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">
+                    Fewer than 60 trades in this comparison — SQN deltas on small samples are noisy.
+                    Treat any improvement as indicative, not proven.
+                  </div>
+                )}
 
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button
                       variant={improved ? 'default' : 'outline'}
                       className="w-full"
-                      disabled={!activeKnobCount || pushMutation.loading}
+                      disabled={!testedKnobCount || pushMutation.loading}
                     >
                       <Upload className="mr-2 h-4 w-4" />
                       Push to default
@@ -552,18 +596,23 @@ function ExperimentLabPanel() {
                       </AlertDialogTitle>
                       <AlertDialogDescription className="space-y-2">
                         <span className="block">
-                          {activeKnobCount} knob{activeKnobCount === 1 ? '' : 's'} for engine {engine}
-                          {group ? `, group "${group}"` : ''} will be deep-merged into config.local.yaml.
+                          {testedKnobCount} tested knob{testedKnobCount === 1 ? '' : 's'} for engine {result.engine || engine}
+                          {result.group ? `, score group "${result.group}"` : ''} will be deep-merged into config.local.yaml.
                         </span>
                         {!improved && (
                           <span className="block text-amber-300">
                             This run did not show a clear SQN improvement — pushing anyway is your call.
                           </span>
                         )}
+                        {lowSample && (
+                          <span className="block text-amber-300">
+                            This run has fewer than 60 trades — the SQN comparison is statistically noisy.
+                          </span>
+                        )}
                         {hasGlobalKnob && (
                           <span className="block text-amber-300">
                             One or more changed knobs are GLOBAL and will affect every pair sharing that
-                            config, not only {pair || 'this pair'}.
+                            config, not only {result.pair || result.symbol || 'this pair'}.
                           </span>
                         )}
                         <span className="block">
