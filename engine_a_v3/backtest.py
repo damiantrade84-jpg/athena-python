@@ -540,12 +540,19 @@ def run_v3_backtest(
             continue
         decision_cutoff = primary[index].get("time")
         prefix = _build_prefix_at(_primary_open_epochs[index])
+        try:
+            decision_price = float(primary[index]["close"])
+        except (KeyError, TypeError, ValueError):
+            # The evaluator's candle validation will reject the malformed bar;
+            # an explicit non-finite price also keeps location fail-closed.
+            decision_price = float("nan")
         signal = evaluate_engine_a_v3(
             pair,
             prefix,
             horizon=horizon,
             registry=_run_registry,
             snapshot_cache=snapshot_cache,
+            current_price=decision_price,
             policy_timeframes=policy,
             candle_validation_index=candle_validation_index,
             setup_series_cache=setup_series_cache,

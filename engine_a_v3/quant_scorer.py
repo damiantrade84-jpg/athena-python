@@ -851,6 +851,7 @@ def _location_component(
     score_group: str,
     *,
     corroborating_adx: float | None = None,
+    current_price: float | None = None,
 ) -> tuple[Component, str]:
     """Entry timing. In a trend, a small pullback toward the trend EMA is the
     best entry (high quality); over-extension lowers quality but never vetoes.
@@ -862,10 +863,14 @@ def _location_component(
     """
     if not snap:
         return Component(0.0, 0.0, available=False), "trend"
-    close = _f(snap.get("close"))
+    # Keep EMA/ATR/channel state anchored to the confirmed setup candle, but
+    # price the entry-location measurement from the freshness-gated scan quote
+    # when one is supplied.  Falling back to the confirmed close is reserved
+    # for causal/offline callers that do not have a separate quote.
+    close = _f(current_price) if current_price is not None else _f(snap.get("close"))
     e_trend = _f(snap.get("ema21"))
     atr = _f(snap.get("atr"))
-    if close is None or e_trend is None or atr is None or atr <= 0:
+    if close is None or close <= 0 or e_trend is None or atr is None or atr <= 0:
         return Component(0.0, 0.0, available=False), "trend"
     dist = (close - e_trend) / atr  # >0 above trend EMA
     adx = _f(snap.get("adx"), 0.0) or 0.0
@@ -1187,6 +1192,7 @@ def score_pair(
     context: Mapping[str, Any] | None = None,
     profile: Any | None = None,
     snapshot_cache: dict | None = None,
+    current_price: float | None = None,
     entry_tf_override: str | None = None,
     policy_timeframes: Mapping[str, Any] | None = None,
     series_cache=None,
@@ -1471,17 +1477,29 @@ def score_pair(
     # Momentum-anchor ADX corroborates the mean-reversion regime switch, which is
     # otherwise decided entirely on the entry/setup rung.
     corroborating_adx = _f(momentum_snap.get("adx")) if momentum_snap else None
+    location_price = (
+        _f(current_price) if current_price is not None else _f(entry_snap.get("close"))
+    )
+    location_price_source = (
+        "current_price" if current_price is not None else "confirmed_setup_close"
+    )
     core_key = (
         "entry_core",
         entry_tf,
         len(entry_candles),
         (context or {}).get("volume_ratio"),
         corroborating_adx,
+        current_price is not None,
+        location_price,
     )
     core_result = feature_cache.get(core_key) if feature_cache is not None else None
     if core_result is None:
         location, level_style = _location_component(
-            entry_snap, asset_type, group, corroborating_adx=corroborating_adx
+            entry_snap,
+            asset_type,
+            group,
+            corroborating_adx=corroborating_adx,
+            current_price=current_price,
         )
         volume = _volume_component(entry_snap, entry_candles, context, group)
         core_result = location, level_style, volume
@@ -1785,6 +1803,8 @@ def score_pair(
     if compact_result:
         factor_diagnostics = {
             "atrPct": _f(entry_snap.get("atr_pct")),
+            "locationPrice": location_price,
+            "locationPriceSource": location_price_source,
             "minDirectionalFailed": min_directional_failed,
             "legacyFilters": legacy_diag,
             "equityVolumeBlocked": equity_volume_blocked,
@@ -1803,6 +1823,8 @@ def score_pair(
         factor_diagnostics = {
             "entryTimeframe": entry_tf,
             "entryTfOverride": diagnostic_override,
+            "locationPrice": location_price,
+            "locationPriceSource": location_price_source,
             "scoringTimeframes": {
                 "policyApplied": bool(policy),
                 "trend": list(tf_weights.keys()),

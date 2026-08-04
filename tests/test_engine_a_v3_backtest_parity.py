@@ -275,6 +275,7 @@ def test_v3_backtest_applies_policy_setup_and_trigger_timeframes(monkeypatch):
     assert result["policyTimeframesApplied"] == policy
     assert captured
     assert all(call.get("policy_timeframes") == policy for call in captured)
+    assert all(call.get("current_price") is not None for call in captured)
 
 
 def test_scan_speed_state_is_used_for_engine_a_scoring_policy():

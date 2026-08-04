@@ -796,6 +796,84 @@ def test_trend_mode_location_credits_pullback_and_extension_equally():
     assert pullback.quality == pytest.approx(extension.quality)
 
 
+def test_location_uses_live_price_against_confirmed_setup_indicators(monkeypatch):
+    """A slow setup rung must not freeze location at its confirmed close."""
+    import engine_a_v3.quant_scorer as qs
+
+    monkeypatch.setattr(
+        qs,
+        "_blend_keltner_location",
+        lambda _snap, _price, signal, quality, _group: (signal, quality),
+    )
+    confirmed = {
+        "close": 100.0,
+        "ema21": 100.0,
+        "atr": 2.0,
+        "adx": 40.0,
+        "bbUpper": 120.0,
+        "bbLower": 80.0,
+    }
+
+    closed_location, _ = _location_component(
+        confirmed, "forex", "forex_majors"
+    )
+    live_location, _ = _location_component(
+        confirmed,
+        "forex",
+        "forex_majors",
+        current_price=106.0,
+    )
+    invalid_location, _ = _location_component(
+        confirmed,
+        "forex",
+        "forex_majors",
+        current_price=float("nan"),
+    )
+
+    assert closed_location.quality == pytest.approx(1.0)
+    assert live_location.quality < closed_location.quality
+    assert invalid_location.available is False
+
+
+def test_score_pair_live_location_price_invalidates_same_bar_feature_cache(monkeypatch):
+    """A new quote must rescore location even while the H4 candle count is unchanged."""
+    import engine_a_v3.quant_scorer as qs
+
+    seen_prices: list[float | None] = []
+    original_location = qs._location_component
+
+    def _capture_location(*args, **kwargs):
+        seen_prices.append(kwargs.get("current_price"))
+        return original_location(*args, **kwargs)
+
+    monkeypatch.setattr(qs, "_location_component", _capture_location)
+    route = route_specialist(
+        {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
+    )
+    feature_cache: dict = {}
+
+    first = score_pair(
+        route,
+        "intraday",
+        _candles(),
+        current_price=105.0,
+        feature_cache=feature_cache,
+    )
+    second = score_pair(
+        route,
+        "intraday",
+        _candles(),
+        current_price=106.0,
+        feature_cache=feature_cache,
+    )
+
+    assert seen_prices == [105.0, 106.0]
+    assert first.factor_diagnostics["locationPrice"] == pytest.approx(105.0)
+    assert second.factor_diagnostics["locationPrice"] == pytest.approx(106.0)
+    assert first.factor_diagnostics["locationPriceSource"] == "current_price"
+    assert second.factor_diagnostics["locationPriceSource"] == "current_price"
+
+
 def test_max_attainable_score_reports_unavailable_components(monkeypatch):
     """A missing component keeps its weight in the divisor, so report the ceiling."""
     import engine_a_v3.quant_scorer as qs

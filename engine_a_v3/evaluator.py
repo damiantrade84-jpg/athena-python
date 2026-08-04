@@ -679,6 +679,7 @@ def evaluate_engine_a_v3(
         "context": context,
         "profile": profile,
         "snapshot_cache": snapshot_cache,
+        "current_price": current_price,
         "series_cache": setup_series_cache,
         "feature_cache": quant_feature_cache,
         "compact_result": compact_replay,

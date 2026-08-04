@@ -231,6 +231,29 @@ def _patch_trade_quant(monkeypatch):
     monkeypatch.setattr(evaluator_module, "session_score_passes", lambda *_args, **_kwargs: True)
 
 
+def test_evaluator_forwards_current_price_to_location_scorer(monkeypatch, tmp_path):
+    _patch_trade_quant(monkeypatch)
+    captured: dict[str, float | None] = {}
+    fake_score_pair = evaluator_module.score_pair
+
+    def capturing_score_pair(*args, **kwargs):
+        captured["current_price"] = kwargs.get("current_price")
+        return fake_score_pair(*args, **kwargs)
+
+    monkeypatch.setattr(evaluator_module, "score_pair", capturing_score_pair)
+    pair = REPRESENTATIVE_PAIRS["forex_majors"]
+
+    evaluate_engine_a_v3(
+        pair,
+        _trend_pullback_candles(),
+        horizon="intraday",
+        registry=_registry(tmp_path, pair, "intraday"),
+        current_price=123.456,
+    )
+
+    assert captured["current_price"] == pytest.approx(123.456)
+
+
 def test_router_covers_all_26_score_groups_and_both_horizons():
     assert set(REPRESENTATIVE_PAIRS) == set(KNOWN_SCORE_GROUPS)
     assert len(KNOWN_SCORE_GROUPS) == 26
