@@ -463,8 +463,12 @@ function ExperimentLabPanel() {
               <div className="space-y-2">
                 <Label>Pair</Label>
                 <Select value={pair || undefined} onValueChange={(value) => { setPair(value); setResult(null); }} disabled={!groupPairs.length}>
-                  <SelectTrigger><SelectValue placeholder={assetGroup ? 'Select pair' : 'Pick an asset class first'} /></SelectTrigger>
-                  <SelectContent>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder={assetGroup ? 'Select pair' : 'Pick an asset class first'} />
+                  </SelectTrigger>
+                  {/* popper + max height: long pair lists must wheel-scroll without
+                      re-snapping to the selected (often first) item at the top */}
+                  <SelectContent position="popper" className="max-h-72">
                     {groupPairs.map((row) => (
                       <SelectItem key={`${row.group}-${row.symbol}`} value={row.display || row.symbol}>{row.display}</SelectItem>
                     ))}

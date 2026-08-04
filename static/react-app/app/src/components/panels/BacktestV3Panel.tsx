@@ -338,10 +338,12 @@ function BacktestV3Panel() {
                   onValueChange={setPair}
                   disabled={!groupPairs.length}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder={group ? 'Select pair' : 'Pick a group first'} />
                   </SelectTrigger>
-                  <SelectContent>
+                  {/* popper + max height: long pair lists must wheel-scroll without
+                      re-snapping to the selected (often first) item at the top */}
+                  <SelectContent position="popper" className="max-h-72">
                     {groupPairs.map((row) => {
                       const value = row.display || row.symbol;
                       return (
