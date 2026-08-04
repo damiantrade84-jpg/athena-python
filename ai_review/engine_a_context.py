@@ -594,11 +594,21 @@ def _ema_levels(signal: dict[str, Any], factor_diag: dict[str, Any]) -> dict[str
     }
 
 
-def _engine_a_passed(signal: dict[str, Any]) -> bool:
+def _engine_a_passed_basis(signal: dict[str, Any]) -> str:
+    """Provenance for ``passed``: v3-contract signals gate on
+    decision/qualified/freshness (a structural setup can promote WATCH -> TRADE
+    below the headline confluence threshold); legacy signals gate on
+    score >= threshold."""
     if (
         str(signal.get("engine") or "").upper() == "ENGINE_A_V3"
         and str(signal.get("contractVersion") or "").startswith("3.")
     ):
+        return "engine_a_v3_decision"
+    return "score_threshold"
+
+
+def _engine_a_passed(signal: dict[str, Any]) -> bool:
+    if _engine_a_passed_basis(signal) == "engine_a_v3_decision":
         freshness = signal.get("dataFreshness")
         return bool(
             signal.get("decision") == "TRADE"
@@ -1418,6 +1428,7 @@ def assemble_engine_a_context(
                 or origin.get("scanThreshold")
             ),
             "passed": _engine_a_passed(origin),
+            "passed_basis": _engine_a_passed_basis(origin),
         } if origin else None,
         "review_delta": {
             "entry_displacement": displacement,
@@ -1446,6 +1457,7 @@ def assemble_engine_a_context(
             or signal.get("scanThreshold")
         ),
         "passed": _engine_a_passed(signal),
+        "passed_basis": _engine_a_passed_basis(signal),
         "factor_diagnostics": factor_diag,
         "multiplier_diagnostics": _multiplier_diagnostics(factor_diag),
         "equity_session": _equity_session_block(factor_diag),

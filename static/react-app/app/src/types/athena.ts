@@ -1649,6 +1649,8 @@ export interface AIChartReviewEngineSummary {
   threshold: number | null;
   normalizedScore: number | null;
   passed?: boolean | null;
+  /** Provenance for `passed`: 'engine_a_v3_decision' | 'score_threshold'. */
+  passedBasis?: string | null;
   direction?: string | null;
   activeFactors?: string[] | null;
   decisionState?: string | null;

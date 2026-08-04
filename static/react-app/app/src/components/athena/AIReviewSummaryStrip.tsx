@@ -35,7 +35,15 @@ function engineALine(engine: AIChartReviewEngineSummary | null | undefined): str
   const score = fmtReviewNum(engine.score, 2);
   const max = fmtReviewNum(engine.maxScore, 2);
   const threshold = fmtReviewNum(engine.threshold, 2);
-  const pass = fmtReviewPass(engine.passed);
+  // A v3 decision-basis PASS with score below the headline threshold is a
+  // structural setup upgrade (WATCH -> TRADE), not a score/threshold bug.
+  const setupUpgrade =
+    engine.passed === true &&
+    engine.passedBasis === 'engine_a_v3_decision' &&
+    engine.score != null &&
+    engine.threshold != null &&
+    engine.score < engine.threshold;
+  const pass = setupUpgrade ? 'PASS (setup upgrade)' : fmtReviewPass(engine.passed);
   const direction = showReviewValue(engine.direction);
   const norm =
     engine.normalizedScore != null && !Number.isNaN(engine.normalizedScore)

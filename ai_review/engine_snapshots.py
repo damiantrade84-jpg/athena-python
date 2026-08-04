@@ -99,6 +99,7 @@ def extract_engine_a_snapshot(
         "threshold": threshold,
         "normalizedScore": _norm(score, max_score),
         "passed": passed if passed is None else bool(passed),
+        "passedBasis": engine_a_ctx.get("passed_basis"),
         "direction": engine_a_ctx.get("direction") or (signal or {}).get("direction"),
         "activeFactors": active,
     }

@@ -32,13 +32,20 @@ def _missing_diagnostics(engine_a_ctx: dict[str, Any]) -> bool:
     return False
 
 
-def _has_required_missing_context(
-    engine_a_ctx: dict[str, Any],
+def _required_missing_context(
+    engine_ctx: dict[str, Any],
     ai_review: dict[str, Any],
-) -> bool:
-    diagnostics = build_context_diagnostics(engine_a_ctx, ai_review)
-    required = diagnostics.get("missingContextDetailed", {}).get("required") or []
-    return bool(required)
+) -> list[Any]:
+    diagnostics = build_context_diagnostics(engine_ctx, ai_review)
+    return diagnostics.get("missingContextDetailed", {}).get("required") or []
+
+
+def _missing_context_note(required: list[Any]) -> str:
+    labels = [
+        str(item.get("label") or item.get("key")) if isinstance(item, dict) else str(item)
+        for item in required
+    ]
+    return "Required context missing: " + ", ".join(labels)
 
 
 def _engine_a_comparison(ai_review: dict[str, Any]) -> dict[str, Any]:
@@ -54,41 +61,48 @@ def _engine_a_comparison(ai_review: dict[str, Any]) -> dict[str, Any]:
 def _divergence_from_ai(
     engine_a_ctx: dict[str, Any],
     ai_review: dict[str, Any],
-) -> str:
-    if _has_required_missing_context(engine_a_ctx, ai_review):
-        return "missing_context"
+) -> tuple[str, str]:
+    """Classify the AI-side divergence and name the evidence behind it.
+
+    The note is provenance for the UI chip: the same divergence_type can come
+    from the model's structured comparison, free-text risks, or the wait
+    catch-all, and previously they were indistinguishable.
+    """
+    required = _required_missing_context(engine_a_ctx, ai_review)
+    if required:
+        return "missing_context", _missing_context_note(required)
 
     comparison = _engine_a_comparison(ai_review)
     if comparison.get("chartContradictsEngineADirection") is True:
-        return "visual_contradiction"
+        return "visual_contradiction", "AI reported chart contradicts Engine A direction"
     if (
         comparison.get("chartContradictsEntryTiming") is True
         or comparison.get("comparisonVerdict") == "engine_a_direction_confirmed_entry_rejected"
     ):
-        return "entry_displacement"
+        return "entry_displacement", "AI reported chart contradicts entry timing"
 
     risks = [str(r).lower() for r in (ai_review.get("risks") or [])]
     if ai_review.get("visual_contradiction"):
-        return "visual_contradiction"
+        return "visual_contradiction", "AI reported visual contradiction"
     for risk in risks:
         if "atr" in risk or "freshness" in risk:
-            return "freshness_issue"
+            return "freshness_issue", "AI risk note references ATR/freshness"
         if "rr" in risk or "risk reward" in risk:
-            return "atr_rr_issue"
+            return "atr_rr_issue", "AI risk note references risk/reward"
         if "displacement" in risk or "entry" in risk or "chasing" in risk or "late" in risk:
-            return "entry_displacement"
+            return "entry_displacement", "AI risk note references entry timing/displacement"
 
     entry_text = str(ai_review.get("entry_quality") or "").lower()
     if any(
         marker in entry_text
         for marker in ("late", "chasing", "extended", "poor entry", "bad entry")
     ):
-        return "entry_displacement"
+        return "entry_displacement", "AI flagged entry quality as late/chasing/extended"
 
     human_action = str(ai_review.get("human_action") or "wait").lower()
     if human_action in ("wait", "needs_fresher_data", "needs_better_rr"):
-        return "entry_displacement"
-    return "other"
+        return "entry_displacement", "AI suggested wait; no specific divergence evidence"
+    return "other", ""
 
 
 def compute_engine_a_ai_concordance(
@@ -122,10 +136,10 @@ def compute_engine_a_ai_concordance(
             concordance = "agree"
     elif passed and ai_verdict == "CAUTION":
         concordance = "partial"
-        divergence_type = _divergence_from_ai(engine_a_ctx, ai_review)
+        divergence_type, divergence_note = _divergence_from_ai(engine_a_ctx, ai_review)
     elif passed and ai_verdict in ("INVALID", "NO_TRADE"):
         concordance = "disagree"
-        divergence_type = _divergence_from_ai(engine_a_ctx, ai_review)
+        divergence_type, divergence_note = _divergence_from_ai(engine_a_ctx, ai_review)
     elif not passed and ai_verdict == "VALID":
         concordance = "disagree"
         divergence_type = "other"
@@ -134,13 +148,14 @@ def compute_engine_a_ai_concordance(
         concordance = "agree"
     else:
         concordance = "partial"
-        divergence_type = _divergence_from_ai(engine_a_ctx, ai_review)
+        divergence_type, divergence_note = _divergence_from_ai(engine_a_ctx, ai_review)
 
     atr = engine_a_ctx.get("atr") or {}
     if str(atr.get("atr_freshness_status") or "").lower() == "stale":
         concordance = _downgrade(concordance)
         divergence_type = "freshness_issue"
-        divergence_note = divergence_note or "ATR freshness stale"
+        # Deterministic evidence owns the note so it always matches the type.
+        divergence_note = "ATR freshness stale"
 
     geometry = engine_a_ctx.get("geometry") or {}
     displacement = geometry.get("price_displacement_from_candidate_entry")
@@ -154,7 +169,8 @@ def compute_engine_a_ai_concordance(
     ):
         concordance = _downgrade(concordance)
         divergence_type = "entry_displacement"
-        divergence_note = divergence_note or "Price displacement exceeds ATR multiple"
+        # Deterministic evidence owns the note so it always matches the type.
+        divergence_note = "Price displacement exceeds ATR multiple"
 
     return {
         "engine": "A",
@@ -195,41 +211,43 @@ def _engine_b_comparison(ai_review: dict[str, Any]) -> dict[str, Any]:
 def _divergence_from_ai_b(
     engine_b_ctx: dict[str, Any],
     ai_review: dict[str, Any],
-) -> str:
-    if _has_required_missing_context(engine_b_ctx, ai_review):
-        return "missing_context"
+) -> tuple[str, str]:
+    """Engine B mirror of `_divergence_from_ai` (type plus evidence note)."""
+    required = _required_missing_context(engine_b_ctx, ai_review)
+    if required:
+        return "missing_context", _missing_context_note(required)
 
     comparison = _engine_b_comparison(ai_review)
     if comparison.get("chartContradictsEngineBDirection") is True:
-        return "visual_contradiction"
+        return "visual_contradiction", "AI reported chart contradicts Engine B direction"
     if (
         comparison.get("chartContradictsEntryTiming") is True
         or comparison.get("comparisonVerdict") == "engine_b_direction_confirmed_entry_rejected"
     ):
-        return "entry_displacement"
+        return "entry_displacement", "AI reported chart contradicts entry timing"
 
     risks = [str(r).lower() for r in (ai_review.get("risks") or [])]
     if ai_review.get("visual_contradiction"):
-        return "visual_contradiction"
+        return "visual_contradiction", "AI reported visual contradiction"
     for risk in risks:
         if "atr" in risk or "freshness" in risk:
-            return "freshness_issue"
+            return "freshness_issue", "AI risk note references ATR/freshness"
         if "rr" in risk or "risk reward" in risk:
-            return "atr_rr_issue"
+            return "atr_rr_issue", "AI risk note references risk/reward"
         if "displacement" in risk or "entry" in risk or "chasing" in risk or "late" in risk:
-            return "entry_displacement"
+            return "entry_displacement", "AI risk note references entry timing/displacement"
 
     entry_text = str(ai_review.get("entry_quality") or "").lower()
     if any(
         marker in entry_text
         for marker in ("late", "chasing", "extended", "poor entry", "bad entry")
     ):
-        return "entry_displacement"
+        return "entry_displacement", "AI flagged entry quality as late/chasing/extended"
 
     human_action = str(ai_review.get("human_action") or "wait").lower()
     if human_action in ("wait", "needs_fresher_data", "needs_better_rr"):
-        return "entry_displacement"
-    return "other"
+        return "entry_displacement", "AI suggested wait; no specific divergence evidence"
+    return "other", ""
 
 
 def compute_engine_b_ai_concordance(
@@ -263,10 +281,10 @@ def compute_engine_b_ai_concordance(
             concordance = "agree"
     elif passed and ai_verdict == "CAUTION":
         concordance = "partial"
-        divergence_type = _divergence_from_ai_b(engine_b_ctx, ai_review)
+        divergence_type, divergence_note = _divergence_from_ai_b(engine_b_ctx, ai_review)
     elif passed and ai_verdict in ("INVALID", "NO_TRADE"):
         concordance = "disagree"
-        divergence_type = _divergence_from_ai_b(engine_b_ctx, ai_review)
+        divergence_type, divergence_note = _divergence_from_ai_b(engine_b_ctx, ai_review)
     elif not passed and ai_verdict == "VALID":
         concordance = "disagree"
         divergence_type = "other"
@@ -275,13 +293,14 @@ def compute_engine_b_ai_concordance(
         concordance = "agree"
     else:
         concordance = "partial"
-        divergence_type = _divergence_from_ai_b(engine_b_ctx, ai_review)
+        divergence_type, divergence_note = _divergence_from_ai_b(engine_b_ctx, ai_review)
 
     atr = engine_b_ctx.get("atr") or {}
     if str(atr.get("atr_freshness_status") or "").lower() == "stale":
         concordance = _downgrade(concordance)
         divergence_type = "freshness_issue"
-        divergence_note = divergence_note or "ATR freshness stale"
+        # Deterministic evidence owns the note so it always matches the type.
+        divergence_note = "ATR freshness stale"
 
     geometry = engine_b_ctx.get("geometry") or {}
     displacement = geometry.get("price_displacement_from_candidate_entry")
@@ -295,7 +314,8 @@ def compute_engine_b_ai_concordance(
     ):
         concordance = _downgrade(concordance)
         divergence_type = "entry_displacement"
-        divergence_note = divergence_note or "Price displacement exceeds ATR multiple"
+        # Deterministic evidence owns the note so it always matches the type.
+        divergence_note = "Price displacement exceeds ATR multiple"
 
     struct = engine_b_ctx.get("structure_context") or {}
     structural_verdict = struct.get("structural_verdict") if isinstance(struct, dict) else None

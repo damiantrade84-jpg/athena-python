@@ -108,3 +108,13 @@ def test_engine_a_v3_review_pass_requires_current_trade_qualification():
 
     signal["decision"] = "WATCH"
     assert _engine_a_passed(signal) is False
+
+
+def test_engine_a_passed_basis_distinguishes_v3_decision_from_score_threshold():
+    from ai_review.engine_a_context import _engine_a_passed_basis
+
+    v3_signal = {"engine": "ENGINE_A_V3", "contractVersion": "3.1.0"}
+    assert _engine_a_passed_basis(v3_signal) == "engine_a_v3_decision"
+
+    legacy_signal = {"direction": "LONG", "confluenceScore": 2.5, "threshold": 2.0}
+    assert _engine_a_passed_basis(legacy_signal) == "score_threshold"

@@ -14,7 +14,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from flask import Flask
 
-from ai_review.concordance import compute_engine_a_ai_concordance
+from ai_review.concordance import (
+    compute_engine_a_ai_concordance,
+    compute_engine_b_ai_concordance,
+)
 from ai_review.engine_snapshots import extract_engine_snapshots
 from ai_review.freshness import classify_atr_freshness
 from ai_review.normalizer import normalize_chart_review_response
@@ -1698,8 +1701,103 @@ def test_concordance_prefers_structured_entry_timing_over_visual_contradiction_t
     assert concordance["concordance"] == "disagree"
     assert concordance["divergence_type"] == "entry_displacement"
 
+def test_concordance_divergence_note_records_entry_timing_evidence():
+    ctx = _engine_a_ctx(passed=True)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 58,
+                "human_action": "wait",
+                "engineAVerdictComparison": {"chartContradictsEntryTiming": True},
+            }
+        )
+    )
+    out = compute_engine_a_ai_concordance(ctx, ai, cfg={})
+    assert out["concordance"] == "partial"
+    assert out["divergence_type"] == "entry_displacement"
+    assert out["divergence_note"] == "AI reported chart contradicts entry timing"
+
+
+def test_concordance_divergence_note_marks_wait_catch_all():
+    ctx = _engine_a_ctx(passed=True)
+    ai = normalize_chart_review_response(
+        json.dumps({"verdict": "CAUTION", "confidence": 50, "human_action": "wait"})
+    )
+    out = compute_engine_a_ai_concordance(ctx, ai, cfg={})
+    assert out["concordance"] == "partial"
+    assert out["divergence_type"] == "entry_displacement"
+    assert out["divergence_note"] == "AI suggested wait; no specific divergence evidence"
+
+
+def test_concordance_geometric_displacement_owns_note():
+    ctx = _engine_a_ctx(passed=True)
+    ctx["geometry"]["price_displacement_from_candidate_entry"] = 3000.0
+    ai = normalize_chart_review_response(
+        json.dumps({"verdict": "CAUTION", "confidence": 50, "human_action": "wait"})
+    )
+    out = compute_engine_a_ai_concordance(ctx, ai, cfg={"MAX_DISPLACEMENT_ATR_MULTIPLE": 1.0})
+    assert out["concordance"] == "disagree"
+    assert out["divergence_type"] == "entry_displacement"
+    assert out["divergence_note"] == "Price displacement exceeds ATR multiple"
+
+
+def test_concordance_missing_context_note_lists_required_labels():
+    ctx = _engine_a_ctx(passed=True)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 55,
+                "human_action": "wait",
+                "missing_context": ["higher-timeframe resistance map"],
+            }
+        )
+    )
+    out = compute_engine_a_ai_concordance(ctx, ai, cfg={})
+    assert out["divergence_type"] == "missing_context"
+    assert out["divergence_note"].startswith("Required context missing: ")
+    assert "resistance" in out["divergence_note"].lower()
+
+
+def test_concordance_engine_b_divergence_note_records_entry_timing_evidence():
+    ctx = {
+        "symbol": "BTCUSDT",
+        "timeframe": "H4",
+        "asset_group": "crypto",
+        "direction": "LONG",
+        "confluence_score": 2.4,
+        "threshold": 2.0,
+        "passed": True,
+        "geometry": {"rr": 2.0, "stop_loss": 64000.0},
+        "atr": {"atr_value": 1200.0, "atr_freshness_status": "fresh"},
+    }
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 58,
+                "human_action": "wait",
+                "engineBVerdictComparison": {"chartContradictsEntryTiming": True},
+            }
+        )
+    )
+    out = compute_engine_b_ai_concordance(ctx, ai, cfg={})
+    assert out["concordance"] == "partial"
+    assert out["divergence_type"] == "entry_displacement"
+    assert out["divergence_note"] == "AI reported chart contradicts entry timing"
+
+
+def test_engine_a_snapshot_passed_basis_passthrough():
+    ctx = _engine_a_ctx()
+    ctx["passed_basis"] = "engine_a_v3_decision"
+    snap = extract_engine_snapshots({}, ctx)["engineA"]
+    assert snap["passed"] is True
+    assert snap["passedBasis"] == "engine_a_v3_decision"
+
 
 def test_wait_high_alignment_low_tradeability():
+
     ctx = _engine_a_ctx(passed=True)
     ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
     ai = normalize_chart_review_response(
