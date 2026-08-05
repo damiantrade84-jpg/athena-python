@@ -301,6 +301,9 @@ ENGINE_A_V3_MR_OPPOSITION_GUARD:
 # Reversible: set false to restore the directional behaviour.
 ENGINE_A_V3_LOCATION:
   TREND_TIMING_ONLY: true
+  # KELTNER_BLEND_WEIGHT rows removed 2026-08-05: the Keltner quality term
+  # (|close − mid|) was inverted vs this component's pullback-timing quality
+  # and opposed the fade in the mean-reversion regime (Tuning Lab audit).
 # Structural SL must be at least this many ATRs from entry (noise-stop floor).
 ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT: 0.35
 # Structural trend geometry (Engine A V3). Global defaults = historical contract
@@ -374,6 +377,23 @@ ENGINE_A_V3_MOMENTUM_BLEND:
   RSI_WEIGHT: 0.35
   DI_WEIGHT: 0.35
   MACD_SLOPE_WEIGHT: 0.30
+  # STOCH/CCI/WILLIAMS_R weights removed 2026-08-05: Williams %R is raw Stoch
+  # %K − 100 over the same window, all three duplicate RSI's bounded-oscillator
+  # shape, and their linear pro-extreme scoring rewarded max-overbought/oversold
+  # entries (Tuning Lab audit). ROC (ATR-scaled) is the surviving extra term.
+  BY_GROUP:
+    crypto_alt_majors: { ROC_WEIGHT: 0.0 }
+    crypto_btc: { ROC_WEIGHT: 0.0 }
+    crypto_other: { ROC_WEIGHT: 0.15 }
+    eu_indices: { ROC_WEIGHT: 0.1 }
+    forex_crosses: { ROC_WEIGHT: 0.15 }
+    forex_majors: { ROC_WEIGHT: 0.0 }
+    precious_trackers: { ROC_WEIGHT: 0.15 }
+
+ENGINE_A_V3_VOLUME_BLEND:
+  BY_GROUP:
+    crypto_other: { MFI_WEIGHT: 0.0 }
+    precious_trackers: { MFI_WEIGHT: 0.0 }
 
 # Per-component volatility sensitivity and adaptive structural TP2 sizing.
 ENGINE_A_V3_VOLATILITY_GATING:
@@ -415,6 +435,10 @@ ENGINE_A_QUANT_WEIGHTS_BY_GROUP:
   eu_indices: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
   asian_indices: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
   forex_exotics: { trend: 0.40, momentum: 0.26, location: 0.22, volume: 0.12 }
+  crypto_other: { trend: 0.36, momentum: 0.27, location: 0.18, volume: 0.19 }
+  forex_crosses: { volume: 0.0 }
+  forex_majors: { trend: 0.48, momentum: 0.30, location: 0.22, volume: 0.0 }
+  us_stock_single: { volume: 0.25 }
 
 # Per-TF candle freshness diagnostic (stalenessSeverity, bucketLag, etc.).
 # Always populated for production visibility (unlike candleMeta which is debug-only).
@@ -1985,13 +2009,14 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
 
   default: 1.5
 
-  # Forex
-  forex_majors: 2.1
+  # Forex. forex_majors 1.9 is the promoted Tuning Lab result; the previous
+  # tracked default was 2.1.
+  forex_majors: 1.9
   # forex_crosses 2.1 was effectively unreachable: 0/160 samples passed on the
   # frozen 2026-05-30 V3 score sweep (max 2.068, p90 1.823) while majors on the
   # same weights reached 2.62. 1.9 (2026-07-09, UNVALIDATED judgment value, not
-  # n>=30 outcome-backed) sits between exotics 1.7 and majors 2.1 and admits
-  # roughly the top ~5-8% of sampled scores. Reversible: reset to 2.1.
+  # n>=30 outcome-backed) admits roughly the top ~5-8% of sampled scores.
+  # Reversible: reset to 2.1.
   forex_crosses: 1.9
   forex_other: 2.1
   forex_exotics: 1.7
@@ -1999,7 +2024,7 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
   # Crypto
   crypto_btc: 2.0
   crypto_eth: 2.0
-  crypto_alt_majors: 2.0
+  crypto_alt_majors: 2.2  # Promoted Tuning Lab result; previous tracked default 2.0.
   crypto_doge: 2.0
   crypto_other: 2.2
 
@@ -4443,7 +4468,9 @@ TF_POLICY_UNDERLYING_EXCHANGE_CALENDARS: {}
 ENGINE_TF_ROLE_OVERRIDES:
   ENABLED: true
   BY_GROUP:
-    # Intraday: session-bound fast instruments confirm structure on H1.
+    # Intraday: session-bound fast instruments use their promoted Tuning Lab
+    # ladder; fast/cash-equity groups retain H1 structure while standard
+    # indices and single stocks use the tested H4 structure/setup.
     # Swing: D1 structure + H4 setup + H1 trigger.
     equity_index_fast:
       intraday:
@@ -4458,8 +4485,10 @@ ENGINE_TF_ROLE_OVERRIDES:
         trigger: H1
     equity_index_standard:
       intraday:
-        structure: H1
-        setup: M30
+        regime: D1
+        bias: H4
+        structure: H4
+        setup: H4
         trigger: M15
       swing:
         regime: D1
@@ -4469,8 +4498,10 @@ ENGINE_TF_ROLE_OVERRIDES:
         trigger: H1
     us_stock_single:
       intraday:
-        structure: H1
-        setup: M30
+        regime: D1
+        bias: H4
+        structure: H4
+        setup: H4
         trigger: M15
       swing:
         regime: D1
@@ -4551,6 +4582,12 @@ ENGINE_TF_ROLE_OVERRIDES:
     # Swing: D1 structure + H4 setup + H1 trigger for the remaining policy
     # groups (D1 regime/bias/structure satisfies the slower-to-faster ladder).
     forex_majors_standard:
+      intraday:
+        regime: D1
+        bias: H4
+        structure: H4
+        setup: H4
+        trigger: M15
       swing:
         regime: D1
         bias: D1
@@ -4565,6 +4602,12 @@ ENGINE_TF_ROLE_OVERRIDES:
         setup: H4
         trigger: H1
     forex_crosses_broad:
+      intraday:
+        regime: D1
+        bias: H4
+        structure: H4
+        setup: H4
+        trigger: M15
       swing:
         regime: D1
         bias: D1
@@ -4586,6 +4629,12 @@ ENGINE_TF_ROLE_OVERRIDES:
         setup: H4
         trigger: H1
     liquid_metals:
+      intraday:
+        regime: H4
+        bias: H4
+        structure: H4
+        setup: H1
+        trigger: M15
       swing:
         regime: D1
         bias: D1
@@ -4593,6 +4642,12 @@ ENGINE_TF_ROLE_OVERRIDES:
         setup: H4
         trigger: H1
     crypto_majors_fast:
+      intraday:
+        regime: D1
+        bias: H4
+        structure: H4
+        setup: H4
+        trigger: M15
       swing:
         regime: D1
         bias: D1
@@ -4600,6 +4655,12 @@ ENGINE_TF_ROLE_OVERRIDES:
         setup: H4
         trigger: H1
     crypto_alt_majors:
+      intraday:
+        regime: D1
+        bias: H4
+        structure: H4
+        setup: H4
+        trigger: M15
       swing:
         regime: D1
         bias: D1
@@ -4607,6 +4668,12 @@ ENGINE_TF_ROLE_OVERRIDES:
         setup: H4
         trigger: H1
     crypto_other_thin:
+      intraday:
+        regime: D1
+        bias: H4
+        structure: H4
+        setup: H4
+        trigger: M15
       swing:
         regime: D1
         bias: D1

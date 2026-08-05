@@ -15,7 +15,6 @@ that already exists and is already read by live scoring:
                           the same-named keys under NAKED_ENGINE.score_group_overrides
                           have no consumer and are inert)
 - New indicator terms  -> ``ENGINE_A_V3_MOMENTUM_BLEND.BY_GROUP`` /
-                          ``ENGINE_A_V3_LOCATION.BY_GROUP`` /
                           ``ENGINE_A_V3_VOLUME_BLEND.BY_GROUP`` /
                           ``ENGINE_B_WEIGHTED_SCORING.COMPONENT_WEIGHTS_BY_GROUP``
                           (engine_a_v3/quant_scorer.py::_group_scoped_blend_weight,
@@ -211,46 +210,14 @@ def _engine_b_gate_knobs() -> list[Knob]:
 
 def _indicator_knobs() -> list[Knob]:
     return [
-        Knob(
-            id="indicator.momentum.stoch_weight",
-            label="Stochastic (momentum blend)",
-            applies_to=("A",),
-            kind="float",
-            config_path=("ENGINE_A_V3_MOMENTUM_BLEND", "BY_GROUP", "{group}", "STOCH_WEIGHT"),
-            scope="group",
-            default=0.0,
-            minimum=0.0,
-            maximum=1.0,
-            description=(
-                "Adds a Stochastic %K term to Engine A's momentum blend, alongside "
-                "the existing RSI/DI/MACD terms. Scoped to this score group only — "
-                "every other group keeps today's exact momentum scoring."
-            ),
-        ),
-        Knob(
-            id="indicator.momentum.cci_weight",
-            label="CCI (momentum blend)",
-            applies_to=("A",),
-            kind="float",
-            config_path=("ENGINE_A_V3_MOMENTUM_BLEND", "BY_GROUP", "{group}", "CCI_WEIGHT"),
-            scope="group",
-            default=0.0,
-            minimum=0.0,
-            maximum=1.0,
-            description="Adds a Commodity Channel Index term to Engine A's momentum blend, scoped to this score group only.",
-        ),
-        Knob(
-            id="indicator.momentum.williams_r_weight",
-            label="Williams %R (momentum blend)",
-            applies_to=("A",),
-            kind="float",
-            config_path=("ENGINE_A_V3_MOMENTUM_BLEND", "BY_GROUP", "{group}", "WILLIAMS_R_WEIGHT"),
-            scope="group",
-            default=0.0,
-            minimum=0.0,
-            maximum=1.0,
-            description="Adds a Williams %R term to Engine A's momentum blend, scoped to this score group only.",
-        ),
+        # Stochastic/CCI/Williams %R momentum knobs and the Keltner location
+        # knob were removed 2026-08-05: W%R is raw Stoch %K − 100 (same window),
+        # both duplicate RSI's bounded-oscillator signal shape, and all three
+        # scored linearly pro-extreme in a direction-credited blend — rewarding
+        # entries at max overbought/oversold. The Keltner quality term
+        # (|close − mid|) was inverted vs the location component's pullback-
+        # timing quality (peaks near EMA). ROC and MFI carry distinct
+        # information and remain.
         Knob(
             id="indicator.momentum.roc_weight",
             label="Rate of Change (momentum blend)",
@@ -262,22 +229,6 @@ def _indicator_knobs() -> list[Knob]:
             minimum=0.0,
             maximum=1.0,
             description="Adds a Rate-of-Change term to Engine A's momentum blend, scoped to this score group only.",
-        ),
-        Knob(
-            id="indicator.location.keltner_weight",
-            label="Keltner Channel (location blend)",
-            applies_to=("A",),
-            kind="float",
-            config_path=("ENGINE_A_V3_LOCATION", "BY_GROUP", "{group}", "KELTNER_BLEND_WEIGHT"),
-            scope="group",
-            default=0.0,
-            minimum=0.0,
-            maximum=1.0,
-            description=(
-                "Blends a Keltner-channel position term into Engine A's location "
-                "component, alongside the existing EMA-distance/Bollinger logic. "
-                "Scoped to this score group only."
-            ),
         ),
         Knob(
             id="indicator.volume.mfi_weight",

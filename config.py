@@ -2060,14 +2060,13 @@ CONFIG: dict = {
         "RSI_WEIGHT": 0.35,
         "DI_WEIGHT": 0.35,
         "MACD_SLOPE_WEIGHT": 0.30,
-        # Tuning Lab (athena_experiment) extra indicator terms. Default 0.0 —
+        # Tuning Lab (athena_experiment) extra indicator term. Default 0.0 —
         # inert until a group's config.local.yaml (via the Tuning Lab "push to
-        # default" action) explicitly weights one in. BY_GROUP overrides these
+        # default" action) explicitly weights it in. BY_GROUP overrides this
         # per score_group (see _group_scoped_blend_weight); a group absent
         # from BY_GROUP falls back to the flat value above, unchanged.
-        "STOCH_WEIGHT": 0.0,
-        "CCI_WEIGHT": 0.0,
-        "WILLIAMS_R_WEIGHT": 0.0,
+        # STOCH/CCI/WILLIAMS_R weights were removed 2026-08-05 (redundant with
+        # RSI and scored pro-extreme; see engine_a_v3/quant_scorer.py).
         "ROC_WEIGHT": 0.0,
         "BY_GROUP": {},
     },
@@ -2079,14 +2078,12 @@ CONFIG: dict = {
         "BY_GROUP": {},
     },
     # ENGINE_A_V3_LOCATION.TREND_TIMING_ONLY defaults True even when this key is
-    # absent (see engine_a_v3/quant_scorer.py::_location_trend_timing_only);
-    # KELTNER_BLEND_WEIGHT is the Tuning Lab optional location-blend term,
-    # default 0.0 — inert (see _blend_keltner_location). BY_GROUP is a
-    # per-score_group override, falling back to KELTNER_BLEND_WEIGHT above.
+    # absent (see engine_a_v3/quant_scorer.py::_location_trend_timing_only).
+    # The Tuning Lab KELTNER_BLEND_WEIGHT term was removed 2026-08-05: its
+    # quality (|close − mid|) was inverted vs the location component's
+    # pullback-timing quality, and it opposed the fade in the MR regime.
     "ENGINE_A_V3_LOCATION": {
         "TREND_TIMING_ONLY": True,
-        "KELTNER_BLEND_WEIGHT": 0.0,
-        "BY_GROUP": {},
     },
     "ENGINE_A_V3_VOLATILITY_GATING": {
         "ENABLED": True,

@@ -1,12 +1,17 @@
 """Tuning Lab (athena_experiment) indicator tests.
 
-Two things get proven here:
-1. The new pure indicator math (calc_cci/calc_williams_r/calc_roc/calc_mfi/
-   calc_keltner) matches hand-computed reference values.
-2. Wiring the new terms into Engine A's momentum/location/volume components and
-   Engine B's confluence subscores is default-inert: with no config override,
-   scoring output is unchanged whether or not the new snapshot fields are
-   present, because every new blend weight defaults to 0.0.
+Three things get proven here:
+1. The pure indicator math (calc_cci/calc_williams_r/calc_roc/calc_mfi/
+   calc_keltner) matches hand-computed reference values. These functions remain
+   consumed by Engine B's momentum_oscillator_confluence subscore and the
+   snapshot plumbing even though the Engine A blend terms below were removed.
+2. The surviving Engine A blend terms (ROC, MFI) are default-inert: with no
+   config override, scoring output is unchanged whether or not the new
+   snapshot fields are present, because their weights default to 0.0.
+3. The removed Engine A blend terms (Stoch/CCI/Williams %R in momentum,
+   Keltner in location — deleted 2026-08-05 as redundant-with-RSI /
+   inverted-vs-timing-quality) stay gone: even an explicitly configured
+   weight must not change scoring output.
 """
 
 from __future__ import annotations
@@ -74,13 +79,26 @@ def test_calc_keltner_bands_symmetric_around_ema():
 
 
 # ── Engine A default-inert guarantees ──────────────────────────────────────
-def test_momentum_component_ignores_extra_indicators_by_default(monkeypatch):
+def test_momentum_component_ignores_extra_indicators_even_when_weighted(monkeypatch):
+    """Stoch/CCI/Williams %R terms were removed from the momentum blend; a
+    configured weight (e.g. a stale config.local.yaml row) must be a no-op.
+    ROC survives but defaults to 0.0, so it must also contribute nothing here.
+    """
     from config import CONFIG
 
     monkeypatch.setitem(
         CONFIG,
         "ENGINE_A_V3_MOMENTUM_BLEND",
-        {"ENABLED": True, "RSI_WEIGHT": 0.35, "DI_WEIGHT": 0.35, "MACD_SLOPE_WEIGHT": 0.30, "BY_GROUP": {}},
+        {
+            "ENABLED": True,
+            "RSI_WEIGHT": 0.35,
+            "DI_WEIGHT": 0.35,
+            "MACD_SLOPE_WEIGHT": 0.30,
+            "STOCH_WEIGHT": 1.0,
+            "CCI_WEIGHT": 1.0,
+            "WILLIAMS_R_WEIGHT": 1.0,
+            "BY_GROUP": {"forex_majors": {"STOCH_WEIGHT": 1.0, "CCI_WEIGHT": 1.0, "WILLIAMS_R_WEIGHT": 1.0}},
+        },
     )
     base_snap = {
         "rsi": 62.0,
@@ -95,21 +113,26 @@ def test_momentum_component_ignores_extra_indicators_by_default(monkeypatch):
     extra_comp, extra_diag = _momentum_component(extra_snap, "forex", "forex_majors")
     assert extra_comp.signal == pytest.approx(base_comp.signal)
     assert extra_comp.quality == pytest.approx(base_comp.quality)
-    # The terms are computed as None/absent in diagnostics since the
-    # corresponding *_WEIGHT config defaults to 0.0 (blend loop is skipped).
     assert extra_diag.get("stochTerm") is None
     assert extra_diag.get("cciTerm") is None
     assert extra_diag.get("williamsRTerm") is None
+    # ROC remains a supported term but its weight defaults to 0.0.
     assert extra_diag.get("rocTerm") is None
 
 
-def test_location_component_ignores_keltner_by_default(monkeypatch):
+def test_location_component_ignores_keltner_even_when_weighted(monkeypatch):
+    """The Keltner location blend was removed; a configured weight (e.g. a
+    stale config.local.yaml row) must be a no-op."""
     from config import CONFIG
 
     monkeypatch.setitem(
         CONFIG,
         "ENGINE_A_V3_LOCATION",
-        {"TREND_TIMING_ONLY": True, "KELTNER_BLEND_WEIGHT": 0.0, "BY_GROUP": {}},
+        {
+            "TREND_TIMING_ONLY": True,
+            "KELTNER_BLEND_WEIGHT": 1.0,
+            "BY_GROUP": {"forex_majors": {"KELTNER_BLEND_WEIGHT": 1.0}},
+        },
     )
     base_snap = {"close": 101.0, "ema21": 100.0, "atr": 2.0, "adx": 25.0}
     extra_snap = dict(base_snap, keltnerUpper=110.0, keltnerMid=100.0, keltnerLower=90.0)

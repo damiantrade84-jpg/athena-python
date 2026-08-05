@@ -596,19 +596,19 @@ def _momentum_component(
         "rsiTerm": None,
         "diTerm": None,
         "macdSlopeTerm": None,
-        "stochTerm": None,
-        "cciTerm": None,
-        "williamsRTerm": None,
         "rocTerm": None,
     }
     if not snap:
         return Component(0.0, 0.0), diag
 
     rsi_w, di_w, macd_w = 0.35, 0.35, 0.30
-    # Tuning Lab (athena_experiment) extra momentum indicators. Default 0.0 —
-    # inert unless a group's config.local.yaml explicitly weights one in, so
-    # existing scoring is unaffected until a tested variant is pushed live.
-    stoch_w = cci_w = williams_r_w = roc_w = 0.0
+    # Tuning Lab (athena_experiment) extra momentum indicator: ROC. Default
+    # 0.0 — inert unless a group's config.local.yaml explicitly weights it in.
+    # Stoch/CCI/Williams %R terms were removed 2026-08-05: W%R is raw Stoch %K
+    # − 100 over the same window, all three duplicate RSI's bounded-oscillator
+    # shape, and their linear pro-extreme scoring rewarded entries at maximum
+    # overbought/oversold in a direction-credited blend.
+    roc_w = 0.0
     if _momentum_blend_enabled():
         try:
             from config import CONFIG
@@ -617,9 +617,6 @@ def _momentum_component(
             rsi_w = float(cfg.get("RSI_WEIGHT", 0.35))
             di_w = float(cfg.get("DI_WEIGHT", 0.35))
             macd_w = float(cfg.get("MACD_SLOPE_WEIGHT", 0.30))
-            stoch_w = _group_scoped_blend_weight(cfg, score_group, "STOCH_WEIGHT", 0.0)
-            cci_w = _group_scoped_blend_weight(cfg, score_group, "CCI_WEIGHT", 0.0)
-            williams_r_w = _group_scoped_blend_weight(cfg, score_group, "WILLIAMS_R_WEIGHT", 0.0)
             roc_w = _group_scoped_blend_weight(cfg, score_group, "ROC_WEIGHT", 0.0)
         except Exception:
             pass
@@ -685,37 +682,10 @@ def _momentum_component(
         quality_terms.append(_clamp01(abs(macd_term)))
         diag["macdSlopeTerm"] = round(macd_term, 4)
 
-    # ── Tuning Lab extra momentum terms (Stochastic/CCI/Williams %R/ROC) ────
-    # Each is inert unless its *_WEIGHT is configured > 0 (see resolution above),
-    # so with no config change this loop contributes nothing and `signal` below
-    # is bit-for-bit the pre-existing RSI/DI/MACD blend.
-    if stoch_w > 0:
-        stoch_k = _f(snap.get("stochK"))
-        if stoch_k is not None:
-            stoch_term = _clamp((stoch_k - 50.0) / 40.0, -1.0, 1.0)
-            weighted_signal += stoch_w * stoch_term
-            weight_total += stoch_w
-            quality_terms.append(_clamp01(abs(stoch_k - 50.0) / 40.0))
-            diag["stochTerm"] = round(stoch_term, 4)
-
-    if cci_w > 0:
-        cci = _f(snap.get("cci"))
-        if cci is not None:
-            cci_term = _clamp(cci / 150.0, -1.0, 1.0)
-            weighted_signal += cci_w * cci_term
-            weight_total += cci_w
-            quality_terms.append(_clamp01(abs(cci) / 150.0))
-            diag["cciTerm"] = round(cci_term, 4)
-
-    if williams_r_w > 0:
-        williams_r = _f(snap.get("williamsR"))
-        if williams_r is not None:
-            williams_r_term = _clamp((williams_r + 50.0) / 40.0, -1.0, 1.0)
-            weighted_signal += williams_r_w * williams_r_term
-            weight_total += williams_r_w
-            quality_terms.append(_clamp01(abs(williams_r + 50.0) / 40.0))
-            diag["williamsRTerm"] = round(williams_r_term, 4)
-
+    # ── Tuning Lab extra momentum term (ROC) ────────────────────────────────
+    # Inert unless ROC_WEIGHT is configured > 0 (see resolution above), so with
+    # no config change this block contributes nothing and `signal` below is
+    # bit-for-bit the pre-existing RSI/DI/MACD blend.
     if roc_w > 0:
         roc = _f(snap.get("roc"))
         if roc is not None:
@@ -887,7 +857,6 @@ def _location_component(
         # Range fade: signal opposite to the stretch; quality scales with stretch.
         signal = -1.0 if (bb_u is not None and close > bb_u) else 1.0
         quality = _clamp01(abs(dist) / 3.0)
-        signal, quality = _blend_keltner_location(snap, close, signal, quality, score_group)
         return Component(signal, quality), "mean_reversion"
 
     # Trend timing: quality peaks near the EMA, decays with extension. The
@@ -899,46 +868,9 @@ def _location_component(
     extension = abs(dist)
     quality = _clamp01(1.0 - max(0.0, extension - 0.5) / 3.0)
     signal = _clamp(dist / 2.0, -0.5, 0.5)  # mild directional bias only
-    signal, quality = _blend_keltner_location(snap, close, signal, quality, score_group)
     if _location_trend_timing_only():
         return Component(signal, quality, directional=False), "trend"
     return Component(signal, quality), "trend"
-
-
-def _blend_keltner_location(
-    snap: Mapping[str, Any], close: float | None, signal: float, quality: float, score_group: str
-) -> tuple[float, float]:
-    """Tuning Lab optional Keltner-channel location term.
-
-    Inert unless ``ENGINE_A_V3_LOCATION.KELTNER_BLEND_WEIGHT`` (or a per-group
-    override under ``ENGINE_A_V3_LOCATION.BY_GROUP.<score_group>``) is
-    configured > 0 (default 0.0) — with no config change this returns
-    (signal, quality) unmodified, i.e. the pre-existing EMA-distance/
-    Bollinger location score.
-    """
-    try:
-        from config import CONFIG
-
-        cfg = CONFIG.get("ENGINE_A_V3_LOCATION") or {}
-        weight = _group_scoped_blend_weight(cfg, score_group, "KELTNER_BLEND_WEIGHT", 0.0)
-    except Exception:
-        weight = 0.0
-    if weight <= 0.0 or close is None:
-        return signal, quality
-    upper = _f(snap.get("keltnerUpper"))
-    mid = _f(snap.get("keltnerMid"))
-    lower = _f(snap.get("keltnerLower"))
-    if upper is None or mid is None or lower is None:
-        return signal, quality
-    half_width = ((upper - mid) + (mid - lower)) / 2.0
-    if half_width <= 0:
-        return signal, quality
-    keltner_dist = _clamp((close - mid) / half_width, -1.0, 1.0)
-    keltner_quality = _clamp01(abs(keltner_dist))
-    weight = _clamp01(weight)
-    blended_signal = _clamp((1.0 - weight) * signal + weight * keltner_dist, -1.0, 1.0)
-    blended_quality = _clamp01((1.0 - weight) * quality + weight * keltner_quality)
-    return blended_signal, blended_quality
 
 
 # ── volatility regime (per-component quality multipliers) ────────────────────

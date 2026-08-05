@@ -506,7 +506,9 @@ def test_unavailable_volume_does_not_inflate_confluence(monkeypatch):
         score_group=base.score_group,
         horizon=base.horizon,
         indicator_periods=dict(base.indicator_periods),
-        weights=dict(base.weights),
+        # This test exercises unavailable-component accounting, so keep a
+        # non-zero volume premise independent of tuned live group weights.
+        weights={"trend": 0.42, "momentum": 0.28, "location": 0.21, "volume": 0.09},
         direction_deadband=0.01,
         trade_threshold=0.1,
         exit_policy="SINGLE_TP1",
@@ -796,15 +798,8 @@ def test_trend_mode_location_credits_pullback_and_extension_equally():
     assert pullback.quality == pytest.approx(extension.quality)
 
 
-def test_location_uses_live_price_against_confirmed_setup_indicators(monkeypatch):
+def test_location_uses_live_price_against_confirmed_setup_indicators():
     """A slow setup rung must not freeze location at its confirmed close."""
-    import engine_a_v3.quant_scorer as qs
-
-    monkeypatch.setattr(
-        qs,
-        "_blend_keltner_location",
-        lambda _snap, _price, signal, quality, _group: (signal, quality),
-    )
     confirmed = {
         "close": 100.0,
         "ema21": 100.0,
@@ -886,7 +881,20 @@ def test_max_attainable_score_reports_unavailable_components(monkeypatch):
         qs, "_volume_component", lambda *a, **k: Component(0.0, 0.0, available=False)
     )
     route = route_specialist({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"})
-    quant = score_pair(route, "intraday", _candles())
+    base = baseline_profile("forex_majors", "intraday")
+    profile = EngineAV3Profile.create(
+        score_group=base.score_group,
+        horizon=base.horizon,
+        indicator_periods=dict(base.indicator_periods),
+        # Keep this test's missing-volume premise stable when Tuning Lab sets
+        # the production forex-major volume weight to zero.
+        weights={"trend": 0.42, "momentum": 0.28, "location": 0.21, "volume": 0.09},
+        direction_deadband=base.direction_deadband,
+        trade_threshold=base.trade_threshold,
+        exit_policy=base.exit_policy,
+        status=base.status,
+    )
+    quant = score_pair(route, "intraday", _candles(), profile=profile)
 
     diag = quant.factor_diagnostics
     assert "volume" in (diag.get("unavailableComponents") or [])

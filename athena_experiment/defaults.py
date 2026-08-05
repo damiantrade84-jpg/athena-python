@@ -147,14 +147,9 @@ def _engine_a_indicator_values(group: str) -> dict[str, Any]:
     from engine_a_v3.quant_scorer import _group_scoped_blend_weight
 
     momentum_cfg = CONFIG.get("ENGINE_A_V3_MOMENTUM_BLEND") or {}
-    location_cfg = CONFIG.get("ENGINE_A_V3_LOCATION") or {}
     volume_cfg = CONFIG.get("ENGINE_A_V3_VOLUME_BLEND") or {}
     return {
-        "indicator.momentum.stoch_weight": _group_scoped_blend_weight(momentum_cfg, group, "STOCH_WEIGHT", 0.0),
-        "indicator.momentum.cci_weight": _group_scoped_blend_weight(momentum_cfg, group, "CCI_WEIGHT", 0.0),
-        "indicator.momentum.williams_r_weight": _group_scoped_blend_weight(momentum_cfg, group, "WILLIAMS_R_WEIGHT", 0.0),
         "indicator.momentum.roc_weight": _group_scoped_blend_weight(momentum_cfg, group, "ROC_WEIGHT", 0.0),
-        "indicator.location.keltner_weight": _group_scoped_blend_weight(location_cfg, group, "KELTNER_BLEND_WEIGHT", 0.0),
         "indicator.volume.mfi_weight": _group_scoped_blend_weight(volume_cfg, group, "MFI_WEIGHT", 0.0),
     }
 

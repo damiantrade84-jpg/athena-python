@@ -1,7 +1,7 @@
 /**
  * Tuning Lab — separate from Backtest V3. Lets an operator tune Engine A/B
  * timeframe roles, per-group weights/thresholds, Engine B gate overrides, and
- * a set of new indicators (Stochastic, CCI, Williams %R, ROC, MFI, Keltner)
+ * a set of new indicators (ROC, MFI; Engine B oscillator confluence)
  * for one pair, run a frozen-candle A/B comparison against current default
  * scoring, and — only on explicit confirmation — push an improvement into
  * config.local.yaml. Uses /api/experiment/* only; does not touch /api/v3/*.
@@ -405,8 +405,8 @@ function ExperimentLabPanel() {
               </Badge>
             </div>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              Tune timeframe roles, weights/thresholds, and new indicators (Stochastic, CCI, Williams %R,
-              ROC, MFI, Keltner) for one pair, run it against frozen candles, and compare to today's default
+              Tune timeframe roles, weights/thresholds, and new indicators (ROC, MFI) for one pair,
+              run it against frozen candles, and compare to today's default
               before pushing anything live. Uses /api/experiment/* only.
             </p>
           </div>

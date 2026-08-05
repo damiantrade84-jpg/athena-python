@@ -29,7 +29,7 @@ def test_defaults_ignores_asset_filter_group_and_resolves_pair_score_group(monke
 
     def fake_resolve(engine, pair, group, style):
         captured.update(engine=engine, pair=pair, group=group, style=style)
-        return {"indicator.momentum.stoch_weight": 0.0}
+        return {"indicator.momentum.roc_weight": 0.0}
 
     monkeypatch.setattr(experiment_defaults, "resolve_current_values", fake_resolve)
 
@@ -70,7 +70,7 @@ def test_run_builds_overlay_for_canonical_pair_group_and_echoes_tested_knobs(mon
         }
 
     monkeypatch.setattr(experiment_api, "run_worker_subprocess", fake_run)
-    knobs = {"indicator.momentum.stoch_weight": 1.0}
+    knobs = {"indicator.momentum.roc_weight": 1.0}
 
     response = _client().post(
         "/api/experiment/run",
@@ -90,7 +90,7 @@ def test_run_builds_overlay_for_canonical_pair_group_and_echoes_tested_knobs(mon
     assert payload["knobs"] == knobs
     assert captured["overlay"] == {
         "ENGINE_A_V3_MOMENTUM_BLEND": {
-            "BY_GROUP": {"forex_majors": {"STOCH_WEIGHT": 1.0}}
+            "BY_GROUP": {"forex_majors": {"ROC_WEIGHT": 1.0}}
         }
     }
 
@@ -148,7 +148,7 @@ def test_push_rejects_mismatched_group_and_writes_canonical_tested_group(monkeyp
         "symbol": "EURUSD",
         "style": "intraday",
         "confirm": True,
-        "knobs": {"indicator.momentum.stoch_weight": 0.5},
+        "knobs": {"indicator.momentum.roc_weight": 0.5},
     }
 
     mismatch = _client().post(
@@ -169,7 +169,7 @@ def test_push_rejects_mismatched_group_and_writes_canonical_tested_group(monkeyp
     assert writes == [
         {
             "ENGINE_A_V3_MOMENTUM_BLEND": {
-                "BY_GROUP": {"forex_majors": {"STOCH_WEIGHT": 0.5}}
+                "BY_GROUP": {"forex_majors": {"ROC_WEIGHT": 0.5}}
             }
         }
     ]
