@@ -26,6 +26,7 @@ def run_experiment_worker(
     style: str,
     overlay: dict[str, Any],
     n_trials_hint: int = 1,
+    replay_days: int | None = None,
 ) -> dict[str, Any]:
     """Run the same pair through Engine A/B twice: once with today's real
     config (baseline), once with ``overlay`` deep-merged on top (variant).
@@ -55,17 +56,30 @@ def run_experiment_worker(
     engine_u = str(engine).upper()
     style_l = str(style).lower()
 
-    baseline = run_pair(
-        pair, engine=engine_u, horizon=style_l, store=store, n_trials_hint=n_trials_hint
-    )
-
     from config import CONFIG
 
     # Snapshot before mutating so this function is safe to call more than once
     # in the same process (e.g. a script driving several experiments back to
     # back): without restoring afterward, a second call's "baseline" would
     # silently inherit the first call's overlay.
-    pristine = dict(CONFIG) if overlay else None
+    pristine = dict(CONFIG) if (overlay or replay_days) else None
+
+    # Engine B lookback cap: bound the bar-by-bar replay window for BOTH runs.
+    # The comparison stays apples-to-apples (identical window on both sides);
+    # without a cap one Engine B test replays ENGINE_B_BT_MAX_REPLAY_DAYS
+    # (default 180) of trigger bars twice and can run for many minutes.
+    applied_replay_days: int | None = None
+    if replay_days and engine_u == "B":
+        asset_key = str(pair.get("type") or pair.get("asset_type") or "").strip().lower()
+        days_cfg = dict(CONFIG.get("ENGINE_B_BT_MAX_REPLAY_DAYS") or {})
+        days_cfg[asset_key] = int(replay_days)
+        CONFIG["ENGINE_B_BT_MAX_REPLAY_DAYS"] = days_cfg
+        applied_replay_days = int(replay_days)
+
+    baseline = run_pair(
+        pair, engine=engine_u, horizon=style_l, store=store, n_trials_hint=n_trials_hint
+    )
+
     if overlay:
         merged = apply_overlay(CONFIG, overlay)
         # In-place mutation of the same dict object every already-imported
@@ -95,4 +109,5 @@ def run_experiment_worker(
         "baseline": baseline,
         "variant": variant,
         "overlayApplied": overlay,
+        "replayDays": applied_replay_days,
     }

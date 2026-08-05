@@ -53,7 +53,7 @@ def test_defaults_ignores_asset_filter_group_and_resolves_pair_score_group(monke
 def test_run_builds_overlay_for_canonical_pair_group_and_echoes_tested_knobs(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_run(symbol, engine, style, overlay, timeout_sec):
+    def fake_run(symbol, engine, style, overlay, timeout_sec, replay_days=None):
         captured.update(
             symbol=symbol,
             engine=engine,
@@ -98,7 +98,7 @@ def test_run_builds_overlay_for_canonical_pair_group_and_echoes_tested_knobs(mon
 def test_engine_b_run_uses_the_same_canonical_pair_group(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_run(symbol, engine, style, overlay, timeout_sec):
+    def fake_run(symbol, engine, style, overlay, timeout_sec, replay_days=None):
         captured.update(engine=engine, overlay=overlay)
         return {
             "symbol": "EURUSD",
@@ -231,13 +231,62 @@ def test_engine_b_gate_defaults_resolve_clamps_from_consumed_surface(monkeypatch
     monkeypatch.setitem(CONFIG, "ENGINE_B_MAX_SL_ATR_DEFAULT", 3.0)
     monkeypatch.setitem(CONFIG, "NAKED_ENGINE", {})
 
-    values = experiment_defaults._engine_b_gate_values("forex_majors", "intraday")
+    values = experiment_defaults._engine_b_gate_values(_EURUSD, "forex_majors", "intraday")
 
     assert values["engine_b.gate.min_sl_atr"] == 0.9
     assert values["engine_b.gate.max_sl_atr"] == 3.0
-    # Profile-style gates still come from NAKED_ENGINE.score_group_overrides
-    # (None = "no override" for the UI).
-    assert values["engine_b.gate.min_rr"] is None
+    # Numeric gates resolve through the live style profile (shipped intraday
+    # defaults from engine_b_snapshot) — real numbers, not "no override".
+    assert values["engine_b.gate.min_rr"] == 1.2
+    assert values["engine_b.gate.min_score"] == 4.0
+    assert values["engine_b.gate.min_room_atr"] == 0.7
+    assert values["engine_b.gate.macro_required"] is False
+
+
+def test_engine_b_gate_defaults_layer_group_style_override_over_profile(monkeypatch):
+    """An explicit score_group_overrides row must win over the style-profile
+    default — that merged value is what the UI shows as currently live."""
+    from config import CONFIG
+    import athena_experiment.defaults as experiment_defaults
+
+    monkeypatch.setitem(
+        CONFIG,
+        "NAKED_ENGINE",
+        {"score_group_overrides": {"forex_majors": {"intraday": {"min_rr": 1.5, "macro_required": True}}}},
+    )
+
+    values = experiment_defaults._engine_b_gate_values(_EURUSD, "forex_majors", "intraday")
+
+    assert values["engine_b.gate.min_rr"] == 1.5
+    assert values["engine_b.gate.macro_required"] is True
+    # Untouched fields still show the style-profile default.
+    assert values["engine_b.gate.min_score"] == 4.0
+
+
+def test_engine_b_run_passes_replay_days_to_worker_and_validates_range(monkeypatch):
+    """The UI lookback select caps the Engine B replay window; both runs share
+    it, so the A/B stays fair. Out-of-range values are rejected before the
+    worker starts."""
+    captured: dict[str, object] = {}
+
+    def fake_run(symbol, engine, style, overlay, timeout_sec, replay_days=None):
+        captured["replay_days"] = replay_days
+        return {"symbol": "EURUSD", "pair": "EUR/USD", "baseline": {}, "variant": {}}
+
+    monkeypatch.setattr(experiment_api, "run_worker_subprocess", fake_run)
+
+    ok = _client().post(
+        "/api/experiment/run",
+        json={"engine": "B", "symbol": "EURUSD", "replayDays": 60, "overlay": {}},
+    )
+    assert ok.status_code == 200
+    assert captured["replay_days"] == 60
+
+    bad = _client().post(
+        "/api/experiment/run",
+        json={"engine": "B", "symbol": "EURUSD", "replayDays": 10, "overlay": {}},
+    )
+    assert bad.status_code == 422
 
 
 def test_engine_b_min_score_rejects_implausible_values():
@@ -258,7 +307,7 @@ def test_engine_b_run_uses_the_extended_timeout(monkeypatch):
     per-engine timeout to the worker subprocess."""
     captured: dict[str, object] = {}
 
-    def fake_run(symbol, engine, style, overlay, timeout_sec):
+    def fake_run(symbol, engine, style, overlay, timeout_sec, replay_days=None):
         captured["timeout_sec"] = timeout_sec
         return {
             "symbol": "EURUSD",

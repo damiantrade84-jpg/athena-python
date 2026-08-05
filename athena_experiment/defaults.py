@@ -12,21 +12,21 @@ every value below is read through the exact resolver live scoring uses:
 - Engine A weights     -> engine_a_v3.profile._resolved_weights (same call
                           EngineAV3Profile.create makes)
 - Engine A threshold   -> engine_a_v3.profile._resolved_trade_threshold
-- Engine B gates       -> NAKED_ENGINE.score_group_overrides[group][style]
-                          (returns null when unset -- there is no single
-                          "default" number without a live style profile, so
-                          the UI must show "no override" rather than a guess).
-                          The two SL-width clamps (min_sl_atr / max_sl_atr) are
-                          the exception: they resolve from
-                          ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES[group]
+- Engine B gates       -> engine_b_snapshot.resolve_engine_b_style_profile (the
+                          exact resolver live scoring uses, which merges
+                          NAKED_ENGINE.score_group_overrides[group][style] over
+                          the style profile), so the UI shows the real live
+                          numbers/bools. space_rr_substitute stays null when
+                          unset (the global asset-scoped flag decides there).
+                          The two SL-width clamps (min_sl_atr / max_sl_atr)
+                          resolve from ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES[group]
                           with the global ENGINE_B_MIN/MAX_SL_ATR_DEFAULT
                           fallback, so the UI shows the genuinely live clamp.
 - Indicator weights    -> engine_a_v3.quant_scorer._group_scoped_blend_weight /
                           engine_b_quality.weighted_scoring_config_for_group
                           (same per-group-with-global-fallback resolution the
-                          scoring core itself uses; today every one of them is
-                          genuinely 0.0 because none of these keys exist in
-                          config.yaml/config.local.yaml yet, at any group)
+                          scoring core itself uses; groups an operator has not
+                          tuned fall back to the process-wide value, 0.0)
 """
 
 from __future__ import annotations
@@ -44,24 +44,59 @@ def _engine_a_weight_and_threshold_values(group: str) -> dict[str, Any]:
     return values
 
 
-def _engine_b_gate_values(group: str, style: str) -> dict[str, Any]:
-    from config import CONFIG
+def _engine_b_gate_values(pair: Mapping[str, Any], group: str, style: str) -> dict[str, Any]:
+    """Currently live Engine B gate values for this (group, style, pair).
 
-    fields = (
-        "min_score", "min_rr", "min_room_atr",
-        "space_rr_substitute", "profile_trusted", "macro_required",
-    )
-    naked_engine = CONFIG.get("NAKED_ENGINE")
-    overrides: Mapping[str, Any] = {}
-    if isinstance(naked_engine, Mapping):
-        group_overrides = naked_engine.get("score_group_overrides")
-        if isinstance(group_overrides, Mapping):
-            group_row = group_overrides.get(str(group or "").strip().lower())
-            if isinstance(group_row, Mapping):
-                style_row = group_row.get(str(style or "").strip().lower())
-                if isinstance(style_row, Mapping):
-                    overrides = style_row
-    values = {f"engine_b.gate.{field}": overrides.get(field) for field in fields}
+    Resolved through the exact style-profile resolver live scoring uses
+    (engine_b_snapshot.resolve_engine_b_style_profile), which already merges
+    NAKED_ENGINE.score_group_overrides[group][style] over the style profile —
+    so the UI shows the real numbers/bools scoring runs on today, not a bare
+    "no override" placeholder.
+    """
+    from config import CONFIG
+    from engine_b_snapshot import resolve_engine_b_style_profile
+
+    asset_type = str(pair.get("type") or pair.get("asset_type") or "")
+    symbol = str(pair.get("display") or pair.get("symbol") or "")
+    try:
+        _resolved, profile = resolve_engine_b_style_profile(
+            style, group, asset_type, symbol=symbol
+        )
+    except Exception:
+        profile = {}
+
+    def _num(field: str) -> float | None:
+        raw = profile.get(field)
+        try:
+            return None if raw is None else float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    values: dict[str, Any] = {
+        "engine_b.gate.min_score": _num("min_score"),
+        "engine_b.gate.min_rr": _num("min_rr"),
+        "engine_b.gate.min_room_atr": _num("min_room_atr"),
+        # macro_required's consumer defaults to False when the key is absent
+        # (market_structure.py DXY gate), so False IS the live value.
+        "engine_b.gate.macro_required": bool(profile.get("macro_required", False)),
+        # space_rr_substitute has no per-(group,style) default: unset means the
+        # global asset-scoped space-gate flag decides. Leave None so the UI can
+        # honestly show "no override".
+        "engine_b.gate.space_rr_substitute": profile.get("space_rr_substitute"),
+        "engine_b.gate.profile_trusted": profile.get("profile_trusted"),
+    }
+
+    # profile_trusted absent from the profile -> the global trust-list
+    # resolution decides (same call the scoring path makes).
+    if values["engine_b.gate.profile_trusted"] is None:
+        try:
+            from market_structure import engine_b_profile_context_enabled
+
+            values["engine_b.gate.profile_trusted"] = bool(
+                engine_b_profile_context_enabled(asset_type, CONFIG, score_group=group)
+            )
+        except Exception:
+            values["engine_b.gate.profile_trusted"] = None
 
     # SL-width ATR clamps live on a different, flat per-group surface — the
     # only one market_structure.py's clamp/tighten/TP1-retry paths read.
@@ -146,6 +181,6 @@ def resolve_current_values(engine: str, pair: Mapping[str, Any], group: str, sty
         values.update(_engine_a_weight_and_threshold_values(group))
         values.update(_engine_a_indicator_values(group))
     else:
-        values.update(_engine_b_gate_values(group, style))
+        values.update(_engine_b_gate_values(pair, group, style))
         values.update(_engine_b_indicator_values(group))
     return values

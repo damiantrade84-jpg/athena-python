@@ -88,7 +88,7 @@ type CurrentValue = string | number | boolean | null;
 type DefaultsResponse = { success?: boolean; error?: string; group?: string; style?: string; values?: Record<string, CurrentValue> };
 
 function formatCurrentValue(value: CurrentValue | undefined): string {
-  if (value === undefined || value === null) return 'no override — uses style default';
+  if (value === undefined || value === null) return 'no override (style default)';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
   return String(value);
@@ -114,6 +114,7 @@ type RunResult = {
   engine?: EngineKey;
   symbol?: string;
   pair?: string;
+  replayDays?: number | null;
   knobs?: Record<string, unknown>;
   overlay?: Record<string, unknown>;
   baseline?: RunMetrics;
@@ -161,7 +162,7 @@ function KnobField({ knob, value, currentValue, loadingCurrent, onChange }: {
   if (knob.kind === 'enum') {
     return (
       <Select value={value || '__unset__'} onValueChange={(v) => onChange(knob.id, v === '__unset__' ? '' : v)}>
-        <SelectTrigger>
+        <SelectTrigger className="truncate">
           <SelectValue placeholder={`current: ${currentLabel}`} />
         </SelectTrigger>
         <SelectContent>
@@ -178,7 +179,7 @@ function KnobField({ knob, value, currentValue, loadingCurrent, onChange }: {
   if (knob.kind === 'bool') {
     return (
       <Select value={value || '__unset__'} onValueChange={(v) => onChange(knob.id, v === '__unset__' ? '' : v)}>
-        <SelectTrigger>
+        <SelectTrigger className="truncate">
           <SelectValue placeholder={`current: ${currentLabel}`} />
         </SelectTrigger>
         <SelectContent>
@@ -248,6 +249,9 @@ function ExperimentLabPanel() {
   const { showToast } = useStore();
   const [engine, setEngine] = useState<EngineKey>('A');
   const [style, setStyle] = useState('intraday');
+  // Engine B lookback cap for the bar-by-bar replay (days). Engine A has no
+  // such window and runs fast on the full frozen history.
+  const [replayDays, setReplayDays] = useState('90');
   // /api/pairs groups by broad asset-class display labels. This is only a
   // selector/filter; the API derives the canonical score group from `pair`.
   const [assetGroup, setAssetGroup] = useState('');
@@ -341,6 +345,7 @@ function ExperimentLabPanel() {
       engine,
       symbol: token,
       style,
+      replayDays: engine === 'B' ? Number(replayDays) : undefined,
       overlay: buildOverlayPayload(),
     });
     if (!response || response.error) {
@@ -441,6 +446,19 @@ function ExperimentLabPanel() {
                     ))}
                   </SelectContent>
                 </Select>
+                {engine === 'B' && (
+                  <>
+                    <Label className="pt-1">Lookback (days)</Label>
+                    <Select value={replayDays} onValueChange={(value) => { setReplayDays(value); setResult(null); }}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {['30', '60', '90', '180'].map((item) => (
+                          <SelectItem key={item} value={item}>{item}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </>
+                )}
               </div>
             </div>
 
@@ -543,6 +561,11 @@ function ExperimentLabPanel() {
                 <><Play className="mr-2 h-4 w-4" />Run test ({activeKnobCount} knob{activeKnobCount === 1 ? '' : 's'} changed)</>
               )}
             </Button>
+            {engine === 'B' && (
+              <div className="text-[10px] text-muted-foreground">
+                Engine B replays bar-by-bar — one test runs two backtests over the lookback window and can take several minutes.
+              </div>
+            )}
             {runMutation.error && (
               <div className="rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-xs text-rose-200">{runMutation.error}</div>
             )}
@@ -565,6 +588,11 @@ function ExperimentLabPanel() {
               <div className="rounded-xl border border-rose-400/30 bg-rose-400/10 p-4 text-sm text-rose-200">{result.error}</div>
             ) : (
               <>
+                {typeof result.replayDays === 'number' && (
+                  <div className="text-[10px] text-muted-foreground">
+                    Engine B replay window: last {result.replayDays} days — both runs use the same window.
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <CompareTile label="Trades" base={result.baseline?.totalTrades} variant={result.variant?.totalTrades} digits={0} />
                   <CompareTile label="SQN" base={result.baseline?.sqn} variant={result.variant?.sqn} />

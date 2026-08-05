@@ -74,7 +74,14 @@ def test_calc_keltner_bands_symmetric_around_ema():
 
 
 # ── Engine A default-inert guarantees ──────────────────────────────────────
-def test_momentum_component_ignores_extra_indicators_by_default():
+def test_momentum_component_ignores_extra_indicators_by_default(monkeypatch):
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_V3_MOMENTUM_BLEND",
+        {"ENABLED": True, "RSI_WEIGHT": 0.35, "DI_WEIGHT": 0.35, "MACD_SLOPE_WEIGHT": 0.30, "BY_GROUP": {}},
+    )
     base_snap = {
         "rsi": 62.0,
         "plusDI": 24.0,
@@ -96,7 +103,14 @@ def test_momentum_component_ignores_extra_indicators_by_default():
     assert extra_diag.get("rocTerm") is None
 
 
-def test_location_component_ignores_keltner_by_default():
+def test_location_component_ignores_keltner_by_default(monkeypatch):
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_V3_LOCATION",
+        {"TREND_TIMING_ONLY": True, "KELTNER_BLEND_WEIGHT": 0.0, "BY_GROUP": {}},
+    )
     base_snap = {"close": 101.0, "ema21": 100.0, "atr": 2.0, "adx": 25.0}
     extra_snap = dict(base_snap, keltnerUpper=110.0, keltnerMid=100.0, keltnerLower=90.0)
     base_comp, base_regime = _location_component(base_snap, "forex", "forex_majors")
@@ -106,7 +120,10 @@ def test_location_component_ignores_keltner_by_default():
     assert extra_comp.quality == pytest.approx(base_comp.quality)
 
 
-def test_volume_component_ignores_mfi_by_default():
+def test_volume_component_ignores_mfi_by_default(monkeypatch):
+    from config import CONFIG
+
+    monkeypatch.setitem(CONFIG, "ENGINE_A_V3_VOLUME_BLEND", {"MFI_WEIGHT": 0.0, "BY_GROUP": {}})
     rows = [
         {"close": 100.0 + i * 0.3, "vol": 100.0 + i} for i in range(20)
     ]
@@ -123,7 +140,7 @@ def test_engine_b_confluence_subscores_new_key_is_neutral_when_uncandled():
     assert subscores["momentum_oscillator_confluence"] == pytest.approx(0.5)
 
 
-def test_engine_b_confluence_subscores_oscillator_candles_do_not_change_aggregate():
+def test_engine_b_confluence_subscores_oscillator_candles_do_not_change_aggregate(monkeypatch):
     # ENGINE_B_WEIGHTED_SCORING is enabled in this deployment's config.yaml, and
     # its COMPONENT_WEIGHTS list (the config.yaml override merged over
     # _DEFAULT_COMPONENT_WEIGHTS) has no entry for the new component, so it
@@ -136,6 +153,13 @@ def test_engine_b_confluence_subscores_oscillator_candles_do_not_change_aggregat
         weighted_scoring_config,
     )
 
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_B_WEIGHTED_SCORING",
+        {"ENABLED": True, "COMPONENT_WEIGHTS": {}, "COMPONENT_WEIGHTS_BY_GROUP": {}},
+    )
     assert _DEFAULT_COMPONENT_WEIGHTS["momentum_oscillator_confluence"] == 0.0
 
     res = {"pair_display": "BTCUSDT", "asset_type": "crypto"}

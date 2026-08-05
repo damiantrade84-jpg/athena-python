@@ -151,6 +151,21 @@ def create_experiment_blueprint(*, all_pairs_provider, json_safe=None) -> Bluepr
         except OverlayValidationError as exc:
             return jsonify({"success": False, "error": str(exc)}), 422
 
+        # Optional Engine B lookback cap (days) for the replay window. Both the
+        # baseline and the variant run use the same window, so the A/B stays
+        # apples-to-apples — it only bounds how far back the comparison reads.
+        replay_days_raw = payload.get("replayDays")
+        replay_days: int | None = None
+        if replay_days_raw is not None:
+            try:
+                replay_days = int(replay_days_raw)
+            except (TypeError, ValueError):
+                return jsonify({"success": False, "error": "replayDays must be an integer"}), 422
+            if not 30 <= replay_days <= 365:
+                return jsonify(
+                    {"success": False, "error": "replayDays must be between 30 and 365"}
+                ), 422
+
         try:
             result = run_worker_subprocess(
                 pair.get("symbol") or pair.get("display"),
@@ -158,6 +173,7 @@ def create_experiment_blueprint(*, all_pairs_provider, json_safe=None) -> Bluepr
                 style,
                 overlay,
                 _RUN_TIMEOUT_SEC_ENGINE_B if engine == "B" else _RUN_TIMEOUT_SEC,
+                replay_days=replay_days,
             )
         except WorkerTimeoutError as exc:
             return jsonify({"success": False, "error": str(exc)}), 504

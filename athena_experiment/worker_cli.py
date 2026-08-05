@@ -45,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
             payload["style"],
             payload.get("overlay") or {},
             n_trials_hint=int(payload.get("n_trials_hint", 1)),
+            replay_days=payload.get("replay_days"),
         )
     except Exception as exc:  # surface as a normal error result, not a crash
         result = {"error": f"{type(exc).__name__}: {exc}"}

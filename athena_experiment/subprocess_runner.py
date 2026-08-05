@@ -26,12 +26,21 @@ def run_worker_subprocess(
     style: str,
     overlay: dict[str, Any],
     timeout_sec: float,
+    replay_days: int | None = None,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="athena_experiment_") as tmpdir:
         input_path = Path(tmpdir) / "input.json"
         output_path = Path(tmpdir) / "output.json"
         input_path.write_text(
-            json.dumps({"symbol": symbol, "engine": engine, "style": style, "overlay": overlay}),
+            json.dumps(
+                {
+                    "symbol": symbol,
+                    "engine": engine,
+                    "style": style,
+                    "overlay": overlay,
+                    "replay_days": replay_days,
+                }
+            ),
             encoding="utf-8",
         )
         try:
