@@ -3,9 +3,10 @@
 Zero scoring logic here: every decision comes from the shared live snapshot
 contract `engine_b_snapshot.evaluate_engine_b_snapshot` (the same function the
 live scanner's independent direction probe calls), evaluated at trigger-TF
-bar closes over point-in-time confirmed prefixes. Speed state is replayed
-historically (`athena_backtest.speed_replay`) so timeframe-policy promotion
-matches live instead of being pinned to the baseline.
+bar closes over point-in-time confirmed prefixes. Speed state is NOT replayed:
+policy v4 records speed only as diagnostics/M5-eligibility and never lets it
+rewrite role TFs, so the per-bar SpeedStateReplay computation was removed
+(see the note above the style-profile resolution in run_engine_b_backtest).
 
 Trade construction mirrors the retired legacy runner's Engine B loop
 risk contract (execution levels from the gating confidence dict, fallback-RR
@@ -23,7 +24,6 @@ from athena_backtest.costs import cost_r, resolve_costs
 from athena_backtest.data.store import ParquetCandleStore
 from athena_backtest.exits import SAME_BAR_POLICY, simulate_fixed_exit
 from athena_backtest.policy import attach_policy_provenance, resolve_backtest_policy_roles
-from athena_backtest.speed_replay import SpeedStateReplay
 
 _PROVIDER_BY_SOURCE = {
     "mt5": "mt5",
@@ -143,8 +143,6 @@ def run_engine_b_backtest(
     score_group = resolve_score_group_by_type(pair)
     asset_type = str(pair.get("type") or "")
     symbol = str(pair.get("display") or pair.get("symbol") or "")
-    replay = SpeedStateReplay(pair, role_rows["H1"], role_rows["M15"])
-    h1_close_epochs = role_close_epochs["H1"]
     naked = NakedEngine()
 
     def _trigger_atr_lookup(tf: str, rows: list) -> float | None:
@@ -241,19 +239,42 @@ def run_engine_b_backtest(
         replay_window_bounded = True
 
     index = total_index
+    # Resolve the style profile once per run. In policy v4 the resolved role
+    # TFs cannot change bar-to-bar: resolve_timeframe_policy records
+    # speed_state only as diagnostics/M5-eligibility messages ("speed no
+    # longer demotes setup/trigger either", timeframe_policy.py), and the
+    # profile dict carries no speed-dependent field — pinned by
+    # tests/test_engine_b_style_profile_speed_independence.py. The per-bar
+    # SpeedStateReplay computation that used to feed this call was ~23% of
+    # the backtest runtime while its result was never consumed by scoring.
+    # Never cache this module-level: the Tuning Lab variant run mutates
+    # CONFIG between runs and must re-resolve.
+    resolved_style, profile = resolve_engine_b_style_profile(
+        style,
+        score_group,
+        asset_type,
+        symbol=symbol,
+        speed_state=None,
+    )
+
+    # Run-scoped probe series cache for the research-lab VWAP/CVD probes
+    # (engine_b_series). Built once over the full stored entry-TF series;
+    # windows that are not a contiguous slice fall back to the original
+    # per-window recompute inside the probes, and the build-time self-check
+    # disables it entirely on any mismatch (fail closed).
+    from engine_b_series import EngineBProbeSeries
+
+    _probe_entry_tf = str(profile.get("entry_tf") or "H1").upper()
+    probe_series = (
+        EngineBProbeSeries(role_rows[_probe_entry_tf])
+        if role_rows.get(_probe_entry_tf)
+        else None
+    )
+
     while index < len(iter_rows) - 1:
         decision_epoch = role_close_epochs[iter_tf][index]
         funnel["bars_seen"] += 1
 
-        h1_closed = bisect.bisect_right(h1_close_epochs, decision_epoch) - 1
-        speed_state = replay.state_at(h1_closed) if h1_closed >= 0 else None
-        resolved_style, profile = resolve_engine_b_style_profile(
-            style,
-            score_group,
-            asset_type,
-            symbol=symbol,
-            speed_state=speed_state,
-        )
         trigger_tf = str(profile.get("entry_tf") or "H1").upper()
         trigger_dur = _TF_SECONDS.get(trigger_tf, 3_600)
         # Evaluate only on trigger-TF close boundaries (all supported TFs are
@@ -313,6 +334,7 @@ def run_engine_b_backtest(
             engine=naked,
             context_mode="historical",
             feature_cache=feature_cache,
+            probe_series=probe_series,
             conflict_fn=independent_conflict_blocks_emit,
         )
         selected = result.selected
@@ -437,7 +459,10 @@ def run_engine_b_backtest(
                 "grossR": round(outcome.result_r, 4),
                 "costR": round(friction, 4),
                 "resultR": round(result_r, 4),
-                "speedClass": str(getattr(speed_state, "speed_class", "") or ""),
+                # Speed replay removed (v4: speed never rewrites the role
+                # ladder) — the per-trade diagnostic key is kept for payload
+                # compatibility but no longer carries a per-bar class.
+                "speedClass": "",
             }
         )
         index = exit_index + 1

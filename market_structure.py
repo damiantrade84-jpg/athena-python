@@ -2464,21 +2464,32 @@ def _engine_b_micro_breakout_value(direction: str, candles: list, range_bars: in
     }
 
 
-def _engine_b_vwap_reclaim_value(direction: str, candles: list, atr_val: float, band_std: float) -> dict:
+def _engine_b_vwap_reclaim_value(direction: str, candles: list, atr_val: float, band_std: float, probe_series=None) -> dict:
     if len(candles) < 20:
         return {"passed": False, "signal": "insufficient_candles"}
     try:
-        from indicators import calc_vwap
+        # Optional run-scoped series cache (engine_b_series): O(1) windowed
+        # VWAP from cumulative sums instead of a full recompute per call.
+        # Default path (no cache / window not a slice) is the original
+        # recompute, byte-identical outputs.
+        view = probe_series.for_window(candles) if probe_series is not None else None
+        if view is not None:
+            prev_vwap_raw = view.vwap_prev()
+            last_vwap_raw = view.vwap_last()
+        else:
+            from indicators import calc_vwap
 
-        vwap = calc_vwap(candles, band_mult=band_std)
-        values = vwap.get("vwap") or []
-        if len(values) < 2 or values[-1] is None or values[-2] is None:
+            vwap = calc_vwap(candles, band_mult=band_std)
+            values = vwap.get("vwap") or []
+            prev_vwap_raw = values[-2] if len(values) >= 2 else None
+            last_vwap_raw = values[-1] if values else None
+        if last_vwap_raw is None or prev_vwap_raw is None:
             return {"passed": False, "signal": "missing_vwap"}
         band = max(float(atr_val), 1e-10) * band_std
         prev_close = float(candles[-2].get("close", 0.0))
         close = float(candles[-1].get("close", 0.0))
-        prev_vwap = float(values[-2])
-        last_vwap = float(values[-1])
+        prev_vwap = float(prev_vwap_raw)
+        last_vwap = float(last_vwap_raw)
         if direction == "LONG":
             trigger = prev_close <= prev_vwap + band and close > last_vwap + band
         else:
@@ -2495,21 +2506,33 @@ def _engine_b_vwap_reclaim_value(direction: str, candles: list, atr_val: float, 
         return {"passed": False, "signal": "error", "error": str(exc)}
 
 
-def _engine_b_cvd_momentum_value(direction: str, candles: list) -> dict:
+def _engine_b_cvd_momentum_value(direction: str, candles: list, probe_series=None) -> dict:
     if len(candles) < 20:
         return {"passed": False, "signal": "insufficient_candles"}
     try:
-        from indicators import calc_cvd, calc_vwap
+        # Optional run-scoped series cache (engine_b_series): O(1) windowed
+        # VWAP and SMA-5 smoothed delta. Default path is the original
+        # recompute, byte-identical outputs.
+        view = probe_series.for_window(candles) if probe_series is not None else None
+        if view is not None:
+            prev_delta_raw = view.cvd_smoothed_prev()
+            last_delta_raw = view.cvd_smoothed_last()
+            last_vwap_raw = view.vwap_last()
+        else:
+            from indicators import calc_cvd, calc_vwap
 
-        cvd = calc_cvd(candles, smooth_period=5)
-        smoothed = cvd.get("smoothed_delta") or []
-        vwap_values = (calc_vwap(candles).get("vwap") or [])
-        if len(smoothed) < 2 or not vwap_values or vwap_values[-1] is None:
+            cvd = calc_cvd(candles, smooth_period=5)
+            smoothed = cvd.get("smoothed_delta") or []
+            vwap_values = (calc_vwap(candles).get("vwap") or [])
+            prev_delta_raw = smoothed[-2] if len(smoothed) >= 2 else None
+            last_delta_raw = smoothed[-1] if smoothed else None
+            last_vwap_raw = vwap_values[-1] if vwap_values else None
+        if last_vwap_raw is None:
             return {"passed": False, "signal": "missing_cvd_or_vwap"}
-        prev_delta = float(smoothed[-2] or 0.0)
-        last_delta = float(smoothed[-1] or 0.0)
+        prev_delta = float(prev_delta_raw or 0.0)
+        last_delta = float(last_delta_raw or 0.0)
         close = float(candles[-1].get("close", 0.0))
-        last_vwap = float(vwap_values[-1])
+        last_vwap = float(last_vwap_raw)
         if direction == "LONG":
             passed = last_delta > prev_delta and close > last_vwap
         else:
@@ -2527,19 +2550,26 @@ def _engine_b_cvd_momentum_value(direction: str, candles: list) -> dict:
         return {"passed": False, "signal": "error", "error": str(exc)}
 
 
-def _engine_b_vwap_deviation_value(direction: str, candles: list, std_threshold: float) -> dict:
+def _engine_b_vwap_deviation_value(direction: str, candles: list, std_threshold: float, probe_series=None) -> dict:
     if len(candles) < 25:
         return {"passed": False, "signal": "insufficient_candles"}
     try:
-        from indicators import calc_vwap
-
         closes = pd.Series([float(c.get("close", 0.0)) for c in candles])
         std = float(closes.rolling(20).std().iloc[-1] or 0.0)
-        vwap_values = calc_vwap(candles).get("vwap") or []
-        if not vwap_values or vwap_values[-1] is None or std <= 0:
+        # Optional run-scoped series cache for the VWAP read (the pandas
+        # rolling std stays on the original per-window path by design).
+        view = probe_series.for_window(candles) if probe_series is not None else None
+        if view is not None:
+            last_vwap_raw = view.vwap_last()
+        else:
+            from indicators import calc_vwap
+
+            vwap_values = calc_vwap(candles).get("vwap") or []
+            last_vwap_raw = vwap_values[-1] if vwap_values else None
+        if last_vwap_raw is None or std <= 0:
             return {"passed": False, "signal": "missing_vwap_or_std"}
         close = float(closes.iloc[-1])
-        last_vwap = float(vwap_values[-1])
+        last_vwap = float(last_vwap_raw)
         upper = last_vwap + std_threshold * std
         lower = last_vwap - std_threshold * std
         if direction == "LONG":
@@ -2565,6 +2595,7 @@ def _engine_b_research_lab_candidate_gates(
     current_price: float,
     atr_val: float,
     profile: dict,
+    probe_series=None,
 ) -> dict:
     cfg = config.CONFIG.get("ENGINE_B_RESEARCH_LAB_FACTORS", {}) or {}
     if not cfg.get("ENABLED", False):
@@ -2606,13 +2637,13 @@ def _engine_b_research_lab_candidate_gates(
             detail = _engine_b_micro_breakout_value(direction, candles, range_bars)
             entry_ok = entry_ok or bool(detail.get("passed"))
         elif name == "vwap_reclaim":
-            detail = _engine_b_vwap_reclaim_value(direction, candles, atr_val, band_std)
+            detail = _engine_b_vwap_reclaim_value(direction, candles, atr_val, band_std, probe_series=probe_series)
             entry_ok = entry_ok or bool(detail.get("passed"))
         elif name == "cvd_momentum":
-            detail = _engine_b_cvd_momentum_value(direction, candles)
+            detail = _engine_b_cvd_momentum_value(direction, candles, probe_series=probe_series)
             entry_ok = entry_ok or bool(detail.get("passed"))
         elif name == "vwap_deviation":
-            detail = _engine_b_vwap_deviation_value(direction, candles, deviation_std)
+            detail = _engine_b_vwap_deviation_value(direction, candles, deviation_std, probe_series=probe_series)
             location_ok = location_ok or bool(detail.get("passed"))
         else:
             detail = {"passed": False, "signal": "unknown_candidate"}
@@ -6627,6 +6658,7 @@ class NakedEngine:
         learning_ctx: dict = None,
         entry_candles: list | None = None,
         style_profile: dict | None = None,
+        probe_series=None,
     ) -> dict:
         """Calculate Engine B confidence score and gate verdict.
 
@@ -7214,6 +7246,7 @@ class NakedEngine:
             current_price=current_price,
             atr_val=trigger_atr_val,
             profile=profile,
+            probe_series=probe_series,
         )
         research_entry_ok = bool(research_lab_detail.get("entry_ok"))
         research_location_ok = bool(research_lab_detail.get("location_ok"))
@@ -7553,6 +7586,27 @@ class NakedEngine:
                 # context used by the profile bonus/output path below.
                 _quality_res = dict(res)
                 _quality_res["profile_context"] = _profile_vp_context
+                # Resolve the group-scoped weight table once. The
+                # Stochastic/CCI/Williams %R oscillator trio costs three
+                # O(n x period) series per evaluated bar (twice — once per
+                # direction), yet aggregate_quality_score drops weight-0
+                # components from both the score and the emitted
+                # quality_components diagnostics, so whenever this group's
+                # oscillator weight is 0 the computed value is unobservable.
+                # Passing no candles yields the neutral 0.5 an uncandled call
+                # returns anyway, with the three series skipped. Proven
+                # score-identical by
+                # tests/test_indicators_experiment.py::test_engine_b_confluence_subscores_oscillator_candles_do_not_change_aggregate.
+                _ws_cfg = weighted_scoring_config_for_group(profile.get("score_group"))
+                try:
+                    _osc_weight = float(
+                        (_ws_cfg.get("COMPONENT_WEIGHTS") or {}).get(
+                            "momentum_oscillator_confluence", 0.0
+                        )
+                        or 0.0
+                    )
+                except (TypeError, ValueError):
+                    _osc_weight = 0.0
                 _subscores = compute_confluence_subscores(
                     _quality_res,
                     direction,
@@ -7566,14 +7620,14 @@ class NakedEngine:
                     asset_type=asset_type_lower,
                     pair_display=res.get("pair_display"),
                     as_of_date=_subsystem_as_of,
-                    oscillator_candles=entry_candles,
+                    oscillator_candles=entry_candles if _osc_weight > 0 else None,
                 )
                 _regime_label = str(res.get("_adx_derived_regime") or "").upper()
                 _weighted_subscores = apply_regime_component_weights(
                     _subscores, _regime_label, asset_type_lower
                 )
                 _quality_score, _quality_max_possible, _quality_components = aggregate_quality_score(
-                    _weighted_subscores, weighted_scoring_config_for_group(profile.get("score_group"))
+                    _weighted_subscores, _ws_cfg
                 )
                 bonus_points = _quality_score
                 max_possible = gate_max_possible + _quality_max_possible

@@ -422,6 +422,7 @@ def evaluate_engine_b_snapshot(
     context_mode: str = "historical",
     precomputed_structure: dict[str, Any] | None = None,
     feature_cache: EngineBHistoricalFeatureCache | None = None,
+    probe_series=None,
     gate_fn: Callable[..., tuple[bool, float]] = engine_b_confidence_passes,
     picker_fn: Callable[..., dict[str, Any] | None] = engine_b_pick_directional_candidate,
     conflict_fn: Callable[[str, dict[str, Any]], bool] | None = None,
@@ -620,6 +621,9 @@ def evaluate_engine_b_snapshot(
                 else role_candles.get(entry_tf) or []
             ),
             "style_profile": resolved_profile,
+            # Optional run-scoped probe series cache (engine_b_series); None on
+            # the live path keeps the original per-window recompute.
+            "probe_series": probe_series,
         }
         if learning_context:
             confidence = naked.calculate_confidence(

@@ -43,6 +43,33 @@ def enrich_fvg_lifecycle(
     max_fill = max(0.0, min(1.0, _number(cfg.get("BAG_MAX_FILL_FRACTION"), 0.25)))
 
     enriched: list[dict[str, Any]] = []
+    n = len(candles)
+
+    # Suffix extremes over the candle window: one O(n) pass replaces the
+    # per-FVG O(n) min/max scans over post-gap candles (and the O(n) tail-copy
+    # slice per FVG). min/max over the identical set is bit-exact. Unparseable
+    # and NaN highs/lows map to +/-inf sentinels, which the fill_fraction
+    # clamp below reduces to exactly the same 0.0 the old `_number(..., top)`
+    # / `_number(..., bottom)` defaults produced (case analysis: when every
+    # parseable extreme is beyond the gap edge, both versions clamp to 0).
+    _pos_inf = float("inf")
+    _neg_inf = float("-inf")
+
+    def _parse(value: Any, sentinel: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return sentinel
+        return parsed if parsed == parsed else sentinel
+
+    lows = [_parse(c.get("low"), _pos_inf) for c in candles]
+    highs = [_parse(c.get("high"), _neg_inf) for c in candles]
+    suffix_min_low = [_pos_inf] * (n + 1)
+    suffix_max_high = [_neg_inf] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        suffix_min_low[i] = lows[i] if lows[i] < suffix_min_low[i + 1] else suffix_min_low[i + 1]
+        suffix_max_high[i] = highs[i] if highs[i] > suffix_max_high[i + 1] else suffix_max_high[i + 1]
+
     for source in fvgs:
         item = dict(source)
         direction = str(item.get("type") or "").lower()
@@ -51,15 +78,15 @@ def enrich_fvg_lifecycle(
         size = max(0.0, top - bottom)
         middle_index = int(_number(item.get("bar_index"), -1))
         third_index = middle_index + 1
-        post = candles[third_index + 1 :] if 0 <= third_index < len(candles) else []
+        post_len = (n - (third_index + 1)) if 0 <= third_index < n else 0
 
         fill_fraction = 0.0
-        if size > 0 and post:
+        if size > 0 and post_len > 0:
             if direction == "bullish":
-                deepest = min(_number(c.get("low"), top) for c in post)
+                deepest = suffix_min_low[third_index + 1]
                 fill_fraction = (top - deepest) / size
             elif direction == "bearish":
-                deepest = max(_number(c.get("high"), bottom) for c in post)
+                deepest = suffix_max_high[third_index + 1]
                 fill_fraction = (deepest - bottom) / size
         fill_fraction = max(0.0, min(1.0, fill_fraction))
         ce = bottom + size * 0.5
@@ -107,7 +134,7 @@ def enrich_fvg_lifecycle(
             if direction == "bearish" and atr_value > 0
             else 0.0
         )
-        followthrough = len(post) >= followthrough_bars and continuation >= continuation_atr
+        followthrough = post_len >= followthrough_bars and continuation >= continuation_atr
 
         if not displacement_ok:
             bag_state = "not_bag"
