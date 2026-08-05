@@ -21,25 +21,29 @@ _DEFAULT_COMPONENT_MAX: dict[str, float] = {
     # _momentum_oscillator_confluence_score below. Present in the max map so a
     # non-zero COMPONENT_WEIGHTS override normalizes correctly.
     "momentum_oscillator_confluence": 1.0,
+    "pullback_quality": 1.0,
+    "sweep_quality": 1.0,
 }
 
 _DEFAULT_COMPONENT_WEIGHTS: dict[str, float] = {
-    "structure_alignment": 0.21,
-    "ob_confluence": 0.13,
-    "fvg_confluence": 0.10,
-    "bag_continuation": 0.08,
-    "liquidity_proximity": 0.07,
-    "bos_followthrough": 0.14,
+    "structure_alignment": 0.18,
+    "ob_confluence": 0.11,
+    "fvg_confluence": 0.09,
+    "bag_continuation": 0.06,
+    "liquidity_proximity": 0.06,
+    "bos_followthrough": 0.11,
     "volume_confirmation": 0.08,
-    "profile_reaction": 0.09,
-    "session_context": 0.05,
-    "orderflow": 0.05,
+    "profile_reaction": 0.07,
+    "session_context": 0.06,
+    "orderflow": 0.04,
     # Default 0.0 — inert. ENGINE_B_WEIGHTED_SCORING itself defaults disabled
     # (weighted_scoring_enabled()), and even when a group enables it, this
     # component contributes nothing until a config.local.yaml override (via the
     # Tuning Lab "push to default" action) gives it a non-zero weight. The ten
     # active weights above, including BAG continuation, sum to 1.0.
     "momentum_oscillator_confluence": 0.0,
+    "pullback_quality": 0.08,
+    "sweep_quality": 0.06,
 }
 
 
@@ -443,6 +447,10 @@ def compute_confluence_subscores(
             asset_lower, display, direction, as_of_date=as_of_date
         )
 
+    phase2 = res.get("phase2_quality") if isinstance(res.get("phase2_quality"), dict) else {}
+    graded_volume = phase2.get("volume_confirmation") if isinstance(phase2.get("volume_confirmation"), dict) else {}
+    pullback_quality = phase2.get("pullback_quality") if isinstance(phase2.get("pullback_quality"), dict) else {}
+    sweep_quality = phase2.get("sweep_quality") if isinstance(phase2.get("sweep_quality"), dict) else {}
     subscores = {
         "structure_alignment": compute_structure_alignment_score(res, direction),
         "ob_confluence": _ob_confluence_score(res, direction),
@@ -450,13 +458,19 @@ def compute_confluence_subscores(
         "bag_continuation": _bag_continuation_score(res, direction),
         "liquidity_proximity": _liquidity_proximity_score(res, atr),
         "bos_followthrough": round(_clamp01(bos_followthrough_norm), 4),
-        "volume_confirmation": 1.0 if volume_ok else 0.0,
+        # 2026-08-05 Phase 2: moderate/weak authoritative volume is a graded
+        # quality penalty, not a new hard rejection. Legacy boolean remains fallback.
+        "volume_confirmation": round(
+            _clamp01(_float_mapping(graded_volume.get("score"), 1.0 if volume_ok else 0.0)), 4
+        ),
         "profile_reaction": _profile_reaction_score(res, direction),
         "session_context": _session_context_score(res),
         "orderflow": round(_clamp01(orderflow), 4),
         "momentum_oscillator_confluence": _momentum_oscillator_confluence_score(
             oscillator_candles, direction
         ),
+        "pullback_quality": round(_clamp01(_float_mapping(pullback_quality.get("score"), 0.0)), 4),
+        "sweep_quality": round(_clamp01(_float_mapping(sweep_quality.get("score"), 0.0)), 4),
     }
     # Drop components no feed can ever supply for this asset class, rather than
     # scoring them 0 and leaving their weight in the quality denominator — an

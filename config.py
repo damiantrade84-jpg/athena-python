@@ -2953,18 +2953,24 @@ CONFIG: dict = {
             "profile_reaction": 1.0,
             "session_context": 0.5,
             "orderflow": 1.0,
+            "pullback_quality": 1.0,
+            "sweep_quality": 1.0,
         },
         "COMPONENT_WEIGHTS": {
-            "structure_alignment": 0.21,
-            "ob_confluence": 0.13,
-            "fvg_confluence": 0.10,
-            "bag_continuation": 0.08,
-            "liquidity_proximity": 0.07,
-            "bos_followthrough": 0.14,
+            # 2026-08-05 Phase 2: normalized 1.0 quality table with explicit
+            # pullback/sweep evidence; mirrors config.yaml.
+            "structure_alignment": 0.18,
+            "ob_confluence": 0.11,
+            "fvg_confluence": 0.09,
+            "bag_continuation": 0.06,
+            "liquidity_proximity": 0.06,
+            "bos_followthrough": 0.11,
             "volume_confirmation": 0.08,
-            "profile_reaction": 0.09,
-            "session_context": 0.05,
-            "orderflow": 0.05,
+            "profile_reaction": 0.07,
+            "session_context": 0.06,
+            "orderflow": 0.04,
+            "pullback_quality": 0.08,
+            "sweep_quality": 0.06,
         },
         "REGIME_COMPONENT_MULT": {
             "RANGING": {
@@ -2984,6 +2990,23 @@ CONFIG: dict = {
             "LOW_VOLATILITY": {
                 "bos_followthrough": 0.90,
             },
+        },
+    },
+    # 2026-08-05 Phase 2: deterministic quality/adaptation defaults. These are
+    # soft evidence/bounded thresholds and never replace Engine B structure.
+    "ENGINE_B_PHASE2_QUALITY": {
+        "APPLY_ADAPTIVE_ROOM_RR": True,
+        "HIGH_CONVICTION_MIN_DENSITY": 65,
+        "ZONE_FRESHNESS_DECAY_HOURS": 168,
+        "CONFLUENCE_WEIGHTS": {
+            "structure_break": 24,
+            "order_block": 14,
+            "fvg": 13,
+            "breaker": 9,
+            "liquidity_sweep": 13,
+            "sequence": 8,
+            "volume": 10,
+            "pullback": 9,
         },
     },
     "ENGINE_B_SUBSYSTEMS": {

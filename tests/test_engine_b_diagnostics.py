@@ -1984,6 +1984,88 @@ def test_zone_context_proximity_mult_varies_by_asset_type(monkeypatch):
     assert crypto_ctx["near_zone"] is True
 
 
+def test_fvg_sweep_recovers_bounded_location_without_weakening_structure(monkeypatch):
+    """2026-08-05 Phase 1: strong directional FVG+sweep gets bounded location credit."""
+    naked_cfg = dict(config.CONFIG.get("NAKED_ENGINE", {}) or {})
+    naked_cfg["fvg_sweep_location_max_distance_atr_mult"] = 1.0
+    monkeypatch.setitem(config.CONFIG, "NAKED_ENGINE", naked_cfg)
+    res = _base_res_long()
+    res.update(
+        {
+            "bos_confirmed": False,
+            "choch_confirmed": True,
+            "strong_close": False,
+            "zone_touched": False,
+            "near_active_zone": False,
+            "ob_at_zone": False,
+            "active_zone_distance": 0.9,
+            "fvg_overlap": True,
+            "fvg_reaction_confirmed": True,
+            "liquidity_sweep": True,
+            "sweep_direction": "LONG",
+            "distance_to_res": 3.0,
+        }
+    )
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        entry_candles=[],
+        style_profile={
+            "min_room_atr": 0.35,
+            "min_rr": 1.0,
+            "require_macro_align": False,
+            "checklist_mode": "flexible",
+        },
+    )
+
+    assert out["structure_ok"] is True
+    assert out["location_ok"] is True
+    assert out["location_mode"] == "fvg_sweep"
+
+
+def test_fvg_sweep_location_rejects_beyond_bounded_distance(monkeypatch):
+    """2026-08-05 Phase 1: FVG+sweep cannot pass location anywhere on chart."""
+    naked_cfg = dict(config.CONFIG.get("NAKED_ENGINE", {}) or {})
+    naked_cfg["fvg_sweep_location_max_distance_atr_mult"] = 1.0
+    monkeypatch.setitem(config.CONFIG, "NAKED_ENGINE", naked_cfg)
+    res = _base_res_long()
+    res.update(
+        {
+            "bos_confirmed": False,
+            "choch_confirmed": True,
+            "strong_close": False,
+            "zone_touched": False,
+            "near_active_zone": False,
+            "ob_at_zone": False,
+            "active_zone_distance": 1.01,
+            "fvg_overlap": True,
+            "fvg_reaction_confirmed": True,
+            "liquidity_sweep": True,
+            "sweep_direction": "LONG",
+            "distance_to_res": 3.0,
+        }
+    )
+
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        entry_candles=[],
+        style_profile={
+            "min_room_atr": 0.35,
+            "min_rr": 1.0,
+            "require_macro_align": False,
+            "checklist_mode": "flexible",
+        },
+    )
+
+    assert out["structure_ok"] is True
+    assert out["location_ok"] is False
+    assert out["location_mode"] == "none"
+
+
 def test_engine_b_invalid_atr_still_fails_closed():
     out = resolve_engine_b_execution_levels(
         direction="LONG",

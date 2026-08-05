@@ -6148,6 +6148,25 @@ class NakedEngine:
             score_group=_zone_score_group,
             trigger_tf=str(tfs.get("trigger") or ""),
         )
+        # 2026-08-05 Phase 2: always evaluate the opposite M15 pattern for
+        # invalidation/early-warning diagnostics. It cannot select or flip the
+        # structure-derived direction and is reused by conditional-M5 recovery.
+        _opposing_direction = "SHORT" if direction == "LONG" else "LONG"
+        _opposing_bos_confirmed = (
+            (direction == "LONG" and bool(bos_data.get("bos_bear")))
+            or (direction == "SHORT" and bool(bos_data.get("bos_bull")))
+        )
+        _opposing_trigger_ctx = self._price_action_trigger(
+            trigger_candles,
+            _opposing_direction,
+            trigger_atr,
+            zone_ctx["zone_touched"] or zone_ctx["near_zone"],
+            _opposing_bos_confirmed,
+            is_trending=bool(_opposing_bos_confirmed),
+            asset_type=asset_type,
+            score_group=_zone_score_group,
+            trigger_tf=str(tfs.get("trigger") or ""),
+        )
 
         # Conditional-M5 prerequisite: the setup rung must have armed a
         # direction-aligned trigger before the M5 entry event counts. This is
@@ -6208,21 +6227,7 @@ class NakedEngine:
             and _structure_supports
             and _m5_ref_candles
         ):
-            _opp_dir = "SHORT" if direction == "LONG" else "LONG"
-            _m15_opp = self._price_action_trigger(
-                trigger_candles,
-                _opp_dir,
-                trigger_atr,
-                _loc_for_refine,
-                (
-                    (direction == "LONG" and bool(bos_data.get("bos_bear")))
-                    or (direction == "SHORT" and bool(bos_data.get("bos_bull")))
-                ),
-                is_trending=False,
-                asset_type=asset_type,
-                score_group=_zone_score_group,
-                trigger_tf=str(tfs.get("trigger") or ""),
-            )
+            _m15_opp = _opposing_trigger_ctx
             if not bool(_m15_opp.get("trigger_ok")):
                 _m5_ctx = self._price_action_trigger(
                     _m5_ref_candles,
@@ -6236,6 +6241,7 @@ class NakedEngine:
                     trigger_tf="M5",
                 )
                 if bool(_m5_ctx.get("trigger_ok")):
+                    _m15_pattern = trigger_ctx.get("pattern") or "NONE"
                     trigger_ctx = dict(trigger_ctx)
                     trigger_ctx["trigger_ok"] = True
                     trigger_ctx["pattern"] = _m5_ctx.get("pattern") or "M5_REFINEMENT"
@@ -6247,6 +6253,16 @@ class NakedEngine:
                     m5_pullback_confirm = True
                     m5_refinement_pattern = _m5_ctx.get("pattern")
                     entry_path = "m5_pullback_confirm"
+                    # 2026-08-05 Phase 1: make conditional-M5 recovery explicit
+                    # in runtime logs without granting M5 direction/structure authority.
+                    log.info(
+                        "[ENGINE-B-M5] entry_path=m5_pullback_confirm pair=%s "
+                        "direction=%s m15_pattern=%s m5_pattern=%s",
+                        (pair or {}).get("display") or (pair or {}).get("symbol") or "unknown",
+                        direction,
+                        _m15_pattern,
+                        m5_refinement_pattern or "M5_REFINEMENT",
+                    )
 
         latest_trigger_candle_time = None
         if trigger_candles:
@@ -6316,7 +6332,7 @@ class NakedEngine:
                 liquidity_sweep=bool(is_sweep_event),
             )
 
-        return {
+        _result = {
             "structural_verdict": "CLEAR",
             "direction": direction,
             "nearest_resistance_zone": nearest_res,
@@ -6433,6 +6449,8 @@ class NakedEngine:
             "zone_touched": zone_ctx["zone_touched"],
             "trigger_pattern": trigger_ctx["pattern"],
             "trigger_ok": trigger_ctx["trigger_ok"],
+            "opposing_trigger_pattern": _opposing_trigger_ctx.get("pattern"),
+            "opposing_trigger_ok": bool(_opposing_trigger_ctx.get("trigger_ok")),
             "rejection_candle": trigger_ctx["rejection"],
             "engulfing_candle": trigger_ctx["engulfing"],
             "inside_break_candle": trigger_ctx["inside_break"],
@@ -6441,6 +6459,8 @@ class NakedEngine:
             "latest_confirmed_trigger_candle_time": latest_trigger_candle_time,
             "structure_tf": structure_tf,
             "asset_type": asset_type,
+            "regime": regime,
+            "style": style,
             "pair_display": (pair or {}).get("display") or (pair or {}).get("symbol"),
             "aggtrade_enabled": precompute.get("aggtrade_enabled"),
             "aggtrade_required": precompute.get("aggtrade_required"),
@@ -6470,6 +6490,27 @@ class NakedEngine:
             "d1_pd_array_conflict_window_atr_mult": _engine_b_d1_conflict_window_atr_mult(),
             **_profile_result,
         }
+        # 2026-08-05 Phase 2: attach measurable quality/lifecycle evidence only;
+        # these helpers cannot create H4 structure, direction, or readiness.
+        try:
+            from engine_b_phase2 import build_invalidation_context, build_phase2_context
+
+            _session_payload = forex_session_structure or equity_session_structure or {}
+            _result["phase2_quality"] = build_phase2_context(
+                res=_result,
+                candles=trigger_candles,
+                direction=direction,
+                atr=float(trigger_atr or atr),
+                active_zone=active_zone,
+                session_quality=str(_session_payload.get("session_quality") or "unknown"),
+                asset_type=asset_type,
+                aggtrade_available=bool(precompute.get("aggtrade_available")),
+            )
+            _result["invalidation_context"] = build_invalidation_context(_result, direction)
+        except Exception as _phase2_err:
+            log.warning("[ENGINE-B-PHASE2] quality context unavailable: %s", _phase2_err)
+            _result["phase2_quality"] = {"version": "engine_b.phase2.v1", "error": str(_phase2_err)}
+        return _result
 
     def analyze_structure(
         self,
@@ -6624,6 +6665,21 @@ class NakedEngine:
         else:
             require_macro_align = bool(_rma_cfg)
         checklist_mode = str(profile.get("checklist_mode", "flexible")).lower()
+        # 2026-08-05 Phase 2: bounded regime/structural-quality adaptation. It
+        # adjusts room/RR only; H4 structure and M15 trigger gates stay unchanged.
+        try:
+            from engine_b_phase2 import resolve_adaptive_thresholds
+
+            _phase2_thresholds = resolve_adaptive_thresholds(
+                res,
+                direction,
+                regime=str(res.get("_adx_derived_regime") or res.get("regime") or ""),
+                base_min_room=min_room_atr,
+                base_min_rr=min_rr,
+            )
+            min_rr = float(_phase2_thresholds["effective_min_rr"])
+        except Exception as _phase2_threshold_err:
+            _phase2_thresholds = {"enabled": False, "error": str(_phase2_threshold_err)}
         allow_breakout_entry = bool(
             profile.get("allow_breakout_entry", not require_macro_align)
         )
@@ -6941,6 +6997,26 @@ class NakedEngine:
             and (zone_ok or _near_bos_level)
         )
 
+        # 2026-08-05 Phase 1: a directionally aligned, reaction-confirmed FVG
+        # plus aligned liquidity sweep can recover location just outside classic
+        # zone proximity. Keep it bounded to the H4 zone so this cannot become a
+        # structure-free or anywhere-on-chart location bypass.
+        try:
+            _fvg_sweep_max_atr = _naked_engine_atr_mult(
+                "fvg_sweep_location_max_distance_atr_mult", 0.0, asset_type_lower
+            )
+            _active_zone_distance = abs(float(res.get("active_zone_distance")))
+        except (TypeError, ValueError):
+            _fvg_sweep_max_atr = 0.0
+            _active_zone_distance = float("inf")
+        _fvg_sweep_location = bool(
+            _fvg_sweep_max_atr > 0
+            and res.get("fvg_overlap")
+            and res.get("fvg_reaction_confirmed")
+            and _sweep_aligned
+            and _active_zone_distance <= atr_val * _fvg_sweep_max_atr
+        )
+
         location_ok = (
             zone_ok
             or ob_at_zone
@@ -6950,10 +7026,13 @@ class NakedEngine:
                 and not _forex_ranging_continuation_blocked
             )
             or _trend_pullback
+            or _fvg_sweep_location
         )
         location_mode = (
             "trend_pullback"
             if _trend_pullback and not zone_ok and not ob_at_zone
+            else "fvg_sweep"
+            if _fvg_sweep_location and not zone_ok and not ob_at_zone
             else "normal" if location_ok else "none"
         )
         location_distance_atr = None
@@ -7092,6 +7171,8 @@ class NakedEngine:
 
         # FIX 7: Apply contextual room gate after rr is computed
         _effective_min_room_atr = _get_min_room_atr(rr, bool(res.get("bos_confirmed")), asset_type_lower, exec_style)
+        if _phase2_thresholds.get("enabled"):
+            _effective_min_room_atr *= float(_phase2_thresholds.get("room_multiplier", 1.0))
         if config.CONFIG.get("ENGINE_B_ROOM_GATE_REQUIRE_DISTANCE", True):
             if room_dist is None:
                 # Open-air room: require BOS plus MTF trend alignment (default ON)
@@ -7856,6 +7937,10 @@ class NakedEngine:
             "quality_components": _quality_components,
             "weighted_scoring_enabled": bool(_use_weighted_scoring),
             "weighted_scoring_error": _weighted_scoring_error,
+            "phase2_quality": res.get("phase2_quality", {}),
+            "phase2_adaptive_thresholds": _phase2_thresholds,
+            "confluence_density": _phase2_thresholds.get("confluence_density", {}),
+            "invalidation_context": res.get("invalidation_context", {}),
             "volume_scoring_applicable": _volume_scoring_applicable,
             "struct_points": 1.0 if structure_ok else 0.0,
             "rr_points": 1.0 if rr_ok else 0.0,

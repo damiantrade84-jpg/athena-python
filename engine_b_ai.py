@@ -455,6 +455,17 @@ def build_engine_b_signal_message(
         lines.append(f"Pair: {pair} | Direction: {direction} | Price: {current_price}")
         lines.append(f"Confidence: {conf_score:.2f} / {max_score} ({score_pct}%)")
     lines.append(f"Verdict: {structure_result.get('structural_verdict', 'UNCLEAR')}")
+    # 2026-08-05 Phase 2: AI receives deterministic quality evidence only after
+    # the checklist; it remains ranking/advisory and cannot alter these gates.
+    _phase2 = structure_result.get("phase2_quality") or confidence_result.get("phase2_quality")
+    if isinstance(_phase2, dict) and not _phase2.get("error"):
+        lines.append(f"Phase 2 quality package: {json.dumps(_phase2, default=str)}")
+    _density = structure_result.get("confluence_density") or confidence_result.get("confluence_density")
+    if isinstance(_density, dict):
+        lines.append(f"Confluence density (soft ranking only): {json.dumps(_density, default=str)}")
+    _invalidation = structure_result.get("invalidation_context") or confidence_result.get("invalidation_context")
+    if isinstance(_invalidation, dict):
+        lines.append(f"Deterministic invalidation context: {json.dumps(_invalidation, default=str)}")
     canonical_trade_ok = bool(
         confidence_result.get("canonical_trade_ok", confidence_result.get("engine_b_canonical_actionable"))
     )

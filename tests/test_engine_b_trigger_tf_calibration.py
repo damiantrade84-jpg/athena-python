@@ -40,8 +40,8 @@ _WICK_CANDLES = [
 @pytest.mark.parametrize(
     "group,asset,expected_atr,expected_wick,expected_engulf,expected_close",
     [
-        ("forex_majors", "forex", 10, 1.5, 0.25, 0.70),
-        ("forex_crosses", "forex", 11, 1.4, 0.22, 0.70),
+        ("forex_majors", "forex", 10, 1.30, 0.18, 0.68),
+        ("forex_crosses", "forex", 11, 1.25, 0.18, 0.68),
         ("forex_exotics", "forex", 12, 1.2, 0.20, 0.65),
         ("crypto_btc", "crypto", 10, 1.0, 0.30, 0.75),
         ("crypto_other", "crypto", 11, 1.0, 0.35, 0.75),
@@ -133,7 +133,7 @@ def test_m15_nested_subrow_merges_when_present(monkeypatch):
     assert engine_b_trigger_atr_period("forex_majors", "forex", "M15") == 9
 
 
-def test_m15_trigger_uses_forex_majors_wick_15():
+def test_m15_trigger_uses_phase1_forex_majors_wick_130():
     engine = NakedEngine()
     m15 = engine._price_action_trigger(
         _WICK_CANDLES,
@@ -145,7 +145,8 @@ def test_m15_trigger_uses_forex_majors_wick_15():
         score_group="forex_majors",
         trigger_tf="M15",
     )
-    assert m15["rejection"] is False
+    # 2026-08-05 Phase 1: wick/body=1.4 now clears the calibrated 1.30 floor.
+    assert m15["rejection"] is True
 
 
 def test_trending_cap_applies_after_class_lookup():
@@ -186,4 +187,36 @@ def test_config_block_present():
     assert "forex_majors" in keyed
     assert "crypto_btc" in keyed
     assert keyed["forex_majors"]["trigger_atr"] == 10
+    # 2026-08-05 Phase 1: lock the promoted config values at the resolver boundary.
+    assert keyed["forex_majors"]["rejection_wick_body"] == pytest.approx(1.30)
+    assert keyed["forex_majors"]["engulfing_body_atr"] == pytest.approx(0.18)
+    assert keyed["forex_majors"]["strong_close_pct"] == pytest.approx(0.68)
+    assert keyed["forex_crosses"]["rejection_wick_body"] == pytest.approx(1.25)
+    assert keyed["forex_crosses"]["engulfing_body_atr"] == pytest.approx(0.18)
+    assert keyed["forex_crosses"]["strong_close_pct"] == pytest.approx(0.68)
     assert "trigger_adx" not in keyed["forex_majors"]
+
+    naked = CONFIG.get("NAKED_ENGINE") or {}
+    assert naked["zone_touch_tolerance_atr_mult"] == pytest.approx(0.32)
+    assert naked["zone_proximity_atr_mult"]["default"] == pytest.approx(0.75)
+    assert naked["zone_proximity_atr_mult"]["forex_majors"] == pytest.approx(0.75)
+    assert naked["ob_min_strength"] == pytest.approx(42)
+    assert CONFIG["ENGINE_B_M5_PULLBACK_REFINEMENT_ENABLED"] is True
+    assert CONFIG["ENGINE_B_OB_CONFLUENCE_DIRECTIONAL"] is True
+
+
+def test_phase1_location_values_reach_zone_context():
+    """2026-08-05 Phase 1: loaded proximity/touch values reach the live consumer."""
+    local_engine = NakedEngine()
+    zone = {"lower": 98.0, "upper": 99.0, "center": 98.5}
+    ctx = local_engine._zone_context(
+        zone,
+        current_price=99.74,
+        atr=1.0,
+        direction="LONG",
+        candles=[{"open": 99.6, "high": 99.8, "low": 99.31, "close": 99.5}],
+        asset_type="forex",
+        score_group="forex_majors",
+    )
+    assert ctx["near_zone"] is True
+    assert ctx["zone_touched"] is True
