@@ -67,58 +67,113 @@ CANDLE_BUILDER_BULK_D1_SKIP_EXCHANGES: ["COMM"]
 # cap filter is conservative. Low-ATR mega-caps are excluded deliberately, not by
 # oversight: AAPL 2.29, WMT 2.28, MA 1.99, MCD 1.93, BRKb 1.29.
 EODHD_WS_US_SYMBOLS:
-  - INTC      # ATR% 8.78
-  - IBM       # 6.24
-  - MRNA      # 6.01
-  - COIN      # 5.81
-  - ORCL      # 5.61
-  - RBLX      # 5.42
-  - WDAY      # 5.34
-  - TSLA      # 5.21
-  - TWLO      # 5.21
-  - SNOW      # 4.98
-  - CAT       # 4.95
-  - SHOP      # 4.80
-  - NRG       # 4.57
-  - QCOM      # 4.52
-  - DOCU      # 4.48
-  - ADBE      # 4.43
-  - GS        # 4.27
-  - AA        # 4.24
-  - DASH      # 4.22
-  - TSM       # 4.22
-  - TMUS      # 4.18
-  - NVDA      # 3.95
-  - UAL       # 3.86
-  - META      # 3.76
-  - MS        # 3.75
-  - LUV       # 3.74
-  - NFLX      # 3.61
-  # SQ removed 2026-07-30: Block trades as XYZ now, so the EODHD `us` stream
-  # delivers no ticks under SQ and the pair held zero bars on every timeframe
-  # while still consuming one of the 50 subscription slots.
-  - PYPL      # 3.56
-  - GOOG      # 3.45, renamed from GOOGL: ATFX only quotes Alphabet Class C (#GOOG)
-  - OMC       # 3.44
-  - UBER      # 3.43
-  - ZM        # 3.35
-  - CSCO      # 3.25
-  - BABA      # 3.14
-  - C         # 3.11
-  - UPS       # 3.11
-  - ABT       # 3.10
-  - GM        # 3.10
-  - NKE       # 3.05
-  - DAL       # 2.99
-  - PM        # 2.99
-  - BBY       # 2.98
-  - GE        # 2.96
-  - MMM       # 2.95
-  - MSFT      # 2.90
-  - GILD      # 2.89
-  - TGT       # 2.77
-  - LLY       # 2.71
-  - VZ        # 2.70
+  # The complete 50-stock US active universe. Every selected US stock is
+  # WebSocket-eligible, so no stock volume is routed through Live-v2.
+  - NVDA
+  - TSLA
+  - PLTR
+  - AMD
+  - COIN
+  - AAPL
+  - MSFT
+  - AMZN
+  - META
+  - GOOG
+  - AVGO
+  - NFLX
+  - TSM
+  - ORCL
+  - QCOM
+  - INTC
+  - CRM
+  - ADBE
+  - SNOW
+  - RBLX
+  - UBER
+  - SHOP
+  - DASH
+  - BA
+  - GME
+  - AMC
+  - AI
+  - MRNA
+  - TWLO
+  - DOCU
+  - ZM
+  - PYPL
+  - JPM
+  - GS
+  - BAC
+  - WFC
+  - V
+  - XOM
+  - CVX
+  - GE
+  - CAT
+  - NRG
+  - BABA
+  - NKE
+  - GM
+  - C
+  - LLY
+  - IBM
+  - DIS
+  - UAL
+
+# Curated ATFX cash-equity universe.  The optional machine-local setting may
+# replace this list for a different broker account, but omitted shares are not
+# constructed into ALL_PAIRS and therefore cannot enter scans or Tuning Lab.
+# The US subset plus the static core list yields 50 US stocks; the remaining
+# entries are the selected Xetra, Euronext Paris, and HKEX stocks.
+MT5_ATFX_SHARE_TICKERS:
+  # US additions to the static core US_STOCK_PAIRS list
+  - ORCL
+  - QCOM
+  - TSM
+  - ADBE
+  - SNOW
+  - RBLX
+  - SHOP
+  - DASH
+  - TWLO
+  - DOCU
+  - ZM
+  - AI
+  - GME
+  - AMC
+  - MRNA
+  - IBM
+  - GS
+  - BAC
+  - WFC
+  - CVX
+  - GE
+  - CAT
+  - NRG
+  - BABA
+  - NKE
+  - GM
+  - C
+  - LLY
+  - UAL
+  # Xetra
+  - SAP
+  - SIE
+  - IFX
+  - DB1
+  - BMW
+  # Euronext Paris
+  - AIR
+  - LVMH
+  - TTEF
+  - AXAF
+  - BNPP
+  # Hong Kong
+  - HK0700
+  - HK9988
+  - HK1810
+  - HK0005
+  - HK0388
 
 SCAN_MAX_WORKERS: 8           # Increased scan concurrency for faster Engine A full-universe runs. (Conservative: 8 for i7/16GB)
 

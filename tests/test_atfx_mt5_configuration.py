@@ -6,6 +6,25 @@ from pathlib import Path
 
 import mt5_executor
 import scanner
+import yaml
+
+
+_CURATED_ATFX_SHARES = {
+    "ORCL", "QCOM", "TSM", "ADBE", "SNOW", "RBLX", "SHOP", "DASH", "TWLO",
+    "DOCU", "ZM", "AI", "GME", "AMC", "MRNA", "IBM", "GS", "BAC", "WFC",
+    "CVX", "GE", "CAT", "NRG", "BABA", "NKE", "GM", "C", "LLY", "UAL",
+    "SAP", "SIE", "IFX", "DB1", "BMW", "AIR", "LVMH", "TTEF", "AXAF", "BNPP",
+    "HK0700", "HK9988", "HK1810", "HK0005", "HK0388",
+}
+
+
+def test_checked_in_atfx_share_catalog_is_the_curated_scan_and_tuning_universe():
+    """Omitted shares must not be constructed into ALL_PAIRS or Tuning Lab."""
+    config_path = Path(__file__).resolve().parents[1] / "config.yaml"
+    cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    assert set(cfg["MT5_ATFX_SHARE_TICKERS"]) == _CURATED_ATFX_SHARES
+    assert len(cfg["MT5_ATFX_SHARE_TICKERS"]) == 44
 
 
 def test_mt5_symbol_overrides_precede_static_broker_map(monkeypatch):

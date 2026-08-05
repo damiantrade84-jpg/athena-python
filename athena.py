@@ -780,7 +780,6 @@ US_STOCK_PAIRS = [
         "display": "AMZN",
         "source": "mt5",
         "enabled": True,
-        "ws": False,
     },  # SQN +0.27
     {
         "symbol": "META.US",
@@ -815,7 +814,6 @@ US_STOCK_PAIRS = [
         "display": "JPM",
         "source": "mt5",
         "enabled": True,
-        "ws": False,
     },  # SQN +0.26
     {
         "symbol": "V.US",
@@ -823,7 +821,6 @@ US_STOCK_PAIRS = [
         "display": "V",
         "source": "mt5",
         "enabled": True,
-        "ws": False,
     },  # SQN -1.39
     {
         "symbol": "XOM.US",
@@ -831,7 +828,6 @@ US_STOCK_PAIRS = [
         "display": "XOM",
         "source": "mt5",
         "enabled": True,
-        "ws": False,
     },  # SQN -0.03
     {
         "symbol": "NFLX.US",
@@ -853,7 +849,6 @@ US_STOCK_PAIRS = [
         "display": "CRM",
         "source": "mt5",
         "enabled": True,
-        "ws": False,
     },  # Pepperstone CFD
     {
         "symbol": "DIS.US",
@@ -861,7 +856,6 @@ US_STOCK_PAIRS = [
         "display": "DIS",
         "source": "mt5",
         "enabled": True,
-        "ws": False,
     },  # Pepperstone CFD
     {
         "symbol": "BA.US",
@@ -869,7 +863,6 @@ US_STOCK_PAIRS = [
         "display": "BA",
         "source": "mt5",
         "enabled": True,
-        "ws": False,
     },  # Pepperstone CFD
     {
         "symbol": "COIN.US",

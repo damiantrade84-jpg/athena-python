@@ -50,16 +50,7 @@ def test_build_non_ws_stock_pairs_matches_current_inventory():
     selected = build_non_ws_stock_pairs(mod.ALL_PAIRS)
 
     assert [p["display"] for p in selected] == [
-        "AMZN",
-        "JPM",
-        "V",
-        "XOM",
-        "CRM",
-        "DIS",
-        "BA",
-        "QQQ",
         "GLD",
-        "TLT",
         "XLE",
     ]
 
