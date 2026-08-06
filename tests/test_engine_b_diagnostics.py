@@ -813,30 +813,41 @@ def test_calculate_confidence_can_disable_structure_gate_for_bt_experiment_only(
     ).get("reason_codes", [])
 
 
+def _inverse_return_dxy_series(seed: int) -> tuple[list, list]:
+    """60-bar asset/DXY closes with genuinely inverse bar-to-bar RETURNS.
+
+    A shared shock moves the asset down whenever DXY moves up (return
+    correlation ~ -1), plus a DXY drift so the adverse-direction leg fires.
+    The gate correlates returns, not levels: opposite *trends* with independent
+    noise have ~zero return correlation and must NOT block — that was the
+    spurious level-correlation case the return-based gate removes (audit B-2).
+    """
+    rng = np.random.default_rng(seed)
+    n = 60
+    shock = rng.normal(0.0, 0.01, size=n)
+    asset_ret = -shock + rng.normal(0.0, 0.002, size=n)
+    dxy_ret = shock + 0.003 + rng.normal(0.0, 0.002, size=n)
+    asset = 200.0 * np.cumprod(1.0 + asset_ret)
+    dxy = 100.0 * np.cumprod(1.0 + dxy_ret)
+    return asset.tolist(), dxy.tolist()
+
+
 def test_check_macro_correlation_detail_returns_reason_when_blocking():
-    # Construct 60 bars: asset falls while DXY rises → negative correlation; last segment DXY up → block LONG
-    rng = np.random.default_rng(42)
-    t = np.arange(60, dtype=float)
-    dxy = 100 + t * 0.05 + rng.normal(0, 0.02, size=60)
-    asset = 200 - t * 0.12 + rng.normal(0, 0.05, size=60)
-    ok, reason = engine.check_macro_correlation_detail(
-        asset.tolist(), dxy.tolist(), "LONG"
-    )
+    # Inverse bar-to-bar returns + DXY uptrend → block LONG.
+    asset, dxy = _inverse_return_dxy_series(42)
+    ok, reason = engine.check_macro_correlation_detail(asset, dxy, "LONG")
     assert ok is False
     assert reason == ENGINE_B_REASON_ADVERSE_DXY
 
 
 def test_dxy_macro_gate_is_consumed_by_confidence(monkeypatch):
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_DXY_MACRO_GATE_ENABLED", True)
-    rng = np.random.default_rng(7)
-    t = np.arange(60, dtype=float)
-    dxy = 100 + t * 0.05 + rng.normal(0, 0.02, size=60)
-    asset = 200 - t * 0.12 + rng.normal(0, 0.05, size=60)
+    asset, dxy = _inverse_return_dxy_series(7)
     res = {
         **_base_res_long(),
         "asset_type": "forex",
-        "_dxy_h4_closes": dxy.tolist(),
-        "_pair_h4_closes": asset.tolist(),
+        "_dxy_h4_closes": dxy,
+        "_pair_h4_closes": asset,
     }
 
     out = engine.calculate_confidence(

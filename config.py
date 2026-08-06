@@ -3896,6 +3896,55 @@ def _fatal_config_validation(cfg: dict) -> None:
     if _b_max is None or float(_b_max) <= 0:
         errors.append("Engine B max_possible must be defined and positive")
 
+    # 7. Engine gate blocks must be mappings (audit C-1). Every one of these is
+    # consumed via `CONFIG.get(key) or {}` + `.get(...)` with per-reader default
+    # fallbacks; a scalar or list value makes each reader silently fall back to
+    # its own hardcoded default — re-tuning several gates at once with no error
+    # anywhere. Refuse to start instead of fail-open re-tuning.
+    _engine_gate_blocks = (
+        "ENGINE_A_V3_DIRECTIONAL_RAMP",
+        "ENGINE_A_V3_MR_OPPOSITION_GUARD",
+        "ENGINE_A_V3_TREND_SEPARATION",
+        "ENGINE_A_V3_TREND_HEALTH",
+        "ENGINE_A_V3_MOMENTUM_BLEND",
+        "ENGINE_A_V3_VOLUME_BLEND",
+        "ENGINE_A_V3_LOCATION",
+        "ENGINE_A_V3_VOLATILITY_GATING",
+        "ENGINE_A_V3_SESSION_STRENGTHENED",
+        "ENGINE_A_V3_QUANT_SESSION_GATE",
+        "ENGINE_A_V3_SESSION_SCORING",
+        "ENGINE_A_V3_SETUP_UPGRADE",
+        "ENGINE_A_V3_EQUITY_VOLUME_FLOOR",
+        "ENGINE_A_V3_CRYPTO_DERIV_GUARD",
+        "ENGINE_A_V3_LEGACY_FILTERS",
+        "ENGINE_A_V3_SUBSYSTEMS",
+        "ENGINE_A_V3_STRUCTURAL_GEOMETRY",
+        "ENGINE_A_V3_MEAN_REVERSION",
+        "ENGINE_A_SPREAD_SCORE_PENALTY",
+        "ENGINE_A_CORRELATION_SCORE_PENALTY",
+        "ENGINE_B_WEIGHTED_SCORING",
+        "ENGINE_B_SUBSYSTEMS",
+        "ENGINE_B_CANONICAL_ACTIONABILITY",
+        "ENGINE_B_PHASE2_QUALITY",
+        "ENGINE_B_FOLLOW_THROUGH",
+    )
+    for _block in _engine_gate_blocks:
+        _value = cfg.get(_block)
+        if _value is not None and not isinstance(_value, dict):
+            errors.append(
+                f"{_block} must be a mapping when set, got {type(_value).__name__}"
+            )
+
+    # Audit B-1: the quality_ratio floor binds Engine B pass/fail on
+    # ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE. The shipped ratios were placeholders,
+    # not n>=30 outcome-calibrated — keep the switch visible until calibrated.
+    if str(cfg.get("ENGINE_B_MIN_SCORE_BASIS", "total") or "total").strip().lower() == "quality_ratio":
+        log.warning(
+            "[BOOT] ENGINE_B_MIN_SCORE_BASIS=quality_ratio binds Engine B pass/fail "
+            "on ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE — verify those ratios are "
+            "outcome-calibrated (n>=30) before trusting the pass/fail change."
+        )
+
     if errors:
         for e in errors:
             log.critical("CONFIG_VALIDATION_FATAL: %s", e)
@@ -3903,7 +3952,7 @@ def _fatal_config_validation(cfg: dict) -> None:
             f"System refused to start due to {len(errors)} config error(s). See logs above."
         )
 
-    log.info("[BOOT] Fatal config validation passed (%d checks)", 6)
+    log.info("[BOOT] Fatal config validation passed (%d checks)", 7)
 
 
 # Deprecated v3 timeframe-policy keys (timeframe-architecture migration).

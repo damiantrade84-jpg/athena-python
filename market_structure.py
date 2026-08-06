@@ -6924,10 +6924,18 @@ class NakedEngine:
         )
         expected_trigger_tf = str(profile.get("entry_tf") or "").upper()
         actual_trigger_tf = str(res.get("trigger_timeframe") or "").upper()
-        # M5 belongs in this set: it is a policy trigger rung for the
+        # M5 belongs in the fast set: it is a policy trigger rung for the
         # fast/conditional profiles, so a structure pass that ran on a
-        # different series must not satisfy the entry gate.
-        trigger_timeframe_gate_required = expected_trigger_tf in {"M5", "M15", "M30"}
+        # different series must not satisfy the entry gate. Fast rungs fail
+        # closed on MISSING provenance too; any expected rung fails closed on a
+        # MISMATCHED series (audit B-3). A missing stamp on a non-fast rung
+        # stays accepted for legacy/hand-built payloads: production structure
+        # analysis always stamps trigger_timeframe, so this widens the gate
+        # only for payloads that predate the stamp, never for live scan output.
+        _fast_trigger_tf = expected_trigger_tf in {"M5", "M15", "M30"}
+        trigger_timeframe_gate_required = bool(expected_trigger_tf) and (
+            _fast_trigger_tf or bool(actual_trigger_tf)
+        )
         trigger_timeframe_gate_ok = (
             not trigger_timeframe_gate_required
             or actual_trigger_tf == expected_trigger_tf
@@ -8083,7 +8091,23 @@ class NakedEngine:
             entry_candles, direction, trigger_atr_val
         )
         if checklist_mode == "strict":
-            passed = structure_ok and zone_ok and trigger_ok and space_gate_ok and rr_ok and macro_ok and tape_ok
+            # Strict is a SUPERSET of the flexible requirements: the full
+            # flexible gate stack plus a zone at price, a raw trigger pattern,
+            # and macro alignment. The earlier form substituted zone_ok for
+            # location_ok and trigger_ok for entry_ok, which silently disabled
+            # the trend-pullback / FVG-sweep / breakout location and entry
+            # paths instead of tightening them (audit B-4).
+            passed = (
+                structure_ok
+                and location_ok
+                and entry_ok
+                and zone_ok
+                and trigger_ok
+                and space_gate_ok
+                and rr_ok
+                and macro_ok
+                and tape_ok
+            )
         else:
             # Flexible but not free — require BOTH location AND a trigger/catalyst.
             # BOS alone is not enough. You need: structure + (zone OR breakout) + trigger + room/rr.
@@ -8518,7 +8542,27 @@ class NakedEngine:
         a_series = pd.Series(asset_close_series[-min_len:])
         d_series = pd.Series(dxy_close_series[-min_len:])
 
-        correlation = a_series.corr(d_series)
+        # Correlate bar-to-bar RETURNS, not raw close levels: level correlation
+        # on non-stationary price series is spurious — two independent trends
+        # correlate near +/-1 — so a level read blocks on coincident drift
+        # instead of genuine inverse co-movement (audit B-2).
+        a_returns = (
+            a_series.pct_change()
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
+        )
+        d_returns = (
+            d_series.pct_change()
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
+        )
+        if len(a_returns) < 10 or len(d_returns) < 10:
+            if macro_required and bool(
+                config.CONFIG.get("ENGINE_B_MACRO_SHORT_HISTORY_FAIL_CLOSED", True)
+            ):
+                return False, "macro_history_insufficient"
+            return True, None
+        correlation = a_returns.corr(d_returns)
 
         dxy_recent = d_series.iloc[-5:].mean()
         dxy_past = d_series.iloc[-15:-5].mean()
@@ -8541,7 +8585,7 @@ class NakedEngine:
         macro_required: bool = False,
     ) -> bool:
         """
-        Calculates 30-period rolling Pearson correlation.
+        Pearson correlation of bar-to-bar returns over ENGINE_B_MACRO_CORRELATION_WINDOW.
         Returns False (Block) if dynamically inversely correlated AND DXY moving against the trade.
         When macro_required and history is short, fails closed (config-gated).
         """

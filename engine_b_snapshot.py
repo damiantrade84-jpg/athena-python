@@ -261,25 +261,32 @@ def resolve_engine_b_style_profile(
         )
         for selected in ("scalp", "intraday", "swing")
     }
+    # Fallback numeric profile. min_score / min_rr / fallback_rr MUST mirror
+    # engine_b_config.yaml base_thresholds — the YAML loader is the primary
+    # source and overwrites these at boot (a loader failure refuses startup),
+    # so these defaults are defense-in-depth only; drift between the two makes
+    # a stripped NAKED_ENGINE silently looser than the tracked config (audit B-5).
+    # min_room_atr has no base_thresholds row in the YAML (only per-group
+    # overrides), so the built-in room defaults remain authoritative here.
     profiles: dict[str, dict[str, Any]] = {
         "scalp": {
-            "min_score": 3.0,
+            "min_score": 4.0,
             "min_room_atr": 0.35,
-            "min_rr": 1.0,
+            "min_rr": 1.5,
             "fallback_rr": 1.8,
             "require_macro_align": False,
         },
         "intraday": {
-            "min_score": 4.0,
+            "min_score": 4.5,
             "min_room_atr": 0.7,
-            "min_rr": 1.2,
+            "min_rr": 1.5,
             "fallback_rr": 1.8,
             "require_macro_align": False,
         },
         "swing": {
-            "min_score": 4.0,
+            "min_score": 5.0,
             "min_room_atr": 1.0,
-            "min_rr": 1.6,
+            "min_rr": 2.0,
             "fallback_rr": 2.5,
             "require_macro_align": False,
         },

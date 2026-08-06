@@ -208,13 +208,21 @@ def _slice_candles(
     primary_tf: str,
     end_index: int,
 ) -> dict[str, list[dict]]:
+    # Compare normalized epoch seconds, not raw timestamp strings: string
+    # ordering is only correct when every timeframe emits an identical ISO
+    # format (same offset/precision/Z-suffix). A feed that differs by format
+    # would shift fold/holdout boundaries per timeframe (audit C-2). Rows with
+    # unparseable timestamps (epoch 0) are excluded — the evaluator's candle
+    # validation rejects such series fail-closed anyway.
+    from athena_app.services.market_state import candle_timestamp_epoch
+
     primary = candles[primary_tf]
-    cutoff = str(primary[end_index - 1].get("time") or primary[end_index - 1].get("datetime"))
+    cutoff = candle_timestamp_epoch(primary[end_index - 1])
     return {
         timeframe: [
             row
             for row in rows
-            if str(row.get("time") or row.get("datetime")) <= cutoff
+            if 0 < candle_timestamp_epoch(row) <= cutoff
         ]
         for timeframe, rows in candles.items()
     }

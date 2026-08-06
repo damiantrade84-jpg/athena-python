@@ -1321,39 +1321,46 @@ def _diagnose_layer_period_mismatch(profile: Any, indicator_periods: Mapping[str
         return {"error": str(exc)}
 
 
-# Cash-session windows in UTC hours, keyed by score_group. Each group is scored
-# against the exchange its constituents actually trade on — applying the US
-# window to eu_indices/asian_indices demoted those markets during their own
-# cash session and promoted them while they were closed.
+# Cash-session resolution is calendar-based (DST-aware): each group/symbol is
+# scored against the exchange its constituents actually trade on, and the cash
+# window is derived from that exchange's local session hours on the bar's own
+# date via exchange_calendars (IANA timezones). The previous fixed UTC windows
+# were summer-time values: November-March the US cash session is 14:30-21:00
+# UTC, so the old (13.5, 20.0) window promoted the hour before the open and
+# demoted the final hour of trading (audit A-1).
 #
-# Groups whose members span several exchanges (stock_other holds the ATFX US /
-# Europe / Hong Kong share CFDs; index_other is unclassified) are deliberately
-# absent: without a per-symbol region there is no correct window, and guessing
-# one is worse than not applying the gate. `context["symbol"]` resolves those
-# per pair when a caller supplies it (see _resolve_session_window).
+# Fixed UTC windows are retained ONLY for groups whose members span several
+# exchanges with no single representative calendar (asian_indices covers HKEX,
+# Nikkei and ASX; the union window is fixed by construction).
+#
+# Groups whose members span several exchanges without a representative venue
+# (stock_other holds the ATFX US / Europe / Hong Kong share CFDs; index_other
+# is unclassified) are deliberately absent: without a per-symbol region there
+# is no correct window, and guessing one is worse than not applying the gate.
+# `context["symbol"]` resolves those per pair when a caller supplies it (see
+# _resolve_session_calendar).
 _SESSION_WINDOWS_UTC: dict[str, tuple[float, float]] = {
-    "us_indices_trackers": (13.5, 20.0),
-    "us_stock_single": (13.5, 20.0),
-    "bond_tlt": (13.5, 20.0),
-    "smallcap_em_etf": (13.5, 20.0),
-    "eu_indices": (7.0, 15.5),
     "asian_indices": (0.0, 8.0),
 }
 
-# exchange_calendars key -> UTC cash window, for the per-symbol path.
-_SESSION_WINDOWS_BY_CALENDAR: dict[str, tuple[float, float]] = {
-    "NYSE_NASDAQ": (13.5, 20.0),
-    "XETRA": (7.0, 15.5),
-    "EURONEXT_PARIS": (7.0, 15.5),
-    "HKEX": (1.5, 8.0),
+# score_group -> exchange_calendars key whose continuous session is the group's
+# representative cash window. eu_indices spans several venues (DAX, FTSE,
+# CAC/MIB/IBEX); XETRA hours are the representative choice — an approximation
+# disclosed rather than a per-symbol split the group key cannot carry.
+_GROUP_SESSION_CALENDAR: dict[str, str] = {
+    "us_indices_trackers": "NYSE_NASDAQ",
+    "us_stock_single": "NYSE_NASDAQ",
+    "bond_tlt": "NYSE_NASDAQ",
+    "smallcap_em_etf": "NYSE_NASDAQ",
+    "eu_indices": "XETRA",
 }
 
 
-def _resolve_session_window(group: str, symbol: str | None) -> tuple[tuple[float, float] | None, str]:
-    """Resolve the (start, end) UTC cash window for a group / optional symbol."""
-    window = _SESSION_WINDOWS_UTC.get(group)
-    if window is not None:
-        return window, group
+def _resolve_session_calendar(group: str, symbol: str | None) -> tuple[str | None, str]:
+    """Resolve an exchange_calendars key for a group / optional symbol."""
+    calendar = _GROUP_SESSION_CALENDAR.get(group)
+    if calendar is not None:
+        return calendar, group
     raw = str(symbol or "").strip()
     if not raw:
         return None, "region_unresolved"
@@ -1365,10 +1372,7 @@ def _resolve_session_window(group: str, symbol: str | None) -> tuple[tuple[float
         return None, "region_unresolved"
     if not calendar:
         return None, "region_unresolved"
-    window = _SESSION_WINDOWS_BY_CALENDAR.get(calendar)
-    if window is None:
-        return None, "region_unresolved"
-    return window, calendar
+    return calendar, calendar
 
 
 def _v3_session_multiplier(
@@ -1388,6 +1392,10 @@ def _v3_session_multiplier(
     session was current at replay time, so live and backtest could never agree
     on the same bar. Missing/unparseable bar time fails open (mult 1.0) rather
     than substituting wall clock.
+
+    Session membership is resolved through exchange_calendars on the bar's own
+    date, so DST transitions shift the window with the exchange (audit A-1).
+    When the timezone database is unavailable the gate fails open, loudly.
     """
     try:
         from config import CONFIG
@@ -1396,21 +1404,49 @@ def _v3_session_multiplier(
             return 1.0, {"enabled": False}
         if family not in {"equity_etf", "index"} and group not in {"us_indices_trackers", "eu_indices", "asian_indices", "index_other", "us_stock_single", "stock_other", "bond_tlt", "smallcap_em_etf"}:
             return 1.0, {"enabled": True, "applied": False, "reason": "family_not_equity_index"}
-        window, window_source = _resolve_session_window(group, symbol)
-        if window is None:
-            return 1.0, {
-                "enabled": True,
-                "applied": False,
-                "reason": "session_window_unresolved_for_group",
-                "group": group,
-            }
         parsed = _parse_bar_time(bar_time)
         if parsed is None:
             return 1.0, {
                 "enabled": True,
                 "applied": False,
                 "reason": "bar_time_unavailable",
-                "window": list(window),
+            }
+        calendar, calendar_source = _resolve_session_calendar(group, symbol)
+        if calendar:
+            try:
+                from exchange_calendars import SessionPhase, compute_session_phase
+
+                phase = compute_session_phase(calendar, parsed)
+            except Exception:
+                phase = None
+            if phase is None:
+                return 1.0, {
+                    "enabled": True,
+                    "applied": False,
+                    "reason": "session_calendar_unavailable",
+                    "calendar": calendar,
+                    "windowSource": calendar_source,
+                }
+            active = phase == SessionPhase.OPEN
+            mult = float(cfg.get("US_ACTIVE_MULT", 1.12) if active else cfg.get("US_OFF_MULT", 0.88))
+            return mult, {
+                "enabled": True,
+                "applied": True,
+                "session": "cash_active" if active else "off_hours",
+                "calendar": calendar,
+                "sessionPhase": str(getattr(phase, "value", phase)),
+                "windowSource": calendar_source,
+                "barUtcHour": round(parsed.hour + parsed.minute / 60.0, 2),
+                "timeSource": "entry_candle",
+                "mult": mult,
+            }
+        window = _SESSION_WINDOWS_UTC.get(group)
+        if window is None:
+            return 1.0, {
+                "enabled": True,
+                "applied": False,
+                "reason": "session_window_unresolved_for_group",
+                "group": group,
             }
         hour = parsed.hour + parsed.minute / 60.0
         start, end = window
@@ -1420,7 +1456,7 @@ def _v3_session_multiplier(
             "enabled": True,
             "applied": True,
             "session": "cash_active" if active else "off_hours",
-            "windowSource": window_source,
+            "windowSource": calendar_source,
             "windowUtc": [start, end],
             "barUtcHour": round(hour, 2),
             "timeSource": "entry_candle",
@@ -1696,6 +1732,7 @@ def score_pair(
     series_cache=None,
     feature_cache: dict | None = None,
     compact_result: bool = False,
+    entry_candle_is_forming: bool = False,
 ) -> QuantScore:
     """Continuous quality score for one pair. `route` is a SpecialistRoute
     (.score_group, .family). `context` carries subsystem snapshots and an
@@ -1857,10 +1894,12 @@ def score_pair(
             snapshot_cache,
             **snap_kwargs,
         )
-    if diagnostic_override is not None or policy:
-        entry_snap = snaps.get(entry_tf) or {}
-    else:
-        entry_snap = snaps.get(entry_tf) or snaps.get("H4") or snaps.get("D1") or {}
+    # No cross-timeframe fallback on any path: a missing/empty entry snapshot
+    # must degrade the entry-rung reads to unavailable, never silently re-anchor
+    # them on H4/D1 while volume/alignment-age keep reading the entry series —
+    # the mixed-rung read carried no diagnostic (audit A-2). The policy path was
+    # already fail-closed; the legacy path now matches it.
+    entry_snap = snaps.get(entry_tf) or {}
     momentum_snap = (
         (snaps.get(momentum_tf) or {})
         if policy else
@@ -1985,6 +2024,7 @@ def score_pair(
         "entry_core",
         entry_tf,
         len(entry_candles),
+        bool(entry_candle_is_forming),
         (context or {}).get("volume_ratio"),
         corroborating_adx,
         current_price is not None,
@@ -1999,7 +2039,18 @@ def score_pair(
             corroborating_adx=corroborating_adx,
             current_price=current_price,
         )
-        volume = _volume_component(entry_snap, entry_candles, context, group)
+        # Volume must be measured on confirmed bars only. When the entry candle
+        # is still forming, its last bar carries a partial volume that
+        # understates the derived relative-volume ratio and skews OBV — live
+        # would then systematically disagree with the confirmed-bar backtest
+        # (audit A-6). Drop the forming bar for the volume read; location keeps
+        # the live quote via current_price.
+        volume_candles = (
+            entry_candles[:-1]
+            if entry_candle_is_forming and len(entry_candles) > 1
+            else entry_candles
+        )
+        volume = _volume_component(entry_snap, volume_candles, context, group)
         core_result = location, level_style, volume
         if feature_cache is not None:
             previous_key = feature_cache.get("_latest_entry_core_key")
@@ -2156,7 +2207,17 @@ def score_pair(
                         direction, dsign = "FLAT", 0.0
                     level_style = "trend"
         except Exception:
-            pass
+            # Fail closed: if the guard configuration cannot be read, do not
+            # force the counter-trend fade — fall back to the consensus
+            # direction exactly like an opposed fade (audit A-5).
+            mr_opposition_blocked = True
+            if dir_sum > profile.direction_deadband:
+                direction, dsign = "LONG", 1.0
+            elif dir_sum < -profile.direction_deadband:
+                direction, dsign = "SHORT", -1.0
+            else:
+                direction, dsign = "FLAT", 0.0
+            level_style = "trend"
     elif dir_sum > profile.direction_deadband:
         direction, dsign = "LONG", 1.0
     elif dir_sum < -profile.direction_deadband:
@@ -2187,7 +2248,13 @@ def score_pair(
             if not ramp_cfg.get("APPLY_TO_CONFLUENCE", True):
                 dir_ramp_mult = 1.0 if not min_directional_failed else 0.0
     except Exception:
-        dir_ramp_mult = round(0.5 + 0.5 * abs(dir_sum), 4)
+        # Fail closed: the ramp is the weak-direction abort gate, so an
+        # unreadable ramp configuration must not score the direction through
+        # a fail-open soft multiplier (audit A-5). Abort like a sub-minimum
+        # dir_sum instead.
+        min_directional_failed = True
+        direction, dsign = "FLAT", 0.0
+        dir_ramp_mult = 0.0
 
     # ── Direction-aware location timing ──────────────────────────────────────
     # Location is non-directional in timing-only mode, so it is credited on

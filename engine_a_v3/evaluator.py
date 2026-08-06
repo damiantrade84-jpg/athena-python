@@ -205,11 +205,16 @@ def _expiry(decision_time: datetime, horizon: str, primary_tf: str = "H1") -> da
     Intraday validity must cover at least two primary bars: decision_time is the
     open of the last CONFIRMED bar, so a window shorter than 2x the primary TF
     expires at (or before) evaluation time. Default H1 groups keep the historical
-    4h window; valid style-nested H4 overrides receive an 8h window.
+    4h window; valid style-nested H4 overrides receive an 8h window. Sub-H1
+    entry rungs use a 1h floor — the historical 4h floor kept an M15 signal
+    "valid" for 16 of its own bars (audit A-3).
     """
     if horizon == "intraday":
-        tf_hours = {"H1": 1, "H4": 4, "D1": 24}.get(str(primary_tf or "").upper(), 1)
-        return decision_time + timedelta(hours=max(4, 2 * tf_hours))
+        tf_hours = {"M15": 0.25, "M30": 0.5, "H1": 1, "H4": 4, "D1": 24}.get(
+            str(primary_tf or "").upper(), 1
+        )
+        min_hours = 1.0 if tf_hours < 1 else 4.0
+        return decision_time + timedelta(hours=max(min_hours, 2 * tf_hours))
     return decision_time + timedelta(days=2)
 
 
@@ -554,13 +559,31 @@ def evaluate_engine_a_v3(
         role_timeframes[primary_tf] = "entry"
     if policy_trigger_tf and policy_trigger_tf != primary_tf:
         role_timeframes[policy_trigger_tf] = "trigger"
-    role_minimum = (
-        _minimum_normalized_indicator_bars(asset_type, profile.indicator_periods)
-        if policy and profile is not None
-        else 50
-    )
+    def _role_minimum_bars(role_tf: str) -> int:
+        if not (policy and profile is not None):
+            return 50
+        # The scorer resolves intraday-override periods for lower rungs
+        # (factor_scoring._resolved_indicator_periods_for_tf); demanding the
+        # profile's HTF-scale periods there rejected valid M15/M30 history the
+        # scorer itself never needs (audit A-4). Mirror the scorer's periods.
+        periods = dict(profile.indicator_periods)
+        try:
+            from factor_scoring import (
+                _resolved_indicator_periods_for_tf,
+                entry_tf_uses_period_overrides,
+            )
+
+            if entry_tf_uses_period_overrides(role_tf):
+                periods = _resolved_indicator_periods_for_tf(
+                    route.score_group, asset_type, role_tf
+                )
+        except Exception:
+            pass
+        return _minimum_normalized_indicator_bars(asset_type, periods)
+
     for role_tf, role_name in role_timeframes.items():
         role_candles = candles.get(role_tf, [])
+        role_minimum = _role_minimum_bars(role_tf)
         if not role_candles:
             candle_reasons = candle_reasons + (f"missing_{role_name}_candles",)
             valid_candles = False
@@ -683,6 +706,7 @@ def evaluate_engine_a_v3(
         "series_cache": setup_series_cache,
         "feature_cache": quant_feature_cache,
         "compact_result": compact_replay,
+        "entry_candle_is_forming": entry_candle_is_forming,
     }
     if diagnostic_override is not None:
         _score_kwargs["entry_tf_override"] = diagnostic_override
