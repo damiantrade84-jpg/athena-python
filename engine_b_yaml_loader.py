@@ -180,6 +180,14 @@ def translate_engine_b_config(doc: dict[str, Any]) -> dict[str, Any]:
             "space_gate.block_capped_structural_tp_substitute",
             True,
         ),
+        # A synthetic TP is sl_dist * fallback_rr — derived from the stop, not
+        # from structure — so it proves nothing about the room in front of price.
+        # Default false: room must be proven structurally.
+        "ENGINE_B_SPACE_RR_SUBSTITUTE_ALLOW_SYNTHETIC": _bool_default(
+            space.get("rr_substitute_allow_synthetic_tp"),
+            "space_gate.rr_substitute_allow_synthetic_tp",
+            False,
+        ),
         "ENGINE_B_ENFORCE_MAX_SL_PCT": True,
         # execution_levels.max_sl_pct is accepted for schema compatibility but is
         # NOT emitted: the previous MAX_SL_PCT["engine_b"] key was read by nothing.

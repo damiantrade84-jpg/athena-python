@@ -158,15 +158,28 @@ def test_weighted_scoring_populates_quality_fields(monkeypatch):
         asset_type="forex",
     )
     assert out["passed"] is True
-    # swing x RANGING is one of only two style/regime combinations whose floor
-    # (5.0 x 1.10 = 5.5) exceeds the guaranteed gate floor of 5.0, so the outcome
-    # rests on ~0.5 points of quality headroom. Assert the gate agrees with that
-    # comparison rather than pinning a razor-thin pass/fail that flips on any
-    # change to the quality weight table.
+    # The style/regime floor is still resolved the same way (5.0 x 1.10 = 5.5),
+    # but WHICH quantity it is compared against depends on the configured basis.
+    # Assert the gate agrees with the comparison its own basis declares, rather
+    # than pinning one basis's arithmetic — the `total` basis is structurally
+    # non-binding for most style/regime combinations (gate_score always equals
+    # gate_max_possible on a pass, so score >= 5.0 is guaranteed), which is why
+    # ENGINE_B_MIN_SCORE_BASIS exists.
     assert effective_min == pytest.approx(5.5)
-    assert gate_ok is (out["score"] >= effective_min)
-    assert out["min_score_basis"] == "total"
-    assert out["min_score_floor_binding"] is True
+    basis = out["min_score_basis"]
+    assert basis in {"total", "quality_ratio"}
+    if basis == "total":
+        assert gate_ok is (out["score"] >= effective_min)
+        # swing x RANGING is one of only two combinations whose floor exceeds
+        # the guaranteed 5.0 gate floor, so it can actually reject here.
+        assert out["min_score_floor_binding"] is True
+    else:
+        min_ratio = config.CONFIG.get("ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE", {}).get(
+            "swing", 0.0
+        )
+        assert gate_ok is (out["quality_pct"] / 100.0 >= min_ratio)
+        # The quality-ratio basis can reject at every style/regime combination.
+        assert out["min_score_floor_binding"] is True
 
 
 def test_weighted_scoring_disabled_matches_legacy_bonus_shape(monkeypatch):

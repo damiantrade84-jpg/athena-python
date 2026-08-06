@@ -321,6 +321,31 @@ def _clamp01(value: float) -> float:
     return _clamp(value, 0.0, 1.0)
 
 
+def _parse_bar_time(value: Any):
+    """Parse a candle timestamp to an aware UTC datetime, or None.
+
+    Local to this module so the session gate does not import the evaluator
+    (which imports this module) and stays usable from the ablation/backtest
+    harnesses that never load the evaluator.
+    """
+    from datetime import datetime, timezone
+
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 # ── component results ────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Component:
@@ -378,6 +403,47 @@ def _tf_trend(snap: Mapping[str, Any]) -> tuple[float, str, bool]:
     return score, label, True
 
 
+def _tf_stack_separation(snap: Mapping[str, Any]) -> float | None:
+    """Tightest gap in the EMA stack, in ATR units (None when unavailable).
+
+    ``_tf_trend`` votes are binary, so a stack separated by 0.02 ATR scores
+    identically to one separated by 3 ATR — the component carried direction but
+    no magnitude at all. The *minimum* pairwise gap is used rather than the mean
+    because a stack is only as clean as its tightest rung: one compressed gap is
+    the EMA-cluster condition, and averaging hides it behind a wide
+    ema50/ema200 spread.
+    """
+    close = _f(snap.get("close"))
+    e_trend = _f(snap.get("ema21"))
+    e_mom = _f(snap.get("ema50"))
+    e_long = _f(snap.get("ema200"))
+    atr = _f(snap.get("atr"))
+    if None in (close, e_trend, e_mom, e_long) or atr is None or atr <= 0:
+        return None
+    gaps = (
+        abs(close - e_trend),      # type: ignore[operator]
+        abs(e_trend - e_mom),      # type: ignore[operator]
+        abs(e_mom - e_long),       # type: ignore[operator]
+    )
+    return min(gaps) / atr
+
+
+def _trend_separation_params() -> tuple[bool, float, float]:
+    enabled, target, floor = True, 0.25, 0.65
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_TREND_SEPARATION") or {}
+        enabled = bool(cfg.get("ENABLED", True))
+        target = float(cfg.get("TARGET_ATR", 0.25))
+        floor = float(cfg.get("FLOOR", 0.65))
+    except Exception:
+        pass
+    if target <= 0:
+        target = 0.25
+    return enabled, target, _clamp01(floor)
+
+
 def _trend_component(
     snaps: dict[str, Mapping[str, Any]],
     tf_w: Mapping[str, float],
@@ -391,6 +457,8 @@ def _trend_component(
     coherence: dict[str, str] = {}
     weighted = 0.0
     total_w = 0.0
+    sep_weighted = 0.0
+    sep_w_total = 0.0
     for tf, w in tf_w.items():
         snap = snaps.get(tf)
         if not snap:
@@ -402,6 +470,10 @@ def _trend_component(
         coherence[tf.lower()] = label
         weighted += w * score
         total_w += w
+        sep = _tf_stack_separation(snap)
+        if sep is not None:
+            sep_weighted += w * sep
+            sep_w_total += w
     if total_w <= 0:
         return Component(0.0, 0.0), coherence
     weighted /= total_w
@@ -413,6 +485,17 @@ def _trend_component(
     else:
         coherence_q = abs(weighted)
     quality = abs(weighted) * (0.5 + 0.5 * coherence_q)
+    # Separation scales quality, never direction: a compressed stack is a
+    # low-conviction read of the same side, not the other side.
+    sep_enabled, sep_target, sep_floor = _trend_separation_params()
+    if sep_enabled and sep_w_total > 0:
+        sep_mean = sep_weighted / sep_w_total
+        sep_mult = sep_floor + (1.0 - sep_floor) * _clamp01(sep_mean / sep_target)
+        # Deliberately NOT written into `coherence`: legacy_filters and the
+        # crypto late-trend adjustment iterate that dict *by value* looking for
+        # UP/DOWN/FLAT labels, so a numeric entry there would leak into a
+        # label set.
+        quality *= _clamp(sep_mult, sep_floor, 1.0)
     quality *= _trend_health_mult(
         weighted, snaps, entry_candles, indicator_periods, entry_tf=entry_tf,
         series_cache=series_cache,
@@ -590,6 +673,38 @@ def _momentum_blend_enabled() -> bool:
         return True
 
 
+def _rsi_exhaustion_params() -> tuple[bool, float, float]:
+    """(enabled, exhaustion_start_rsi, floor_multiplier) for RSI quality taper."""
+    enabled, start, floor = True, 75.0, 0.45
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_MOMENTUM_BLEND") or {}
+        enabled = bool(cfg.get("RSI_EXHAUSTION_ENABLED", True))
+        start = float(cfg.get("RSI_EXHAUSTION_START", 75.0))
+        floor = float(cfg.get("RSI_EXHAUSTION_FLOOR", 0.45))
+    except Exception:
+        pass
+    start = _clamp(start, 51.0, 99.0)
+    return enabled, start, _clamp01(floor)
+
+
+def _macd_quality_magnitude_params() -> tuple[bool, float]:
+    """(enabled, atr_scale) for the MACD histogram-magnitude quality factor."""
+    enabled, scale = True, 0.35
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_MOMENTUM_BLEND") or {}
+        enabled = bool(cfg.get("MACD_QUALITY_MAGNITUDE_ENABLED", True))
+        scale = float(cfg.get("MACD_QUALITY_ATR_SCALE", 0.35))
+    except Exception:
+        pass
+    if scale <= 0:
+        scale = 0.35
+    return enabled, scale
+
+
 def _momentum_component(
     snap: Mapping[str, Any], asset_type: str, score_group: str
 ) -> tuple[Component, dict[str, Any]]:
@@ -634,11 +749,27 @@ def _momentum_component(
     rsi = _f(snap.get("rsi"))
     if rsi is not None:
         rsi_term = _clamp((rsi - 50.0) / 30.0, -1.0, 1.0)
-        rsi_quality = _clamp01(abs(rsi - 50.0) / 30.0)
+        # Quality (confidence in the reading), not the directional term, is
+        # tapered past the exhaustion bound. The linear |rsi-50|/30 curve peaked
+        # at RSI 80/20 — it scored a fully extended, late-stage move as the
+        # single most confident momentum reading available, with no term
+        # anywhere in the component representing reversal risk. The signal keeps
+        # its sign and magnitude; only the confidence attached to it decays.
+        rsi_dev = abs(rsi - 50.0)
+        rsi_quality = _clamp01(rsi_dev / 30.0)
+        exhaustion_enabled, exhaustion_start, exhaustion_floor = _rsi_exhaustion_params()
+        if exhaustion_enabled:
+            start_dev = max(1.0, float(exhaustion_start) - 50.0)
+            if rsi_dev > start_dev:
+                span = max(1e-9, 50.0 - start_dev)
+                excess = _clamp01((rsi_dev - start_dev) / span)
+                rsi_quality *= 1.0 - (1.0 - exhaustion_floor) * excess
+                diag["rsiExhaustionExcess"] = round(excess, 4)
         weighted_signal += rsi_w * rsi_term
         weight_total += rsi_w
-        quality_terms.append(rsi_quality)
+        quality_terms.append(_clamp01(rsi_quality))
         diag["rsiTerm"] = round(rsi_term, 4)
+        diag["rsiQuality"] = round(_clamp01(rsi_quality), 4)
 
     di_p = _f(snap.get("plusDI"))
     di_m = _f(snap.get("minusDI"))
@@ -683,8 +814,21 @@ def _momentum_component(
                 macd_term *= 0.8
         weighted_signal += macd_w * macd_term
         weight_total += macd_w
-        quality_terms.append(_clamp01(abs(macd_term)))
+        # |macd_term| alone floors at 0.48 for ANY non-zero histogram (the
+        # +/-0.8 sign term x the 0.6 weakening factor), so a histogram of 1e-6
+        # contributed the same confidence as a full-scale one and put a hard
+        # floor under momentum quality. Scale the confidence by the histogram's
+        # magnitude in ATR units; the directional term is untouched.
+        macd_quality = _clamp01(abs(macd_term))
+        mag_enabled, mag_scale = _macd_quality_magnitude_params()
+        macd_atr = _f(snap.get("atr"))
+        if mag_enabled and macd_atr is not None and macd_atr > 0 and mag_scale > 0:
+            magnitude = _clamp01(abs(hist) / (macd_atr * mag_scale))
+            macd_quality = _clamp01(macd_quality * magnitude)
+            diag["macdMagnitude"] = round(magnitude, 4)
+        quality_terms.append(macd_quality)
         diag["macdSlopeTerm"] = round(macd_term, 4)
+        diag["macdQuality"] = round(macd_quality, 4)
 
     # ── Tuning Lab extra momentum term (ROC) ────────────────────────────────
     # Inert unless ROC_WEIGHT is configured > 0 (see resolution above), so with
@@ -776,6 +920,56 @@ def _location_trend_timing_only() -> bool:
         return bool(cfg.get("TREND_TIMING_ONLY", True))
     except Exception:
         return True
+
+
+def _location_direction_aware_params() -> tuple[bool, float, float, float, float]:
+    """(enabled, pullback_free, pullback_decay, chase_free, chase_decay) in ATR."""
+    enabled = True
+    pullback_free, pullback_decay = 1.0, 2.5
+    chase_free, chase_decay = 0.25, 1.75
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_LOCATION") or {}
+        enabled = bool(cfg.get("DIRECTION_AWARE_TIMING", True))
+        pullback_free = float(cfg.get("PULLBACK_FREE_ATR", pullback_free))
+        pullback_decay = float(cfg.get("PULLBACK_DECAY_ATR", pullback_decay))
+        chase_free = float(cfg.get("CHASE_FREE_ATR", chase_free))
+        chase_decay = float(cfg.get("CHASE_DECAY_ATR", chase_decay))
+    except Exception:
+        pass
+    if pullback_decay <= 0:
+        pullback_decay = 2.5
+    if chase_decay <= 0:
+        chase_decay = 1.75
+    return enabled, max(0.0, pullback_free), pullback_decay, max(0.0, chase_free), chase_decay
+
+
+def _location_timing_quality(dist: float, dsign: float) -> float:
+    """Two-sided entry-timing quality for trend-mode location.
+
+    ``dist`` is (price - trend EMA) / ATR; ``dsign`` is +1 LONG / -1 SHORT.
+
+    In timing-only mode the component is non-directional, so the aggregator
+    credits it on quality alone whenever a direction exists. With a single
+    symmetric curve that made it a near-constant: any pair sitting within half
+    an ATR of its trend EMA earned the full weight for LONG and for SHORT
+    alike — up to 0.66 of the 3.0 scale on forex_majors, awarded most reliably
+    in chop, where price sits on the EMA. A term identical on both sides adds no
+    directional information and just compresses the discriminating range.
+
+    The curve is now asymmetric about the trade direction: a retracement toward
+    the EMA (the entry the component was written to reward) holds full quality
+    further, while an equal extension *in* the trade direction — chasing — decays
+    faster. dist == 0 scores 1.0 on both sides, so the neutral point is unchanged.
+    """
+    _, pullback_free, pullback_decay, chase_free, chase_decay = _location_direction_aware_params()
+    extension = abs(dist)
+    if dist * dsign <= 0.0:  # retracement side (or exactly at the EMA)
+        free, decay = pullback_free, pullback_decay
+    else:                     # extended in the trade direction
+        free, decay = chase_free, chase_decay
+    return _clamp01(1.0 - max(0.0, extension - free) / decay)
 
 
 def _resolve_mr_adx_ceiling(asset_type: str, score_group: str) -> float:
@@ -1004,7 +1198,9 @@ def _report_only_group_vol_bands_diagnostic(snap: Mapping[str, Any], group: str,
         return {"enabled": False, "would_apply": False, "error": str(exc)}
 
 
-def _report_only_spread_diagnostic(entry_snap: Mapping[str, Any], group: str) -> dict:
+def _report_only_spread_diagnostic(
+    entry_snap: Mapping[str, Any], group: str, asset_type: str = ""
+) -> dict:
     """Report-only spread-to-SL penalty. Never demotes until ENGINE_A_SPREAD_SCORE_PENALTY.ENABLED."""
     try:
         from config import CONFIG
@@ -1015,29 +1211,99 @@ def _report_only_spread_diagnostic(entry_snap: Mapping[str, Any], group: str) ->
         if atr is None or atr <= 0:
             return {"enabled": True, "would_penalize": False, "reason": "missing_atr"}
         # Use MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL / MAX_EXECUTION_SPREAD_PCT as proxy when live spread not on snap
-        spread_pct = _f(entry_snap.get("spread_pct")) or _f(entry_snap.get("spreadPct"))
+        spread_pct = _f(entry_snap.get("spread_pct"))
         if spread_pct is None:
+            spread_pct = _f(entry_snap.get("spreadPct"))
+        if spread_pct is None or spread_pct <= 0:
             return {"enabled": True, "would_penalize": False, "reason": "no_spread_on_snap"}
-        ratio = spread_pct * _f(entry_snap.get("close") or 1.0) / atr if atr else 0
+        close = _f(entry_snap.get("close")) or 1.0
+        # Same SL basis as the live gate so the two can never disagree.
+        from engine_a_v3.levels import resolve_structural_geometry
+
+        sl_atr_mult = float(
+            resolve_structural_geometry(asset_type).get("sl_min_atr_mult", 0.8) or 0.8
+        )
+        sl_distance = atr * sl_atr_mult
+        ratio = spread_pct * close / sl_distance if sl_distance > 0 else 0.0
         max_ratio = float(cfg.get("MAX_SPREAD_TO_SL_RATIO", 0.20))
         mult = float(cfg.get("PENALTY_MULT", 0.85))
         would = ratio > max_ratio
-        return {"enabled": True, "would_penalize": would, "spreadToAtr": round(ratio, 4), "threshold": max_ratio, "would_mult": mult if would else 1.0}
+        return {"enabled": True, "would_penalize": would, "spreadToSl": round(ratio, 4), "threshold": max_ratio, "would_mult": mult if would else 1.0}
     except Exception as exc:
         return {"enabled": False, "would_penalize": False, "error": str(exc)}
 
 
-def _report_only_correlation_diagnostic(group: str, family: str) -> dict:
-    """Report-only USD-cluster correlation penalty. Never demotes until ENABLED."""
+def _resolve_correlation_cluster_size(context: Mapping[str, Any] | None) -> tuple[int | None, str]:
+    """Read the concurrent same-cluster signal count from scan context.
+
+    Cluster membership is a portfolio-level fact (how many *other* signals in
+    this scan share the pair's dominant risk factor), so it cannot be derived
+    inside a single-pair scorer. The scan supplies it as
+    ``context["correlation_cluster"] = {"size": N, "label": "USD"}`` — or the
+    flat ``context["correlation_cluster_size"]``. Absent context yields
+    ``(None, reason)`` and the gate stays inert rather than guessing.
+    """
+    ctx = context or {}
+    cluster = ctx.get("correlation_cluster")
+    label = ""
+    raw: Any = None
+    if isinstance(cluster, Mapping):
+        raw = cluster.get("size")
+        label = str(cluster.get("label") or "")
+    if raw is None:
+        raw = ctx.get("correlation_cluster_size")
+    if raw is None:
+        return None, "cluster_context_not_supplied"
+    try:
+        size = int(raw)
+    except (TypeError, ValueError):
+        return None, "cluster_context_invalid"
+    if size < 0:
+        return None, "cluster_context_invalid"
+    return size, label or "cluster"
+
+
+def _v3_correlation_multiplier(
+    context: Mapping[str, Any] | None, group: str, family: str
+) -> tuple[float, dict]:
+    """Correlation-cluster penalty (live gate when enabled and fed).
+
+    Previously a hardcoded placeholder that returned ``would_penalize: False``
+    unconditionally, so the config knob had no implementation behind it. The
+    penalty now applies whenever the scan supplies a cluster size above
+    ``MAX_CLUSTER_SIZE``; without that context it reports exactly why it is
+    inert instead of implying a check ran.
+    """
     try:
         from config import CONFIG
+
         cfg = CONFIG.get("ENGINE_A_CORRELATION_SCORE_PENALTY") or {}
         if not cfg.get("ENABLED", False):
-            return {"enabled": False, "would_penalize": False}
-        # Audit placeholder: would check cluster size via scoring._pair_to_cluster at scan layer
-        return {"enabled": True, "would_penalize": False, "reason": "scan_layer_only", "would_mult": float(cfg.get("USD_CLUSTER_PENALTY_MULT", 0.85))}
+            return 1.0, {"enabled": False}
+        size, label = _resolve_correlation_cluster_size(context)
+        max_size = int(cfg.get("MAX_CLUSTER_SIZE", 2) or 2)
+        mult = float(cfg.get("USD_CLUSTER_PENALTY_MULT", 0.85))
+        if size is None:
+            return 1.0, {
+                "enabled": True,
+                "applied": False,
+                "reason": label,
+                "maxClusterSize": max_size,
+                "mult": 1.0,
+            }
+        detail = {
+            "enabled": True,
+            "clusterLabel": label,
+            "clusterSize": size,
+            "maxClusterSize": max_size,
+            "family": family,
+            "group": group,
+        }
+        if size > max_size:
+            return mult, {**detail, "applied": True, "mult": mult}
+        return 1.0, {**detail, "applied": False, "mult": 1.0}
     except Exception as exc:
-        return {"enabled": False, "would_penalize": False, "error": str(exc)}
+        return 1.0, {"enabled": False, "error": str(exc)}
 
 
 def _diagnose_layer_period_mismatch(profile: Any, indicator_periods: Mapping[str, int]) -> dict:
@@ -1055,11 +1321,73 @@ def _diagnose_layer_period_mismatch(profile: Any, indicator_periods: Mapping[str
         return {"error": str(exc)}
 
 
-def _v3_session_multiplier(group: str, family: str) -> tuple[float, dict]:
+# Cash-session windows in UTC hours, keyed by score_group. Each group is scored
+# against the exchange its constituents actually trade on — applying the US
+# window to eu_indices/asian_indices demoted those markets during their own
+# cash session and promoted them while they were closed.
+#
+# Groups whose members span several exchanges (stock_other holds the ATFX US /
+# Europe / Hong Kong share CFDs; index_other is unclassified) are deliberately
+# absent: without a per-symbol region there is no correct window, and guessing
+# one is worse than not applying the gate. `context["symbol"]` resolves those
+# per pair when a caller supplies it (see _resolve_session_window).
+_SESSION_WINDOWS_UTC: dict[str, tuple[float, float]] = {
+    "us_indices_trackers": (13.5, 20.0),
+    "us_stock_single": (13.5, 20.0),
+    "bond_tlt": (13.5, 20.0),
+    "smallcap_em_etf": (13.5, 20.0),
+    "eu_indices": (7.0, 15.5),
+    "asian_indices": (0.0, 8.0),
+}
+
+# exchange_calendars key -> UTC cash window, for the per-symbol path.
+_SESSION_WINDOWS_BY_CALENDAR: dict[str, tuple[float, float]] = {
+    "NYSE_NASDAQ": (13.5, 20.0),
+    "XETRA": (7.0, 15.5),
+    "EURONEXT_PARIS": (7.0, 15.5),
+    "HKEX": (1.5, 8.0),
+}
+
+
+def _resolve_session_window(group: str, symbol: str | None) -> tuple[tuple[float, float] | None, str]:
+    """Resolve the (start, end) UTC cash window for a group / optional symbol."""
+    window = _SESSION_WINDOWS_UTC.get(group)
+    if window is not None:
+        return window, group
+    raw = str(symbol or "").strip()
+    if not raw:
+        return None, "region_unresolved"
+    try:
+        from engine_a_groups import resolve_cash_equity_exchange_calendar
+
+        calendar = resolve_cash_equity_exchange_calendar(raw)
+    except Exception:
+        return None, "region_unresolved"
+    if not calendar:
+        return None, "region_unresolved"
+    window = _SESSION_WINDOWS_BY_CALENDAR.get(calendar)
+    if window is None:
+        return None, "region_unresolved"
+    return window, calendar
+
+
+def _v3_session_multiplier(
+    group: str,
+    family: str,
+    *,
+    bar_time: Any = None,
+    symbol: str | None = None,
+) -> tuple[float, dict]:
     """Session multiplier for equities/indices (strengthened gate).
 
     Returns (mult, detail). When ENGINE_A_V3_SESSION_STRENGTHENED disabled, mult=1.0.
-    Active = US cash session 13.5-20.0 UTC, else off-hours. Demotes off-hours when enabled.
+
+    ``bar_time`` is the entry candle's timestamp. The multiplier must be a
+    property of the bar being scored, not of when the scan happens to run:
+    reading ``datetime.now()`` made a replayed/backtested bar take whatever
+    session was current at replay time, so live and backtest could never agree
+    on the same bar. Missing/unparseable bar time fails open (mult 1.0) rather
+    than substituting wall clock.
     """
     try:
         from config import CONFIG
@@ -1068,11 +1396,36 @@ def _v3_session_multiplier(group: str, family: str) -> tuple[float, dict]:
             return 1.0, {"enabled": False}
         if family not in {"equity_etf", "index"} and group not in {"us_indices_trackers", "eu_indices", "asian_indices", "index_other", "us_stock_single", "stock_other", "bond_tlt", "smallcap_em_etf"}:
             return 1.0, {"enabled": True, "applied": False, "reason": "family_not_equity_index"}
-        from datetime import datetime, timezone
-        hour = datetime.now(timezone.utc).hour + datetime.now(timezone.utc).minute / 60.0
-        active = 13.5 <= hour < 20.0
+        window, window_source = _resolve_session_window(group, symbol)
+        if window is None:
+            return 1.0, {
+                "enabled": True,
+                "applied": False,
+                "reason": "session_window_unresolved_for_group",
+                "group": group,
+            }
+        parsed = _parse_bar_time(bar_time)
+        if parsed is None:
+            return 1.0, {
+                "enabled": True,
+                "applied": False,
+                "reason": "bar_time_unavailable",
+                "window": list(window),
+            }
+        hour = parsed.hour + parsed.minute / 60.0
+        start, end = window
+        active = start <= hour < end
         mult = float(cfg.get("US_ACTIVE_MULT", 1.12) if active else cfg.get("US_OFF_MULT", 0.88))
-        return mult, {"enabled": True, "applied": True, "session": "us_active" if active else "off_hours", "utc_hour": round(hour, 2), "mult": mult}
+        return mult, {
+            "enabled": True,
+            "applied": True,
+            "session": "cash_active" if active else "off_hours",
+            "windowSource": window_source,
+            "windowUtc": [start, end],
+            "barUtcHour": round(hour, 2),
+            "timeSource": "entry_candle",
+            "mult": mult,
+        }
     except Exception as exc:
         return 1.0, {"enabled": False, "error": str(exc)}
 
@@ -1080,8 +1433,22 @@ def _v3_session_multiplier(group: str, family: str) -> tuple[float, dict]:
 def _v3_spread_multiplier(entry_snap: Mapping[str, Any], group: str, asset_type: str) -> tuple[float, dict]:
     """Spread-to-SL penalty (live gate when enabled).
 
-    Uses MAX_EXECUTION_SPREAD_PCT as proxy when snap has no spread_pct.
-    Ratio = spread_pct * close / atr  (spread in price / ATR). If ratio > MAX_SPREAD_TO_SL_RATIO, penalize.
+    Requires a *live* spread on the snapshot. The previous implementation fell
+    back to the ``MAX_EXECUTION_SPREAD_PCT`` cap whenever ``spread_pct`` was
+    absent — and it is always absent, because no producer writes a spread onto
+    an indicator snapshot (see indicator_adapter._snapshot_from_bundle and
+    indicators.calc_indicators' snap keys). With a constant substituted for the
+    numerator the test collapsed to ``atr/close < 5 x cap``, i.e. a pure
+    low-volatility penalty applied on every scan: the forex trip point (0.0025)
+    is the ceiling of the whole forex ATR%% band in VOLATILITY_SCALER_BANDS,
+    so every forex pair took the penalty while crypto (trip point 0.010 = its
+    band floor) almost never did. That is a cross-asset score distortion, not a
+    spread gate, so a missing spread now fails open and says so.
+
+    The denominator is the stop distance, matching the "spread-to-SL" name.
+    Levels are built after scoring, so the SL is approximated by the same
+    ``SL_MIN_ATR_MULT`` the geometry resolver uses for the structural floor;
+    the basis is reported so the approximation is visible.
     """
     try:
         from config import CONFIG
@@ -1092,19 +1459,37 @@ def _v3_spread_multiplier(entry_snap: Mapping[str, Any], group: str, asset_type:
         close = _f(entry_snap.get("close"))
         if atr is None or atr <= 0 or close is None or close <= 0:
             return 1.0, {"enabled": True, "applied": False, "reason": "missing_atr_close"}
-        spread_pct = _f(entry_snap.get("spread_pct")) or _f(entry_snap.get("spreadPct"))
+        spread_pct = _f(entry_snap.get("spread_pct"))
         if spread_pct is None:
-            # Fallback to config cap as worst-case proxy
-            caps = CONFIG.get("MAX_EXECUTION_SPREAD_PCT") or {}
-            # asset_type for equities is stock/index/etf; family equity_etf maps to stock
-            key = asset_type if asset_type in caps else ("stock" if asset_type == "stock" else "index" if asset_type == "index" else asset_type)
-            spread_pct = _f(caps.get(key)) or _f(caps.get("stock")) or 0.002
-        ratio = spread_pct * close / atr
+            spread_pct = _f(entry_snap.get("spreadPct"))
+        if spread_pct is None or spread_pct <= 0:
+            # Fail open, loudly. Substituting the configured cap here turned the
+            # gate into a blanket volatility haircut (see docstring).
+            return 1.0, {
+                "enabled": True,
+                "applied": False,
+                "reason": "live_spread_unavailable",
+                "mult": 1.0,
+            }
+        from engine_a_v3.levels import resolve_structural_geometry
+
+        sl_atr_mult = float(resolve_structural_geometry(asset_type).get("sl_min_atr_mult", 0.8) or 0.8)
+        sl_distance = atr * sl_atr_mult
+        if sl_distance <= 0:
+            return 1.0, {"enabled": True, "applied": False, "reason": "invalid_sl_basis"}
+        ratio = spread_pct * close / sl_distance
         max_ratio = float(cfg.get("MAX_SPREAD_TO_SL_RATIO", 0.20))
         mult = float(cfg.get("PENALTY_MULT", 0.85))
+        detail = {
+            "enabled": True,
+            "spreadToSl": round(ratio, 4),
+            "threshold": max_ratio,
+            "slBasis": "atr_x_sl_min_atr_mult",
+            "slAtrMult": round(sl_atr_mult, 4),
+        }
         if ratio > max_ratio:
-            return mult, {"enabled": True, "applied": True, "spreadToAtr": round(ratio, 4), "threshold": max_ratio, "mult": mult}
-        return 1.0, {"enabled": True, "applied": False, "spreadToAtr": round(ratio, 4), "threshold": max_ratio, "mult": 1.0}
+            return mult, {**detail, "applied": True, "mult": mult}
+        return 1.0, {**detail, "applied": False, "mult": 1.0}
     except Exception as exc:
         return 1.0, {"enabled": False, "error": str(exc)}
 
@@ -1804,6 +2189,46 @@ def score_pair(
     except Exception:
         dir_ramp_mult = round(0.5 + 0.5 * abs(dir_sum), 4)
 
+    # ── Direction-aware location timing ──────────────────────────────────────
+    # Location is non-directional in timing-only mode, so it is credited on
+    # quality alone once a direction exists. Re-score that quality against the
+    # chosen side now that the side is known (see _location_timing_quality).
+    # Runs after the directional ramp so a ramp-induced FLAT leaves it untouched,
+    # and only in trend mode — the mean-reversion branch is genuinely directional
+    # and already votes.
+    location_timing_diag: dict[str, Any] | None = None
+    if (
+        level_style != "mean_reversion"
+        and dsign
+        and not components["location"].directional
+        and _location_direction_aware_params()[0]
+    ):
+        _loc_ema = _f(entry_snap.get("ema21"))
+        _loc_atr = _f(entry_snap.get("atr"))
+        if (
+            location_price is not None
+            and _loc_ema is not None
+            and _loc_atr is not None
+            and _loc_atr > 0
+        ):
+            _loc_dist = (location_price - _loc_ema) / _loc_atr
+            _loc_quality = _location_timing_quality(_loc_dist, dsign)
+            location_timing_diag = {
+                "distAtr": round(_loc_dist, 4),
+                "side": "pullback" if _loc_dist * dsign <= 0 else "extension",
+                "qualityBefore": round(components["location"].quality, 4),
+                "qualityAfter": round(_loc_quality, 4),
+            }
+            location = Component(
+                components["location"].signal,
+                _loc_quality,
+                available=components["location"].available,
+                directional=False,
+            )
+            components["location"] = location
+            if "location" in active:
+                active["location"] = location
+
     # Confluence = weighted aligned quality. Directional components that disagree
     # with the chosen direction contribute nothing (continuous), but never veto.
     # Non-directional components (trend-mode location) are credited on quality
@@ -1889,12 +2314,26 @@ def score_pair(
             decision = "WATCH"
             equity_volume_blocked = True
 
-    # ── Session / Spread gates (enabled 2026-08-06 with approval) ──────
-    # These demote TRADE→WATCH when enabled; previous report-only path is now live.
-    session_mult, session_gate_detail = _v3_session_multiplier(group, family)
+    # ── Session / Spread / Correlation gates ───────────────────────────
+    # These demote TRADE→WATCH when enabled. The session multiplier is keyed to
+    # the entry candle's timestamp (never wall clock) and to the exchange the
+    # group actually trades on; the spread multiplier is inert without a live
+    # spread; the correlation multiplier is inert without scan cluster context.
+    _entry_bar_time = None
+    if entry_candles and isinstance(entry_candles[-1], dict):
+        _entry_bar_time = entry_candles[-1].get("time") or entry_candles[-1].get("datetime")
+    session_mult, session_gate_detail = _v3_session_multiplier(
+        group,
+        family,
+        bar_time=_entry_bar_time,
+        symbol=(context or {}).get("symbol") or (context or {}).get("display"),
+    )
     spread_mult, spread_gate_detail = _v3_spread_multiplier(entry_snap, group, asset_type)
+    correlation_mult, correlation_gate_detail = _v3_correlation_multiplier(
+        context, group, family
+    )
     pre_session_spread_confluence = confluence
-    gate_mult = session_mult * spread_mult
+    gate_mult = session_mult * spread_mult * correlation_mult
     session_spread_demotion = False
     if gate_mult != 1.0:
         confluence = _clamp(confluence * gate_mult, 0.0, MAX_SCORE)
@@ -1929,8 +2368,8 @@ def score_pair(
     # Diagnostics (group-vol is now live via _component_vol_mults; spread/session are live gates above)
     try:
         _group_vol_diag = _report_only_group_vol_bands_diagnostic(entry_snap, group, asset_type)
-        _spread_diag = _report_only_spread_diagnostic(entry_snap, group)
-        _corr_diag = _report_only_correlation_diagnostic(group, family)
+        _spread_diag = _report_only_spread_diagnostic(entry_snap, group, asset_type)
+        _corr_diag = dict(correlation_gate_detail)
         _layer_diag = _diagnose_layer_period_mismatch(profile, indicator_periods)
     except Exception:
         _group_vol_diag = {"enabled": False}
@@ -1943,6 +2382,7 @@ def score_pair(
             "atrPct": _f(entry_snap.get("atr_pct")),
             "locationPrice": location_price,
             "locationPriceSource": location_price_source,
+            "locationTiming": location_timing_diag,
             "minDirectionalFailed": min_directional_failed,
             "legacyFilters": legacy_diag,
             "equityVolumeBlocked": equity_volume_blocked,
@@ -1951,6 +2391,7 @@ def score_pair(
             "thresholdUnreachable": threshold_unreachable,
             "sessionGate": session_gate_detail,
             "spreadGate": spread_gate_detail,
+            "correlationGate": correlation_gate_detail,
             "sessionSpreadGateMult": round(gate_mult, 4),
             "sessionSpreadDemoted": session_spread_demotion,
             "preGatesConfluence": round(pre_session_spread_confluence, 4),
@@ -1974,6 +2415,7 @@ def score_pair(
             "entryTfOverride": diagnostic_override,
             "locationPrice": location_price,
             "locationPriceSource": location_price_source,
+            "locationTiming": location_timing_diag,
             "scoringTimeframes": {
                 "policyApplied": bool(policy),
                 "trend": list(tf_weights.keys()),
@@ -2021,6 +2463,7 @@ def score_pair(
             "cryptoDerivBlocked": crypto_deriv_blocked,
             "sessionGate": session_gate_detail,
             "spreadGate": spread_gate_detail,
+            "correlationGate": correlation_gate_detail,
             "sessionSpreadGateMult": round(gate_mult, 4),
             "sessionSpreadDemoted": session_spread_demotion,
             "preGatesConfluence": round(pre_session_spread_confluence, 4),
@@ -2044,9 +2487,14 @@ def score_pair(
                 name: {
                     "signal": round(comp.signal, 4), "quality": round(comp.quality, 4),
                     "weight": round(combined_weights.get(name, 0.0), 4),
+                    # Must mirror the `aligned` rule the confluence loop uses.
+                    # Omitting the `directional` clause made non-directional
+                    # location report a 0 contribution whenever its signal
+                    # happened to oppose the trade side, even though it had
+                    # contributed its full weight x quality to the score.
                     "contribution": round(
                         combined_weights.get(name, 0.0) * comp.quality * vol_mults.get(name, 1.0)
-                        if (dsign and comp.signal * dsign > 0.0)
+                        if (dsign and (not comp.directional or comp.signal * dsign > 0.0))
                         else 0.0,
                         4,
                     ),

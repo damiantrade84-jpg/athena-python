@@ -46,6 +46,15 @@ space_gate:
   # Synthetic TPs created because no opposing wall existed still qualify.
   # Set false to restore legacy behaviour.
   block_capped_structural_tp_substitute: true
+  # 2026-08-06 audit: the remaining synthetic-TP substitutions
+  # (missing_tp_synthesized / wrong_side_tp_synthesized). A synthetic TP is
+  # sl_dist * fallback_rr — computed from the STOP, not from structure — so it
+  # carries no evidence about how much room sits in front of price. Allowing it
+  # to satisfy the room gate meant the gate was cleared by a number the engine
+  # derived from its own stop distance. The "no structural target could be
+  # mapped at all" case is, if anything, weaker evidence of room than the
+  # already-blocked "structural TP was capped" case. Set true to restore.
+  rr_substitute_allow_synthetic_tp: false
 
 execution_levels:
   # max_sl_pct is accepted but UNUSED (2026-07-02 audit: the old

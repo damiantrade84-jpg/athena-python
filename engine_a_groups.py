@@ -422,5 +422,11 @@ def resolve_timeframe_policy_group(pair: dict) -> str:
             return "us_stock_single"
         if display in _US_INDICES_TRACKERS:
             return "equity_index_standard"
-        return "us_stock_single"
+        # Anything else in stock/etf lands on scoring group `stock_other`, whose
+        # live policy alias is cash_equity_standard_dynamic (see
+        # TIMEFRAME_POLICY_GROUP_ALIASES). Returning us_stock_single here made
+        # this resolver disagree with the ladder the pair actually runs on for
+        # every ATFX share CFD — us_stock_single carries an M15 setup and a
+        # conditional M5 trigger those CFDs are explicitly excluded from.
+        return "cash_equity_standard_dynamic"
     return "unknown"

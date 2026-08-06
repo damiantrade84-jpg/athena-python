@@ -359,6 +359,24 @@ ENGINE_A_V3_LOCATION:
   # KELTNER_BLEND_WEIGHT rows removed 2026-08-05: the Keltner quality term
   # (|close − mid|) was inverted vs this component's pullback-timing quality
   # and opposed the fade in the mean-reversion regime (Tuning Lab audit).
+  #
+  # 2026-08-06 audit: trend-mode location is non-directional, so it is credited
+  # on quality alone once a direction exists. With the old symmetric curve that
+  # made it a near constant — any pair within 0.5 ATR of its trend EMA earned
+  # full weight for LONG and SHORT alike (up to 0.66 of the 3.0 scale on
+  # forex_majors), and it peaked in chop, where price sits on the EMA. A term
+  # identical on both sides carries no directional information; it just
+  # compresses the discriminating range. The curve is now asymmetric about the
+  # trade side: a retracement toward the EMA (the entry this component exists to
+  # reward) holds quality further, while an equal extension IN the trade
+  # direction — chasing — decays faster. dist == 0 still scores 1.0 on both
+  # sides, so the neutral point is unchanged. Reversible:
+  # DIRECTION_AWARE_TIMING: false.
+  DIRECTION_AWARE_TIMING: true
+  PULLBACK_FREE_ATR: 1.0     # retracement distance scored at full quality
+  PULLBACK_DECAY_ATR: 2.5
+  CHASE_FREE_ATR: 0.25       # in-direction extension scored at full quality
+  CHASE_DECAY_ATR: 1.75
 # Structural SL must be at least this many ATRs from entry (noise-stop floor).
 ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT: 0.35
 # Structural trend geometry (Engine A V3). Global defaults = historical contract
@@ -367,6 +385,16 @@ ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT: 0.35
 ENGINE_A_V3_STRUCTURAL_GEOMETRY:
   ENABLED: true
   SL_MIN_ATR_MULT: 0.8
+  # 2026-08-06 audit: upper bound on stop width, previously absent. The
+  # structural stop is the 20-bar window extreme, which in a trending market can
+  # sit many ATR from price — and because BOTH targets are pure R-multiples of
+  # that risk, an oversized stop silently produces an oversized target (a 6-ATR
+  # stop yields a 6-ATR TP1 on a signal that expires in hours). Capping the stop
+  # keeps the geometry R-consistent and bounded. 3.0 matches Engine B's
+  # execution_levels.max_sl_atr_default. Set 0 to disable the cap.
+  # When it binds, StructuralLevels.sl_capped_atr_mult is set and surfaces as
+  # factorDiagnostics.setupOverlay.slCappedAtMaxAtr.
+  SL_MAX_ATR_MULT: 3.0
   TP1_RR: 1.0
   LEVELS_ATR_TF: entry
   BY_ASSET:
@@ -432,6 +460,23 @@ ENGINE_A_V3_MOMENTUM_BLEND:
   RSI_WEIGHT: 0.35
   DI_WEIGHT: 0.35
   MACD_SLOPE_WEIGHT: 0.30
+  # 2026-08-06 audit — two quality (confidence) fixes. Neither touches the
+  # directional term; both change only how much confidence is attached to it.
+  #
+  # RSI: quality was linear |rsi-50|/30, peaking at RSI 80/20 — a fully extended,
+  # late-stage move scored as the single most confident momentum reading
+  # available, with no term anywhere in the component representing reversal risk.
+  # Quality now tapers once |rsi-50| passes RSI_EXHAUSTION_START, down to
+  # RSI_EXHAUSTION_FLOOR of its untapered value at RSI 100/0.
+  RSI_EXHAUSTION_ENABLED: true
+  RSI_EXHAUSTION_START: 75
+  RSI_EXHAUSTION_FLOOR: 0.45
+  # MACD: |macd_term| alone floors at 0.48 for ANY non-zero histogram (the ±0.8
+  # sign term × the 0.6 weakening factor), so a histogram of 1e-6 contributed the
+  # same confidence as a full-scale one and put a hard floor under momentum
+  # quality. Confidence is now scaled by the histogram's magnitude in ATR units.
+  MACD_QUALITY_MAGNITUDE_ENABLED: true
+  MACD_QUALITY_ATR_SCALE: 0.35
   # STOCH/CCI/WILLIAMS_R weights removed 2026-08-05: Williams %R is raw Stoch
   # %K − 100 over the same window, all three duplicate RSI's bounded-oscillator
   # shape, and their linear pro-extreme scoring rewarded max-overbought/oversold
@@ -489,7 +534,16 @@ ENGINE_A_QUANT_WEIGHTS_BY_GROUP:
   us_indices_trackers: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
   eu_indices: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
   asian_indices: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
-  forex_exotics: { trend: 0.40, momentum: 0.26, location: 0.22, volume: 0.12 }
+  # 2026-08-06 audit: forex volume weight is now 0.0 for EVERY forex group.
+  # forex_majors/forex_crosses already excluded it (MT5 "volume" on spot FX is
+  # tick count — price-change activity, not traded size), but forex_exotics kept
+  # 0.12 and forex_other silently inherited the family default 0.09, so two of
+  # the four forex groups scored a component the other two had rejected as
+  # invalid for the same feed. Renormalized over the remaining budget so the
+  # relative trend/momentum/location weighting each group was tuned with is
+  # preserved exactly. Reversible: restore the volume weights.
+  forex_exotics: { trend: 0.4545, momentum: 0.2955, location: 0.25, volume: 0.0 }
+  forex_other: { trend: 0.4615, momentum: 0.3077, location: 0.2308, volume: 0.0 }
   crypto_other: { trend: 0.36, momentum: 0.27, location: 0.18, volume: 0.19 }
   # Explicit full budget (was partial volume:0.0) — renormalized from family forex 0.42/0.28/0.21/0.09 to keep live effective 0.4615/0.3077/0.2308/0.0 identical; makes tuning explicit and boot-validated.
   forex_crosses: { trend: 0.4615, momentum: 0.3077, location: 0.2308, volume: 0.0 }
@@ -501,18 +555,73 @@ ENGINE_A_QUANT_WEIGHTS_BY_GROUP:
 # Previously report-only (F10/F12/F13). Now live: spread / correlation / session /
 # group-vol gates demote TRADE→WATCH when enabled. Reversible via ENABLED:false.
 ENGINE_A_SPREAD_SCORE_PENALTY:
+  # 2026-08-06 audit: this gate never saw a live spread. No producer writes a
+  # spread onto an Engine A indicator snapshot, so the old implementation always
+  # substituted the MAX_EXECUTION_SPREAD_PCT cap and the test collapsed to
+  # "atr/close < 5 x cap" — a blanket low-volatility haircut, not a spread gate.
+  # The forex trip point (0.0025) is the CEILING of the whole forex ATR% band in
+  # VOLATILITY_SCALER_BANDS, so every forex pair took the 0.85 penalty while
+  # crypto (trip point 0.010 = its band FLOOR) almost never did, distorting the
+  # shared 0-3 scale across asset classes. quant_scorer._v3_spread_multiplier now
+  # fails open with reason "live_spread_unavailable" instead, and divides by the
+  # stop distance rather than raw ATR (matching the "spread-to-SL" name — SL is
+  # >= 0.8 ATR, so the old ATR divisor was ~3-6x stricter than advertised).
+  # Left ENABLED so it activates automatically once a live spread reaches the
+  # snapshot; until then it is inert and says so in factorDiagnostics.spreadGate.
   ENABLED: true
   MAX_SPREAD_TO_SL_RATIO: 0.20
   PENALTY_MULT: 0.85
 ENGINE_A_CORRELATION_SCORE_PENALTY:
-  ENABLED: false  # scan-layer wiring pending; keep report-only until wired
+  # Implemented 2026-08-06 (was a hardcoded placeholder that returned
+  # would_penalize:false unconditionally — the knob had nothing behind it).
+  # The scorer now applies the penalty whenever the scan supplies
+  # context["correlation_cluster"] = {"size": N, "label": "USD"} (or the flat
+  # context["correlation_cluster_size"]). Cluster membership is portfolio state
+  # and cannot be derived inside a single-pair scorer, so without that context
+  # the gate stays inert and reports "cluster_context_not_supplied".
+  # Keep ENABLED false until the scan wiring lands AND the multiplier is
+  # outcome-calibrated; flipping it early only penalizes pairs whose scan
+  # happens to populate the context.
+  ENABLED: false
   USD_CLUSTER_PENALTY_MULT: 0.85
   MAX_CLUSTER_SIZE: 2
 ENGINE_A_V3_SESSION_STRENGTHENED:
+  # 2026-08-06 audit: was reading datetime.now() and applying the US cash window
+  # to every equity/index group. Two defects: (1) a replayed/backtested bar took
+  # whatever session was current at replay time, so live and backtest could never
+  # agree on the same bar; (2) eu_indices / asian_indices / the ATFX Europe+HK
+  # share CFDs were demoted 0.88 during their OWN cash session and promoted 1.12
+  # while closed. The multiplier is now keyed to the entry candle's timestamp and
+  # to a per-group exchange window (_SESSION_WINDOWS_UTC in quant_scorer), and
+  # groups spanning several exchanges (stock_other, index_other) are skipped
+  # unless the caller supplies context["symbol"] to resolve the region.
   ENABLED: true
   US_ACTIVE_MULT: 1.12
   US_OFF_MULT: 0.88
 ENGINE_A_V3_GROUP_VOL_BANDS_ENABLED: true
+
+# ── Engine A scoring-shape fixes (2026-08-06 audit) ─────────────────────────
+# Each block is default-on and individually reversible. They change the score
+# DISTRIBUTION, so re-check ENGINE_A_SCORE_GROUP_THRESHOLDS after enabling.
+
+# Trend was a mean of 3-4 binary EMA-stack votes with no magnitude: a stack
+# separated by 0.02 ATR scored identically to one separated by 3 ATR. Quality
+# (never direction) is now scaled by the TIGHTEST pairwise gap in the stack —
+# minimum rather than mean, because a stack is only as clean as its worst rung
+# and averaging hides a compressed close/EMA gap behind a wide EMA50/EMA200 one.
+ENGINE_A_V3_TREND_SEPARATION:
+  ENABLED: true
+  TARGET_ATR: 0.25   # min gap at/above which no separation penalty applies
+  FLOOR: 0.65        # worst-case multiplier for a fully compressed stack
+
+# (Location direction-aware timing lives in the ENGINE_A_V3_LOCATION block above
+# — a second top-level key of the same name would silently override it.)
+
+# Breakout/retest used to require breakout and retest on CONSECUTIVE bars
+# (primary[-2] then primary[-1]); real retests take several. The breakout bar is
+# now searched back this many bars, with the level required to have held (no
+# close back through it) for every bar in between. 1 restores the old behaviour.
+ENGINE_A_V3_BREAKOUT_RETEST_MAX_BARS: 5
 
 # Per-TF candle freshness diagnostic (stalenessSeverity, bucketLag, etc.).
 # Always populated for production visibility (unlike candleMeta which is debug-only).
@@ -3225,6 +3334,14 @@ ENGINE_B_WEIGHTED_SCORING:
     orderflow: 0.04
     pullback_quality: 0.08
     sweep_quality: 0.06
+    # Declared at 0.0 so its inert state is explicit. compute_confluence_subscores
+    # emits this component, but it had no entry here at all, so
+    # aggregate_quality_score silently dropped it (weight <= 0 -> skipped) and it
+    # never appeared in quality_components either — computed-and-discarded with
+    # nothing in config to explain why. Raising it above 0 activates the term and
+    # re-enables the oscillator series computation for that group; the weight
+    # table must still sum to 1.0, so rebalance the others if you do.
+    momentum_oscillator_confluence: 0.0
   REGIME_COMPONENT_MULT:
     RANGING:
       fvg_confluence: 1.15
@@ -4387,11 +4504,68 @@ ENGINE_B_STYLE_MIN_SCORE_BY_STYLE:
 # basis remains total, calibration diagnostics record whether each signal would
 # pass them as a non-gating shadow. Do not switch the basis to quality_ratio
 # until they are backed by outcome evidence.
-ENGINE_B_MIN_SCORE_BASIS: total
+# 2026-08-06 audit: switched total -> quality_ratio. Under `total` the floor was
+# structurally incapable of rejecting anything. gate_confirmations has 5 entries
+# and `passed` requires ALL of them, so gate_score == 5 for every passing signal;
+# quality adds at most 1.0 (COMPONENT_WEIGHTS sums to exactly 1.00). Total score
+# for a passing signal is therefore always 5.0-6.0, against floors of
+# 4.0/4.5/5.0 — scalp and intraday could never reject, and only swing x RANGING
+# (5.0 x 1.10 = 5.5) bound at all, where it silently became a demand for ~67%
+# quality on forex. The floor was a no-op dressed as a gate.
+#
+# ⚠ The ratios below are the PLACEHOLDER values that were already in this file;
+# they are NOT outcome-calibrated (no n>=30 evidence). This flip is the one
+# change in the audit that alters Engine B pass/fail on unvalidated numbers, and
+# it will reject signals that previously passed. It is enabled because a floor
+# that cannot bind is worse than an approximate one, but treat the ratios as
+# provisional and calibrate them against outcomes.
+# Revert with: ENGINE_B_MIN_SCORE_BASIS: total
+ENGINE_B_MIN_SCORE_BASIS: quality_ratio
 ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE:
   scalp: 0.30
   intraday: 0.35
   swing: 0.40
+
+# ── Engine B structural fixes (2026-08-06 audit) ───────────────────────────
+# BOS reference swing. `legacy_second_last` restores the fixed peak_idx[-2]
+# offset, which reported a break whenever price cleared the second-newest swing
+# even if a higher, more recent one stood unbroken. `strongest_recent` requires
+# the break to clear the strongest of the last N swings formed before the break
+# bar — never weaker than the old pick, so it can only remove false BOS.
+ENGINE_B_BOS_REFERENCE_MODE: strongest_recent
+ENGINE_B_BOS_REFERENCE_PEAKS: 3
+
+# Sweep reference must predate the sweep window. Passing the most recent swing
+# fed the detector a level defined inside its own measurement window — the bar
+# that sweeps liquidity IS the new swing extreme, so once find_peaks confirmed
+# it (~3 bars later) it became its own reference and the sweep became
+# undetectable. false restores the old (contaminated) reference.
+ENGINE_B_SWEEP_REFERENCE_EXCLUDE_WINDOW: true
+
+# Trigger-at-location. `trigger_ok` is last-bar candle geometry computed with no
+# zone/OB/FVG proximity input, and it alone satisfied entry_ok — so an engulfing
+# bar anywhere could pair with a zone well away from price and clear both the
+# entry and location gates independently. Pairing the entry pattern with the
+# level that justifies it is the core of the methodology; nothing enforced it.
+ENGINE_B_TRIGGER_AT_LOCATION_ENABLED: true
+ENGINE_B_TRIGGER_AT_LOCATION_MAX_ATR: 0.75
+
+# A synthetic TP is sl_dist * fallback_rr — derived from the STOP, not from
+# structure — so it carries no evidence about how much room is in front of
+# price. Letting it satisfy the room gate meant the gate was cleared by a number
+# the engine computed from its own stop distance. true restores substitution.
+# Expect fewer Engine B passes on thin / structurally unmapped instruments.
+ENGINE_B_SPACE_RR_SUBSTITUTE_ALLOW_SYNTHETIC: false
+
+# Swing sequence as CONFLUENCE (never direction authority or a veto — that stays
+# off under ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED). Retiring the sequence
+# from direction also removed it from scoring entirely, so the classic
+# HH_HL/LH_LL read stopped contributing anywhere and Engine B's structure score
+# rests solely on BOS/CHoCH. Staleness was the defect, not the read: credit now
+# decays linearly to zero as the defining swing ages past FRESH_BARS.
+ENGINE_B_SWING_SEQUENCE_CONFLUENCE_ENABLED: true
+ENGINE_B_SWING_SEQUENCE_FRESH_BARS: 10
+ENGINE_B_SWING_SEQUENCE_CONFLUENCE_BONUS: 0.10
 
 # Ranking / conviction basis for Engine B (blends, sorting, execution gates).
 #   quality — confidence.quality_pct (0-100, full range for passing signals)

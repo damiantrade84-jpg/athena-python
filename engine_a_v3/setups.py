@@ -59,6 +59,56 @@ def _ema(values: Iterable[float], period: int) -> list[float]:
     return out
 
 
+def _quiet_window_extra_bars(
+    candles: list[dict],
+    atr: float | None,
+    *,
+    base: int = 20,
+    max_extra: int = 8,
+    compress_ratio: float = 0.7,
+) -> int:
+    """Extra structural-window bars when the trailing range is compressed.
+
+    Mirrors the Engine B BOS-lookback widening (market_structure.
+    _engine_b_quiet_window_extra_bars): in quiet regimes average true range
+    collapses relative to the structure ATR, so the structural reference (SL
+    anchor or breakout level) can sit beyond the fixed window. Returns a
+    bounded number of extra bars scaled by the measured compression, or 0 when
+    no compression is detected / data is too short, so default behavior is
+    unchanged.
+    """
+    try:
+        if float(compress_ratio) <= 0 or float(max_extra) <= 0:
+            return 0
+        window = max(int(base), 1)
+        if len(candles) < window + 1:
+            return 0
+        highs = [float(c["high"]) for c in candles]
+        lows = [float(c["low"]) for c in candles]
+        closes = [float(c["close"]) for c in candles]
+        tr = [
+            max(
+                highs[i] - lows[i],
+                abs(highs[i] - closes[i - 1]),
+                abs(lows[i] - closes[i - 1]),
+            )
+            for i in range(1, len(candles))
+        ]
+        recent = float(fmean(tr[-window:])) if tr[-window:] else 0.0
+        try:
+            anchor = float(atr) if atr is not None else 0.0
+        except (TypeError, ValueError):
+            anchor = 0.0
+        if anchor <= 0:
+            anchor = float(fmean(tr)) if tr else 0.0
+        if anchor <= 0 or recent >= anchor * float(compress_ratio):
+            return 0
+        compression = min(1.0, 1.0 - (recent / anchor))
+        return int(round(compression * float(max_extra)))
+    except Exception:
+        return 0
+
+
 def _atr(
     candles: list[dict],
     period: int = 14,
@@ -546,20 +596,132 @@ def _breakout_retest_candidate(
             context_predicates,
             ("trend_context_not_directional",),
         )
-    prior = primary[-(lookback + 2):-2]
-    breakout = primary[-2]
+    effective_lookback = max(int(lookback), 1)
+    swing_anchor = False
+    try:
+        from config import CONFIG
+
+        # F4: quiet/compressed regimes compress ranges and can pull the structural
+        # reference (breakout level) beyond the fixed window. When enabled, widen
+        # the reference window in such regimes (bounded by an absolute cap).
+        # Default off so detection is unchanged until the operator opts in.
+        if bool(CONFIG.get("ENGINE_A_V3_ADAPTIVE_STRUCTURE_WINDOW_ENABLED", False)):
+            swing_anchor = True
+            max_extra = int(CONFIG.get("ENGINE_A_V3_STRUCTURE_WINDOW_MAX_EXTRA_BARS", 8) or 8)
+            compress_ratio = float(CONFIG.get("ENGINE_A_V3_STRUCTURE_WINDOW_COMPRESS_RATIO", 0.7) or 0.7)
+            _atr_anchor = _atr(primary[:-2], periods.atr)
+            effective_lookback = min(
+                max(1, len(primary) - 2),
+                effective_lookback
+                + _quiet_window_extra_bars(
+                    primary[:-2],
+                    _atr_anchor,
+                    base=effective_lookback,
+                    max_extra=max_extra,
+                    compress_ratio=compress_ratio,
+                ),
+            )
+    except Exception:
+        pass
+    # Breakout/retest window. The pattern used to be pinned to exactly two bars
+    # (breakout == primary[-2], retest == primary[-1]), so it only ever fired
+    # when a level was broken and retested on consecutive bars — a real retest
+    # normally takes several. The breakout bar is now searched back over
+    # ENGINE_A_V3_BREAKOUT_RETEST_MAX_BARS, with the latest bar still acting as
+    # the retest/acceptance bar and the level required to have held for every bar
+    # in between (no close back through it). MAX_BARS = 1 restores the legacy
+    # two-bar behaviour exactly.
+    try:
+        from config import CONFIG
+
+        retest_max_bars = int(CONFIG.get("ENGINE_A_V3_BREAKOUT_RETEST_MAX_BARS", 5) or 5)
+    except Exception:
+        retest_max_bars = 5
+    retest_max_bars = max(1, min(retest_max_bars, max(1, len(primary) - effective_lookback - 1)))
+
     retest = primary[-1]
-    high_level = max(float(candle["high"]) for candle in prior)
-    low_level = min(float(candle["low"]) for candle in prior)
-    level = high_level if direction == "LONG" else low_level
+
+    def _window_for(offset: int) -> tuple[list, dict]:
+        """(prior window, breakout bar) for a breakout `offset` bars back."""
+        end = -(offset + 1)
+        return primary[-(effective_lookback + offset + 1):end], primary[end]
+
+    is_long = direction == "LONG"
+
+    def _broken_swing(prior_rows: list, breakout_row: dict) -> float | None:
+        # F2: anchor the reference on the highest (LONG) / lowest (SHORT) local
+        # swing extreme that the breakout bar actually closed through, rather than
+        # the raw window extreme — a single outlier wick can set a non-structural
+        # level. Falls back to the window extreme when no swing qualifies.
+        _ext = (lambda c: float(c["high"])) if is_long else (lambda c: float(c["low"]))
+        pivots = []
+        for i in range(1, len(prior_rows) - 1):
+            cur = _ext(prior_rows[i])
+            if is_long:
+                if cur >= _ext(prior_rows[i - 1]) and cur >= _ext(prior_rows[i + 1]):
+                    pivots.append(cur)
+            elif cur <= _ext(prior_rows[i - 1]) and cur <= _ext(prior_rows[i + 1]):
+                pivots.append(cur)
+        close_now = float(breakout_row["close"])
+        for lvl in sorted(set(pivots), reverse=is_long):
+            if (close_now > lvl) if is_long else (close_now < lvl):
+                return lvl
+        return None
+
+    def _levels_for(prior_rows: list, breakout_row: dict) -> tuple[float, float]:
+        hi = max(float(candle["high"]) for candle in prior_rows)
+        lo = min(float(candle["low"]) for candle in prior_rows)
+        if swing_anchor:
+            ref = _broken_swing(prior_rows, breakout_row)
+            if ref is not None:
+                if is_long:
+                    hi = ref
+                else:
+                    lo = ref
+        return hi, lo
+
+    def _level_held(breakout_offset: int, lvl: float) -> bool:
+        """No close back through the level between the break and the retest bar."""
+        start = len(primary) - breakout_offset  # first bar after the breakout
+        for row in primary[start:-1]:
+            close_v = float(row["close"])
+            if (close_v < lvl) if is_long else (close_v > lvl):
+                return False
+        return True
+
+    prior, breakout = _window_for(1)
+    high_level, low_level = _levels_for(prior, breakout)
+    level = high_level if is_long else low_level
     broke = (
         float(breakout["close"]) > high_level
-        if direction == "LONG"
+        if is_long
         else float(breakout["close"]) < low_level
     )
+    breakout_bars_ago = 1
+    if not broke:
+        for _offset in range(2, retest_max_bars + 1):
+            if len(primary) < effective_lookback + _offset + 2:
+                break
+            _prior, _breakout = _window_for(_offset)
+            if len(_prior) < 3:
+                break
+            _hi, _lo = _levels_for(_prior, _breakout)
+            _lvl = _hi if is_long else _lo
+            _broke = (
+                float(_breakout["close"]) > _hi
+                if is_long
+                else float(_breakout["close"]) < _lo
+            )
+            if not _broke or not _level_held(_offset, _lvl):
+                continue
+            prior, breakout = _prior, _breakout
+            high_level, low_level, level = _hi, _lo, _lvl
+            broke = True
+            breakout_bars_ago = _offset
+            break
     retested = (
         float(retest["low"]) <= level <= float(retest["close"])
-        if direction == "LONG"
+        if is_long
         else float(retest["high"]) >= level >= float(retest["close"])
     )
     accepted = (
@@ -579,7 +741,7 @@ def _breakout_retest_candidate(
             "breakout_close",
             broke,
             breakout["close"],
-            f"{lookback}-bar close beyond {level}",
+            f"{lookback}-bar close beyond {level} ({breakout_bars_ago} bar(s) ago)",
         ),
         _predicate("level_retest", retested, retest["close"], f"retest {level}"),
         _predicate("retest_acceptance", accepted, retest["close"], f"{direction} close"),

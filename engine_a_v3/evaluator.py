@@ -898,6 +898,10 @@ def evaluate_engine_a_v3(
             atr_timeframe=levels_atr_tf,
         )
 
+    # SL-cap provenance must travel with the levels it describes.
+    if levels is not None and getattr(levels, "sl_capped_atr_mult", None) is not None:
+        setup_diagnostics["slCappedAtMaxAtr"] = levels.sl_capped_atr_mult
+
     # The quant model never emits NO_SIGNAL. Missing levels caps TRADE -> WATCH
     # so the pair stays visible. Promotion caps only outside demo research mode;
     # execution stays gated by executionScope / engineATradeEnabled below.

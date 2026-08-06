@@ -188,8 +188,7 @@ def compute_structure_alignment_score(res: dict[str, Any], direction: str) -> fl
             score = 0.0
     else:
         # Break/character evidence is direction authority. The lagging swing
-        # sequence is diagnostic only and earns no alignment credit (EURNZD:
-        # stale HH_HL maxed this component while H4/D1 structure was selling).
+        # sequence never regains direction authority or a veto here.
         if bos:
             score = 0.85
         elif choch:
@@ -199,9 +198,62 @@ def compute_structure_alignment_score(res: dict[str, Any], direction: str) -> fl
         else:
             score = 0.0
 
+        # ...but a *fresh* aligned sequence is still genuine confluence. Retiring
+        # it from direction (EURNZD: stale HH_HL maxed this component while H4/D1
+        # structure was selling) also removed it from scoring entirely, so the
+        # classic market-structure read stopped contributing anywhere and
+        # Engine B's structure score rests solely on BOS/CHoCH. Staleness — not
+        # the read itself — was the defect, and it is now measured directly
+        # (current_swing_sequence_age). Credit is a bounded bonus on top of break
+        # evidence, decaying to zero as the defining swing ages out.
+        bonus, freshness = _sequence_freshness_bonus(res, micro_aligned, macro_aligned)
+        if bonus > 0 and score > 0:
+            score = min(1.0, score + bonus)
+        _ = freshness
+
     if bos_mtf and score > 0:
         score = min(1.0, score + 0.15)
     return round(_clamp01(score), 4)
+
+
+def _sequence_freshness_bonus(
+    res: dict[str, Any], micro_aligned: bool, macro_aligned: bool
+) -> tuple[float, float]:
+    """Bounded confluence bonus for a *fresh* direction-aligned swing sequence.
+
+    Returns (bonus, freshness) where freshness is 1.0 at age 0 and decays
+    linearly to 0.0 at ``FRESH_BARS``. Only the micro (structure-rung) sequence
+    is credited when the macro rung is not an independent timeframe, so the same
+    series is never scored twice. Disabled via
+    ``ENGINE_B_SWING_SEQUENCE_CONFLUENCE_ENABLED: false``.
+    """
+    try:
+        from config import CONFIG
+
+        if not bool(CONFIG.get("ENGINE_B_SWING_SEQUENCE_CONFLUENCE_ENABLED", True)):
+            return 0.0, 0.0
+        fresh_bars = float(CONFIG.get("ENGINE_B_SWING_SEQUENCE_FRESH_BARS", 10) or 10)
+        max_bonus = float(CONFIG.get("ENGINE_B_SWING_SEQUENCE_CONFLUENCE_BONUS", 0.10) or 0.10)
+    except Exception:
+        return 0.0, 0.0
+    if fresh_bars <= 0 or max_bonus <= 0:
+        return 0.0, 0.0
+    aligned = micro_aligned or (macro_aligned and macro_sequence_is_independent(res))
+    if not aligned:
+        return 0.0, 0.0
+    age_key = (
+        "current_swing_sequence_age" if micro_aligned else "macro_swing_sequence_age"
+    )
+    raw_age = res.get(age_key)
+    if raw_age is None:
+        # Unmeasured age is not evidence of freshness.
+        return 0.0, 0.0
+    try:
+        age = float(raw_age)
+    except (TypeError, ValueError):
+        return 0.0, 0.0
+    freshness = _clamp01(1.0 - max(0.0, age) / fresh_bars)
+    return round(max_bonus * freshness, 4), round(freshness, 4)
 
 
 def _nearest_zone(res: dict[str, Any], direction: str) -> dict[str, Any] | None:
@@ -430,6 +482,7 @@ def compute_confluence_subscores(
     pair_display: str | None = None,
     as_of_date: str | None = None,
     oscillator_candles: list[dict] | None = None,
+    pruned_out: list[str] | None = None,
 ) -> dict[str, float]:
     asset_lower = str(asset_type or res.get("asset_type") or "").lower()
     display = pair_display or res.get("pair_display")
@@ -479,7 +532,8 @@ def compute_confluence_subscores(
     # valid session profile) stay in, so a signal cannot inflate its ratio by
     # having less evidence.
     for name in _inapplicable_quality_components(res, asset_lower):
-        subscores.pop(name, None)
+        if subscores.pop(name, None) is not None and pruned_out is not None:
+            pruned_out.append(name)
     return subscores
 
 

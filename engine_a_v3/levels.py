@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 from engine_a_v3.contract import PriceZone, Target
 from engine_a_v3.session_forex import asian_session_range, parse_utc
-from engine_a_v3.setups import _ema, atr_for_levels
+from engine_a_v3.setups import _ema, _quiet_window_extra_bars, atr_for_levels
 
 
 def _resolve_tp2_rr(atr_pct: float | None) -> float:
@@ -31,7 +31,11 @@ def _resolve_tp2_rr(atr_pct: float | None) -> float:
     return tp2_min + frac * (tp2_max - tp2_min)
 
 
-def resolve_structural_geometry(asset_type: str | None = None) -> dict[str, Any]:
+def resolve_structural_geometry(
+    asset_type: str | None = None,
+    *,
+    config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Resolve SL min ATR multiple, TP1 RR, and levels ATR source.
 
     Defaults preserve the historical contract: 0.8×ATR min stop, TP1 at 1.0R,
@@ -39,14 +43,21 @@ def resolve_structural_geometry(asset_type: str | None = None) -> dict[str, Any]
     ``ENGINE_A_V3_STRUCTURAL_GEOMETRY.BY_ASSET``.
     """
     sl_min = 0.8
+    sl_max = 3.0
     tp1_rr = 1.0
     atr_tf = "entry"
     try:
-        from config import CONFIG
+        config_source = config
+        if config_source is None:
+            from config import CONFIG
 
-        cfg = CONFIG.get("ENGINE_A_V3_STRUCTURAL_GEOMETRY") or {}
+            config_source = CONFIG
+        cfg = config_source.get("ENGINE_A_V3_STRUCTURAL_GEOMETRY") or {}
         if isinstance(cfg, dict) and cfg.get("ENABLED", True):
             sl_min = float(cfg.get("SL_MIN_ATR_MULT", sl_min) or sl_min)
+            _sl_max_raw = cfg.get("SL_MAX_ATR_MULT")
+            if _sl_max_raw is not None:
+                sl_max = float(_sl_max_raw)
             tp1_rr = float(cfg.get("TP1_RR", tp1_rr) or tp1_rr)
             atr_tf = str(cfg.get("LEVELS_ATR_TF", atr_tf) or atr_tf).strip().lower()
             by_asset = cfg.get("BY_ASSET") or {}
@@ -55,6 +66,8 @@ def resolve_structural_geometry(asset_type: str | None = None) -> dict[str, Any]
             if isinstance(override, dict):
                 if override.get("SL_MIN_ATR_MULT") is not None:
                     sl_min = float(override["SL_MIN_ATR_MULT"])
+                if override.get("SL_MAX_ATR_MULT") is not None:
+                    sl_max = float(override["SL_MAX_ATR_MULT"])
                 if override.get("TP1_RR") is not None:
                     tp1_rr = float(override["TP1_RR"])
                 if override.get("LEVELS_ATR_TF") is not None:
@@ -67,8 +80,13 @@ def resolve_structural_geometry(asset_type: str | None = None) -> dict[str, Any]
         tp1_rr = 1.0
     if atr_tf not in {"entry", "structure"}:
         atr_tf = "entry"
+    # sl_max <= 0 disables the cap. A cap below the floor would make every stop
+    # unbuildable, so the floor always wins.
+    if 0 < sl_max < sl_min:
+        sl_max = sl_min
     return {
         "sl_min_atr_mult": sl_min,
+        "sl_max_atr_mult": sl_max,
         "tp1_rr": tp1_rr,
         "levels_atr_tf": atr_tf,
     }
@@ -80,6 +98,10 @@ class StructuralLevels:
     invalidation: float
     targets: tuple[Target, ...]
     price: float
+    # Set when the structural extreme sat beyond SL_MAX_ATR_MULT and the stop
+    # was pulled back to the cap. Travels with the levels so the widened-risk
+    # provenance is not lost between geometry and the emitted signal.
+    sl_capped_atr_mult: float | None = None
 
 
 def build_structural_levels(
@@ -131,10 +153,42 @@ def build_structural_levels(
     swing_src = swing_candles if swing_candles is not None else primary
     if len(swing_src) < 20:
         swing_src = primary
-    recent = swing_src[-20:]
+    window_bars = 20
+    try:
+        from config import CONFIG
+
+        # F4: quiet/compressed regimes compress ranges and can put the true
+        # structural extreme beyond the fixed window. When enabled, widen it in
+        # such regimes (bounded by an absolute cap). Default off so structural
+        # geometry is unchanged until the operator opts in.
+        if bool(CONFIG.get("ENGINE_A_V3_ADAPTIVE_STRUCTURE_WINDOW_ENABLED", False)):
+            base = max(1, int(CONFIG.get("ENGINE_A_V3_STRUCTURE_WINDOW_BARS", 20) or 20))
+            max_extra = int(CONFIG.get("ENGINE_A_V3_STRUCTURE_WINDOW_MAX_EXTRA_BARS", 8) or 8)
+            compress_ratio = float(CONFIG.get("ENGINE_A_V3_STRUCTURE_WINDOW_COMPRESS_RATIO", 0.7) or 0.7)
+            window_bars = min(
+                len(swing_src),
+                max(1, base + _quiet_window_extra_bars(
+                    swing_src, atr, base=base, max_extra=max_extra, compress_ratio=compress_ratio,
+                )),
+            )
+    except Exception:
+        pass
+    window_bars = max(1, min(window_bars, len(swing_src)))
+    recent = swing_src[-window_bars:]
+    # Upper bound on stop width. The structural stop is the window extreme, which
+    # in a trending market can sit many ATR from price — and because both targets
+    # are pure R-multiples of that risk, an oversized stop silently produces an
+    # oversized target: a 6-ATR stop yields a 6-ATR TP1 on a signal that expires
+    # in hours. Capping the stop keeps the geometry R-consistent and bounded.
+    # SL_MAX_ATR_MULT <= 0 disables the cap and restores the previous behaviour.
+    sl_max_mult = float(geometry.get("sl_max_atr_mult", 0.0) or 0.0)
+    sl_capped_atr_mult: float | None = None
     if direction == "LONG":
         structural = min(float(candle["low"]) for candle in recent)
         invalidation = min(structural, current - effective_sl_min_mult * atr)
+        if sl_max_mult > 0 and (current - invalidation) > sl_max_mult * atr:
+            invalidation = current - sl_max_mult * atr
+            sl_capped_atr_mult = sl_max_mult
         if invalidation >= current:
             return None
         risk = current - invalidation
@@ -146,6 +200,9 @@ def build_structural_levels(
     else:
         structural = max(float(candle["high"]) for candle in recent)
         invalidation = max(structural, current + effective_sl_min_mult * atr)
+        if sl_max_mult > 0 and (invalidation - current) > sl_max_mult * atr:
+            invalidation = current + sl_max_mult * atr
+            sl_capped_atr_mult = sl_max_mult
         if invalidation <= current:
             return None
         risk = invalidation - current
@@ -167,6 +224,7 @@ def build_structural_levels(
         invalidation=invalidation,
         targets=targets,
         price=current,
+        sl_capped_atr_mult=sl_capped_atr_mult,
     )
 
 

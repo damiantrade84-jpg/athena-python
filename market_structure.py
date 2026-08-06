@@ -4123,11 +4123,29 @@ class NakedEngine:
         elif equal_lows and direction == "LONG":
             has_equal_extrema = True
  
+        # Bars since the newest swing that defines this sequence. The sequence
+        # was retired from direction because a STALE HH_HL/LH_LL green-lit the
+        # wrong side; age is what distinguishes a stale read from a live one, and
+        # it was never measured. Consumers use it to decay the sequence's
+        # confluence credit rather than discarding the read entirely.
+        last_swing_age = None
+        try:
+            newest = -1
+            if len(peak_idx) > 0:
+                newest = max(newest, int(peak_idx[-1]))
+            if len(trough_idx) > 0:
+                newest = max(newest, int(trough_idx[-1]))
+            if newest >= 0:
+                last_swing_age = int(len(highs) - 1 - newest)
+        except (TypeError, ValueError):
+            last_swing_age = None
+
         return {
             "state": sequence,
             "recent_high": recent_swing_high,
             "recent_low": recent_swing_low,
             "has_equal_extrema": has_equal_extrema,
+            "last_swing_age": last_swing_age,
             # Direction-agnostic raw flags so direction-dependent consumers can
             # resolve per side (precompute calls this once with "LONG").
             "equal_highs": bool(equal_highs),
@@ -4198,31 +4216,98 @@ class NakedEngine:
             )
             lookback = max(1, min(lookback, n))
 
+            # ── BOS reference swing ──────────────────────────────────────────
+            # The reference used to be a fixed index offset: peak_idx[-2], the
+            # second-NEWEST swing high. When the most recent peak is higher than
+            # that one, a close above the older, lower peak reported a BOS while
+            # the actual structure high stood untouched — peaks 105 -> 100 -> 103
+            # with a close at 101 fired bos_bull. That is a false break, and BOS
+            # is load-bearing in three places at once (structure_ok, the
+            # independent-direction vote at weight 3/5, and the top tier of
+            # structure_alignment), so it propagated everywhere.
+            #
+            # The reference is now the STRONGEST of the last N swings that formed
+            # strictly before the candidate break bar. That is never weaker than
+            # the old [-2] pick (max of a set containing it), so this can only
+            # remove false BOS, never create new ones — fail-closed. Restore the
+            # old behaviour with ENGINE_B_BOS_REFERENCE_MODE: legacy_second_last.
+            _naked_bos_cfg = config.CONFIG
+            _ref_mode = str(
+                _naked_bos_cfg.get("ENGINE_B_BOS_REFERENCE_MODE", "strongest_recent")
+                or "strongest_recent"
+            ).strip().lower()
+            try:
+                _ref_peaks = int(_naked_bos_cfg.get("ENGINE_B_BOS_REFERENCE_PEAKS", 3) or 3)
+            except (TypeError, ValueError):
+                _ref_peaks = 3
+            _ref_peaks = max(1, _ref_peaks)
+
+            def _ref_high_for(break_idx: int):
+                if _ref_mode == "legacy_second_last":
+                    return prior_high, prior_high_idx
+                cands = [int(p) for p in peak_idx[-_ref_peaks:] if int(p) < break_idx]
+                if not cands:
+                    return None, None
+                best = max(cands, key=lambda p: float(highs[p]))
+                return float(highs[best]), best
+
+            def _ref_low_for(break_idx: int):
+                if _ref_mode == "legacy_second_last":
+                    return prior_low, prior_low_idx
+                cands = [int(t) for t in trough_idx[-_ref_peaks:] if int(t) < break_idx]
+                if not cands:
+                    return None, None
+                best = min(cands, key=lambda t: float(lows[t]))
+                return float(lows[best]), best
+
             bos_bull = False; bos_bull_idx = None; bos_bull_vol_ref = None
             bos_bear = False; bos_bear_idx = None; bos_bear_vol_ref = None
+            bull_ref_high = None; bull_ref_high_idx = None
+            bear_ref_low = None; bear_ref_low_idx = None
             for k in range(1, lookback + 1):
                 idx = n - k
-                close_v = float(closes[idx]) if _has_close else float(highs[idx])
-                # Bull BOS: close above prior swing high, no subsequent close back below
-                if not bos_bull and close_v > prior_high + min_break_abs:
-                    invalidated = False
-                    for j in range(idx + 1, n):
-                        if (float(closes[j]) if _has_close else float(lows[j])) < prior_high:
-                            invalidated = True
-                            break
-                    if not invalidated:
-                        bos_bull, bos_bull_idx, bos_bull_vol_ref = True, idx, idx
-                close_v_bear = float(closes[idx]) if _has_close else float(lows[idx])
-                if not bos_bear and close_v_bear < prior_low - min_break_abs:
-                    invalidated = False
-                    for j in range(idx + 1, n):
-                        if (float(closes[j]) if _has_close else float(highs[j])) > prior_low:
-                            invalidated = True
-                            break
-                    if not invalidated:
-                        bos_bear, bos_bear_idx, bos_bear_vol_ref = True, idx, idx
+                close_v = float(closes[idx])
+                # Bull BOS: close above the reference swing high, no subsequent
+                # close back below it.
+                if not bos_bull:
+                    _rh, _rh_idx = _ref_high_for(idx)
+                    if _rh is not None and close_v > _rh + min_break_abs:
+                        invalidated = False
+                        for j in range(idx + 1, n):
+                            if float(closes[j]) < _rh:
+                                invalidated = True
+                                break
+                        if not invalidated:
+                            bos_bull, bos_bull_idx, bos_bull_vol_ref = True, idx, idx
+                            bull_ref_high, bull_ref_high_idx = _rh, _rh_idx
+                if not bos_bear:
+                    _rl, _rl_idx = _ref_low_for(idx)
+                    if _rl is not None and close_v < _rl - min_break_abs:
+                        invalidated = False
+                        for j in range(idx + 1, n):
+                            if float(closes[j]) > _rl:
+                                invalidated = True
+                                break
+                        if not invalidated:
+                            bos_bear, bos_bear_idx, bos_bear_vol_ref = True, idx, idx
+                            bear_ref_low, bear_ref_low_idx = _rl, _rl_idx
                 if bos_bull and bos_bear:
                     break
+
+            # Reported reference: the swing the detected break actually cleared,
+            # else the reference a break on the latest bar would be measured
+            # against. Consumers (SL placement, follow-through, TP1 path) read
+            # these, so they must match the level the break was tested against.
+            _latest_ref_high, _latest_ref_high_idx = _ref_high_for(n)
+            _latest_ref_low, _latest_ref_low_idx = _ref_low_for(n)
+            ref_high_out = bull_ref_high if bos_bull else _latest_ref_high
+            ref_high_idx_out = bull_ref_high_idx if bos_bull else _latest_ref_high_idx
+            ref_low_out = bear_ref_low if bos_bear else _latest_ref_low
+            ref_low_idx_out = bear_ref_low_idx if bos_bear else _latest_ref_low_idx
+            if ref_high_out is None:
+                ref_high_out, ref_high_idx_out = prior_high, prior_high_idx
+            if ref_low_out is None:
+                ref_low_out, ref_low_idx_out = prior_low, prior_low_idx
 
             bos_volume_confirmed = False
             bos_volume_available = False
@@ -4278,12 +4363,13 @@ class NakedEngine:
             return {
                 "bos_bull": bos_bull,
                 "bos_bear": bos_bear,
-                "last_broken_high": prior_high if bos_bull else None,
-                "last_broken_low": prior_low if bos_bear else None,
-                "bos_reference_high": prior_high,
-                "bos_reference_low": prior_low,
-                "bos_reference_high_index": prior_high_idx,
-                "bos_reference_low_index": prior_low_idx,
+                "last_broken_high": bull_ref_high if bos_bull else None,
+                "last_broken_low": bear_ref_low if bos_bear else None,
+                "bos_reference_high": ref_high_out,
+                "bos_reference_low": ref_low_out,
+                "bos_reference_high_index": ref_high_idx_out,
+                "bos_reference_low_index": ref_low_idx_out,
+                "bos_reference_mode": _ref_mode,
                 "bos_volume_confirmed": bos_volume_confirmed,
                 "bos_volume_available": bos_volume_available,
                 "bos_bar_volume": round(bos_bar_volume, 4) if bos_bar_volume is not None else None,
@@ -5290,25 +5376,33 @@ class NakedEngine:
         _choch_bear = bool(choch_data.get("choch_bear")) and not bool(
             choch_data.get("choch_bull")
         )
+        # Confidence after a BOS override is DERIVED, not asserted. The override
+        # used to promote NONE/LOW/MEDIUM straight to HIGH — and since BOS is
+        # also the heaviest vote (weight 3), that made confidence HIGH for
+        # essentially every signal carrying a BOS, so the field stopped carrying
+        # information. It now reflects whether the other active evidence agrees
+        # with the overridden side: unopposed -> HIGH, opposed -> MEDIUM, and an
+        # already-computed confidence is never downgraded by the override.
+        _rank = {"NONE": 0, "": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3}
+
+        def _override_confidence(side_sign: int, current: str) -> str:
+            opposing = sum(1 for v in active_votes if v * side_sign < 0)
+            derived = "MEDIUM" if opposing else "HIGH"
+            return derived if _rank.get(derived, 0) > _rank.get(current, 0) else current
+
         if bos_bear and not bos_bull and not _choch_bull:
             direction = "SHORT"
-            if confidence in {"NONE", "LOW", ""}:
-                confidence = "HIGH"
-            elif confidence == "MEDIUM":
-                confidence = "HIGH"
+            confidence = _override_confidence(-1, confidence)
             reason = (
                 f"Exclusive structure-TF BOS bearish overrides lagging sequence "
-                f"(h4={h4_sequence}, h1={h1_sequence})"
+                f"(h4={h4_sequence}, h1={h1_sequence}, confidence={confidence})"
             )
         elif bos_bull and not bos_bear and not _choch_bear:
             direction = "LONG"
-            if confidence in {"NONE", "LOW", ""}:
-                confidence = "HIGH"
-            elif confidence == "MEDIUM":
-                confidence = "HIGH"
+            confidence = _override_confidence(1, confidence)
             reason = (
                 f"Exclusive structure-TF BOS bullish overrides lagging sequence "
-                f"(h4={h4_sequence}, h1={h1_sequence})"
+                f"(h4={h4_sequence}, h1={h1_sequence}, confidence={confidence})"
             )
 
         return {
@@ -5691,10 +5785,33 @@ class NakedEngine:
         try:
             _pk_idx = struct_swings.get("peak_idx", [])
             _tr_idx = struct_swings.get("trough_idx", [])
-            if len(_pk_idx) >= 1:
-                _sweep_swing_high = float(struct_highs[_pk_idx[-1]])
-            if len(_tr_idx) >= 1:
-                _sweep_swing_low = float(struct_lows[_tr_idx[-1]])
+            # The sweep reference must be a level that existed BEFORE the sweep
+            # window opens. Passing the most recent swing (peak_idx[-1]) fed the
+            # detector a level defined inside its own measurement window: the bar
+            # that sweeps liquidity is itself a prominent local extreme, so once
+            # find_peaks confirms it (distance=3 -> ~3 bars later) it becomes its
+            # own reference and can never satisfy `low < ref_low - wick*ATR`.
+            # The engine therefore stopped detecting exactly the sweeps it was
+            # looking for, and the effective window was ~3 bars rather than the
+            # configured 5. Reversible: ENGINE_B_SWEEP_REFERENCE_EXCLUDE_WINDOW.
+            _exclude_window = bool(
+                config.CONFIG.get("ENGINE_B_SWEEP_REFERENCE_EXCLUDE_WINDOW", True)
+            )
+            if _exclude_window:
+                try:
+                    _sweep_lb = int(config.CONFIG.get("ENGINE_B_SWEEP_LOOKBACK_BARS", 5) or 5)
+                except (TypeError, ValueError):
+                    _sweep_lb = 5
+                _window_start = len(struct_highs) - max(1, _sweep_lb)
+                _pk_pool = [int(p) for p in _pk_idx if int(p) < _window_start]
+                _tr_pool = [int(t) for t in _tr_idx if int(t) < _window_start]
+            else:
+                _pk_pool = [int(p) for p in _pk_idx]
+                _tr_pool = [int(t) for t in _tr_idx]
+            if _pk_pool:
+                _sweep_swing_high = float(struct_highs[_pk_pool[-1]])
+            if _tr_pool:
+                _sweep_swing_low = float(struct_lows[_tr_pool[-1]])
         except Exception:
             pass
         sweep_data = self._detect_sweep(struct_highs, struct_lows, struct_closes, struct_atr, swing_high=_sweep_swing_high, swing_low=_sweep_swing_low)
@@ -6456,6 +6573,10 @@ class NakedEngine:
             "nearest_support_zone": nearest_sup,
             "current_swing_sequence": sequence_data["state"],
             "macro_swing_sequence": macro_seq_data["state"],
+            # Bars since the swing that defines each sequence — lets consumers
+            # decay a stale HH_HL/LH_LL read instead of discarding it outright.
+            "current_swing_sequence_age": sequence_data.get("last_swing_age"),
+            "macro_swing_sequence_age": macro_seq_data.get("last_swing_age"),
             "macro_sequence_tf": precompute.get("macro_sequence_tf"),
             **(
                 {
@@ -7347,8 +7468,42 @@ class NakedEngine:
         # analyze_structure_direction never set absorption_confirmed or
         # location_at_extreme, so the branch was dead. Only scalp_engine.py sets
         # absorption_confirmed. Re-add when Engine B gains absorption detection.
+        # Trigger-at-location. `trigger_ok` is a last-bar candle-geometry read
+        # (_price_action_trigger) computed with NO zone / OB / FVG proximity
+        # input at all, and it alone satisfied entry_ok. location_ok is a
+        # separate gate that could be satisfied by an entirely different
+        # mechanism — so an engulfing bar anywhere could pair with a zone
+        # sitting well away from price and clear both gates. Pairing the entry
+        # pattern with the level that justifies it is the core of the
+        # methodology, and nothing enforced it. The trigger branch now also
+        # requires price to actually be at one of the recognised locations.
+        # Breakout / sweep / CHoCH branches are unchanged: those carry their own
+        # location evidence. Reversible: ENGINE_B_TRIGGER_AT_LOCATION_ENABLED.
+        _trigger_loc_enabled = bool(
+            config.CONFIG.get("ENGINE_B_TRIGGER_AT_LOCATION_ENABLED", True)
+        )
+        try:
+            _trigger_loc_max_atr = float(
+                config.CONFIG.get("ENGINE_B_TRIGGER_AT_LOCATION_MAX_ATR", 0.75) or 0.75
+            )
+        except (TypeError, ValueError):
+            _trigger_loc_max_atr = 0.75
+        _trigger_at_location = (
+            zone_ok
+            or ob_at_zone
+            or _trend_pullback
+            or _fvg_sweep_location
+            or (allow_breakout_entry and breakout_ok)
+            or _active_zone_distance <= atr_val * _trigger_loc_max_atr
+        )
+        _trigger_location_blocked = bool(
+            _trigger_loc_enabled and trigger_ok and not _trigger_at_location
+        )
+        _trigger_entry_ok = trigger_ok and (
+            _trigger_at_location or not _trigger_loc_enabled
+        )
         entry_ok = (
-            trigger_ok
+            _trigger_entry_ok
             or (breakout_ok and bool(res.get("bos_volume_confirmed", False)))
             or (bool(res.get("liquidity_sweep")) and zone_ok)
             or (bool(res.get("choch_confirmed")) and zone_ok)
@@ -7447,6 +7602,27 @@ class NakedEngine:
         ):
             _rr_space_tp_qualified = False
             _rr_space_capped_tp_blocked = True
+        # Remaining synthetic-TP substitutions (missing_tp_synthesized /
+        # wrong_side_tp_synthesized). A synthetic TP is sl_dist * fallback_rr —
+        # it is derived from the STOP, not from structure, so it carries no
+        # evidence whatsoever about how much room sits in front of price. Letting
+        # it satisfy the room gate means the gate is cleared by a number the
+        # engine computed from its own stop distance. The above block already
+        # rejected the "structural TP was capped" case; this closes the "no
+        # structural target could be mapped at all" case, which is if anything
+        # weaker evidence of room. Room must now be proven by structure or by a
+        # real structural TP. Expect fewer Engine B passes on thin/unmapped
+        # instruments. Reversible: set this flag true.
+        _rr_space_synthetic_blocked = False
+        if (
+            _rr_space_tp_qualified
+            and _level_mode_str.endswith("_fallback_rr_tp")
+            and not bool(
+                config.CONFIG.get("ENGINE_B_SPACE_RR_SUBSTITUTE_ALLOW_SYNTHETIC", False)
+            )
+        ):
+            _rr_space_tp_qualified = False
+            _rr_space_synthetic_blocked = True
         _rr_space_floor_enabled = bool(
             config.CONFIG.get("ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR_ENABLED", False)
         )
@@ -7552,6 +7728,12 @@ class NakedEngine:
         _quality_score = 0.0
         _quality_max_possible = 0.0
         _quality_components: dict[str, float] = {}
+        # Quality components dropped as unearnable for this asset class. Pruning
+        # removes them from BOTH numerator and denominator, so it changes the
+        # evidence base the quality ratio is built from (forex can lose 0.25 of
+        # the 1.00 weight table). Reported so a thin denominator is visible
+        # rather than implicit.
+        _quality_pruned: list[str] = []
         _use_weighted_scoring = False
         try:
             from engine_b_quality import weighted_scoring_enabled
@@ -7697,6 +7879,7 @@ class NakedEngine:
                     _quality_res,
                     direction,
                     atr_val,
+                    pruned_out=_quality_pruned,
                     bos_followthrough_norm=_ft_norm,
                     volume_ok=volume_ok,
                     aggtrade_available=_aggtrade_available,
@@ -8055,6 +8238,10 @@ class NakedEngine:
                 _hard_fail_reasons.append("engine_b_aggtrade_required_false")
             if not trigger_timeframe_gate_ok:
                 _hard_fail_reasons.append("engine_b_trigger_timeframe_false")
+            if _trigger_location_blocked:
+                _hard_fail_reasons.append("engine_b_trigger_not_at_location")
+            if _rr_space_synthetic_blocked:
+                _hard_fail_reasons.append("engine_b_synthetic_tp_cannot_substitute_room")
             if terminal_lifecycle:
                 _hard_fail_reasons.append(f"engine_b_lifecycle_{lifecycle_state}")
             _hard_fail_reasons = sorted(set(_hard_fail_reasons))
@@ -8068,6 +8255,10 @@ class NakedEngine:
             # for every pass and pct floors near 83%; only this field varies.
             "quality_pct": quality_pct,
             "quality_points_net": round(_quality_points_net, 4),
+            "quality_components_pruned": list(_quality_pruned),
+            "trigger_at_location": bool(_trigger_at_location),
+            "trigger_location_blocked": bool(_trigger_location_blocked),
+            "rr_space_synthetic_blocked": bool(_rr_space_synthetic_blocked),
             "quality_denominator": round(_quality_denominator, 4),
             "max_possible": round(max_possible, 2),
             "gate_max_possible": round(gate_max_possible, 2),
