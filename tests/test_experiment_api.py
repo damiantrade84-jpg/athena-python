@@ -5,9 +5,67 @@ from __future__ import annotations
 from flask import Flask
 
 import athena_experiment.api as experiment_api
+from athena_experiment.worker import _timeframe_result_summary
 
 
 _EURUSD = {"symbol": "EURUSD", "display": "EUR/USD", "type": "forex"}
+
+
+def test_worker_timeframe_summary_tracks_full_route_and_dynamic_engine_a_trend():
+    collapsed = _timeframe_result_summary(
+        {
+            "regimeTf": "D1",
+            "biasTf": "H4",
+            "structureTf": "H4",
+            "setupTf": "H1",
+            "triggerTf": "M15",
+            "executionTf": "M5",
+        },
+        "A",
+    )
+    assert collapsed["roles"] == {
+        "regime": "D1",
+        "bias": "H4",
+        "structure": "H4",
+        "setup": "H1",
+        "trigger": "M15",
+        "execution": "M5",
+    }
+    assert collapsed["trendTimeframes"] == ["D1", "H4"]
+
+    distinct = _timeframe_result_summary(
+        {
+            "regimeTf": "D1",
+            "biasTf": "H4",
+            "structureTf": "H1",
+            "setupTf": "M30",
+            "triggerTf": "M15",
+            "executionTf": "M15",
+        },
+        "A",
+    )
+    assert distinct["trendTimeframes"] == ["D1", "H4", "H1"]
+
+
+def test_tuning_lab_structure_knob_targets_authoritative_policy_group():
+    from athena_experiment.overlay import build_overlay
+
+    overlay = build_overlay(
+        "A",
+        "forex_majors",
+        "intraday",
+        {"tf_role.structure": "H1"},
+    )
+
+    assert overlay == {
+        "ENGINE_TF_ROLE_OVERRIDES": {
+            "BY_GROUP": {
+                "forex_majors_standard": {
+                    "intraday": {"structure": "H1"}
+                }
+            }
+        }
+    }
 
 
 def _client():

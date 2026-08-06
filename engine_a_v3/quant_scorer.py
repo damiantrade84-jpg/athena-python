@@ -452,9 +452,9 @@ def _trend_component(
     indicator_periods: Mapping[str, int] | None = None,
     entry_tf: str = "H1",
     series_cache=None,
-) -> tuple[Component, dict[str, str]]:
+) -> tuple[Component, dict[str, Any]]:
     parts: dict[str, float] = {}
-    coherence: dict[str, str] = {}
+    coherence: dict[str, Any] = {}
     weighted = 0.0
     total_w = 0.0
     sep_weighted = 0.0
@@ -484,6 +484,48 @@ def _trend_component(
         coherence_q = max(0.0, 1.0 - dispersion)
     else:
         coherence_q = abs(weighted)
+    configured_timeframes = [str(tf).upper() for tf in tf_w]
+    available_timeframes = [str(tf).upper() for tf in parts]
+    dominant_label = "UP" if weighted > 0.0 else "DOWN" if weighted < 0.0 else "MIXED"
+    agreement_count = sum(
+        1 for label in coherence.values() if label == dominant_label
+    )
+    total_count = len(parts)
+    coherence.update(
+        {
+            # Direct lower-case TF keys above remain for backward compatibility.
+            # These explicit collections make the contract dynamic and let
+            # consumers ignore non-TF metadata safely.
+            "per_tf": {
+                str(tf).upper(): {
+                    "direction": coherence.get(str(tf).lower()),
+                    "signal": round(parts[tf], 4),
+                    "weight": round(float(tf_w.get(tf, 0.0)), 4),
+                }
+                for tf in parts
+            },
+            "trend_timeframes": configured_timeframes,
+            "available_timeframes": available_timeframes,
+            "configured_count": len(configured_timeframes),
+            "total_count": total_count,
+            "agreement_count": agreement_count,
+            "coherence_ratio": round(
+                agreement_count / total_count if total_count else 0.0, 4
+            ),
+            "tf_coverage": round(
+                total_count / len(configured_timeframes)
+                if configured_timeframes
+                else 0.0,
+                4,
+            ),
+            "dominant_direction": (
+                "LONG" if dominant_label == "UP" else
+                "SHORT" if dominant_label == "DOWN" else
+                None
+            ),
+            "weighted_balance": round(weighted, 4),
+        }
+    )
     quality = abs(weighted) * (0.5 + 0.5 * coherence_q)
     # Separation scales quality, never direction: a compressed stack is a
     # low-conviction read of the same side, not the other side.
@@ -491,10 +533,9 @@ def _trend_component(
     if sep_enabled and sep_w_total > 0:
         sep_mean = sep_weighted / sep_w_total
         sep_mult = sep_floor + (1.0 - sep_floor) * _clamp01(sep_mean / sep_target)
-        # Deliberately NOT written into `coherence`: legacy_filters and the
-        # crypto late-trend adjustment iterate that dict *by value* looking for
-        # UP/DOWN/FLAT labels, so a numeric entry there would leak into a
-        # label set.
+        # Separation stays a quality-only multiplier. Coherence consumers that
+        # need TF labels read the explicit per_tf map or filter the compatible
+        # lower-case TF keys above.
         quality *= _clamp(sep_mult, sep_floor, 1.0)
     quality *= _trend_health_mult(
         weighted, snaps, entry_candles, indicator_periods, entry_tf=entry_tf,
@@ -1740,7 +1781,8 @@ def score_pair(
 
     ``entry_tf_override`` is diagnostic-only (H1/M15/M30). When set, primary
     entry candles/snaps come from that TF with no silent H1/H4 fallback.
-    Trend stack remains D1/H4/H1.
+    When policy provenance is supplied, the trend stack follows its resolved
+    regime/bias/structure roles and collapses duplicate timeframes.
     """
     group = getattr(route, "score_group", "unknown")
     family = getattr(route, "family", "unknown")
@@ -1811,6 +1853,10 @@ def score_pair(
         policy_trigger_tf,
         policy_confirmation_tf,
         policy_m5,
+        tuple(
+            str((policy or {}).get(role) or (policy or {}).get(f"{role}Tf") or "").upper()
+            for role in ("regime", "bias", "structure")
+        ),
         getattr(profile, "profile_sha256", None),
     )
     plan = feature_cache.get(plan_key) if feature_cache is not None else None
@@ -1910,9 +1956,14 @@ def score_pair(
         "trend",
         entry_tf,
         tuple(
-            (tf, len(candles.get(tf) or []))
-            for tf in sorted(set((*tf_weights.keys(), entry_tf)))
+            (
+                tf,
+                round(float(tf_weights.get(tf, 0.0)), 8),
+                len(candles.get(tf) or []),
+            )
+            for tf in sorted(tf_weights)
         ),
+        len(candles.get(entry_tf) or []),
     )
     trend_result = feature_cache.get(trend_key) if feature_cache is not None else None
     if trend_result is None:
@@ -1931,6 +1982,13 @@ def score_pair(
             feature_cache[trend_key] = trend_result
             feature_cache["_latest_trend_key"] = trend_key
     trend, coherence = trend_result
+    coherence = dict(coherence or {})
+    _trend_role_timeframes = tf_diagnostics.get("trendRoleTimeframes")
+    if isinstance(_trend_role_timeframes, Mapping):
+        coherence["role_timeframes"] = dict(_trend_role_timeframes)
+    _trend_role_weights = tf_diagnostics.get("trendRoleWeights")
+    if isinstance(_trend_role_weights, Mapping):
+        coherence["role_weights"] = dict(_trend_role_weights)
     momentum, mom_diag = _momentum_component(momentum_snap, asset_type, group)
     trigger_evidence = None
     if policy_confirmation_tf:

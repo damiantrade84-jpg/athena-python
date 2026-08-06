@@ -88,6 +88,30 @@ export function resolveTrendCoherenceRows(diagnostics: Record<string, unknown>):
   };
 }
 
+export function resolveTrendCoherenceTimeframeRows(
+  diagnostics: Record<string, unknown>,
+): Array<{ timeframe: string; direction: string }> {
+  const trendCoherence = asRecord(diagnostics.trendCoherence);
+  const perTf = asRecord(trendCoherence.per_tf);
+  const rows: Array<{ timeframe: string; direction: string }> = [];
+
+  if (Object.keys(perTf).length > 0) {
+    for (const [timeframe, raw] of Object.entries(perTf)) {
+      const detail = asRecord(raw);
+      const direction = firstString(detail.direction, detail.label, detail.state);
+      if (direction) rows.push({ timeframe: timeframe.toUpperCase(), direction });
+    }
+    return rows;
+  }
+
+  for (const [key, raw] of Object.entries(trendCoherence)) {
+    if (!/^(d1|h4|h1|m30|m15|m5|m1)$/i.test(key)) continue;
+    const direction = firstString(raw);
+    if (direction) rows.push({ timeframe: key.toUpperCase(), direction });
+  }
+  return rows;
+}
+
 export function resolveFeedAddonDisplay(diagnostics: Record<string, unknown>): DiagnosticDisplay {
   const feedStatus = asRecord(diagnostics.feedStatus);
   return resolveTextDisplay(feedStatus.addon, 'factorDiagnostics.feedStatus.addon missing from payload');

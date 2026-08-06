@@ -45,6 +45,20 @@ def test_signal_and_tv_chart_render_v3_setup_contract():
     assert "AI review is advisory only" in chart
 
 
+def test_trend_coherence_display_uses_dynamic_policy_timeframes():
+    card = _read("components/athena/EngineASignalCard.tsx")
+    helper = _read("lib/engineADiagnosticsDisplay.ts")
+    lab = _read("components/panels/ExperimentLabPanel.tsx")
+
+    assert "resolveTrendCoherenceTimeframeRows(fd)" in card
+    assert "trendCoherence.d1" not in card
+    assert "trendCoherence.h4" not in card
+    assert "trendCoherence.h1" not in card
+    assert "trendCoherence.per_tf" in helper
+    assert "timeframeComparison" in lab
+    assert "Trend coherence TFs" in lab
+
+
 def test_v3_manual_execute_uses_decision_and_ai_cannot_veto():
     source = _read("lib/manualExecuteHelpers.ts")
     v3_branch = source.index("if (isV3) {")

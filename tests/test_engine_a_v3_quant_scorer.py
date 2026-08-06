@@ -475,6 +475,81 @@ def test_trend_component_skips_unavailable_tf():
     assert all_present.quality == pytest.approx(one_missing.quality)
 
 
+def test_trend_component_emits_dynamic_coherence_contract():
+    snap = _bullish_snap()
+
+    _component, collapsed = _trend_component({"D1": snap}, {"D1": 1.0})
+    assert collapsed["trend_timeframes"] == ["D1"]
+    assert collapsed["available_timeframes"] == ["D1"]
+    assert collapsed["configured_count"] == 1
+    assert collapsed["total_count"] == 1
+    assert collapsed["agreement_count"] == 1
+    assert collapsed["coherence_ratio"] == pytest.approx(1.0)
+    assert collapsed["tf_coverage"] == pytest.approx(1.0)
+    assert collapsed["dominant_direction"] == "LONG"
+    assert collapsed["per_tf"]["D1"]["direction"] == "UP"
+
+    _component, dynamic = _trend_component(
+        {"D1": snap, "M30": snap}, {"D1": 0.4, "M30": 0.6}
+    )
+    assert dynamic["trend_timeframes"] == ["D1", "M30"]
+    assert set(dynamic["per_tf"]) == {"D1", "M30"}
+    assert dynamic["total_count"] == 2
+    assert dynamic["agreement_count"] == 2
+
+
+def test_score_pair_rebuilds_dynamic_trend_route_when_policy_changes():
+    route = route_specialist(
+        {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
+    )
+    candles = _candles()
+    feature_cache: dict = {}
+    shared = {
+        "setup": "H1",
+        "trigger": "H1",
+        "execution": "H1",
+        "m5_policy": "disabled",
+    }
+
+    collapsed = score_pair(
+        route,
+        "intraday",
+        candles,
+        policy_timeframes={
+            **shared,
+            "regime": "D1",
+            "bias": "H4",
+            "structure": "H4",
+        },
+        feature_cache=feature_cache,
+    )
+    dynamic = score_pair(
+        route,
+        "intraday",
+        candles,
+        policy_timeframes={
+            **shared,
+            "regime": "D1",
+            "bias": "H4",
+            "structure": "H1",
+        },
+        feature_cache=feature_cache,
+    )
+
+    collapsed_diag = collapsed.factor_diagnostics
+    dynamic_diag = dynamic.factor_diagnostics
+    assert collapsed_diag["scoringTimeframes"]["trend"] == ["D1", "H4"]
+    assert collapsed_diag["trendCoherence"]["trend_timeframes"] == ["D1", "H4"]
+    assert collapsed_diag["trendCoherence"]["role_timeframes"] == {
+        "regime": "D1",
+        "bias": "H4",
+        "structure": "H4",
+    }
+    assert dynamic_diag["scoringTimeframes"]["trend"] == ["D1", "H4", "H1"]
+    assert dynamic_diag["trendCoherence"]["trend_timeframes"] == ["D1", "H4", "H1"]
+    assert dynamic_diag["trendCoherence"]["role_timeframes"]["structure"] == "H1"
+
+
 def test_momentum_blend_exposes_component_terms():
     snap = {
         "rsi": 62.0,

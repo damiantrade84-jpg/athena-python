@@ -17,6 +17,7 @@ import {
 } from '@/lib/athenaFormat';
 import type { EngineASignal } from '@/types/athena';
 import { isEngineAV3Signal, resolveEngineAV3Signal } from '@/lib/engineAV3';
+import { resolveTrendCoherenceTimeframeRows } from '@/lib/engineADiagnosticsDisplay';
 
 interface Props {
   signal: EngineASignal;
@@ -231,14 +232,8 @@ export default function EngineASignalCard({
     && (Number.isFinite(diAlign) || Number.isFinite(adxMult) || Number.isFinite(dirRamp));
   const trendAbortNote = (() => {
     if (trendAbortError === 'weighted_tf_tie') {
-      const d1 = trendCoherence.d1;
-      const h4 = trendCoherence.h4;
-      const h1 = trendCoherence.h1;
-      const parts = [
-        d1 ? `D1 ${d1}` : null,
-        h4 ? `H4 ${h4}` : null,
-        h1 ? `H1 ${h1}` : null,
-      ].filter(Boolean);
+      const parts = resolveTrendCoherenceTimeframeRows(fd)
+        .map(({ timeframe, direction }) => `${timeframe} ${direction}`);
       return parts.length
         ? `Multi-TF EMA vote tie (${parts.join(', ')}) — Engine A cannot pick LONG vs SHORT.`
         : 'Multi-TF EMA vote tie — Engine A cannot pick LONG vs SHORT.';

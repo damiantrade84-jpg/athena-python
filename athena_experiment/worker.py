@@ -20,6 +20,32 @@ from __future__ import annotations
 from typing import Any
 
 
+def _timeframe_result_summary(result: dict[str, Any], engine: str) -> dict[str, Any]:
+    """Expose the resolved baseline/variant routes the worker actually scored."""
+    roles = {
+        role: result.get(field)
+        for role, field in (
+            ("regime", "regimeTf"),
+            ("bias", "biasTf"),
+            ("structure", "structureTf"),
+            ("setup", "setupTf"),
+            ("trigger", "triggerTf"),
+            ("execution", "executionTf"),
+        )
+        if result.get(field)
+    }
+    summary: dict[str, Any] = {"roles": roles}
+    if str(engine).upper() == "A":
+        summary["trendTimeframes"] = list(
+            dict.fromkeys(
+                roles.get(role)
+                for role in ("regime", "bias", "structure")
+                if roles.get(role)
+            )
+        )
+    return summary
+
+
 def run_experiment_worker(
     symbol: str,
     engine: str,
@@ -108,6 +134,10 @@ def run_experiment_worker(
         },
         "baseline": baseline,
         "variant": variant,
+        "timeframeComparison": {
+            "baseline": _timeframe_result_summary(baseline, engine_u),
+            "variant": _timeframe_result_summary(variant, engine_u),
+        },
         "overlayApplied": overlay,
         "replayDays": applied_replay_days,
     }

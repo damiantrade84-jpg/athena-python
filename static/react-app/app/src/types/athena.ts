@@ -329,7 +329,7 @@ export interface EngineASignal {
   } | null;
   factorDiagnostics?: {
     trendDirection?: Direction | string;
-    trendCoherence?: number;
+    trendCoherence?: Record<string, unknown>;
     momentumQuality?: number;
     adxValue?: number;
     adxGate?: string;

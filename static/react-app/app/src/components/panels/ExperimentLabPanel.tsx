@@ -119,7 +119,19 @@ type RunResult = {
   overlay?: Record<string, unknown>;
   baseline?: RunMetrics;
   variant?: RunMetrics;
+  timeframeComparison?: {
+    baseline?: { roles?: Record<string, string>; trendTimeframes?: string[] };
+    variant?: { roles?: Record<string, string>; trendTimeframes?: string[] };
+  };
 };
+
+function formatRoleRoute(roles: Record<string, string> | undefined): string {
+  if (!roles) return 'Unavailable';
+  return ['regime', 'bias', 'structure', 'setup', 'trigger', 'execution']
+    .map((role) => roles[role])
+    .filter(Boolean)
+    .join(' → ') || 'Unavailable';
+}
 
 function metricValue(value: number | undefined, digits = 2): string {
   if (value == null || !Number.isFinite(value)) return '—';
@@ -601,6 +613,29 @@ function ExperimentLabPanel() {
                   <CompareTile label="Expectancy" base={result.baseline?.expectancy} variant={result.variant?.expectancy} digits={3} />
                   <CompareTile label="Max DD (R)" base={result.baseline?.maxDrawdownR} variant={result.variant?.maxDrawdownR} />
                 </div>
+
+                {result.timeframeComparison && (
+                  <div className="grid gap-2 rounded-xl border border-border/60 bg-black/20 p-3 text-xs md:grid-cols-2">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Baseline TF route</div>
+                      <div className="mt-1 font-mono">{formatRoleRoute(result.timeframeComparison.baseline?.roles)}</div>
+                      {engine === 'A' && (
+                        <div className="mt-1 text-[10px] text-muted-foreground">
+                          Trend coherence TFs: {(result.timeframeComparison.baseline?.trendTimeframes || []).join(' / ') || 'Unavailable'}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Variant TF route</div>
+                      <div className="mt-1 font-mono">{formatRoleRoute(result.timeframeComparison.variant?.roles)}</div>
+                      {engine === 'A' && (
+                        <div className="mt-1 text-[10px] text-muted-foreground">
+                          Trend coherence TFs: {(result.timeframeComparison.variant?.trendTimeframes || []).join(' / ') || 'Unavailable'}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {lowSample && (
                   <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">
