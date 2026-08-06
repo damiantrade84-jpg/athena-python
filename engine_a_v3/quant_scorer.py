@@ -29,11 +29,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+import logging
+
 from factor_scoring import _adx_multiplier_from_value, _resolve_adx_thresholds
 from engine_a_scoring_profile import (
     default_trend_tf_weights,
     resolve_engine_a_scoring_profile,
 )
+
+log = logging.getLogger("athena.quant_scorer")
 from engine_a_v3.profile import CORE_COMPONENTS
 from engine_a_v3.timeframes import (
     resolve_diagnostic_v3_entry_timeframe,
@@ -895,8 +899,13 @@ def _volatility_denominator_normalized() -> bool:
         return True
 
 
-def _component_vol_mults(snap: Mapping[str, Any]) -> dict[str, float]:
-    """Per-component volatility/regime multipliers (default global 1.0)."""
+def _component_vol_mults(snap: Mapping[str, Any], group: str | None = None, asset_type: str | None = None) -> dict[str, float]:
+    """Per-component volatility/regime multipliers (default global 1.0).
+
+    When ENGINE_A_V3_GROUP_VOL_BANDS_ENABLED true, ATR% ratio bands (VOLATILITY_SCALER_BANDS)
+    drive location/volume (and gentle trend) instead of generic atr_pct>0.9 percentile gate,
+    matching factor_scoring._volatility_scaler semantics per group.
+    """
     if not snap or not _volatility_gating_enabled():
         return {name: 1.0 for name in CORE_COMPONENTS}
     adx_pct = _f(snap.get("adx_pct"))
@@ -908,7 +917,39 @@ def _component_vol_mults(snap: Mapping[str, Any]) -> dict[str, float]:
     if adx_pct is not None:
         trend_mult += 0.08 * (adx_pct - 0.5)
         momentum_mult += 0.12 * (adx_pct - 0.5)
-    if atr_pct is not None:
+    # Group-aware ATR% ratio bands (preferred when enabled and group/asset known)
+    group_mult_applied = False
+    if group is not None and asset_type is not None:
+        try:
+            from config import CONFIG
+            if CONFIG.get("ENGINE_A_V3_GROUP_VOL_BANDS_ENABLED", False):
+                from factor_scoring import _resolve_class_keyed
+                bands = CONFIG.get("VOLATILITY_SCALER_BANDS") or {}
+                band = _resolve_class_keyed(bands, group, asset_type, None)
+                if isinstance(band, dict) and "low" in band and "high" in band:
+                    atr = _f(snap.get("atr"))
+                    close = _f(snap.get("close"))
+                    if atr is not None and close and close > 0 and atr > 0:
+                        ratio = atr / close
+                        low = float(band["low"]); high = float(band["high"])
+                        if ratio <= low:
+                            g_mult = 1.15
+                        elif ratio >= high:
+                            g_mult = 0.85
+                        else:
+                            t = (ratio - low) / (high - low) if high != low else 0.5
+                            g_mult = 1.15 + t * (0.85 - 1.15)
+                        # Apply group mult to location/volume primarily (precision vs noise)
+                        # Blend with generic 0.5-centred logic instead of replacing ADX term.
+                        location_mult *= (0.7 + 0.3 * g_mult)
+                        volume_mult *= (0.8 + 0.2 * g_mult)
+                        trend_mult *= (0.9 + 0.1 * g_mult)
+                        group_mult_applied = True
+                        # Debug trail via log when needed
+                        # log.debug("group vol band %s %s ratio %.5f low %.5f high %.5f gmult %.3f", group, asset_type, ratio, low, high, g_mult)
+        except Exception:
+            pass
+    if not group_mult_applied and atr_pct is not None:
         location_mult += 0.06 * (0.5 - atr_pct)
         if atr_pct > 0.9:
             volume_mult -= 0.08
@@ -926,6 +967,146 @@ def _volatility_mult(snap: Mapping[str, Any]) -> float:
     """Headline volatility multiplier retained for diagnostics/backward compat."""
     mults = _component_vol_mults(snap)
     return round(sum(mults.values()) / len(mults), 4)
+
+
+def _report_only_group_vol_bands_diagnostic(snap: Mapping[str, Any], group: str, asset_type: str) -> dict:
+    """Report-only: what group-aware VOLATILITY_SCALER_BANDS multiplier would be.
+
+    Never changes score; enabled only when ENGINE_A_V3_GROUP_VOL_BANDS_ENABLED true
+    and would use per-group low/high instead of generic adx_pct/atr_pct 0.5 center.
+    """
+    try:
+        from config import CONFIG
+        if not CONFIG.get("ENGINE_A_V3_GROUP_VOL_BANDS_ENABLED", False):
+            return {"enabled": False, "would_apply": False}
+        # Resolve per-group bands like factor_scoring._volatility_scaler does
+        from factor_scoring import _resolve_class_keyed
+        bands = CONFIG.get("VOLATILITY_SCALER_BANDS") or {}
+        band = _resolve_class_keyed(bands, group, asset_type, None)
+        if not isinstance(band, dict) or "low" not in band or "high" not in band:
+            return {"enabled": True, "would_apply": False, "reason": "no_group_band"}
+        atr = _f(snap.get("atr"))
+        close = _f(snap.get("close"))
+        if atr is None or close is None or close <= 0 or atr <= 0:
+            return {"enabled": True, "would_apply": False, "reason": "missing_atr_close"}
+        atr_pct = atr / close
+        low = float(band["low"]); high = float(band["high"])
+        # Would-be multiplier on same 0.85-1.15 scale as factor_scoring._volatility_scaler
+        if atr_pct <= low:
+            would_mult = 1.15
+        elif atr_pct >= high:
+            would_mult = 0.85
+        else:
+            t = (atr_pct - low) / (high - low) if high != low else 0.5
+            would_mult = 1.15 + t * (0.85 - 1.15)
+        return {"enabled": True, "would_apply": True, "atr_pct": round(atr_pct, 6), "band": {"low": low, "high": high}, "would_mult": round(would_mult, 4)}
+    except Exception as exc:
+        return {"enabled": False, "would_apply": False, "error": str(exc)}
+
+
+def _report_only_spread_diagnostic(entry_snap: Mapping[str, Any], group: str) -> dict:
+    """Report-only spread-to-SL penalty. Never demotes until ENGINE_A_SPREAD_SCORE_PENALTY.ENABLED."""
+    try:
+        from config import CONFIG
+        cfg = CONFIG.get("ENGINE_A_SPREAD_SCORE_PENALTY") or {}
+        if not cfg.get("ENABLED", False):
+            return {"enabled": False, "would_penalize": False}
+        atr = _f(entry_snap.get("atr"))
+        if atr is None or atr <= 0:
+            return {"enabled": True, "would_penalize": False, "reason": "missing_atr"}
+        # Use MAX_EXECUTION_SPREAD_PCT_BY_SYMBOL / MAX_EXECUTION_SPREAD_PCT as proxy when live spread not on snap
+        spread_pct = _f(entry_snap.get("spread_pct")) or _f(entry_snap.get("spreadPct"))
+        if spread_pct is None:
+            return {"enabled": True, "would_penalize": False, "reason": "no_spread_on_snap"}
+        ratio = spread_pct * _f(entry_snap.get("close") or 1.0) / atr if atr else 0
+        max_ratio = float(cfg.get("MAX_SPREAD_TO_SL_RATIO", 0.20))
+        mult = float(cfg.get("PENALTY_MULT", 0.85))
+        would = ratio > max_ratio
+        return {"enabled": True, "would_penalize": would, "spreadToAtr": round(ratio, 4), "threshold": max_ratio, "would_mult": mult if would else 1.0}
+    except Exception as exc:
+        return {"enabled": False, "would_penalize": False, "error": str(exc)}
+
+
+def _report_only_correlation_diagnostic(group: str, family: str) -> dict:
+    """Report-only USD-cluster correlation penalty. Never demotes until ENABLED."""
+    try:
+        from config import CONFIG
+        cfg = CONFIG.get("ENGINE_A_CORRELATION_SCORE_PENALTY") or {}
+        if not cfg.get("ENABLED", False):
+            return {"enabled": False, "would_penalize": False}
+        # Audit placeholder: would check cluster size via scoring._pair_to_cluster at scan layer
+        return {"enabled": True, "would_penalize": False, "reason": "scan_layer_only", "would_mult": float(cfg.get("USD_CLUSTER_PENALTY_MULT", 0.85))}
+    except Exception as exc:
+        return {"enabled": False, "would_penalize": False, "error": str(exc)}
+
+
+def _diagnose_layer_period_mismatch(profile: Any, indicator_periods: Mapping[str, int]) -> dict:
+    """Report-only: does profile trend_layers EMA keys align with resolved periods?"""
+    try:
+        layers = getattr(profile, "indicator_periods", None) or tuple()
+        # indicator_periods came from profile via _resolved_periods / _resolved_indicator_periods_for_tf
+        # Mismatch when bond_tlt 34/80 but layers still claim ema21
+        period_map = dict(indicator_periods) if isinstance(indicator_periods, dict) else dict(layers)
+        trend_period = period_map.get("ema_trend")
+        # Layers hardcode ema21/ema50/ema200 names; verify the numeric period behind ema21 matches the group's trend
+        # No score change — diagnostic only.
+        return {"trend_period": trend_period, "layers": [dict(x) for x in (getattr(profile, "indicator_periods", []) or [])] if hasattr(profile, "indicator_periods") else None}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _v3_session_multiplier(group: str, family: str) -> tuple[float, dict]:
+    """Session multiplier for equities/indices (strengthened gate).
+
+    Returns (mult, detail). When ENGINE_A_V3_SESSION_STRENGTHENED disabled, mult=1.0.
+    Active = US cash session 13.5-20.0 UTC, else off-hours. Demotes off-hours when enabled.
+    """
+    try:
+        from config import CONFIG
+        cfg = CONFIG.get("ENGINE_A_V3_SESSION_STRENGTHENED") or {}
+        if not cfg.get("ENABLED", False):
+            return 1.0, {"enabled": False}
+        if family not in {"equity_etf", "index"} and group not in {"us_indices_trackers", "eu_indices", "asian_indices", "index_other", "us_stock_single", "stock_other", "bond_tlt", "smallcap_em_etf"}:
+            return 1.0, {"enabled": True, "applied": False, "reason": "family_not_equity_index"}
+        from datetime import datetime, timezone
+        hour = datetime.now(timezone.utc).hour + datetime.now(timezone.utc).minute / 60.0
+        active = 13.5 <= hour < 20.0
+        mult = float(cfg.get("US_ACTIVE_MULT", 1.12) if active else cfg.get("US_OFF_MULT", 0.88))
+        return mult, {"enabled": True, "applied": True, "session": "us_active" if active else "off_hours", "utc_hour": round(hour, 2), "mult": mult}
+    except Exception as exc:
+        return 1.0, {"enabled": False, "error": str(exc)}
+
+
+def _v3_spread_multiplier(entry_snap: Mapping[str, Any], group: str, asset_type: str) -> tuple[float, dict]:
+    """Spread-to-SL penalty (live gate when enabled).
+
+    Uses MAX_EXECUTION_SPREAD_PCT as proxy when snap has no spread_pct.
+    Ratio = spread_pct * close / atr  (spread in price / ATR). If ratio > MAX_SPREAD_TO_SL_RATIO, penalize.
+    """
+    try:
+        from config import CONFIG
+        cfg = CONFIG.get("ENGINE_A_SPREAD_SCORE_PENALTY") or {}
+        if not cfg.get("ENABLED", False):
+            return 1.0, {"enabled": False}
+        atr = _f(entry_snap.get("atr"))
+        close = _f(entry_snap.get("close"))
+        if atr is None or atr <= 0 or close is None or close <= 0:
+            return 1.0, {"enabled": True, "applied": False, "reason": "missing_atr_close"}
+        spread_pct = _f(entry_snap.get("spread_pct")) or _f(entry_snap.get("spreadPct"))
+        if spread_pct is None:
+            # Fallback to config cap as worst-case proxy
+            caps = CONFIG.get("MAX_EXECUTION_SPREAD_PCT") or {}
+            # asset_type for equities is stock/index/etf; family equity_etf maps to stock
+            key = asset_type if asset_type in caps else ("stock" if asset_type == "stock" else "index" if asset_type == "index" else asset_type)
+            spread_pct = _f(caps.get(key)) or _f(caps.get("stock")) or 0.002
+        ratio = spread_pct * close / atr
+        max_ratio = float(cfg.get("MAX_SPREAD_TO_SL_RATIO", 0.20))
+        mult = float(cfg.get("PENALTY_MULT", 0.85))
+        if ratio > max_ratio:
+            return mult, {"enabled": True, "applied": True, "spreadToAtr": round(ratio, 4), "threshold": max_ratio, "mult": mult}
+        return 1.0, {"enabled": True, "applied": False, "spreadToAtr": round(ratio, 4), "threshold": max_ratio, "mult": 1.0}
+    except Exception as exc:
+        return 1.0, {"enabled": False, "error": str(exc)}
 
 
 # ── volume / flow ────────────────────────────────────────────────────────────
@@ -1516,7 +1697,7 @@ def score_pair(
     # clamped away) the top of the scale in high-ADX regimes — i.e. the "/3.00"
     # denominator shown on the card was not the achievable maximum. Disable with
     # ENGINE_A_V3_VOLATILITY_GATING.NORMALIZE_DENOMINATOR: false.
-    vol_mults = _component_vol_mults(entry_snap)
+    vol_mults = _component_vol_mults(entry_snap, group, asset_type)
     _vol_denom_normalized = _volatility_denominator_normalized()
 
     def _denom_vol_mult(name: str) -> float:
@@ -1708,6 +1889,19 @@ def score_pair(
             decision = "WATCH"
             equity_volume_blocked = True
 
+    # ── Session / Spread gates (enabled 2026-08-06 with approval) ──────
+    # These demote TRADE→WATCH when enabled; previous report-only path is now live.
+    session_mult, session_gate_detail = _v3_session_multiplier(group, family)
+    spread_mult, spread_gate_detail = _v3_spread_multiplier(entry_snap, group, asset_type)
+    pre_session_spread_confluence = confluence
+    gate_mult = session_mult * spread_mult
+    session_spread_demotion = False
+    if gate_mult != 1.0:
+        confluence = _clamp(confluence * gate_mult, 0.0, MAX_SCORE)
+        if decision == "TRADE" and confluence < threshold:
+            decision = "WATCH"
+            session_spread_demotion = True
+
     crypto_deriv_blocked = False
     if family == "crypto" and decision == "TRADE":
         try:
@@ -1732,6 +1926,18 @@ def score_pair(
 
     score_norm = confluence / MAX_SCORE
 
+    # Diagnostics (group-vol is now live via _component_vol_mults; spread/session are live gates above)
+    try:
+        _group_vol_diag = _report_only_group_vol_bands_diagnostic(entry_snap, group, asset_type)
+        _spread_diag = _report_only_spread_diagnostic(entry_snap, group)
+        _corr_diag = _report_only_correlation_diagnostic(group, family)
+        _layer_diag = _diagnose_layer_period_mismatch(profile, indicator_periods)
+    except Exception:
+        _group_vol_diag = {"enabled": False}
+        _spread_diag = {"enabled": False}
+        _corr_diag = {"enabled": False}
+        _layer_diag = {}
+
     if compact_result:
         factor_diagnostics = {
             "atrPct": _f(entry_snap.get("atr_pct")),
@@ -1743,6 +1949,17 @@ def score_pair(
             "cryptoDerivBlocked": crypto_deriv_blocked,
             "maxAttainableScore": max_attainable,
             "thresholdUnreachable": threshold_unreachable,
+            "sessionGate": session_gate_detail,
+            "spreadGate": spread_gate_detail,
+            "sessionSpreadGateMult": round(gate_mult, 4),
+            "sessionSpreadDemoted": session_spread_demotion,
+            "preGatesConfluence": round(pre_session_spread_confluence, 4),
+            "reportOnly": {
+                "groupVolBands": _group_vol_diag,
+                "spread": _spread_diag,
+                "correlation": _corr_diag,
+                "layerPeriodMismatch": _layer_diag,
+            },
             **(
                 {"triggerEvidence": trigger_evidence}
                 if trigger_evidence is not None
@@ -1802,6 +2019,17 @@ def score_pair(
             "trendState": legacy_diag.get("trendState"),
             "equityVolumeBlocked": equity_volume_blocked,
             "cryptoDerivBlocked": crypto_deriv_blocked,
+            "sessionGate": session_gate_detail,
+            "spreadGate": spread_gate_detail,
+            "sessionSpreadGateMult": round(gate_mult, 4),
+            "sessionSpreadDemoted": session_spread_demotion,
+            "preGatesConfluence": round(pre_session_spread_confluence, 4),
+            "reportOnly": {
+                "groupVolBands": _group_vol_diag,
+                "spread": _spread_diag,
+                "correlation": _corr_diag,
+                "layerPeriodMismatch": _layer_diag,
+            },
             **(
                 {"triggerEvidence": trigger_evidence}
                 if trigger_evidence is not None

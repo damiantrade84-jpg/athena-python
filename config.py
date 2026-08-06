@@ -3419,6 +3419,53 @@ def validate_config(cfg: dict) -> None:
                     log.warning(
                         f"[CFG] PAIR_PROFILES[{profile_name!r}] {numeric_key} must be numeric, got {profile[numeric_key]!r}"
                     )
+    # Report-only weight/period diagnostics: explicit per-group budgets keep live effective weights
+    # identical but surface drift before it demotes. Never blocks boot. Debug only to avoid
+    # spamming Tuning Lab partial pushes (volume:0.0) which are intentional per-group deltas.
+    try:
+        _qweights = cfg.get("ENGINE_A_QUANT_WEIGHTS_BY_GROUP") or {}
+        for sg, w in _qweights.items():
+            if isinstance(w, dict) and set(w.keys()) != {"trend", "momentum", "location", "volume"}:
+                log.debug("[CFG] ENGINE_A_QUANT_WEIGHTS_BY_GROUP[%r] partial budget %r — explicit 4-key budget preferred (audit F2)", sg, sorted(w.keys()))
+    except Exception:
+        pass
+    try:
+        _sg_thresh = cfg.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}
+        from engine_a_groups import ENGINE_A_KNOWN_SCORE_GROUPS as _EAK
+        missing_groups = sorted(g for g in _EAK if g not in _sg_thresh and g != "unknown")
+        if missing_groups:
+            log.debug("[CFG] ENGINE_A_SCORE_GROUP_THRESHOLDS missing groups %r — will use fallback tier (audit F4)", missing_groups)
+    except Exception:
+        pass
+    # Engine B dual-source drift check (audit F1): NAKED_ENGINE vs engine_b_config.yaml
+    try:
+        from pathlib import Path as _Path
+        _eb_path = _Path(__file__).parent / "engine_b_config.yaml"
+        if _eb_path.exists():
+            from engine_b_yaml_loader import load_engine_b_yaml as _load_eb
+
+            _eb_trans = _load_eb(str(_eb_path))
+            _eb_sgo = (_eb_trans.get("NAKED_ENGINE") or {}).get("score_group_overrides") or {}
+            _cfg_sgo = (cfg.get("NAKED_ENGINE") or {}).get("score_group_overrides") or {}
+            _eb_groups = set(_eb_sgo.keys())
+            _cfg_groups = set(_cfg_sgo.keys())
+            _only_eb = sorted(_eb_groups - _cfg_groups)
+            _only_cfg = sorted(_cfg_groups - _eb_groups)
+            if _only_eb or _only_cfg:
+                log.debug(
+                    "[CFG] Engine B dual source drift: only engine_b_config.yaml %r only NAKED_ENGINE %r (audit F1 — merge keeps config.yaml authoritative)",
+                    _only_eb,
+                    _only_cfg,
+                )
+            # Per-group min_rr drift check (first style only)
+            for _g in sorted(_eb_groups & _cfg_groups):
+                _eb_min = (_eb_sgo.get(_g) or {}).get("intraday", {}).get("min_rr")
+                _cfg_min = (_cfg_sgo.get(_g) or {}).get("intraday", {}).get("min_rr")
+                if _eb_min is not None and _cfg_min is not None and abs(float(_eb_min) - float(_cfg_min)) > 1e-9:
+                    log.debug("[CFG] Engine B min_rr drift for %r intraday engine_b_config.yaml %r vs NAKED_ENGINE %r", _g, _eb_min, _cfg_min)
+                    break
+    except Exception:
+        pass
 
 
 # Stage 4.1: Fatal boot-time config validation layer.

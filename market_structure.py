@@ -690,8 +690,14 @@ def engine_b_low_volatility_gate(
     atr_series: list,
     *,
     config_map: dict | None = None,
+    timeframe: str | None = None,
 ) -> tuple[bool, dict]:
-    """Apply the shared Engine B low-volatility pre-score gate."""
+    """Apply the shared Engine B low-volatility pre-score gate.
+
+    When ``timeframe`` is supplied and TF-normalization is enabled, ATRs are
+    scaled to the H4 reference (sqrt-time) before comparing, so an H1 ATR is
+    not judged against an H4 average without correction (audit F6).
+    """
     cfg = config_map if isinstance(config_map, dict) else config.CONFIG
     if not bool(cfg.get("ENGINE_B_LOW_VOLATILITY_GATE_ENABLED", True)):
         return True, {"reason": "disabled"}
@@ -713,6 +719,14 @@ def engine_b_low_volatility_gate(
             valid.append(parsed)
     if not valid:
         return False, {"reason": "no_valid_atr_history", "lookback": lookback}
+    # TF-normalize ATRs to H4 reference when timeframe is known (audit F6)
+    tf_scale = 1.0
+    if timeframe and bool(cfg.get("ENGINE_B_VOLATILITY_BAND_TF_NORMALIZATION", True)):
+        seconds = _TF_SECONDS_FOR_VOL_BANDS.get(str(timeframe).strip().upper())
+        if seconds:
+            tf_scale = math.sqrt(_VOL_BAND_REFERENCE_TF_SECONDS / float(seconds))
+            atr = atr * tf_scale
+            valid = [v * tf_scale for v in valid]
     average = sum(valid) / len(valid)
     threshold = average * ratio
     return atr >= threshold, {
@@ -722,6 +736,8 @@ def engine_b_low_volatility_gate(
         "minimum_ratio": ratio,
         "threshold": threshold,
         "lookback": lookback,
+        "timeframe": str(timeframe or "").upper() or None,
+        "tf_scale": round(tf_scale, 4),
     }
 
 
@@ -1082,6 +1098,76 @@ def _asset_class_structure_adjustment(
         "applied": applied_mult > 1.0 or min_break > 0.0,
     })
     return detail
+
+
+def _engine_b_atr_pct_min_room_diagnostic(
+    res: dict[str, Any], base_min_room: float, atr: float, asset_type: str, score_group: str | None
+) -> dict[str, Any]:
+    """Report-only ATR% normalized min_room (audit F10).
+
+    Shows what min_room would be if scaled via VOLATILITY_SCALER_BANDS (H4 ref)
+    instead of scalar ATR. Never changes gate — diagnostics only.
+    """
+    try:
+        close = float((res.get("close") or res.get("price") or 0) or 0)
+    except (TypeError, ValueError):
+        close = 0.0
+    atr_pct = (float(atr) / abs(close)) if close else None
+    band_atr_pct, scale = _volatility_band_atr_pct(atr_pct, res.get("structure_tf") or res.get("timeframe"))
+    bands = (config.CONFIG.get("VOLATILITY_SCALER_BANDS", {}) or {})
+    band = bands.get(str(score_group or "").lower()) or bands.get(str(asset_type or "").lower()) or {}
+    low = float(band.get("low", 0.005)) if isinstance(band, dict) else 0.005
+    high = float(band.get("high", 0.020)) if isinstance(band, dict) else 0.020
+    # Simple ATR% -> 0.8x .. 1.4x scaler for diagnostic
+    if band_atr_pct is None:
+        scaled = base_min_room
+        regime = "unknown"
+    elif band_atr_pct >= high:
+        scaled = base_min_room * 1.4
+        regime = "high_volatility"
+    elif band_atr_pct >= low:
+        scaled = base_min_room * 1.1
+        regime = "elevated_volatility"
+    else:
+        scaled = base_min_room * 0.85
+        regime = "normal"
+    return {
+        "base_min_room_atr": round(base_min_room, 4),
+        "atr": round(float(atr), 6) if atr else None,
+        "atr_pct": round(atr_pct, 6) if atr_pct is not None else None,
+        "band_atr_pct": round(band_atr_pct, 6) if band_atr_pct is not None else None,
+        "band_tf_scale": round(scale, 4),
+        "score_group": score_group,
+        "asset_type": asset_type,
+        "band_low": low,
+        "band_high": high,
+        "regime": regime,
+        "scaled_min_room_atr": round(scaled, 4),
+        "would_pass_with_scaled": None,  # filled by caller if distance known
+    }
+
+
+def _engine_b_zone_prominence_diagnostic(asset_type: str, score_group: str | None) -> dict[str, Any]:
+    """Report-only per-group zone prominence (audit F9)."""
+    try:
+        from config import CONFIG
+
+        base = float(CONFIG.get("NAKED_ENGINE", {}).get("zone_prominence_atr_mult", 0.8))
+    except (TypeError, ValueError):
+        base = 0.8
+    # Asset-class structure mult already adjusts swing prominence; surface it
+    try:
+        mult_map = config.CONFIG.get("ENGINE_B_ASSET_CLASS_STRUCTURE_MULT", {}) or {}
+        asset_mult = float(mult_map.get(str(asset_type or "").lower(), 1.0))
+    except (TypeError, ValueError):
+        asset_mult = 1.0
+    return {
+        "base_zone_prominence_atr": round(base, 4),
+        "asset_type": asset_type,
+        "score_group": score_group,
+        "asset_class_mult": round(asset_mult, 4),
+        "effective_zone_prominence": round(base * asset_mult, 4),
+    }
 
 
 def _crypto_structure_quality_score(

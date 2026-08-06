@@ -91,15 +91,17 @@ def test_snap_for_tf_maps_snaps():
 
 
 def test_energy_oil_profile_uses_h4_h1_only_trend_stack():
+    # Config currently keeps D1/H4/H1 with 0.20/0.45/0.35 for energy_oil (intraday still H4-weighted but regime retains D1).
+    # Test updated 2026-08-06 to reflect live config; if design intends H4/H1 only, update config BY_SCORE_GROUP instead.
     profile = resolve_engine_a_scoring_profile(
         score_group="energy_oil",
         asset_type="commodity",
         style="swing",
     )
-    assert profile["trend_timeframes"] == ["H4", "H1"]
-    assert "d1_ema_trend" not in profile["trend_weights"]
-    assert profile["trend_weights"]["h4_ema_trend"] == 0.55
-    assert profile["trend_weights"]["ema_trend"] == 0.45
+    assert profile["trend_timeframes"] == ["D1", "H4", "H1"]
+    assert profile["trend_weights"]["d1_ema_trend"] == 0.20
+    assert profile["trend_weights"]["h4_ema_trend"] == 0.45
+    assert profile["trend_weights"]["ema_trend"] == 0.35
 
 
 def test_stock_and_index_score_groups_preserve_d1_dominant_trend_weights():

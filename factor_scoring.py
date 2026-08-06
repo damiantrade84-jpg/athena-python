@@ -39,7 +39,10 @@ log = logging.getLogger("athena")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-_CRYPTO_COT_PAIRS = {"BTC/USDT", "ETH/USDT"}
+# Deprecated: never referenced after ortho-vote migration (2026-06). Kept as alias for
+# external import compatibility; do not use for new logic. COT for BTC/ETH is via
+# cot_feed._PAIR_FORMULA + ENGINE_A_COT_ADDON_ASSET_TYPES.
+_CRYPTO_COT_PAIRS = frozenset({"BTC/USDT", "ETH/USDT"})
 _funding_stats_cache: dict[str, tuple[dict, float]] = {}
 _FUNDING_STATS_TTL = 3600
 
@@ -2276,6 +2279,21 @@ def _volume_provenance_uniform(candles: list | None, lookback: int) -> bool:
     return len(flags) == 1
 
 
+def volume_provenance_detail(candles: list | None, lookback: int) -> dict:
+    """Report-only provenance diagnostic for volume windows (never changes score).
+
+    Returns {uniform: bool, mixed: bool, eodhd_count: int, tick_count: int}
+    so callers can surface provenance quality without demoting.
+    """
+    if not isinstance(candles, list) or not candles:
+        return {"uniform": False, "mixed": False, "eodhd_count": 0, "tick_count": 0}
+    window = candles[-max(1, int(lookback)):] if lookback else candles
+    eodhd = sum(1 for c in window if str(c.get("volSource") or "") == "eodhd")
+    tick = len(window) - eodhd
+    uniform = len({str(c.get("volSource") or "") == "eodhd" for c in window}) == 1
+    return {"uniform": uniform, "mixed": not uniform and eodhd > 0 and tick > 0, "eodhd_count": eodhd, "tick_count": tick}
+
+
 def _h4_volume_vs_ma(h4_candles: list | None, lookback: int) -> tuple[float | None, float | None]:
     """Return (latest_volume, volume_ma) from H4 candle volume series."""
     if not isinstance(h4_candles, list) or not h4_candles:
@@ -3091,11 +3109,12 @@ def _stock_volume_addon_with_status(
     # All three sub-signals below compare volume across bars, so the whole window
     # must come from one source. During WS warm-up (or after a gap in coverage) the
     # tail is EODHD volume over an MT5 tick-volume history; scoring that would
-    # inflate every stock signal. Treat mixed windows as no volume data.
+    # inflate every stock signal. Treat mixed windows as no volume data (report-only
+    # provenance flag, no score change — keeps current neutral behaviour, not demoting).
     if not _volume_provenance_uniform(
         h4_candles, max(20, obv_lookback, conc_lookback + 1)
     ):
-        return _ADDON_NEUTRAL, "unsupported"
+        return _ADDON_NEUTRAL, "unsupported_provenance_mixed"
 
     # Sub-signal 1: volume ratio vs SMA
     latest_vol, vol_ma = _h4_volume_vs_ma(h4_candles, obv_lookback)

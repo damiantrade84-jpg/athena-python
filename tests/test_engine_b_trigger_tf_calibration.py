@@ -45,7 +45,7 @@ _WICK_CANDLES = [
         ("forex_exotics", "forex", 12, 1.2, 0.20, 0.65),
         ("crypto_btc", "crypto", 10, 1.0, 0.30, 0.75),
         ("crypto_other", "crypto", 11, 1.0, 0.35, 0.75),
-        ("precious_trackers", "commodity", 10, 1.3, 0.25, 0.70),
+        ("precious_trackers", "commodity", 11, 1.0, 0.30, 0.75),  # wick-heavy XAU like crypto (was 10/1.3/0.25)
         ("energy_oil", "commodity", 12, 1.2, 0.30, 0.70),
         ("bond_tlt", "stock", 10, 1.4, 0.22, 0.70),
         ("us_stock_single", "stock", 10, 1.4, 0.22, 0.70),

@@ -491,9 +491,28 @@ ENGINE_A_QUANT_WEIGHTS_BY_GROUP:
   asian_indices: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
   forex_exotics: { trend: 0.40, momentum: 0.26, location: 0.22, volume: 0.12 }
   crypto_other: { trend: 0.36, momentum: 0.27, location: 0.18, volume: 0.19 }
-  forex_crosses: { volume: 0.0 }
+  # Explicit full budget (was partial volume:0.0) — renormalized from family forex 0.42/0.28/0.21/0.09 to keep live effective 0.4615/0.3077/0.2308/0.0 identical; makes tuning explicit and boot-validated.
+  forex_crosses: { trend: 0.4615, momentum: 0.3077, location: 0.2308, volume: 0.0 }
   forex_majors: { trend: 0.48, momentum: 0.30, location: 0.22, volume: 0.0 }
-  us_stock_single: { volume: 0.25 }
+  # Explicit full budget (was partial volume:0.25) — renormalized from family equity_etf 0.36/0.23/0.18/0.23 to keep live effective 0.3529/0.2255/0.1765/0.2451 identical.
+  us_stock_single: { trend: 0.3529, momentum: 0.2255, location: 0.1765, volume: 0.2451 }
+
+# ── Calibrated gates (enabled 2026-08-06 with user approval) ────────────
+# Previously report-only (F10/F12/F13). Now live: spread / correlation / session /
+# group-vol gates demote TRADE→WATCH when enabled. Reversible via ENABLED:false.
+ENGINE_A_SPREAD_SCORE_PENALTY:
+  ENABLED: true
+  MAX_SPREAD_TO_SL_RATIO: 0.20
+  PENALTY_MULT: 0.85
+ENGINE_A_CORRELATION_SCORE_PENALTY:
+  ENABLED: false  # scan-layer wiring pending; keep report-only until wired
+  USD_CLUSTER_PENALTY_MULT: 0.85
+  MAX_CLUSTER_SIZE: 2
+ENGINE_A_V3_SESSION_STRENGTHENED:
+  ENABLED: true
+  US_ACTIVE_MULT: 1.12
+  US_OFF_MULT: 0.88
+ENGINE_A_V3_GROUP_VOL_BANDS_ENABLED: true
 
 # Per-TF candle freshness diagnostic (stalenessSeverity, bucketLag, etc.).
 # Always populated for production visibility (unlike candleMeta which is debug-only).
@@ -640,12 +659,12 @@ ENGINE_B_FOREX_ASIAN_SESSION_SKIP_ENABLED: true
 ENGINE_B_FOREX_SESSION_STRUCTURE_WEIGHTING:
   ENABLED: true
   SCORE_INFLUENCE_ENABLED: true
-  HIGH_QUALITY_BONUS: 0.02
-  MEDIUM_QUALITY_BONUS: 0.01
-  LOW_QUALITY_PENALTY: -0.02
-  LONDON_NY_OVERLAP_BONUS: 0.01
-  LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS: 0.01
-  MAX_ABS_SCORE_BONUS: 0.04
+  HIGH_QUALITY_BONUS: 0.03
+  MEDIUM_QUALITY_BONUS: 0.015
+  LOW_QUALITY_PENALTY: -0.03
+  LONDON_NY_OVERLAP_BONUS: 0.015
+  LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS: 0.015
+  MAX_ABS_SCORE_BONUS: 0.06  # was 0.04 — strengthened per audit F4 (session edge under-weighted vs ob_confluence 0.11)
 
 ENGINE_B_FOREX_RR_CAN_SATISFY_SPACE_GATE: true
 
@@ -743,11 +762,11 @@ ENGINE_B_ASSET_CLASS_BOS_MIN_BREAK_ATR:
 ENGINE_B_EQUITY_SESSION_STRUCTURE_WEIGHTING:
   ENABLED: true
   SCORE_INFLUENCE_ENABLED: true
-  HIGH_QUALITY_BONUS: 0.015
-  MEDIUM_QUALITY_BONUS: 0.008
-  OFF_HOURS_PENALTY: -0.015
-  LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS: 0.008
-  MAX_ABS_SCORE_BONUS: 0.03
+  HIGH_QUALITY_BONUS: 0.03
+  MEDIUM_QUALITY_BONUS: 0.015
+  OFF_HOURS_PENALTY: -0.03
+  LIQUIDITY_SWEEP_ACTIVE_SESSION_BONUS: 0.015
+  MAX_ABS_SCORE_BONUS: 0.06  # was 0.03 — doubled per audit F4 (was 2% of gate vs 11% ob)
 
 BINANCE_KLINE_WS_INTERVALS:
   - "1m"
@@ -2074,14 +2093,17 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
   # Reversible: reset to 2.1.
   forex_crosses: 1.9
   forex_other: 2.1
-  forex_exotics: 1.7
+  # Calibrated 2026-08-06: exotics 1.7 was inverted vs majors (thin liquidity should be stricter, not easier).
+  # 1.9 aligns with majors/crosses and restores liquidity penalty; reversible to 1.7.
+  forex_exotics: 1.9
 
   # Crypto
   crypto_btc: 2.0
   crypto_eth: 2.0
   crypto_alt_majors: 2.2  # Promoted Tuning Lab result; previous tracked default 2.0.
   crypto_doge: 2.0
-  crypto_other: 2.2
+  # Calibrated 2026-08-06: 2.2 unreachable for thin alts where edge weakest; 2.0 aligns with btc/eth and matches audit F15.
+  crypto_other: 2.0
 
   # Commodity
   # #7 (2026-05-28): oil/precious previously sat at the equity-grade 1.5 bar despite
@@ -2089,9 +2111,8 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
   # outcome-backed): oil 1.8 (between SPY 1.5 and nat_gas 2.0), precious 1.7 (slightly
   # lower vol than oil). The ATR% vol scaler partly compensates, so keep the move
   # modest. copper/pgm/base_metals left at 1.5 (not flagged). Reversible: reset to 1.5.
-  # 2026-06-03: precious reverted 1.7 -> 1.5 (ungated bump; restored to config.py default
-  # pending n>=30 validation). oil/nat_gas bumps left in place.
-  precious_trackers: 1.5
+  # 2026-08-06: precious 1.5->1.7 calibrated (between SPY 1.5 and oil 1.8, ATR% vol scaler alone insufficient for XAU spikes; reversible to 1.5).
+  precious_trackers: 1.7
   energy_oil: 1.8
   nat_gas: 2.0
   copper: 1.7
@@ -4432,7 +4453,7 @@ ENGINE_B_TRIGGER_TF_CALIBRATION:
   crypto_doge:       { trigger_atr: 11, rejection_wick_body: 1.0, engulfing_body_atr: 0.35, strong_close_pct: 0.75 }
   crypto_alt_majors: { trigger_atr: 11, rejection_wick_body: 1.0, engulfing_body_atr: 0.35, strong_close_pct: 0.75 }
   crypto_other:      { trigger_atr: 11, rejection_wick_body: 1.0, engulfing_body_atr: 0.35, strong_close_pct: 0.75 }
-  precious_trackers: { trigger_atr: 10, rejection_wick_body: 1.3, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
+  precious_trackers: { trigger_atr: 11, rejection_wick_body: 1.0, engulfing_body_atr: 0.30, strong_close_pct: 0.75 }  # wick-heavy XAU/XAG like crypto (was 10/1.3/0.25 copy-paste; audit F2)
   copper:            { trigger_atr: 10, rejection_wick_body: 1.3, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
   pgm_metals:        { trigger_atr: 10, rejection_wick_body: 1.3, engulfing_body_atr: 0.25, strong_close_pct: 0.70 }
   energy_oil:        { trigger_atr: 12, rejection_wick_body: 1.2, engulfing_body_atr: 0.30, strong_close_pct: 0.70 }
