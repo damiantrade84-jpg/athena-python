@@ -1582,7 +1582,7 @@ def _timeframe_bias(engine_a_ctx: dict[str, Any]) -> dict[str, str | None]:
         if isinstance(trend_detail, dict):
             raw = trend_detail.get(tf_key) or trend_detail.get(tf_key.lower())
             if isinstance(raw, dict):
-                return str(raw.get("label") or raw.get("state") or raw.get("alignment") or raw)
+                return str(raw.get("label") or raw.get("state") or raw.get("alignment") or raw.get("direction") or raw)
             if raw is not None:
                 return str(raw)
         return None
