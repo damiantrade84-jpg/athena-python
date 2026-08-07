@@ -67,13 +67,15 @@ def test_policy_trend_weights_stay_d1_led_for_majors():
     weights, diag = _policy_trend_weights_from_profile(
         roles, "forex_majors", "forex", "intraday"
     )
-    # Configured intraday stack is D1 .42 / H4 .33 / H1 .25 — D1-led.
+    # Balanced ladder D1/H4/H4/H1/M15: regime D1, bias+structure H4, setup H1.
+    # Distinct regime/structure TFs keep D1-led profile weights without collapse.
     assert weights["D1"] == pytest.approx(0.42)
-    assert weights["H4"] == pytest.approx(0.33)
-    assert weights["H1"] == pytest.approx(0.25)
-    assert weights["D1"] > weights["H1"], "regime rung must not be the lightest"
-    assert diag["trendWeightSource"] == "policy_roles_profile_weights"
-    assert diag["trendLayersCollapsed"] == 0
+    assert weights.get("H4", 0.0) + weights.get("H1", 0.0) == pytest.approx(0.58)
+    assert weights["D1"] > weights.get("H1", 0.0), "regime rung must not be the lightest"
+    assert diag["trendWeightSource"] in {
+        "policy_roles_profile_weights",
+        "policy_roles_expanded_setup_trigger",
+    }
 
 
 def test_per_group_trend_weights_survive_under_policy():
@@ -94,15 +96,48 @@ def test_per_group_trend_weights_survive_under_policy():
 
 
 def test_shared_role_timeframes_sum_and_are_reported():
-    """Broad crosses resolve bias == structure == H4."""
+    """Broad crosses: bias == structure == H4; setup H1 restores H1 weight."""
     roles = _policy("EUR/GBP", "forex", "forex_crosses", "intraday")
     assert roles["bias"] == roles["structure"] == "H4"
+    assert roles["setup"] == "H1"
     weights, diag = _policy_trend_weights_from_profile(
         roles, "forex_crosses", "forex", "intraday"
     )
-    assert set(weights) == {"D1", "H4"}
-    assert weights["H4"] == pytest.approx(0.33 + 0.25)
+    assert weights["D1"] == pytest.approx(0.42)
     assert diag["trendLayersCollapsed"] == 1
+    assert diag.get("trendLayersExpanded") is True
+    assert set(weights) == {"D1", "H4", "H1"}
+    assert weights["H4"] == pytest.approx(0.33)
+    assert weights["H1"] == pytest.approx(0.25)
+
+
+def test_swing_d1_collapse_expands_onto_setup_trigger():
+    """Swing D1×3 regime/bias/structure expands onto H4 setup + H1 trigger."""
+    roles = _policy("EUR/USD", "forex", "forex_majors", "swing")
+    assert roles["regime"] == roles["bias"] == roles["structure"] == "D1"
+    weights, diag = _policy_trend_weights_from_profile(
+        roles, "forex_majors", "forex", "swing"
+    )
+    assert diag["trendLayersCollapsed"] == 2
+    assert diag.get("trendLayersExpanded") is True
+    assert weights["D1"] == pytest.approx(0.50)
+    assert weights["H4"] == pytest.approx(0.30)
+    assert weights["H1"] == pytest.approx(0.20)
+
+
+def test_symbol_aware_role_group_prefers_fast_major_over_score_alias():
+    """GBPUSD must not inherit forex_majors_standard-only rows via alias."""
+    gbp = resolve_timeframe_policy(
+        "GBP/USD", "forex", "forex_majors", "intraday", engine_id="engine_a"
+    )
+    assert gbp.setup_tf.value == "H1"
+    assert gbp.structure_tf.value == "H4"
+    assert gbp.m5_policy.value == "conditional"
+    eurusd = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "intraday", engine_id="engine_a"
+    )
+    assert eurusd.setup_tf.value == "H1"
+    assert eurusd.m5_policy.value == "disabled"
 
 
 def test_legacy_role_table_is_reachable_for_rollback(monkeypatch):
@@ -224,11 +259,14 @@ def test_score_pair_fails_closed_when_policy_entry_candles_missing():
         }
         for i in range(300)
     ]
+    # Named setup M30 with no M30 candles must fail closed (not fall back to H1).
+    policy = _policy("EUR/USD", "forex", "forex_majors", "intraday")
+    policy = {**policy, "setup": "M30", "setupTf": "M30"}
     quant = score_pair(
         route,
         "intraday",
         {"D1": rows, "H4": rows, "H1": rows},  # no M30 series supplied
-        policy_timeframes=_policy("EUR/USD", "forex", "forex_majors", "intraday"),
+        policy_timeframes=policy,
     )
     assert quant.factor_diagnostics.get("rejectionReason") == "missing_entry_candles"
     assert quant.direction == "FLAT"

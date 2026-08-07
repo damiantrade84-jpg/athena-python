@@ -4702,26 +4702,15 @@ TF_POLICY_SESSION_CALENDARS: {}
 TF_POLICY_UNDERLYING_EXCHANGE_CALENDARS: {}
 
 # Config-gated per-group/per-style role override for the timeframe policy
-# ladder (see docs/research/tf_structure_optimal_audit.md). The checked-in
-# config enables the selected rows below; set ENABLED false to restore the
-# universal ladder (D1/H4/H4/H1/M15).
-# When enabled, BY_GROUP maps a v4 policy group (the keys used by
-# resolve_timeframe_policy) to per-style role overrides; any subset of
-# regime/bias/structure/setup/trigger may be set, in slower-to-faster order.
+# ladder. ENABLED true applies the matrix below; false restores universal
+# D1/H4/H4/H1/M15. Liquid intraday groups restore intermediate setup=H1
+# (structure H4 ≠ setup H1 ≠ trigger M15). Session equities/indices use H1
+# structure + M30 setup. Thin groups keep M30 trigger. Swing is D1/D1/D1/H4/H1.
+# Role rows key off symbol-aware policy groups (not score-group aliases).
 # Invalid rows fail closed (PolicyConfigurationError). Engine D is never affected.
-# Policy-group taxonomy: forex_majors_standard, forex_majors_fast,
-# forex_crosses_broad, forex_crosses_liquid, forex_exotics_liquid,
-# forex_exotics_restricted, energy_oil, nat_gas, liquid_metals,
-# thin_metals_base_softs, equity_index_fast, equity_index_standard,
-# us_stock_single, cash_equity_standard_dynamic, bond_tlt_smallcap_em_etf,
-# crypto_majors_fast, crypto_alt_majors, crypto_other_thin.
 ENGINE_TF_ROLE_OVERRIDES:
   ENABLED: true
   BY_GROUP:
-    # Intraday: session-bound fast instruments use their promoted Tuning Lab
-    # ladder; fast/cash-equity groups retain H1 structure while standard
-    # indices and single stocks use the tested H4 structure/setup.
-    # Swing: D1 structure + H4 setup + H1 trigger.
     equity_index_fast:
       intraday:
         structure: H1
@@ -4735,10 +4724,8 @@ ENGINE_TF_ROLE_OVERRIDES:
         trigger: H1
     equity_index_standard:
       intraday:
-        regime: D1
-        bias: H4
-        structure: H4
-        setup: H4
+        structure: H1
+        setup: M30
         trigger: M15
       swing:
         regime: D1
@@ -4748,10 +4735,8 @@ ENGINE_TF_ROLE_OVERRIDES:
         trigger: H1
     us_stock_single:
       intraday:
-        regime: D1
-        bias: H4
-        structure: H4
-        setup: H4
+        structure: H1
+        setup: M30
         trigger: M15
       swing:
         regime: D1
@@ -4770,8 +4755,6 @@ ENGINE_TF_ROLE_OVERRIDES:
         structure: D1
         setup: H4
         trigger: H1
-    # Intraday: thin / spread-expensive / gap-prone groups keep H4 structure and
-    # use an M30 trigger instead of M15 to avoid spread-cost erosion.
     forex_exotics_liquid:
       intraday:
         structure: H4
@@ -4794,8 +4777,6 @@ ENGINE_TF_ROLE_OVERRIDES:
         structure: D1
         setup: H4
         trigger: H1
-    # Nat gas: extreme gap risk keeps the M30 intraday trigger and the swing
-    # trigger on H4.
     nat_gas:
       intraday:
         structure: H4
@@ -4829,14 +4810,13 @@ ENGINE_TF_ROLE_OVERRIDES:
         structure: D1
         setup: H4
         trigger: H1
-    # Swing: D1 structure + H4 setup + H1 trigger for the remaining policy
-    # groups (D1 regime/bias/structure satisfies the slower-to-faster ladder).
+    # Liquid FX: classic D1/H4 structure, H1 setup, M15 trigger (not H4 setup).
     forex_majors_standard:
       intraday:
         regime: D1
         bias: H4
         structure: H4
-        setup: H4
+        setup: H1
         trigger: M15
       swing:
         regime: D1
@@ -4845,6 +4825,12 @@ ENGINE_TF_ROLE_OVERRIDES:
         setup: H4
         trigger: H1
     forex_majors_fast:
+      intraday:
+        regime: D1
+        bias: H4
+        structure: H4
+        setup: H1
+        trigger: M15
       swing:
         regime: D1
         bias: D1
@@ -4856,7 +4842,7 @@ ENGINE_TF_ROLE_OVERRIDES:
         regime: D1
         bias: H4
         structure: H4
-        setup: H4
+        setup: H1
         trigger: M15
       swing:
         regime: D1
@@ -4865,6 +4851,12 @@ ENGINE_TF_ROLE_OVERRIDES:
         setup: H4
         trigger: H1
     forex_crosses_liquid:
+      intraday:
+        regime: D1
+        bias: H4
+        structure: H4
+        setup: H1
+        trigger: M15
       swing:
         regime: D1
         bias: D1
@@ -4872,6 +4864,12 @@ ENGINE_TF_ROLE_OVERRIDES:
         setup: H4
         trigger: H1
     energy_oil:
+      intraday:
+        regime: D1
+        bias: H4
+        structure: H4
+        setup: H1
+        trigger: M15
       swing:
         regime: D1
         bias: D1
@@ -4880,7 +4878,7 @@ ENGINE_TF_ROLE_OVERRIDES:
         trigger: H1
     liquid_metals:
       intraday:
-        regime: H4
+        regime: D1
         bias: H4
         structure: H4
         setup: H1
@@ -4896,7 +4894,7 @@ ENGINE_TF_ROLE_OVERRIDES:
         regime: D1
         bias: H4
         structure: H4
-        setup: H4
+        setup: H1
         trigger: M15
       swing:
         regime: D1
@@ -4909,7 +4907,7 @@ ENGINE_TF_ROLE_OVERRIDES:
         regime: D1
         bias: H4
         structure: H4
-        setup: H4
+        setup: H1
         trigger: M15
       swing:
         regime: D1
@@ -4917,19 +4915,32 @@ ENGINE_TF_ROLE_OVERRIDES:
         structure: D1
         setup: H4
         trigger: H1
+    # Thin crypto: H1 setup + M30 trigger (spread/noise trap on M15).
     crypto_other_thin:
       intraday:
         regime: D1
         bias: H4
         structure: H4
-        setup: H4
-        trigger: M15
+        setup: H1
+        trigger: M30
       swing:
         regime: D1
         bias: D1
         structure: D1
         setup: H4
         trigger: H1
+
+# When true, demote trigger M15→M30 under live SLOW speed or THIN liquidity.
+# Never promotes a faster trigger. Regime/bias/structure/setup are untouched.
+TF_POLICY_TRIGGER_SPEED_ADAPTATION_ENABLED: true
+
+# Soft mult when policy trigger-rung momentum opposes the scored direction.
+# Default on; set ENABLED false to restore pre-gate scoring.
+ENGINE_A_TRIGGER_EVIDENCE_SOFT_GATE:
+  ENABLED: true
+  OPPOSE_MULT: 0.88
+  WEAK_QUALITY_MAX: 0.25
+  WEAK_MULT: 0.94
 
 # Minimum ADX for forex Engine B (D1 snap preferred, else H4/zone snap; else
 

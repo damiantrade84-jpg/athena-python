@@ -31,6 +31,17 @@ def _assert_universal_roles(policy) -> None:
     assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
 
 
+def _assert_tuned_h4_roles(policy) -> None:
+    """Balanced liquid ladder: D1 / H4 / H4 / H1 / M15 (structure ≠ setup)."""
+    assert policy.regime_tf == Timeframe.D1
+    assert policy.bias_tf == Timeframe.H4
+    assert policy.structure_tf == Timeframe.H4
+    assert policy.setup_tf == Timeframe.H1
+    assert policy.trigger_tf == Timeframe.M15
+    assert policy.execution_tf == Timeframe.M15
+    assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
+
+
 def _assert_thin_m30_roles(policy) -> None:
     """Enabled override ladder for thin/spread-expensive groups: M30 trigger."""
     assert policy.regime_tf == Timeframe.D1
@@ -43,7 +54,7 @@ def _assert_thin_m30_roles(policy) -> None:
 
 
 def _assert_equity_roles(policy) -> None:
-    """Enabled override ladder for session-bound equities: H1 structure + M30 setup."""
+    """Session equity/index intraday: H1 structure / M30 setup / M15 trigger."""
     assert policy.regime_tf == Timeframe.D1
     assert policy.bias_tf == Timeframe.H4
     assert policy.structure_tf == Timeframe.H1
@@ -99,7 +110,7 @@ def test_unlisted_symbol_inherits_group_template() -> None:
     assert policy.policy_source == PolicySource.SCORE_GROUP_OVERRIDE
     assert policy.diagnostics.symbol_override_applied is False
     assert policy.profile == "FOREX_CROSSES_BROAD"
-    _assert_universal_roles(policy)
+    _assert_tuned_h4_roles(policy)
     assert policy.m5_policy == M5Policy.DISABLED
 
 
@@ -114,12 +125,13 @@ def test_unlisted_symbol_without_group_inherits_asset_default() -> None:
 
 def test_engine_a_intraday_overlay_preserves_instrument_profile() -> None:
     # A conditional-M5 fast-major keeps its profile under engine_a
-    # intraday: the overlay is a no-op, not a timeframe rewrite.
+    # intraday: the instrument profile is preserved while the promoted group
+    # timeframe ladder is applied.
     policy = resolve_timeframe_policy(
         "GBP/USD", "forex", "forex_majors", "intraday", engine_id="engine_a"
     )
     assert policy.profile == "FOREX_MAJORS_FAST"
-    _assert_universal_roles(policy)
+    _assert_tuned_h4_roles(policy)
     assert policy.m5_role == M5Role.REFINEMENT
     assert policy.m5_policy == M5Policy.CONDITIONAL
 
@@ -139,7 +151,7 @@ def test_engine_b_intraday_overlay_preserves_instrument_profile() -> None:
         "GBP/USD", "forex", "forex_majors", "intraday", engine_id="engine_b"
     )
     assert policy.profile == "ENGINE_B_INTRADAY_FOREX_MAJORS_FAST"
-    _assert_universal_roles(policy)
+    _assert_tuned_h4_roles(policy)
     assert policy.m5_role == M5Role.REFINEMENT
     assert policy.m5_policy == M5Policy.CONDITIONAL
 
@@ -163,7 +175,7 @@ def test_overlays_do_not_modify_unrelated_provenance() -> None:
         swing.diagnostics.symbol_override_patched_roles
         == intraday.diagnostics.symbol_override_patched_roles
     )
-    _assert_universal_roles(intraday)
+    _assert_tuned_h4_roles(intraday)
     _assert_swing_d1_roles(swing)
     assert swing.profile.startswith("ENGINE_A_SWING_")
 
@@ -185,9 +197,22 @@ def test_speed_adaptation_never_touches_regime_or_execution_mode() -> None:
         thin_liquidity=False,
         m5_quality_acceptable=True,
     )
-    for state in (slow, fast):
-        policy = resolve_timeframe_policy(
-            "EUR/USD", "forex", "forex_majors", "intraday", state
-        )
-        _assert_universal_roles(policy)
-        assert policy.diagnostics.adaptation_applied is False
+    # FAST: full liquid ladder, no trigger demotion.
+    fast_pol = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "intraday", fast
+    )
+    _assert_tuned_h4_roles(fast_pol)
+    assert fast_pol.diagnostics.adaptation_applied is False
+    assert fast_pol.regime_tf == Timeframe.D1
+    assert fast_pol.execution_mode == ExecutionMode.LIVE_QUOTE
+    # SLOW: trigger-only demotion M15→M30; regime/bias/structure/setup untouched.
+    slow_pol = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "intraday", slow
+    )
+    assert slow_pol.regime_tf == Timeframe.D1
+    assert slow_pol.bias_tf == Timeframe.H4
+    assert slow_pol.structure_tf == Timeframe.H4
+    assert slow_pol.setup_tf == Timeframe.H1
+    assert slow_pol.trigger_tf == Timeframe.M30
+    assert slow_pol.execution_mode == ExecutionMode.LIVE_QUOTE
+    assert slow_pol.diagnostics.adaptation_applied is True

@@ -210,26 +210,26 @@ def test_missing_authoritative_m15_trigger_fails_closed_not_substituted(monkeypa
 # ── group-aware swing ────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize(
-    "symbol,asset,structure,trigger",
+    "symbol,asset,structure,setup,trigger",
     [
-        ("EUR/USD", "forex", "H4", "M15"),
-        ("XAU/USD", "commodity", "H4", "M15"),
-        ("NASDAQ-100", "index", "H4", "M15"),
-        ("BTC/USDT", "crypto", "H4", "M15"),
-        # Universal Engine B policy keeps H4 as bias and structure for every group.
-        ("EUR/GBP", "forex", "H4", "M15"),
-        ("USD/ZAR", "forex", "H4", "M15"),
-        ("XPT/USD", "commodity", "H4", "M15"),
-        ("DOGE/USDT", "crypto", "H4", "M15"),
+        ("EUR/USD", "forex", "D1", "H4", "H1"),
+        ("XAU/USD", "commodity", "D1", "H4", "H1"),
+        ("NASDAQ-100", "index", "D1", "H4", "H1"),
+        ("BTC/USDT", "crypto", "D1", "H4", "H1"),
+        ("EUR/GBP", "forex", "D1", "H4", "H1"),
+        ("USD/ZAR", "forex", "D1", "H4", "H1"),
+        ("XPT/USD", "commodity", "D1", "H4", "H1"),
+        ("DOGE/USDT", "crypto", "D1", "H4", "H1"),
     ],
 )
-def test_engine_b_swing_is_group_aware(symbol, asset, structure, trigger):
+def test_engine_b_swing_is_group_aware(symbol, asset, structure, setup, trigger):
     policy = resolve_timeframe_policy(
         symbol, asset, None, "swing", None, engine_id="engine_b"
     )
     assert policy.structure_tf.value == structure
+    assert policy.setup_tf.value == setup
     assert policy.trigger_tf.value == trigger
-    assert policy.bias_tf.value == "H4"
+    assert policy.bias_tf.value == "D1"
 
 
 # ── volatility band timeframe normalisation ──────────────────────────────────

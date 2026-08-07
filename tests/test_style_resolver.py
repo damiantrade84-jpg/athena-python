@@ -15,7 +15,13 @@ def test_auto_uses_existing_pair_class_policy() -> None:
     assert resolve_auto_style("auto", {"type": "crypto"}, score_group="crypto_btc") == "intraday"
     assert resolve_auto_style("auto", {"type": "forex"}, score_group="forex_exotics") == "swing"
     assert resolve_auto_style("auto", {"type": "crypto"}, score_group="crypto_other") == "swing"
-    assert resolve_auto_style("auto", {"type": "stock"}, score_group="us_stock_single") == "swing"
+    # Session assets use the intraday role ladder under auto (not swing D1).
+    assert resolve_auto_style("auto", {"type": "stock"}, score_group="us_stock_single") == "intraday"
+    assert resolve_auto_style("auto", {"type": "index"}, score_group="us_indices_trackers") == "intraday"
+    assert resolve_auto_style("auto", {"type": "commodity"}, score_group="precious_trackers") == "intraday"
+    # Bonds / energy stay swing under auto.
+    assert resolve_auto_style("auto", {"type": "stock"}, score_group="bond_tlt") == "swing"
+    assert resolve_auto_style("auto", {"type": "commodity"}, score_group="energy_oil") == "swing"
 
 
 def test_invalid_style_falls_back_to_auto_policy() -> None:

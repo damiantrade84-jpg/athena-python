@@ -158,18 +158,56 @@ def _policy_trend_weights_from_profile(
         role_map[key] = tf
         role_weights[key] = round(float(weight), 4)
         tf_weights[tf] = tf_weights.get(tf, 0.0) + weight
+    collapsed = max(0, len(role_map) - len(tf_weights))
+    expanded = False
+    # When regime/bias/structure collide (swing D1×3 or bias==structure),
+    # redistribute profile weights onto distinct setup/trigger rungs so the
+    # triple-screen stack is not pure single-TF EMA.
+    if collapsed > 0 and ordered_weights:
+        setup_tf = str(
+            policy.get("setup") or policy.get("setupTf") or ""
+        ).upper()
+        trigger_tf = str(
+            policy.get("trigger") or policy.get("triggerTf") or ""
+        ).upper()
+        slots: list[str] = []
+        for key in ("regime", "bias", "structure"):
+            tf = role_map.get(key)
+            if tf and tf not in slots:
+                slots.append(tf)
+        for tf in (setup_tf, trigger_tf):
+            if tf and tf not in slots:
+                slots.append(tf)
+        if len(slots) >= 2 and len(slots) > len(tf_weights):
+            redistributed: dict[str, float] = {}
+            n = min(len(slots), len(ordered_weights))
+            for i in range(n):
+                redistributed[slots[i]] = float(ordered_weights[i])
+            if len(ordered_weights) > n:
+                redistributed[slots[-1]] = redistributed.get(slots[-1], 0.0) + sum(
+                    float(w) for w in ordered_weights[n:]
+                )
+            total = sum(redistributed.values())
+            if total > 0:
+                tf_weights = redistributed
+                expanded = True
     diagnostics = {
         "trendWeightSource": (
             "policy_roles_style_fallback"
             if layer_count_mismatch
-            else "policy_roles_profile_weights"
+            else (
+                "policy_roles_expanded_setup_trigger"
+                if expanded
+                else "policy_roles_profile_weights"
+            )
         ),
         "trendRoleTimeframes": dict(role_map),
         # Profile weights are calibrated by timeframe name but applied by role
         # position, so a policy promotion redirects a calibrated weight onto a
         # different timeframe. Emit the resolved (role, tf, weight) triple.
         "trendRoleWeights": dict(role_weights),
-        "trendLayersCollapsed": len(role_map) - len(tf_weights),
+        "trendLayersCollapsed": collapsed,
+        "trendLayersExpanded": expanded,
         "trendLayerCountMismatch": layer_count_mismatch,
     }
     return tf_weights, diagnostics
@@ -2458,7 +2496,59 @@ def score_pair(
         context, group, family
     )
     pre_session_spread_confluence = confluence
-    gate_mult = session_mult * spread_mult * correlation_mult
+    # Trigger-rung soft gate: when policy confirmation/trigger momentum is
+    # available and opposes the scored direction (or is very weak), haircut
+    # confluence so M15 is not purely decorative under the H4 momentum anchor.
+    trigger_gate_mult = 1.0
+    trigger_gate_detail: dict[str, Any] = {"enabled": False}
+    try:
+        from config import CONFIG
+
+        tg_cfg = CONFIG.get("ENGINE_A_TRIGGER_EVIDENCE_SOFT_GATE") or {}
+        if (
+            bool(tg_cfg.get("ENABLED", True))
+            and isinstance(trigger_evidence, Mapping)
+            and trigger_evidence.get("available")
+            and direction in ("LONG", "SHORT")
+        ):
+            t_sig = _f(trigger_evidence.get("signal"), 0.0) or 0.0
+            t_q = _f(trigger_evidence.get("quality"), 0.0) or 0.0
+            dsign_gate = 1.0 if direction == "LONG" else -1.0
+            oppose_mult = float(tg_cfg.get("OPPOSE_MULT", 0.88))
+            weak_max = float(tg_cfg.get("WEAK_QUALITY_MAX", 0.25))
+            weak_mult = float(tg_cfg.get("WEAK_MULT", 0.94))
+            if t_sig * dsign_gate < 0.0:
+                trigger_gate_mult = _clamp(oppose_mult, 0.5, 1.0)
+                trigger_gate_detail = {
+                    "enabled": True,
+                    "applied": True,
+                    "reason": "trigger_opposes_direction",
+                    "mult": trigger_gate_mult,
+                    "triggerSignal": round(t_sig, 4),
+                    "triggerQuality": round(t_q, 4),
+                }
+            elif t_q < weak_max:
+                trigger_gate_mult = _clamp(weak_mult, 0.5, 1.0)
+                trigger_gate_detail = {
+                    "enabled": True,
+                    "applied": True,
+                    "reason": "trigger_weak_quality",
+                    "mult": trigger_gate_mult,
+                    "triggerSignal": round(t_sig, 4),
+                    "triggerQuality": round(t_q, 4),
+                }
+            else:
+                trigger_gate_detail = {
+                    "enabled": True,
+                    "applied": False,
+                    "mult": 1.0,
+                    "triggerSignal": round(t_sig, 4),
+                    "triggerQuality": round(t_q, 4),
+                }
+    except Exception as exc:
+        trigger_gate_detail = {"enabled": False, "error": str(exc)}
+
+    gate_mult = session_mult * spread_mult * correlation_mult * trigger_gate_mult
     session_spread_demotion = False
     if gate_mult != 1.0:
         confluence = _clamp(confluence * gate_mult, 0.0, MAX_SCORE)
@@ -2517,6 +2607,7 @@ def score_pair(
             "sessionGate": session_gate_detail,
             "spreadGate": spread_gate_detail,
             "correlationGate": correlation_gate_detail,
+            "triggerEvidenceGate": trigger_gate_detail,
             "sessionSpreadGateMult": round(gate_mult, 4),
             "sessionSpreadDemoted": session_spread_demotion,
             "preGatesConfluence": round(pre_session_spread_confluence, 4),
@@ -2589,6 +2680,7 @@ def score_pair(
             "sessionGate": session_gate_detail,
             "spreadGate": spread_gate_detail,
             "correlationGate": correlation_gate_detail,
+            "triggerEvidenceGate": trigger_gate_detail,
             "sessionSpreadGateMult": round(gate_mult, 4),
             "sessionSpreadDemoted": session_spread_demotion,
             "preGatesConfluence": round(pre_session_spread_confluence, 4),

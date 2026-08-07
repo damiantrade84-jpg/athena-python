@@ -419,11 +419,9 @@ STILL_SWING = [
     # Restricted / pegged: their symbol override pins an H1 trigger under both
     # styles, so swing costs no resolution and keeps the stricter thresholds.
     ("EUR/ZAR", "forex"), ("GBP/ZAR", "forex"), ("USD/HKD", "forex"),
-    # Pre-existing pairs sharing those groups — must not move.
+    # Pre-existing pairs that remain swing under auto (not session equities).
     ("USD/ZAR", "forex"), ("USD/MXN", "forex"), ("Gasoline", "commodity"),
-    ("DAX 40", "index"), ("UK100", "index"), ("Nikkei 225", "index"),
-    ("ASX 200", "index"), ("Hang Seng", "index"), ("AAPL", "stock"),
-    ("XAU/USD", "commodity"), ("TLT", "etf_bond"),
+    ("TLT", "etf_bond"),
 ]
 
 
@@ -479,9 +477,9 @@ def test_explicit_style_still_overrides_the_opt_in():
 
 
 def test_opt_in_does_not_leak_to_similar_symbols():
-    # XAU/USD must not match the XAU/ZAR entry, and USD/HUF must not drag USD/HKD.
+    # XAU/USD is intentionally intraday (liquid metals session); USD/HKD stays swing.
     assert resolve_auto_style(
-        "auto", {"display": "XAU/USD", "type": "commodity"}) == "swing"
+        "auto", {"display": "XAU/USD", "type": "commodity"}) == "intraday"
     assert resolve_auto_style(
         "auto", {"display": "USD/HKD", "type": "forex"},
         score_group="forex_exotics") == "swing"
@@ -514,8 +512,9 @@ def test_named_us_singles_keep_us_stock_single():
     for ticker, symbol in (("AAPL", "AAPL.US"), ("MSFT", "MSFT.US"), ("TSLA", "TSLA.US")):
         pair = {"display": ticker, "symbol": symbol, "type": "stock"}
         assert resolve_score_group_by_type(pair) == "us_stock_single", ticker
+        # Session equities use the intraday role ladder under auto.
         assert resolve_auto_style(
-            "auto", pair, score_group="us_stock_single", asset_type="stock") == "swing", ticker
+            "auto", pair, score_group="us_stock_single", asset_type="stock") == "intraday", ticker
 
 
 def test_etfs_are_not_swept_into_the_share_cfd_group():
@@ -556,7 +555,8 @@ PRE_EXISTING = {
     ("NASDAQ-100", "index"): ("us_indices_trackers", EQUITY_INTRADAY),
     ("AAPL", "stock"): ("us_stock_single", EQUITY_INTRADAY),
     ("BTC/USDT", "crypto"): ("crypto_btc", UNIVERSAL),
-    ("DOGE/USDT", "crypto"): ("crypto_doge", UNIVERSAL),
+    # Thin crypto uses M30 trigger (spread/noise trap on M15).
+    ("DOGE/USDT", "crypto"): ("crypto_doge", THIN_M30),
 }
 
 

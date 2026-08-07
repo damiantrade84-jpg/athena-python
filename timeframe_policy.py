@@ -969,6 +969,51 @@ def _normalize_group_name(name: Any) -> str | None:
         return text
 
 
+def _symbol_aware_policy_group(
+    symbol: str,
+    asset_type: str,
+    canonical: str | None,
+) -> str | None:
+    """Resolve the v4 policy group from symbol identity, not score-group alias.
+
+    Score groups such as ``forex_majors`` collapse GBPUSD (fast) and EURUSD
+    (standard) onto the same alias. Role rows and group templates must follow
+    the instrument's symbol/display taxonomy so liquid crosses and fast majors
+    do not inherit the conservative broad/standard ladder.
+    """
+    try:
+        from engine_a_groups import resolve_timeframe_policy_group
+    except Exception:
+        return None
+    display = ""
+    if canonical:
+        display = str(_CANONICAL_DISPLAY.get(canonical) or canonical)
+    pair = {
+        "symbol": symbol or canonical or "",
+        "display": display or symbol or canonical or "",
+        "type": asset_type,
+        "asset_type": asset_type,
+    }
+    try:
+        resolved = resolve_timeframe_policy_group(pair)
+    except Exception:
+        return None
+    text = str(resolved or "").strip().lower()
+    if not text or text == "unknown":
+        return None
+    return text
+
+
+def _trigger_speed_adaptation_enabled() -> bool:
+    """Config gate: demote M15→M30 under SLOW/THIN speed (default on)."""
+    try:
+        from config import CONFIG
+
+        return bool(CONFIG.get("TF_POLICY_TRIGGER_SPEED_ADAPTATION_ENABLED", True))
+    except Exception:
+        return True
+
+
 def _normalize_policy_identity(engine_id: str, style: str) -> tuple[str, str]:
     engine = str(engine_id or "engine_a").strip().lower().replace("-", "_")
     normalized_style = str(style or "intraday").strip().lower().replace("-", "_")
@@ -1206,6 +1251,22 @@ def resolve_timeframe_policy(
     canonical = canonical_symbol(requested)
     asset = str(asset_type or "").strip().lower()
     group = _normalize_group_name(score_group)
+    # Prefer symbol-aware policy group for templates + role rows so score-group
+    # aliases (forex_majors → standard) cannot mis-route fast majors / liquid
+    # crosses onto the broad/standard ladder. Only known aliases may override
+    # the supplied score group; unknown symbols without a group still take the
+    # asset-style default (not a silent crypto_other_thin template).
+    symbol_group = (
+        _symbol_aware_policy_group(requested, asset, canonical)
+        if canonical
+        else None
+    )
+    if symbol_group:
+        template_group = symbol_group
+        role_group = symbol_group
+    else:
+        template_group = group
+        role_group = group
     authoritative = _normalize_group_name(authoritative_group)
     resolved_engine, resolved_style = _normalize_policy_identity(engine_id, style)
     messages: list[str] = []
@@ -1222,9 +1283,14 @@ def resolve_timeframe_policy(
             f"canonical group conflict: requested={group or 'none'} authoritative={authoritative}"
         )
     else:
-        if group and group in _GROUP_OVERRIDES:
-            base = _GROUP_OVERRIDES[group]
+        if template_group and template_group in _GROUP_OVERRIDES:
+            base = _GROUP_OVERRIDES[template_group]
             source = PolicySource.SCORE_GROUP_OVERRIDE
+            if symbol_group and group and symbol_group != group:
+                messages.append(
+                    f"symbol_policy_group={symbol_group} preferred over "
+                    f"score_group_alias={group}"
+                )
         elif asset in _ASSET_DEFAULTS:
             base = _ASSET_DEFAULTS[asset]
             source = PolicySource.ASSET_STYLE_DEFAULT
@@ -1253,10 +1319,10 @@ def resolve_timeframe_policy(
             selected,
             role_override_applied,
             role_override_patched_roles,
-        ) = _apply_role_override(selected, group, resolved_style)
+        ) = _apply_role_override(selected, role_group, resolved_style)
         if role_override_applied:
             messages.append(
-                f"ROLE_OVERRIDE:{group}:{resolved_style} patched "
+                f"ROLE_OVERRIDE:{role_group}:{resolved_style} patched "
                 f"{','.join(role_override_patched_roles)}"
             )
     reported_speed = (
@@ -1275,22 +1341,19 @@ def resolve_timeframe_policy(
     # Execution is never adapted: no speed/liquidity input may rewrite the
     # advisory execution TF, and speed never promotes M5 execution (the v3
     # allow_dynamic_m5_execution promotion is removed in v4).
-    # Role TFs are fixed to the configured ladder (universal D1/H4/H4/H1/M15
-    # unless ENGINE_TF_ROLE_OVERRIDES patches roles) — speed no longer demotes
-    # setup/trigger either.
+    # Regime/bias/structure stay fixed. Trigger-only speed/liquidity demotion
+    # (M15→M30 under SLOW or THIN) is config-gated — never promotes faster.
     execution = selected.execution
     m5_role = selected.m5_role
     m5_policy = selected.m5_policy
+    pre_adapt_setup = setup
+    pre_adapt_trigger = trigger
 
     if not adaptation_ready:
         messages.append("INSUFFICIENT_HISTORY: baseline policy retained")
-    elif effective_speed == SpeedClass.SLOW:
-        messages.append(
-            "SLOW speed recorded for diagnostics; universal role ladder retained"
-        )
 
-    # THIN/UNAVAILABLE liquidity no longer rewrites any role TF.  It is
-    # recorded as an M5-eligibility input consumed by the eligibility layer.
+    # THIN/UNAVAILABLE liquidity is an M5-eligibility block and, when trigger
+    # speed adaptation is enabled, demotes an M15 trigger to M30 (cost trap).
     m5_liquidity_blocked = bool(
         speed_state
         and speed_state.liquidity_class
@@ -1305,6 +1368,36 @@ def resolve_timeframe_policy(
             "THIN or UNAVAILABLE liquidity recorded as M5-eligibility block "
             "(m5_liquidity_blocked)"
         )
+
+    if (
+        _trigger_speed_adaptation_enabled()
+        and resolved_engine != "engine_d"
+        and trigger == Timeframe.M15
+    ):
+        demote = False
+        demote_reason = ""
+        if adaptation_ready and effective_speed == SpeedClass.SLOW:
+            demote = True
+            demote_reason = "SLOW_SPEED"
+        elif m5_liquidity_blocked or (
+            speed_state
+            and speed_state.liquidity_class == LiquidityClass.THIN
+        ):
+            demote = True
+            demote_reason = "THIN_LIQUIDITY"
+        elif (
+            not adaptation_ready
+            and selected.baseline_speed == SpeedClass.SLOW
+            and trigger == Timeframe.M15
+        ):
+            # Baseline-SLOW instruments (exotics, thin) keep M15 only when an
+            # explicit role row set it; do not further demote without live speed.
+            demote = False
+        if demote:
+            trigger = Timeframe.M30
+            messages.append(
+                f"TRIGGER_SPEED_ADAPT:{demote_reason} demoted trigger M15→M30"
+            )
 
     setup, trigger = _clamp_adaptive_roles(
         selected.structure,
@@ -1350,7 +1443,10 @@ def resolve_timeframe_policy(
         canonical_symbol=canonical or "UNKNOWN",
         requested_symbol=requested,
         asset_type=asset or "unknown",
-        score_group=group,
+        # Keep score_group as the score-group taxonomy (alias-normalized) for
+        # M5 validation / config lookups. Role rows may use a more specific
+        # symbol-aware group (role_group) without renaming this field.
+        score_group=group or role_group,
         style=resolved_style,
         messages=tuple(messages),
         missing_speed_inputs=speed_state.missing_inputs if speed_state else ("speed_state",),
@@ -1358,14 +1454,17 @@ def resolve_timeframe_policy(
         m15_confirmation_required_for_m5=selected.m15_confirmation_required_for_m5,
         safe_fallback=source == PolicySource.SAFE_FALLBACK,
         config_conflict=config_conflict,
-        adaptation_applied=adaptation_ready and (
-            setup != selected.setup
-            or trigger != selected.trigger
+        adaptation_applied=(
+            setup != pre_adapt_setup or trigger != pre_adapt_trigger
         ),
         adaptation_reason=(
             "SPEED_AND_LIQUIDITY"
-            if adaptation_ready
-            else "INSUFFICIENT_HISTORY"
+            if (setup != pre_adapt_setup or trigger != pre_adapt_trigger)
+            else (
+                "SPEED_AND_LIQUIDITY"
+                if adaptation_ready
+                else "INSUFFICIENT_HISTORY"
+            )
         ),
         liquidity_class=(
             speed_state.liquidity_class

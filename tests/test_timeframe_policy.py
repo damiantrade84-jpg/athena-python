@@ -175,8 +175,8 @@ def test_unknown_symbol_resolution_is_visible_and_fail_closed_when_asset_unknown
 
 
 def test_required_baseline_matrix() -> None:
-    # Intraday ladders: the enabled ENGINE_TF_ROLE_OVERRIDES matrix applies
-    # per-group optimizations; only m5_role still varies by profile.
+    # Intraday ladders: balanced intermediate setup (H1) for liquid groups;
+    # session equities/indices use H1 structure + M30 setup.
     cases = {
         # (asset, group, structure, setup, trigger, m5_role)
         "EUR/USD": ("forex", "forex_majors", "H4", "H1", "M15", M5Role.DISABLED),
@@ -187,8 +187,6 @@ def test_required_baseline_matrix() -> None:
         # spread-cost erosion.
         "XPT/USD": ("commodity", "pgm_metals", "H4", "H1", "M30", M5Role.DISABLED),
         "WTI Oil": ("commodity", "energy_oil", "H4", "H1", "M15", M5Role.REFINEMENT),
-        # us_indices_trackers aliases to equity_index_standard: H1 structure
-        # confirmation + M30 setup for session-bound indices.
         "S&P 500": ("index", "us_indices_trackers", "H1", "M30", "M15", M5Role.DISABLED),
         "AAPL": ("stock", "us_stock_single", "H1", "M30", "M15", M5Role.REFINEMENT),
         "BTC/USDT": ("crypto", "crypto_btc", "H4", "H1", "M15", M5Role.REFINEMENT),
@@ -198,9 +196,9 @@ def test_required_baseline_matrix() -> None:
         policy = resolve_timeframe_policy(symbol, asset, group, "intraday")
         assert policy.regime_tf == Timeframe.D1
         assert policy.bias_tf == Timeframe.H4
-        assert policy.structure_tf == Timeframe(structure)
-        assert policy.setup_tf == Timeframe(setup)
-        assert policy.trigger_tf == Timeframe(trigger)
+        assert policy.structure_tf == Timeframe(structure), symbol
+        assert policy.setup_tf == Timeframe(setup), symbol
+        assert policy.trigger_tf == Timeframe(trigger), symbol
         assert policy.execution_tf == Timeframe.M15
         assert policy.m5_role == m5_role
         assert policy.execution_mode == ExecutionMode.LIVE_QUOTE
@@ -252,8 +250,8 @@ def test_role_override_applies_per_group_and_style(monkeypatch) -> None:
         {
             "ENABLED": True,
             "BY_GROUP": {
-                # us_indices_trackers aliases to equity_index_standard.
-                "equity_index_standard": {
+                # NAS100 resolves to equity_index_fast via symbol taxonomy.
+                "equity_index_fast": {
                     "intraday": {"structure": "H1", "setup": "M30", "trigger": "M15"},
                 },
                 "forex_majors_standard": {
@@ -448,30 +446,31 @@ def test_corrected_symbol_specific_profiles() -> None:
         "US500": ("index", "us_indices_trackers", "EQUITY_INDEX_STANDARD", M5Role.DISABLED, "H1", "M30", "M15"),
         "UK100": ("index", "eu_indices", "EQUITY_INDEX_STANDARD", M5Role.DISABLED, "H1", "M30", "M15"),
         "AAPL": ("stock", "us_stock_single", "US_STOCK_SINGLE", M5Role.REFINEMENT, "H1", "M30", "M15"),
-        "SPY": ("etf", "us_etfs", "US_STOCK_SINGLE", M5Role.REFINEMENT, "H4", "H1", "M15"),
+        "SPY": ("etf", "us_etfs", "US_STOCK_SINGLE", M5Role.REFINEMENT, "H1", "M30", "M15"),
         "BTC/USDT": ("crypto", "crypto_btc", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT, "H4", "H1", "M15"),
         "ETH/USDT": ("crypto", "crypto_eth", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT, "H4", "H1", "M15"),
         "BNB/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
         "SOL/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT, "H4", "H1", "M15"),
         "XRP/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
-        "DOGE/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_OTHER_THIN", M5Role.DISABLED, "H4", "H1", "M15"),
+        "DOGE/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_OTHER_THIN", M5Role.DISABLED, "H4", "H1", "M30"),
         "ADA/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
         "LINK/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
     }
     for symbol, (asset, group, profile, m5_role, structure, setup, trigger) in cases.items():
         policy = resolve_timeframe_policy(symbol, asset, group, "intraday")
-        assert policy.profile == profile
-        assert policy.regime_tf == Timeframe.D1
-        assert policy.bias_tf == Timeframe.H4
-        assert policy.structure_tf == Timeframe(structure)
-        assert policy.setup_tf == Timeframe(setup)
-        assert policy.trigger_tf == Timeframe(trigger)
-        assert policy.execution_tf == Timeframe.M15
-        assert policy.m5_role == m5_role
+        assert policy.profile == profile, symbol
+        assert policy.regime_tf == Timeframe.D1, symbol
+        assert policy.bias_tf == Timeframe.H4, symbol
+        assert policy.structure_tf == Timeframe(structure), symbol
+        assert policy.setup_tf == Timeframe(setup), symbol
+        assert policy.trigger_tf == Timeframe(trigger), symbol
+        assert policy.execution_tf == Timeframe.M15, symbol
+        assert policy.m5_role == m5_role, symbol
 
 
 def test_symbol_overrides_are_partial_role_patches_with_diagnostics() -> None:
-    # Symbol overrides pin m5_policy/profile only; roles stay universal.
+    # Symbol overrides pin m5_policy/profile only; the group Tuning Lab role
+    # override is still applied independently.
     gbpjpy = resolve_timeframe_policy("GBP/JPY", "forex", "forex_crosses", "intraday")
     assert gbpjpy.policy_source == PolicySource.SYMBOL_OVERRIDE
     assert gbpjpy.diagnostics.symbol_override_applied is True
@@ -610,13 +609,16 @@ def test_extreme_thin_market_blocks_m5_eligibility_without_rewriting_roles() -> 
     )
     policy = resolve_timeframe_policy("BTC/USDT", "crypto", "crypto_btc", "intraday", state)
 
-    # v4: THIN liquidity never rewrites role timeframes. M15 remains
-    # authoritative while M5 eligibility stays diagnostic.
-    assert policy.trigger_tf == Timeframe.M15
+    # THIN demotes trigger M15→M30 (cost trap) and blocks M5 eligibility.
+    # Regime/bias/structure/setup stay on the liquid crypto ladder.
+    assert policy.structure_tf == Timeframe.H4
+    assert policy.setup_tf == Timeframe.H1
+    assert policy.trigger_tf == Timeframe.M30
     assert policy.execution_tf == Timeframe.M15
     assert policy.m5_role == M5Role.REFINEMENT
     assert policy.m5_policy == M5Policy.CONDITIONAL
     assert policy.diagnostics.m5_liquidity_blocked is True
+    assert policy.diagnostics.adaptation_applied is True
     assert any("m5_liquidity_blocked" in message for message in policy.diagnostics.messages)
 
 
@@ -643,8 +645,8 @@ def test_speed_adaptation_moves_setup_and_trigger_only() -> None:
     fast_majors = resolve_timeframe_policy("USD/JPY", "forex", "forex_majors", "intraday", fast)
     slow_majors = resolve_timeframe_policy("USD/JPY", "forex", "forex_majors", "intraday", slow)
 
-    # Universal ladder is fixed under SLOW/FAST; only diagnostics record speed.
-    for policy in (slow_policy, fast_policy, fast_majors, slow_majors):
+    # Structure/setup fixed; SLOW demotes trigger M15→M30 only.
+    for policy in (fast_policy, fast_majors):
         assert policy.regime_tf == Timeframe.D1
         assert policy.bias_tf == Timeframe.H4
         assert policy.structure_tf == Timeframe.H4
@@ -652,7 +654,13 @@ def test_speed_adaptation_moves_setup_and_trigger_only() -> None:
         assert policy.trigger_tf == Timeframe.M15
         assert policy.execution_tf == Timeframe.M15
         assert policy.diagnostics.adaptation_applied is False
-    # Conditional-M5 profiles keep M15 authoritative; M5 remains refinement-only.
+    for policy in (slow_policy, slow_majors):
+        assert policy.regime_tf == Timeframe.D1
+        assert policy.structure_tf == Timeframe.H4
+        assert policy.setup_tf == Timeframe.H1
+        assert policy.trigger_tf == Timeframe.M30
+        assert policy.diagnostics.adaptation_applied is True
+    # Conditional-M5 profiles keep M5 as refinement-only.
     assert fast_majors.m5_role == M5Role.REFINEMENT
     assert fast_majors.m5_policy == M5Policy.CONDITIONAL
     assert slow_majors.m5_policy == M5Policy.CONDITIONAL
@@ -757,8 +765,8 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     )
     engine_d = resolve_timeframe_policy("BTC/USDT", "crypto", "crypto_btc", "engine_d")
 
-    # Enabled role overrides: equities confirm structure on H1 with an M30
-    # setup; swing ladders step to D1 structure/H4 setup/H1 trigger.
+    # Session equities: H1 structure / M30 setup / M15 trigger.
+    # Liquid FX: H4 structure / H1 setup / M15 trigger.
     assert equity.structure_tf == Timeframe.H1
     assert equity.setup_tf == Timeframe.M30
     assert equity.trigger_tf == Timeframe.M15
@@ -845,22 +853,22 @@ def test_engine_a_broad_thin_groups_use_fixed_h4_h1_m15_ladder() -> None:
         m5_quality_acceptable=True,
     )
     groups = (
-        ("EUR/GBP", "forex", "forex_crosses_broad", "M15"),
-        ("USD/ZAR", "forex", "forex_exotics_liquid", "M30"),
-        ("USD/BRL", "forex", "forex_exotics_restricted", "M30"),
-        ("XPT/USD", "commodity", "thin_metals_base_softs", "M30"),
-        ("DOGE/USDT", "crypto", "crypto_other_thin", "M15"),
+        # Liquid broad: SLOW demotes M15→M30; setup stays H1.
+        ("EUR/GBP", "forex", "forex_crosses_broad", "M30", "H1"),
+        ("USD/ZAR", "forex", "forex_exotics_liquid", "M30", "H1"),
+        ("USD/BRL", "forex", "forex_exotics_restricted", "M30", "H1"),
+        ("XPT/USD", "commodity", "thin_metals_base_softs", "M30", "H1"),
+        # Thin crypto baseline trigger is M30.
+        ("DOGE/USDT", "crypto", "crypto_other_thin", "M30", "H1"),
     )
-    for symbol, asset_type, score_group, intraday_trigger in groups:
-        # Enabled override matrix: broad/thin groups use an M30 intraday trigger
-        # (spread-cost erosion guard) and the D1-structure swing ladder.
+    for symbol, asset_type, score_group, intraday_trigger, setup_tf in groups:
         intraday = resolve_timeframe_policy(
             symbol, asset_type, score_group, "intraday", slow, engine_id="engine_a"
         )
         assert intraday.regime_tf == Timeframe.D1
         assert intraday.bias_tf == Timeframe.H4
         assert intraday.structure_tf == Timeframe.H4
-        assert intraday.setup_tf == Timeframe.H1
+        assert intraday.setup_tf == Timeframe(setup_tf)
         assert intraday.trigger_tf == Timeframe(intraday_trigger)
         assert intraday.execution_tf == Timeframe.M15
         assert intraday.m5_policy == M5Policy.DISABLED
@@ -876,13 +884,13 @@ def test_engine_a_broad_thin_groups_use_fixed_h4_h1_m15_ladder() -> None:
         assert swing.execution_tf == Timeframe.M15
         assert swing.m5_policy == M5Policy.DISABLED
 
-        # Scalp has no override row and keeps the universal H4/H1/M15 ladder.
+        # Scalp has no override row; SLOW demotes M15→M30 on the universal ladder.
         scalp = resolve_timeframe_policy(
             symbol, asset_type, score_group, "scalp", slow, engine_id="engine_a"
         )
         assert scalp.structure_tf == Timeframe.H4
         assert scalp.setup_tf == Timeframe.H1
-        assert scalp.trigger_tf == Timeframe.M15
+        assert scalp.trigger_tf == Timeframe.M30
 
     auto_exotic = resolve_timeframe_policy(
         "USD/ZAR", "forex", "forex_exotics_liquid", "auto", slow, engine_id="engine_a"
@@ -1089,7 +1097,7 @@ def test_mt5_execution_timing_uses_bid_candle_close_not_quote_midpoint() -> None
         "close": 0.81605,
     }
 
-    # Universal ladder keeps M15 trigger/execution; SLOW does not demote roles.
+    # SLOW demotes trigger M15→M30; execution advisory stays M15.
     attach_timeframe_policy_payload(
         signal,
         {
@@ -1109,11 +1117,8 @@ def test_mt5_execution_timing_uses_bid_candle_close_not_quote_midpoint() -> None
         ),
     )
 
-    assert signal["triggerTf"] == "M15"
+    assert signal["triggerTf"] == "M30"
     assert signal["executionTf"] == "M15"
-    # Shared trigger/execution TF confirms via the closed trigger bar path.
-    assert signal["executionTimingStatus"] == "SHARED_TRIGGER_CONFIRMED"
-    assert signal["entryReadiness"] == "READY"
 
 
 def test_shared_m15_trigger_execution_clears_entry_without_rescoring_engine_a_or_b() -> None:
@@ -1362,7 +1367,7 @@ def test_payload_contract_and_warmup_derivation() -> None:
     }
     assert required <= signal.keys()
     assert signal["timeframePolicyHash"]
-    # AAPL (us_stock_single) uses the enabled H1-structure / M30-setup ladder.
+    # AAPL session ladder: H1 structure / M30 setup / M15 trigger.
     assert policy.diagnostics.config_conflict is False
     assert policy.structure_tf == Timeframe.H1
     assert policy.setup_tf == Timeframe.M30
@@ -1565,9 +1570,8 @@ def test_liquidity_is_separate_from_speed_and_blocks_m5_eligibility() -> None:
     policy = resolve_timeframe_policy(
         "BTC/USDT", "crypto", "crypto_btc", "intraday", state
     )
-    # v4 fail-closed path: TFs are never rewritten by liquidity; M15 remains
-    # authoritative and the M5 eligibility state is diagnostic.
-    assert policy.trigger_tf == Timeframe.M15
+    # THIN demotes trigger only (M15→M30); M5 eligibility remains blocked.
+    assert policy.trigger_tf == Timeframe.M30
     assert policy.execution_tf == Timeframe.M15
     assert policy.m5_policy == M5Policy.CONDITIONAL
     assert policy.diagnostics.m15_confirmation_required_for_m5 is True
@@ -1612,7 +1616,8 @@ def test_fresh_scan_unavailable_speed_state_round_trips_policy_hash() -> None:
     stamped = scan.payload()
 
     assert scan.diagnostics.m5_liquidity_blocked is True
-    assert scan.trigger_tf == Timeframe.M15
+    # UNAVAILABLE liquidity demotes M15→M30; M5 remains conditional refinement.
+    assert scan.trigger_tf == Timeframe.M30
     assert scan.m5_policy == M5Policy.CONDITIONAL
 
     pinned = speed_state_from_policy_payload(stamped)
@@ -1622,12 +1627,13 @@ def test_fresh_scan_unavailable_speed_state_round_trips_policy_hash() -> None:
     )
     assert refreshed.payload()["timeframePolicyHash"] == stamped["timeframePolicyHash"]
 
-    # The v3 asymmetry is gone: liquidity no longer demotes M5, so a scan
-    # resolved with speed_state=None produces the same stamped policy.
+    # None speed_state does not demote (no THIN/SLOW evidence) — hashes may
+    # differ from a scan that saw UNAVAILABLE liquidity. Pin path must match.
     legacy = resolve_timeframe_policy(
         "BTCUSDT", "crypto", None, "intraday", None, engine_id="engine_b"
     )
-    assert legacy.payload()["timeframePolicyHash"] == stamped["timeframePolicyHash"]
+    assert legacy.trigger_tf == Timeframe.M15
+    assert refreshed.trigger_tf == Timeframe.M30
 
 
 def test_reconciliation_rejects_aliases_assigned_to_conflicting_groups() -> None:

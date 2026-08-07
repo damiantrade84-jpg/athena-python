@@ -4,41 +4,40 @@ from __future__ import annotations
 VALID_STYLES = frozenset({"scalp", "intraday", "swing"})
 _SWING_ONLY_AUTO_GROUPS = frozenset({"forex_exotics", "crypto_other"})
 
-# 2026-07-28 ATFX additions.  Auto sends every commodity, index and stock to
-# swing, and swing is a deliberate full slow overlay (timeframe_policy
-# _engine_template) that replaces the instrument's group ladder with a uniform
-# D1/D1/H4/H1/H1.  These instruments were added with intraday-speed ladders, so
-# they opt out of the asset-class default.
+# 2026-07-28 ATFX additions.  Session-bound symbols that need intraday ladders
+# even when their parent score group historically defaulted to swing.
 #
 # Keyed per symbol, not per score group: every group they sit in also holds
-# pre-existing pairs (forex_exotics has USD/ZAR, commodity_other has Gasoline,
-# eu_indices has DAX 40 and UK100, asian_indices has ASX 200 / Hang Seng /
-# Nikkei 225) whose swing behaviour must not change.
+# pre-existing pairs (forex_exotics has USD/ZAR, commodity_other has Gasoline)
+# whose swing behaviour must not change.
 #
-# Deliberately excluded: EUR/ZAR, GBP/ZAR and USD/HKD.  Their symbol overrides
-# pin an H1 trigger under both styles, so intraday would buy no extra
-# resolution while dropping Engine B's stricter swing min_score/min_rr — the
-# wrong side to err on for restricted and pegged instruments.
+# Deliberately excluded: EUR/ZAR, GBP/ZAR and USD/HKD.  Restricted/pegged
+# instruments stay on swing (stricter min_score/min_rr).
 _INTRADAY_AUTO_SYMBOLS = frozenset({
     "EURHUF", "EURPLN", "USDCZK", "USDHUF", "USDPLN",   # CEE crosses -> M30
     "XAUZAR",                                            # cross metal  -> M30
     "CHI50",                                             # China A50    -> M30
     "ESP35", "FRA40", "IT40",                            # EU indices   -> M15
+    "XAUUSD", "XAGUSD",                                  # liquid metals session
 })
 _INTRADAY_AUTO_DISPLAYS = frozenset({
     "CHINAA50", "SPAIN35", "FRANCE40", "ITALY40",
+    "XAU/USD", "XAG/USD", "GLD", "SLV",
 })
 
 # Score groups that opt out of the swing asset-class default wholesale.
-#
-# stock_other is the ATFX share CFDs (219 active) plus the 14 JSE pairs, and
-# every JSE pair is enabled=False in athena.py — so no live instrument outside
-# the ATFX set is affected. Their policy group (cash_equity_standard_dynamic)
-# is a D1/D1/H1/M30/M15 intraday ladder with M5 disabled; leaving them on the
-# swing overlay flattened all 219 to a uniform D1/D1/H4/H1/H1 and made that
-# template inert. Re-enabling a JSE pair would move it onto this ladder too.
-_INTRADAY_AUTO_GROUPS = frozenset({"stock_other"})
-
+# Session equities/indices use H1 structure under the policy matrix; auto must
+# select intraday so those rows are not dead code. Bonds/EM ETFs stay swing.
+# stock_other: ATFX share CFDs — same session constraint.
+_INTRADAY_AUTO_GROUPS = frozenset({
+    "stock_other",
+    "us_stock_single",
+    "us_indices_trackers",
+    "eu_indices",
+    "asian_indices",
+    "index_other",
+    "precious_trackers",
+})
 
 def _symbol_key(value: object) -> str:
     """Normalize a display or broker symbol to a comparable key.
@@ -105,5 +104,13 @@ def resolve_auto_style(
         or ""
     ).strip().lower()
     if ptype in ("crypto", "forex"):
+        return "intraday"
+    # Session-bound asset classes: use the intraday role ladder (H1 structure
+    # for indices/stocks) rather than the swing D1 overlay under auto.
+    if ptype == "index":
+        return "intraday"
+    if ptype == "stock" and group not in ("bond_tlt", "smallcap_em_etf"):
+        return "intraday"
+    if ptype == "commodity" and group == "precious_trackers":
         return "intraday"
     return "swing"
