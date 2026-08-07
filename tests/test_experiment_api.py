@@ -50,6 +50,7 @@ def test_worker_timeframe_summary_tracks_full_route_and_dynamic_engine_a_trend()
 def test_tuning_lab_structure_knob_targets_authoritative_policy_group():
     from athena_experiment.overlay import build_overlay
 
+    # Without a pair, score-group alias maps forex_majors → forex_majors_standard.
     overlay = build_overlay(
         "A",
         "forex_majors",
@@ -59,6 +60,7 @@ def test_tuning_lab_structure_knob_targets_authoritative_policy_group():
 
     assert overlay == {
         "ENGINE_TF_ROLE_OVERRIDES": {
+            "ENABLED": True,
             "BY_GROUP": {
                 "forex_majors_standard": {
                     "intraday": {"structure": "H1"}
@@ -66,6 +68,37 @@ def test_tuning_lab_structure_knob_targets_authoritative_policy_group():
             }
         }
     }
+
+
+def test_tuning_lab_tf_roles_use_symbol_aware_policy_group():
+    """GBPUSD must write forex_majors_fast, not the score-group alias standard."""
+    from athena_experiment.overlay import build_overlay
+
+    overlay = build_overlay(
+        "A",
+        "forex_majors",
+        "intraday",
+        {"tf_role.setup": "H1", "tf_role.trigger": "M15"},
+        pair={"display": "GBP/USD", "type": "forex", "symbol": "GBPUSD"},
+    )
+    by_group = overlay["ENGINE_TF_ROLE_OVERRIDES"]["BY_GROUP"]
+    assert "forex_majors_fast" in by_group
+    assert "forex_majors_standard" not in by_group
+    assert by_group["forex_majors_fast"]["intraday"] == {
+        "setup": "H1",
+        "trigger": "M15",
+    }
+    assert overlay["ENGINE_TF_ROLE_OVERRIDES"]["ENABLED"] is True
+
+    nas = build_overlay(
+        "B",
+        "us_indices_trackers",
+        "intraday",
+        {"tf_role.structure": "H1"},
+        pair={"display": "NASDAQ-100", "type": "index", "symbol": "NAS100"},
+    )
+    assert "equity_index_fast" in nas["ENGINE_TF_ROLE_OVERRIDES"]["BY_GROUP"]
+    assert "equity_index_standard" not in nas["ENGINE_TF_ROLE_OVERRIDES"]["BY_GROUP"]
 
 
 def _client():

@@ -1,4 +1,4 @@
-"""Expand a flat Tuning Lab knob payload into a real nested config overlay.
+"""Expand a flat Tuning Lab knobs payload into a real nested config overlay.
 
 ``build_overlay`` is the only public entry point. It never touches the live
 ``CONFIG`` global — callers decide what to do with the returned dict (the
@@ -63,17 +63,52 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
     return merged
 
 
+def _resolve_tf_policy_group(
+    score_group: str,
+    pair: Mapping[str, Any] | None,
+) -> str:
+    """Policy-group key used by ENGINE_TF_ROLE_OVERRIDES.BY_GROUP.
+
+    Live ``resolve_timeframe_policy`` prefers the *symbol-aware* policy group
+    (e.g. GBPUSD → ``forex_majors_fast``, NAS100 → ``equity_index_fast``) over
+    the score-group alias (``forex_majors`` → ``forex_majors_standard``). Tuning
+    Lab TF-role writes must target that same key or the push is inert for the
+    pair that was tested.
+    """
+    from engine_a_groups import (
+        normalize_timeframe_policy_group,
+        resolve_timeframe_policy_group,
+    )
+
+    if pair:
+        try:
+            symbol_group = resolve_timeframe_policy_group(dict(pair))
+        except Exception:
+            symbol_group = None
+        text = str(symbol_group or "").strip().lower()
+        if text and text != "unknown":
+            return text
+    return normalize_timeframe_policy_group(score_group) or score_group
+
+
 def build_overlay(
     engine: str,
     group: str,
     style: str,
     knob_values: Mapping[str, Any],
+    *,
+    pair: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate ``{knob_id: value}`` and expand it into a nested config overlay.
 
     Raises ``OverlayValidationError`` on any unknown knob id, out-of-range
     value, or TF-role ladder violation — fail closed rather than silently
     dropping a bad entry.
+
+    ``pair`` is required for correct TF-role writes whenever the selected
+    instrument has a finer policy group than its score-group alias (fast
+    majors, liquid crosses, fast indices). Other knobs still use the raw
+    scoring group (``ENGINE_A_QUANT_WEIGHTS_BY_GROUP``, etc.).
     """
     engine_u = str(engine or "").strip().upper()
     group_key = str(group or "").strip().lower()
@@ -84,20 +119,10 @@ def build_overlay(
         raise OverlayValidationError("style is required")
 
     # ENGINE_TF_ROLE_OVERRIDES.BY_GROUP is keyed by the v4 *timeframe-policy*
-    # group taxonomy (e.g. "forex_majors_standard"), which is a different,
-    # finer-grained namespace from the Engine A/B *scoring* group ("forex_majors")
-    # this function is otherwise called with (engine_a_groups.resolve_score_group_by_type).
-    # timeframe_policy.resolve_timeframe_policy self-normalizes scoring-group
-    # names when READING a policy, so the Tuning Lab's "current value" display
-    # (athena_experiment/defaults.py) is correct either way — but BY_GROUP is a
-    # plain dict.get() on the *write* side (timeframe_policy.py::_apply_role_override),
-    # so a TF-role override must be pre-normalized to the same key or it is
-    # silently never read back. Every other knob's {group} slot uses the raw
-    # scoring group, which is the taxonomy those config surfaces actually use
-    # (verified against NAKED_ENGINE.score_group_overrides / ENGINE_A_QUANT_WEIGHTS_BY_GROUP).
-    from engine_a_groups import normalize_timeframe_policy_group
-
-    tf_policy_group = normalize_timeframe_policy_group(group_key) or group_key
+    # group taxonomy. Prefer the symbol-aware group when a pair is supplied so
+    # the write matches live resolve_timeframe_policy role resolution.
+    # Every other knob's {group} slot uses the raw scoring group.
+    tf_policy_group = _resolve_tf_policy_group(group_key, pair)
 
     tf_role_selection: dict[str, str] = {}
     overlay: dict[str, Any] = {}
@@ -125,6 +150,9 @@ def build_overlay(
             validate_tf_role_selection(tf_role_selection)
         except ValueError as exc:
             raise OverlayValidationError(str(exc)) from exc
+        # Ensure the matrix stays active when a TF-role push is written —
+        # a local ENABLED:false would otherwise leave the new row inert.
+        _set_path(overlay, ("ENGINE_TF_ROLE_OVERRIDES", "ENABLED"), True)
 
     return overlay
 

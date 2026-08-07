@@ -147,7 +147,11 @@ def create_experiment_blueprint(*, all_pairs_provider, json_safe=None) -> Bluepr
             return jsonify({"success": False, "error": "overlay/knobs must be an object"}), 422
 
         try:
-            overlay = build_overlay(engine, group, style, knob_values) if knob_values else {}
+            overlay = (
+                build_overlay(engine, group, style, knob_values, pair=pair)
+                if knob_values
+                else {}
+            )
         except OverlayValidationError as exc:
             return jsonify({"success": False, "error": str(exc)}), 422
 
@@ -234,7 +238,7 @@ def create_experiment_blueprint(*, all_pairs_provider, json_safe=None) -> Bluepr
             return jsonify({"success": False, "error": "overlay/knobs must be an object"}), 422
 
         try:
-            overlay = build_overlay(engine, group, style, knob_values)
+            overlay = build_overlay(engine, group, style, knob_values, pair=pair)
         except OverlayValidationError as exc:
             return jsonify({"success": False, "error": str(exc)}), 422
 
