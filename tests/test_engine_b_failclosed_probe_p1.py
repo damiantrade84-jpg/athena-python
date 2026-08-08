@@ -107,14 +107,14 @@ def test_independent_probe_precomputes_once(monkeypatch):
 
     monkeypatch.setattr(
         "scanner.engine_b_confidence_passes",
-        lambda *a, **k: (True, None),
+        lambda *a, **k: (True, 0.0),
     )
     monkeypatch.setattr(
         "scanner.independent_conflict_blocks_emit",
         lambda *a, **k: False,
     )
 
-    direction, res_b, conf_b = _engine_b_independent_direction_probe(
+    direction, res_b, conf_b, diag = _engine_b_independent_direction_probe(
         {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"},
         engine=_FakeEngine(),
         d1_candles=[{}],
@@ -135,3 +135,4 @@ def test_independent_probe_precomputes_once(monkeypatch):
     assert direction == "LONG"
     assert res_b is not None
     assert conf_b is not None
+    assert isinstance(diag, dict)

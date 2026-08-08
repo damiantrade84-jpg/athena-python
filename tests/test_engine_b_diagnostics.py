@@ -1287,21 +1287,51 @@ def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst():
     assert gate_ok is True
 
 
-def test_engine_b_confidence_passes_enforces_min_score_floor():
+def test_engine_b_confidence_passes_enforces_min_score_floor(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_MIN_SCORE_BASIS", "total")
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_ENABLED", False)
     style_profile = {"min_score": 5.0}
+    conf = {
+        "passed": True,
+        "gate_score": 3.0,
+        "gate_max_possible": 5.0,
+        "score": 3.0,
+    }
     gate_ok, min_score_scaled = engine_b_confidence_passes(
-        {
-            "passed": True,
-            "gate_score": 3.0,
-            "gate_max_possible": 5.0,
-            "score": 3.0,
-        },
+        conf,
         style_profile,
         regime_label="RANGING",
     )
 
     assert min_score_scaled == 5.0
     assert gate_ok is False
+    assert conf["passed"] is False
+
+
+def test_engine_b_confidence_passes_stamps_quality_ratio_floor(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_MIN_SCORE_BASIS", "quality_ratio")
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE",
+        {"intraday": 0.35, "scalp": 0.30, "swing": 0.40},
+    )
+    conf = {
+        "passed": True,
+        "gate_score": 5.0,
+        "gate_max_possible": 5.0,
+        "score": 5.0,
+        "quality_pct": 20.0,
+        "failed_gate_names": [],
+    }
+    style_profile = {"style": "intraday", "min_score": 4.5}
+    gate_ok, _ = engine_b_confidence_passes(
+        conf, style_profile, regime_label="TRENDING", asset_type="crypto"
+    )
+    assert gate_ok is False
+    assert conf.get("quality_floor_blocked") is True
+    assert conf.get("score_floor_ok") is False
+    assert any(str(g).startswith("quality_ratio") for g in conf.get("failed_gate_names") or [])
+    assert conf["passed"] is False
 
 
 def test_engine_b_regime_multiplier_enabled_scales_min_score(monkeypatch):

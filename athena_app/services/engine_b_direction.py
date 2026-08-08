@@ -27,17 +27,26 @@ def normalize_caller_direction(
 def resolve_analysis_direction(
     *,
     direction: str | None,
-    probe_fn: Callable[..., tuple[str | None, dict[str, Any] | None, dict[str, Any] | None]],
+    probe_fn: Callable[..., tuple],
     probe_kwargs: dict[str, Any],
 ) -> tuple[str | None, dict[str, Any] | None, dict[str, Any] | None, str, str | None]:
     """Resolve direction for the analysis path before analyze_structure.
 
     Returns (direction, probe_res, probe_conf, direction_source, error).
+
+    ``probe_fn`` may return the legacy 3-tuple
+    ``(direction, res, conf)`` or the 4-tuple with trailing diagnostics
+    ``(direction, res, conf, diagnostics)``.
     """
     if direction in ("LONG", "SHORT"):
         return direction, None, None, "caller", None
 
-    dir_probe, res_probe, conf_probe = probe_fn(**probe_kwargs)
+    probe_result = probe_fn(**probe_kwargs)
+    if not isinstance(probe_result, (list, tuple)) or len(probe_result) < 3:
+        return None, None, None, "", NO_CLEAR_DIRECTION_ERROR
+    dir_probe = probe_result[0]
+    res_probe = probe_result[1]
+    conf_probe = probe_result[2]
     if dir_probe in ("LONG", "SHORT"):
         return dir_probe, res_probe, conf_probe, "independent_probe", None
     return None, None, None, "", NO_CLEAR_DIRECTION_ERROR

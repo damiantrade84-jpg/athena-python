@@ -2458,6 +2458,8 @@ def engine_b_confidence_passes(
         min_score_scaled, gate_max_possible
     )
     basis = engine_b_min_score_basis()
+    min_ratio = 0.0
+    quality_ratio = 0.0
     if basis == "quality_ratio":
         min_ratio = _engine_b_min_quality_ratio(style_profile)
         try:
@@ -2477,7 +2479,26 @@ def engine_b_confidence_passes(
             basis == "quality_ratio"
             or (effective_min > 0 and gate_max_possible > 0 and effective_min > gate_max_possible)
         )
+        conf_data["score_floor_ok"] = bool(score_floor_ok)
+        if basis == "quality_ratio":
+            conf_data["min_quality_ratio"] = round(float(min_ratio), 4)
+            conf_data["quality_ratio"] = round(float(quality_ratio), 4)
+            # Surface quality-floor rejects on failed_gate_names so funnel /
+            # UI do not show "all gates green" while confidence_passed is false.
+            if not score_floor_ok and min_ratio > 0:
+                conf_data["quality_floor_blocked"] = True
+                fails = list(conf_data.get("failed_gate_names") or [])
+                floor_code = f"quality_ratio<{min_ratio:.2f}"
+                if floor_code not in fails and not any(
+                    str(g).startswith("quality_ratio") for g in fails
+                ):
+                    fails.append(floor_code)
+                conf_data["failed_gate_names"] = fails
+            else:
+                conf_data["quality_floor_blocked"] = False
     passed = bool(conf.get("passed", False)) and score_floor_ok
+    if isinstance(conf_data, dict):
+        conf_data["passed"] = bool(passed)
     try:
         from calibration_diagnostics import (
             build_engine_b_calibration_row,

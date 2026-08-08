@@ -210,7 +210,7 @@ def test_engine_b_independent_direction_probe_picks_best_passing_direction(monke
         "LONG": {"structural_verdict": "CLEAR", "_score": 3.5, "_passed": True},
         "SHORT": {"structural_verdict": "CLEAR", "_score": 4.5, "_passed": False},
     })
-    direction, res_b, conf_b = _engine_b_independent_direction_probe(
+    direction, res_b, conf_b, diag = _engine_b_independent_direction_probe(
         {"display": "X", "symbol": "X", "type": "crypto"},
         engine=fake,
         d1_candles=[], h4_candles=[], h1_candles=[], entry_candles=[],
@@ -223,6 +223,8 @@ def test_engine_b_independent_direction_probe_picks_best_passing_direction(monke
     # Even though SHORT scores higher, LONG passed gate so it wins.
     assert direction == "LONG"
     assert conf_b is not None and conf_b["passed"] is True
+    assert isinstance(diag, dict)
+    assert diag.get("structure_ran") is True
 
 
 def test_engine_b_independent_direction_probe_never_selects_terminal_candidate(
@@ -251,7 +253,7 @@ def test_engine_b_independent_direction_probe_never_selects_terminal_candidate(
             },
         })
 
-        direction, res_b, conf_b = _engine_b_independent_direction_probe(
+        direction, res_b, conf_b, diag = _engine_b_independent_direction_probe(
             {"display": "X", "symbol": "X", "type": "crypto"},
             engine=fake,
             d1_candles=[], h4_candles=[], h1_candles=[], entry_candles=[],
@@ -265,6 +267,7 @@ def test_engine_b_independent_direction_probe_never_selects_terminal_candidate(
         assert direction == "SHORT"
         assert res_b is not None
         assert conf_b is not None and conf_b["lifecycle_state"] == "triggered"
+        assert isinstance(diag, dict)
 
 
 def test_engine_b_independent_direction_probe_returns_none_when_no_clear(monkeypatch):
@@ -278,7 +281,7 @@ def test_engine_b_independent_direction_probe_returns_none_when_no_clear(monkeyp
         "LONG": {"structural_verdict": "UNCLEAR"},
         "SHORT": {"structural_verdict": "NONE"},
     })
-    direction, res_b, conf_b = _engine_b_independent_direction_probe(
+    direction, res_b, conf_b, diag = _engine_b_independent_direction_probe(
         {"display": "X", "symbol": "X", "type": "forex"},
         engine=fake,
         d1_candles=[], h4_candles=[], h1_candles=[], entry_candles=[],
@@ -291,6 +294,8 @@ def test_engine_b_independent_direction_probe_returns_none_when_no_clear(monkeyp
     assert direction is None
     assert res_b is None
     assert conf_b is None
+    assert isinstance(diag, dict)
+    assert diag.get("rejection_reason")
 
 
 # ---------------------------------------------------------------------------

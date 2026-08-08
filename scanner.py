@@ -176,6 +176,20 @@ def _select_engine_b_tf_candles(tf: str | None, tf_map: dict[str, list]) -> list
     return list(tf_map.get(key) or [])
 
 
+def _set_engine_b_skip_stage(extras: dict[str, Any], stage: str | None) -> None:
+    """Stamp funnel skip stage only when not already set.
+
+    ``dict.setdefault`` is a no-op when the key exists with value ``None``
+    (the funnel extras init pattern), so early skip reasons were permanently
+    lost and rows looked like "structural verdict NONE" with empty skip_stage.
+    """
+    if not stage:
+        return
+    current = extras.get("engine_b_skip_stage")
+    if current is None or current == "":
+        extras["engine_b_skip_stage"] = str(stage)
+
+
 def _engine_b_scan_freshness_stale_tfs(
     pair: dict,
     d1: list | None,
@@ -1300,16 +1314,20 @@ def _engine_b_independent_direction_probe(
     confidence_entry_candles: list | None = None,
     role_candles: dict[str, list] | None = None,
     dxy_h4_closes: list | None = None,
-) -> tuple[str | None, dict | None, dict | None]:
+) -> tuple[str | None, dict | None, dict | None, dict]:
     """Pick best Engine B direction independently of Engine A.
 
     Precomputes structure once (BT parity), then runs
     ``analyze_structure_direction`` for LONG and SHORT. For any CLEAR verdict
     computes confidence and tests the style/regime gate. Returns the best
-    gate-passed ``(direction, res_b, conf_b)`` tuple. Returns
-    ``(None, None, None)`` when neither direction has a CLEAR structural
-    verdict or when no direction passes the confidence gate (fail-closed:
+    gate-passed ``(direction, res_b, conf_b, diagnostics)`` tuple. Returns
+    ``(None, None, None, diagnostics)`` when neither direction has a CLEAR
+    structural verdict or when no direction is selectable (fail-closed:
     never return a failed counter-structure side as the selected direction).
+
+    ``diagnostics`` always reports whether structure analysis ran and the
+    snapshot rejection reason so funnel rows do not under-count structure
+    work when confidence gates fail both sides.
     """
     from engine_b_snapshot import evaluate_engine_b_snapshot
 
@@ -1348,13 +1366,25 @@ def _engine_b_independent_direction_probe(
         picker_fn=engine_b_pick_directional_candidate,
         conflict_fn=independent_conflict_blocks_emit,
     )
+    clear_sides = [
+        str(c.get("direction") or "")
+        for c in (result.candidates or ())
+        if str(c.get("structuralVerdict") or "").upper() == "CLEAR"
+    ]
+    diagnostics = {
+        "rejection_reason": result.rejection_reason,
+        "structure_ran": bool(result.candidates) or result.selected is not None,
+        "clear_sides": clear_sides,
+        "candidate_count": len(result.candidates or ()),
+    }
     selected = result.selected
     if selected is None:
-        return None, None, None
+        return None, None, None, diagnostics
     return (
         str(selected["direction"]),
         dict(selected["structure"]),
         dict(selected["confidence"] or {}),
+        diagnostics,
     )
 
 
@@ -1846,6 +1876,15 @@ def _attach_engine_b_scan_gate_funnel(
     if isinstance(_rr_gate_cfg, dict):
         funnel["rr_can_satisfy_space_gate_crypto_config"] = bool(_rr_gate_cfg.get("crypto", False))
     funnel["structure_executed"] = bool(extras.get("structure_executed"))
+    # Role TF + bar counts so missing M15/M30 is visible without log digs.
+    funnel["zone_tf"] = extras.get("zone_tf")
+    funnel["entry_tf"] = extras.get("entry_tf")
+    funnel["atr_tf"] = extras.get("atr_tf")
+    funnel["zone_count"] = extras.get("zone_count")
+    funnel["entry_count"] = extras.get("entry_count")
+    funnel["atr_count"] = extras.get("atr_count")
+    funnel["probe_rejection_reason"] = extras.get("probe_rejection_reason")
+    funnel["probe_clear_sides"] = list(extras.get("probe_clear_sides") or [])
     sig["engine_b_scan_gate_funnel"] = funnel
 
 
@@ -2967,6 +3006,73 @@ def run_full_scan(
                     )
                     atr_candles_b = _select_engine_b_tf_candles(_atr_tf_b, _tf_map_b)
 
+                    # Re-fetch empty lower trigger/entry series once. Prefetch can
+                    # leave M15/M30 empty under Bybit rate pressure while H4/H1
+                    # succeed; without a retry Engine B never scores structure.
+                    if (
+                        not entry_candles_b
+                        and _entry_tf_b not in {"D1", "H4", "H1"}
+                        and _entry_tf_b in (_lim or {})
+                    ):
+                        try:
+                            _retry_raw, _retry_meta = _fetch_ab_crypto_signal_candles(
+                                r,
+                                pair,
+                                _entry_tf_b,
+                                int(_lim[_entry_tf_b]),
+                                force_refresh=True,
+                            )
+                            if _retry_raw:
+                                from athena_app.services.market_state import (
+                                    market_state_offset_hours,
+                                    split_market_state,
+                                )
+
+                                _retry_state = split_market_state(
+                                    list(_retry_raw),
+                                    _entry_tf_b,
+                                    pair.get("display") or pair.get("symbol") or "",
+                                    offset_hours=market_state_offset_hours(
+                                        pair, _entry_tf_b
+                                    ),
+                                )
+                                _retry_confirmed = list(
+                                    (_retry_state or {}).get("confirmed") or []
+                                )
+                                _retry_active = list(_retry_confirmed)
+                                if (
+                                    bool(
+                                        CONFIG.get(
+                                            "ENGINE_B_USE_FORMING_FOR_TRIGGER", True
+                                        )
+                                    )
+                                    and (_retry_state or {}).get("forming")
+                                ):
+                                    _retry_active.append(_retry_state["forming"])
+                                if _retry_confirmed:
+                                    _tf_map_b[_entry_tf_b] = _retry_confirmed
+                                    _tf_active_map_b[_entry_tf_b] = _retry_active
+                                    entry_candles_b = _retry_confirmed
+                                    active_entry_candles_b = _retry_active
+                                    _eb_funnel_extras["entry_tf_refetch"] = True
+                                    _eb_funnel_extras["entry_tf_refetch_meta"] = (
+                                        _retry_meta
+                                    )
+                        except Exception as _entry_retry_err:
+                            log.debug(
+                                "[SCAN+B] %s entry TF %s re-fetch failed: %s",
+                                pair.get("display", "?"),
+                                _entry_tf_b,
+                                _entry_retry_err,
+                            )
+
+                    _eb_funnel_extras["zone_tf"] = _zone_tf_b
+                    _eb_funnel_extras["entry_tf"] = _entry_tf_b
+                    _eb_funnel_extras["atr_tf"] = _atr_tf_b
+                    _eb_funnel_extras["zone_count"] = len(zone_candles_b or [])
+                    _eb_funnel_extras["entry_count"] = len(entry_candles_b or [])
+                    _eb_funnel_extras["atr_count"] = len(atr_candles_b or [])
+
                     # M5 is Engine B's refinement rung, never a gate. A stale M5
                     # must not block the signal — the M15 trigger still carries
                     # entry — but it must not confirm one either. It is not in
@@ -3216,32 +3322,50 @@ def run_full_scan(
                             _b_only_probe_res = None
                             _b_only_probe_conf = None
                             _b_dir = None
+                            _b_probe_diag: dict = {}
                             if engine_b_scan_only or _independent_direction_enabled:
-                                _b_dir, _b_only_probe_res, _b_only_probe_conf = (
-                                    _engine_b_independent_direction_probe(
-                                        pair,
-                                        engine=_engine_b,
-                                        d1_candles=d1 or [],
-                                        h4_candles=h4 or [],
-                                        h1_candles=h1 or [],
-                                        entry_candles=entry_candles_b,
-                                        confidence_entry_candles=active_entry_candles_b,
-                                        current_price=current_price,
-                                        atr=atr,
-                                        regime_label=regime_label,
-                                        style_profile=style_profile_b,
-                                        resolved_style=resolved_style_b,
-                                        asset_type=ptype,
-                                        d1_snap=_sc_d1_snap,
-                                        h4_snap=_sc_h4_snap,
-                                        role_candles=_tf_map_b,
-                                        dxy_h4_closes=_dxy_h4_closes_b,
-                                    )
+                                (
+                                    _b_dir,
+                                    _b_only_probe_res,
+                                    _b_only_probe_conf,
+                                    _b_probe_diag,
+                                ) = _engine_b_independent_direction_probe(
+                                    pair,
+                                    engine=_engine_b,
+                                    d1_candles=d1 or [],
+                                    h4_candles=h4 or [],
+                                    h1_candles=h1 or [],
+                                    entry_candles=entry_candles_b,
+                                    confidence_entry_candles=active_entry_candles_b,
+                                    current_price=current_price,
+                                    atr=atr,
+                                    regime_label=regime_label,
+                                    style_profile=style_profile_b,
+                                    resolved_style=resolved_style_b,
+                                    asset_type=ptype,
+                                    d1_snap=_sc_d1_snap,
+                                    h4_snap=_sc_h4_snap,
+                                    role_candles=_tf_map_b,
+                                    dxy_h4_closes=_dxy_h4_closes_b,
+                                )
+                                # Structure analysis ran inside the snapshot even
+                                # when no direction is tradeable — count it.
+                                if _b_probe_diag.get("structure_ran"):
+                                    _eb_funnel_extras["structure_executed"] = True
+                                _eb_funnel_extras["probe_rejection_reason"] = (
+                                    _b_probe_diag.get("rejection_reason")
+                                )
+                                _eb_funnel_extras["probe_clear_sides"] = list(
+                                    _b_probe_diag.get("clear_sides") or []
                                 )
                                 if _b_dir not in ("LONG", "SHORT"):
-                                    _eb_funnel_extras.setdefault(
-                                        "engine_b_skip_stage",
-                                        "no_clear_structural_verdict",
+                                    _skip = str(
+                                        _b_probe_diag.get("rejection_reason")
+                                        or "no_clear_structural_verdict"
+                                    )
+                                    _set_engine_b_skip_stage(
+                                        _eb_funnel_extras,
+                                        _skip,
                                     )
                             _b_direction_for_analysis = _engine_b_scan_direction_input(
                                 _engine_a_direction,
@@ -3583,21 +3707,33 @@ def run_full_scan(
                                     sig_a["_threshold_audit_b_style_profile"] = style_profile_b
 
                             else:
-                                _eb_funnel_extras.setdefault(
-                                    "engine_b_skip_stage",
+                                _set_engine_b_skip_stage(
+                                    _eb_funnel_extras,
                                     "engine_a_direction_not_traded",
                                 )
                         elif _eb_funnel_extras["candles_tf_ok"]:
-                            _eb_funnel_extras.setdefault(
-                                "engine_b_skip_stage",
+                            _set_engine_b_skip_stage(
+                                _eb_funnel_extras,
                                 "crypto_bybit_atr_unavailable"
                                 if sig_a.get("engine_b_error") == "bybit_atr_unavailable"
                                 else "atr_blocked_zero_or_invalid",
                             )
                     else:
-                        _eb_funnel_extras.setdefault(
-                            "engine_b_skip_stage",
-                            "missing_engine_b_tf_candles",
+                        _missing_bits = []
+                        if not zone_candles_b:
+                            _missing_bits.append(f"zone:{_zone_tf_b}")
+                        if not entry_candles_b:
+                            _missing_bits.append(f"entry:{_entry_tf_b}")
+                        if not atr_candles_b:
+                            _missing_bits.append(f"atr:{_atr_tf_b}")
+                        _set_engine_b_skip_stage(
+                            _eb_funnel_extras,
+                            (
+                                "missing_engine_b_tf_candles:"
+                                + ",".join(_missing_bits)
+                                if _missing_bits
+                                else "missing_engine_b_tf_candles"
+                            ),
                         )
 
                     _attach_engine_b_scan_gate_funnel(
@@ -3622,8 +3758,8 @@ def run_full_scan(
                     if _threshold_audit_on:
                         sig_a["_threshold_audit_b_error"] = str(_b_err)
                     try:
-                        _eb_funnel_extras.setdefault(
-                            "engine_b_skip_stage", "engine_b_overlay_exception"
+                        _set_engine_b_skip_stage(
+                            _eb_funnel_extras, "engine_b_overlay_exception"
                         )
                         _sg = locals().get("_pair_score_group")
                         if _sg is None:

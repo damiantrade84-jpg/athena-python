@@ -4560,7 +4560,10 @@ ENGINE_B_SWEEP_REFERENCE_EXCLUDE_WINDOW: true
 # entry and location gates independently. Pairing the entry pattern with the
 # level that justifies it is the core of the methodology; nothing enforced it.
 ENGINE_B_TRIGGER_AT_LOCATION_ENABLED: true
-ENGINE_B_TRIGGER_AT_LOCATION_MAX_ATR: 0.75
+# 2026-08-08: widened 0.75 → 1.0 ATR so zone retests with a slightly offset
+# M15 rejection/engulf still count as trigger-at-location. Keep ENABLED true —
+# disabling reopens the anywhere-on-chart engulfing + distant-zone loophole.
+ENGINE_B_TRIGGER_AT_LOCATION_MAX_ATR: 1.0
 
 # A synthetic TP is sl_dist * fallback_rr — derived from the STOP, not from
 # structure — so it carries no evidence about how much room is in front of
