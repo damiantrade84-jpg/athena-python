@@ -2049,6 +2049,7 @@ CONFIG: dict = {
         "WEIGHTS_BY_FAMILY": {
             "crypto": {"microstructure": 0.08},
         },
+        "WEIGHTS_BY_SCORE_GROUP": {},
     },
     "ENGINE_A_V3_MICROSTRUCTURE": {
         "ENABLED": True,
@@ -2137,19 +2138,25 @@ CONFIG: dict = {
         "BY_SCORE_GROUP": {
             "energy_oil": {
                 "trend_layers": [
+                    {"tf": "D1", "weight_key": "d1_ema_trend", "fast_ema": "ema21", "slow_ema": "ema200"},
                     {"tf": "H4", "weight_key": "h4_ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
                     {"tf": "H1", "weight_key": "ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
                 ],
-                "trend_weights": {"h4_ema_trend": 0.55, "ema_trend": 0.45},
+                "intraday": {
+                    "trend_weights": {"d1_ema_trend": 0.20, "h4_ema_trend": 0.45, "ema_trend": 0.35},
+                },
                 "momentum_tf": "H4",
                 "regime_tf": "H4",
             },
             "commodity_other": {
                 "trend_layers": [
+                    {"tf": "D1", "weight_key": "d1_ema_trend", "fast_ema": "ema21", "slow_ema": "ema200"},
                     {"tf": "H4", "weight_key": "h4_ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
                     {"tf": "H1", "weight_key": "ema_trend", "fast_ema": "ema21", "slow_ema": "ema50"},
                 ],
-                "trend_weights": {"h4_ema_trend": 0.55, "ema_trend": 0.45},
+                "intraday": {
+                    "trend_weights": {"d1_ema_trend": 0.20, "h4_ema_trend": 0.45, "ema_trend": 0.35},
+                },
                 "momentum_tf": "H4",
                 "regime_tf": "H4",
             },

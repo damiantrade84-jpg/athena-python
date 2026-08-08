@@ -90,22 +90,31 @@ def test_snap_for_tf_maps_snaps():
     assert snap_for_tf(profile, d1_snap=d1, h4_snap=h4, h1_snap=h1, tf="H1") is h1
 
 
-def test_energy_oil_profile_uses_h4_h1_only_trend_stack():
-    # Config currently keeps D1/H4/H1 with 0.20/0.45/0.35 for energy_oil (intraday still H4-weighted but regime retains D1).
-    # Test updated 2026-08-06 to reflect live config; if design intends H4/H1 only, update config BY_SCORE_GROUP instead.
-    profile = resolve_engine_a_scoring_profile(
+def test_energy_oil_intraday_override_does_not_replace_swing_style():
+    intraday = resolve_engine_a_scoring_profile(
         score_group="energy_oil",
         asset_type="commodity",
-        style="swing",
+        style="intraday",
     )
-    assert profile["trend_timeframes"] == ["D1", "H4", "H1"]
-    assert profile["trend_weights"]["d1_ema_trend"] == 0.20
-    assert profile["trend_weights"]["h4_ema_trend"] == 0.45
-    assert profile["trend_weights"]["ema_trend"] == 0.35
+    swing = resolve_engine_a_scoring_profile(
+        score_group="energy_oil", asset_type="commodity", style="swing"
+    )
+    assert intraday["trend_timeframes"] == ["D1", "H4", "H1"]
+    assert intraday["trend_weights"] == {
+        "d1_ema_trend": 0.20,
+        "h4_ema_trend": 0.45,
+        "ema_trend": 0.35,
+    }
+    assert swing["trend_weights"] == {
+        "d1_ema_trend": 0.50,
+        "h4_ema_trend": 0.30,
+        "ema_trend": 0.20,
+    }
 
 
-def test_stock_and_index_score_groups_preserve_d1_dominant_trend_weights():
-    expected = {"d1_ema_trend": 0.40, "h4_ema_trend": 0.35, "ema_trend": 0.25}
+def test_stock_and_index_score_groups_keep_style_specific_trend_weights():
+    intraday_expected = {"d1_ema_trend": 0.40, "h4_ema_trend": 0.35, "ema_trend": 0.25}
+    swing_expected = {"d1_ema_trend": 0.50, "h4_ema_trend": 0.30, "ema_trend": 0.20}
     cases = [
         ("us_stock_single", "stock"),
         ("stock_other", "stock"),
@@ -115,12 +124,18 @@ def test_stock_and_index_score_groups_preserve_d1_dominant_trend_weights():
         ("index_other", "index"),
     ]
     for score_group, asset_type in cases:
-        profile = resolve_engine_a_scoring_profile(
+        intraday = resolve_engine_a_scoring_profile(
+            score_group=score_group,
+            asset_type=asset_type,
+            style="intraday",
+        )
+        swing = resolve_engine_a_scoring_profile(
             score_group=score_group,
             asset_type=asset_type,
             style="swing",
         )
-        assert profile["trend_weights"] == expected
+        assert intraday["trend_weights"] == intraday_expected
+        assert swing["trend_weights"] == swing_expected
 
 
 def test_config_keeps_single_engine_a_min_confidence_enabled_key():

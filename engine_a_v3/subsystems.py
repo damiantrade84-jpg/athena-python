@@ -69,7 +69,25 @@ def subsystems_enabled() -> bool:
         return False
 
 
-def resolve_subsystem_weights(family: str) -> dict[str, float]:
+def _apply_weight_override(
+    weights: dict[str, float], override: Any
+) -> dict[str, float]:
+    if not isinstance(override, Mapping):
+        return weights
+    for name in SUBSYSTEM_FACTORS:
+        if name not in override:
+            continue
+        try:
+            weights[name] = max(0.0, float(override[name]))
+        except (TypeError, ValueError):
+            continue
+    return weights
+
+
+def resolve_subsystem_weights(
+    family: str, score_group: str | None = None
+) -> dict[str, float]:
+    """Resolve defaults, then family and optional score-group overrides."""
     defaults = dict(_DEFAULT_WEIGHTS_BY_FAMILY.get(family, _DEFAULT_WEIGHTS_BY_FAMILY["unknown"]))
     try:
         from config import CONFIG
@@ -77,16 +95,38 @@ def resolve_subsystem_weights(family: str) -> dict[str, float]:
         cfg = CONFIG.get("ENGINE_A_V3_SUBSYSTEMS") or {}
         overrides = cfg.get("WEIGHTS_BY_FAMILY") or {}
         family_override = overrides.get(family) if isinstance(overrides, dict) else None
-        if isinstance(family_override, dict):
-            for name in SUBSYSTEM_FACTORS:
-                if name in family_override:
-                    try:
-                        defaults[name] = max(0.0, float(family_override[name]))
-                    except (TypeError, ValueError):
-                        pass
+        _apply_weight_override(defaults, family_override)
+        group_overrides = cfg.get("WEIGHTS_BY_SCORE_GROUP") or {}
+        group_override = (
+            group_overrides.get(str(score_group or ""))
+            if isinstance(group_overrides, dict)
+            else None
+        )
+        _apply_weight_override(defaults, group_override)
     except Exception:
         pass
     return defaults
+
+
+def subsystem_weight_scope(family: str, score_group: str | None = None) -> str:
+    """Return the configuration scope that supplied the effective weights."""
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_SUBSYSTEMS") or {}
+        by_group = cfg.get("WEIGHTS_BY_SCORE_GROUP") or {}
+        if isinstance(by_group, Mapping) and isinstance(
+            by_group.get(str(score_group or "")), Mapping
+        ):
+            return "score_group"
+        by_family = cfg.get("WEIGHTS_BY_FAMILY") or {}
+        if isinstance(by_family, Mapping) and isinstance(
+            by_family.get(family), Mapping
+        ):
+            return "family_override"
+    except Exception:
+        pass
+    return "family_default"
 
 
 def subsystem_component(entry: Any) -> tuple[Any, str]:

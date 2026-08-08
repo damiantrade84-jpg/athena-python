@@ -24,6 +24,7 @@ from engine_a_v3.quant_scorer import (
     _trend_component,
     _trend_health_mult,
     _volume_component,
+    _volume_provenance_diagnostic,
     score_pair,
 )
 from engine_a_v3.routing import route_specialist
@@ -453,6 +454,125 @@ def test_volume_ratio_contra_expansion_biases_signal():
     assert contra.signal < base.signal
 
 
+def test_live_volume_provenance_rejects_mt5_tick_and_mixed_stock_windows():
+    mt5_rows = _rows(20, timedelta(hours=1))
+    for row in mt5_rows:
+        row["volSource"] = "mt5_tick"
+    index_detail = _volume_provenance_diagnostic(
+        mt5_rows, "asian_indices", required=True
+    )
+    assert index_detail["accepted"] is False
+    assert index_detail["reason"] == "score_group_has_no_approved_live_volume_source"
+    assert _volume_component(
+        {},
+        mt5_rows,
+        {"volume_provenance_required": True},
+        "asian_indices",
+    ).available is False
+
+    stock_rows = _rows(20, timedelta(hours=1))
+    for row in stock_rows[:15]:
+        row["volSource"] = "eodhd"
+    for row in stock_rows[15:]:
+        row["volSource"] = "mt5_tick"
+    mixed = _volume_provenance_diagnostic(
+        stock_rows, "stock_other", required=True
+    )
+    assert mixed["accepted"] is False
+    assert mixed["reason"] == "volume_source_not_approved"
+
+
+def test_live_volume_provenance_accepts_exchange_sources_only():
+    stock_rows = _rows(20, timedelta(hours=1))
+    crypto_rows = _rows(20, timedelta(hours=1))
+    for row in stock_rows:
+        row["volSource"] = "eodhd"
+    for row in crypto_rows:
+        row["volSource"] = "bybit"
+
+    stock = _volume_provenance_diagnostic(
+        stock_rows, "us_stock_single", required=True
+    )
+    crypto = _volume_provenance_diagnostic(
+        crypto_rows, "crypto_btc", required=True
+    )
+    assert stock["accepted"] is True
+    assert crypto["accepted"] is True
+    # Current live EODHD overlay policy is type=stock only. ETF/index/commodity
+    # groups do not become eligible merely because a research row is stamped.
+    tracker = _volume_provenance_diagnostic(
+        stock_rows, "precious_trackers", required=True
+    )
+    assert tracker["accepted"] is False
+    assert tracker["reason"] == "score_group_has_no_approved_live_volume_source"
+    assert _volume_component(
+        {},
+        stock_rows,
+        {"volume_provenance_required": True},
+        "us_stock_single",
+    ).available is True
+
+
+def test_live_forex_uses_stamped_dukascopy_ratio_not_mt5_tick_volume():
+    rows = _rows(20, timedelta(hours=1))
+    for row in rows:
+        row["volSource"] = "mt5_tick"
+    unstamped = {
+        "volume_provenance_required": True,
+        "volume_ratio": 2.0,
+    }
+    rejected = _volume_provenance_diagnostic(
+        rows,
+        "forex_majors",
+        required=True,
+        context=unstamped,
+    )
+    assert rejected["accepted"] is False
+    assert rejected["candleAccepted"] is False
+    assert rejected["contextReason"] == "context_volume_source_missing"
+
+    stamped = {**unstamped, "volume_ratio_source": "dukascopy"}
+    accepted = _volume_provenance_diagnostic(
+        rows,
+        "forex_majors",
+        required=True,
+        context=stamped,
+    )
+    assert accepted["accepted"] is True
+    assert accepted["candleAccepted"] is False
+    assert accepted["contextAccepted"] is True
+    assert accepted["selectedInputs"] == ["context_ratio"]
+    component = _volume_component({}, rows, stamped, "forex_majors")
+    assert component.available is True
+    assert component.quality > 0.0
+
+
+def test_unstamped_research_volume_remains_backward_compatible():
+    rows = _rows(20, timedelta(hours=1))
+    detail = _volume_provenance_diagnostic(
+        rows, "us_stock_single", required=False
+    )
+    assert detail["required"] is False
+    assert detail["scoreGroup"] == "us_stock_single"
+    assert detail["allowedSources"] == ["eodhd"]
+    assert detail["sourceCounts"] == {"missing": 20}
+    assert detail["barsWithPositiveVolume"] == 20
+    assert detail["accepted"] is True
+    assert detail["reason"] == "legacy_unstamped_research_series"
+    assert detail["candleAccepted"] is True
+    assert detail["contextAccepted"] is False
+    assert detail["selectedInputs"] == ["candles"]
+
+    for row in rows:
+        row["volSource"] = "mt5_tick"
+    stamped = _volume_provenance_diagnostic(
+        rows, "us_stock_single", required=False
+    )
+    assert stamped["accepted"] is True
+    assert stamped["candleAccepted"] is True
+    assert stamped["reason"] == "research_provenance_not_enforced"
+
+
 def test_trend_component_skips_unavailable_tf():
     good = {
         "close": 110.0,
@@ -660,6 +780,10 @@ def test_subsystems_enabled_carry_can_flip_direction(monkeypatch):
     )
     assert long_quant.direction == "LONG"
     assert short_quant.direction == "SHORT"
+    weighting = long_quant.factor_diagnostics["weighting"]
+    assert weighting["coreScale"] == pytest.approx(0.86)
+    assert weighting["subsystemBudget"] == pytest.approx(0.14)
+    assert weighting["subsystemWeightScope"] == "family_default"
 
 
 def test_component_vol_mults_differ_by_component():

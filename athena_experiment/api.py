@@ -245,7 +245,18 @@ def create_experiment_blueprint(*, all_pairs_provider, json_safe=None) -> Bluepr
         from athena_experiment.push import push_overlay_to_local_config
 
         try:
-            written = push_overlay_to_local_config(overlay)
+            written = push_overlay_to_local_config(
+                overlay,
+                provenance={
+                    "source": "api_experiment_push",
+                    "engine": engine,
+                    "symbol": pair.get("symbol") or pair.get("display"),
+                    "pair": pair.get("display") or pair.get("symbol"),
+                    "scoreGroup": group,
+                    "style": style,
+                    "runId": payload.get("runId"),
+                },
+            )
         except Exception as exc:
             return jsonify({"success": False, "error": f"{type(exc).__name__}: {exc}"}), 500
 
@@ -255,6 +266,7 @@ def create_experiment_blueprint(*, all_pairs_provider, json_safe=None) -> Bluepr
                 "group": group,
                 "overlayWritten": overlay,
                 "localConfigDocument": _safe(written),
+                "auditLogged": True,
                 "restartRequired": True,
                 "note": (
                     "Written to config.local.yaml. This does not take effect on the "

@@ -37,8 +37,8 @@ def _rows(count: int, step: timedelta, *, falling: bool = False) -> list[dict]:
 def _candles() -> dict[str, list[dict]]:
     return {
         "D1": _rows(220, timedelta(days=1)),
-        "H4": _rows(50, timedelta(hours=4)),
-        "H1": _rows(50, timedelta(hours=1)),
+        "H4": _rows(60, timedelta(hours=4)),
+        "H1": _rows(60, timedelta(hours=1)),
     }
 
 
@@ -134,14 +134,14 @@ def test_setup_direction_conflict_falls_back_to_quant_path(monkeypatch):
     from engine_a_v3.quant_scorer import QuantScore
     from engine_a_v3.setups import SetupCandidate
 
-    def _fake_score_pair(route, horizon, candles, *, context=None, profile=None, snapshot_cache=None):
+    def _fake_score_pair(route, horizon, candles, **_kwargs):
         return QuantScore(
-            direction="LONG", confluence_score=1.1, max_score=3.0, score_norm=0.3667,
-            conviction=0.3667, decision="WATCH", threshold=2.1, level_style="trend",
+            direction="LONG", confluence_score=1.8, max_score=3.0, score_norm=0.6,
+            conviction=0.6, decision="WATCH", threshold=2.1, level_style="trend",
             factor_scores={}, factor_diagnostics={}, components={},
         )
 
-    def _fake_detect_setup(route, horizon, candles, *, display=None, indicator_periods=None):
+    def _fake_detect_setup(route, horizon, candles, **_kwargs):
         return SetupCandidate("fx_trend_pullback", "TRADE", "SHORT", (), (), "trend")
 
     monkeypatch.setattr(evaluator_module, "score_pair", _fake_score_pair)

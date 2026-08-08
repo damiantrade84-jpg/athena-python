@@ -50,6 +50,7 @@ from engine_a_v3.subsystems import (
     ST_UNAVAILABLE,
     SUBSYSTEM_FACTORS,
     resolve_subsystem_weights,
+    subsystem_weight_scope,
     subsystems_enabled,
     subsystem_component,
 )
@@ -217,7 +218,7 @@ def _resolve_v3_tf_weights(score_group: str, asset_type: str, horizon: str) -> d
     """Resolve per-group TF weights for the V3 trend component.
 
     Wires V3 to ``ENGINE_A_SCORING_PROFILE`` so per-group TF overrides take live
-    effect (e.g., energy_oil/commodity_other drop D1 and weight H4+H1 0.55/0.45;
+    effect (e.g., energy_oil/commodity_other use 0.20/0.45/0.35 intraday;
     us_stock_single uses 0.40/0.35/0.25). The profile's ``trend_layers`` map each
     ``weight_key`` to a ``tf``; the returned dict is keyed by TF (D1/H4/H1) so
     ``_trend_component`` can consume it directly. Falls back to the hardcoded
@@ -1610,15 +1611,191 @@ def _v3_spread_multiplier(entry_snap: Mapping[str, Any], group: str, asset_type:
 
 
 # ── volume / flow ────────────────────────────────────────────────────────────
+_CRYPTO_EXCHANGE_VOLUME_SOURCES = frozenset({"bybit", "binance_futures"})
+_EQUITY_EXCHANGE_VOLUME_SOURCES = frozenset({"eodhd"})
+_FOREX_CONTEXT_VOLUME_SOURCES = frozenset({"dukascopy"})
+# Checked-in live overlay policy admits only pair type ``stock``. ETF, index,
+# and commodity groups must remain unavailable even if a delayed/research row
+# happens to carry an EODHD label.
+_EODHD_LIVE_STOCK_SCORE_GROUPS = frozenset(
+    {"us_stock_single", "stock_other"}
+)
+
+
+def _normalize_volume_source(raw: Any) -> str | None:
+    source = str(raw or "").strip().lower()
+    aliases = {
+        "bybit_linear_kline": "bybit",
+        "binance": "binance_futures",
+        "binance_usdm": "binance_futures",
+        "duka": "dukascopy",
+        "dukascopy_ecn": "dukascopy",
+        "eodhd_ws": "eodhd",
+        "eodhd_live_v2": "eodhd",
+    }
+    source = aliases.get(source, source)
+    return source or None
+
+
+def _canonical_volume_source(candle: Mapping[str, Any]) -> str | None:
+    raw = candle.get("volSource") or candle.get("volumeSource")
+    if not raw:
+        raw = candle.get("provider")
+    return _normalize_volume_source(raw)
+
+
+def _allowed_volume_sources(score_group: str) -> frozenset[str]:
+    group = str(score_group or "").strip().lower()
+    if group.startswith("crypto_"):
+        return _CRYPTO_EXCHANGE_VOLUME_SOURCES
+    if group in _EODHD_LIVE_STOCK_SCORE_GROUPS:
+        return _EQUITY_EXCHANGE_VOLUME_SOURCES
+    return frozenset()
+
+
+def _allowed_context_volume_sources(score_group: str) -> frozenset[str]:
+    group = str(score_group or "").strip().lower()
+    if group.startswith("forex_"):
+        return _FOREX_CONTEXT_VOLUME_SOURCES
+    return frozenset()
+
+
+def _volume_provenance_diagnostic(
+    candles: list[dict],
+    score_group: str,
+    *,
+    required: bool,
+    context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    window = [
+        candle
+        for candle in candles[-20:]
+        if isinstance(candle, Mapping) and (_f(candle.get("vol")) or 0.0) > 0.0
+    ]
+    source_counts: dict[str, int] = {}
+    for candle in window:
+        source = _canonical_volume_source(candle) or "missing"
+        source_counts[source] = source_counts.get(source, 0) + 1
+    allowed = _allowed_volume_sources(score_group)
+    detail: dict[str, Any] = {
+        "required": bool(required),
+        "scoreGroup": str(score_group or ""),
+        "allowedSources": sorted(allowed),
+        "sourceCounts": source_counts,
+        "barsWithPositiveVolume": len(window),
+    }
+    disallowed: list[str] = []
+    if not window:
+        candle_accepted = False
+        candle_reason = "no_positive_volume"
+    elif not required:
+        candle_accepted = True
+        candle_reason = (
+            "legacy_unstamped_research_series"
+            if set(source_counts) == {"missing"}
+            else "research_provenance_not_enforced"
+        )
+    elif not allowed:
+        candle_accepted = False
+        candle_reason = "score_group_has_no_approved_live_volume_source"
+    elif "missing" in source_counts:
+        candle_accepted = False
+        candle_reason = "volume_source_missing"
+    else:
+        disallowed = sorted(set(source_counts) - set(allowed))
+        if disallowed:
+            candle_accepted = False
+            candle_reason = "volume_source_not_approved"
+        elif len(source_counts) != 1:
+            candle_accepted = False
+            candle_reason = "mixed_volume_sources"
+        else:
+            candle_accepted = True
+            candle_reason = "approved_exchange_volume"
+
+    ratio = _f((context or {}).get("volume_ratio"))
+    context_source = _normalize_volume_source(
+        (context or {}).get("volume_ratio_source")
+    )
+    allowed_context = _allowed_context_volume_sources(score_group)
+    if ratio is None:
+        context_accepted = False
+        context_reason = "no_context_volume_ratio"
+    elif not required:
+        context_accepted = True
+        context_reason = (
+            "legacy_unstamped_context_volume_ratio"
+            if context_source is None
+            else "research_context_provenance_not_enforced"
+        )
+    elif context_source is None:
+        context_accepted = False
+        context_reason = "context_volume_source_missing"
+    elif context_source not in allowed_context:
+        context_accepted = False
+        context_reason = "context_volume_source_not_approved"
+    else:
+        context_accepted = True
+        context_reason = "approved_context_volume_ratio"
+
+    accepted = candle_accepted or context_accepted
+    if candle_accepted and context_accepted:
+        reason = "approved_candle_and_context_volume"
+        selected_inputs = ["candles", "context_ratio"]
+    elif candle_accepted:
+        reason = candle_reason
+        selected_inputs = ["candles"]
+    elif context_accepted:
+        reason = context_reason
+        selected_inputs = ["context_ratio"]
+    else:
+        reason = candle_reason
+        selected_inputs = []
+    result = {
+        **detail,
+        "accepted": accepted,
+        "reason": reason,
+        "candleAccepted": candle_accepted,
+        "candleReason": candle_reason,
+        "allowedContextSources": sorted(allowed_context),
+        "contextSource": context_source,
+        "contextAccepted": context_accepted,
+        "contextReason": context_reason,
+        "selectedInputs": selected_inputs,
+    }
+    if disallowed:
+        result["disallowedSources"] = disallowed
+    return result
+
+
 def _volume_component(
     snap: Mapping[str, Any],
     candles: list[dict],
     context: Mapping[str, Any] | None,
     score_group: str = "",
+    *,
+    provenance: Mapping[str, Any] | None = None,
 ) -> Component:
+    provenance_detail = dict(provenance or {}) or _volume_provenance_diagnostic(
+        candles,
+        score_group,
+        required=bool((context or {}).get("volume_provenance_required")),
+        context=context,
+    )
+    if not provenance_detail.get("accepted"):
+        return Component(0.0, 0.0, available=False)
+    candle_volume_accepted = bool(provenance_detail.get("candleAccepted"))
+    context_volume_accepted = bool(provenance_detail.get("contextAccepted"))
     signal = 0.0
     quality = 0.0
-    valid = [c for c in candles[-20:] if _f(c.get("close")) is not None and (_f(c.get("vol")) or 0) > 0]
+    price_rows = [
+        c for c in candles[-20:] if _f(c.get("close")) is not None
+    ]
+    valid = (
+        [c for c in price_rows if (_f(c.get("vol")) or 0) > 0]
+        if candle_volume_accepted
+        else []
+    )
     if len(valid) >= 5:
         obv = 0.0
         midpoint = len(valid) // 2
@@ -1640,8 +1817,12 @@ def _volume_component(
     # take the derived path, which reads the same Bybit/EODHD volume off the
     # candles. This component sees the entry rung only — there is no D1/H4 volume
     # confirmation in V3, which matters most for crypto (family weight 0.19).
-    vr = _f((context or {}).get("volume_ratio"))
-    if vr is None and candles:
+    vr = (
+        _f((context or {}).get("volume_ratio"))
+        if context_volume_accepted
+        else None
+    )
+    if vr is None and candle_volume_accepted and candles:
         vols = [_f(c.get("vol")) for c in candles[-21:]]
         vols = [v for v in vols if v]
         if len(vols) >= 5:
@@ -1650,9 +1831,9 @@ def _volume_component(
                 vr = vols[-1] / avg
     if vr is not None:
         quality = max(quality, _clamp01((vr - 1.0) / 1.5))
-        if vr > 1.0 and len(valid) >= 2:
-            last_close = float(valid[-1]["close"])
-            prev_close = float(valid[-2]["close"])
+        if vr > 1.0 and len(price_rows) >= 2:
+            last_close = float(price_rows[-1]["close"])
+            prev_close = float(price_rows[-2]["close"])
             bar_dir = (
                 1.0 if last_close > prev_close else -1.0 if last_close < prev_close else 0.0
             )
@@ -1675,14 +1856,18 @@ def _volume_component(
     except Exception:
         mfi_w = 0.0
     mfi = _f(snap.get("mfi")) if snap else None
-    if mfi_w > 0 and mfi is not None:
+    if candle_volume_accepted and mfi_w > 0 and mfi is not None:
         mfi_term = _clamp((mfi - 50.0) / 40.0, -1.0, 1.0)
         mfi_quality = _clamp01(abs(mfi - 50.0) / 40.0)
         w = _clamp01(mfi_w)
         signal = _clamp((1.0 - w) * signal + w * mfi_term, -1.0, 1.0)
         quality = _clamp01((1.0 - w) * quality + w * mfi_quality)
 
-    return Component(signal, _clamp01(quality), available=len(valid) >= 5)
+    return Component(
+        signal,
+        _clamp01(quality),
+        available=(len(valid) >= 5 or (context_volume_accepted and vr is not None)),
+    )
 
 
 # ── config resolvers ─────────────────────────────────────────────────────────
@@ -2116,15 +2301,31 @@ def score_pair(
     location_price_source = (
         "current_price" if current_price is not None else "confirmed_setup_close"
     )
+    volume_candles = (
+        entry_candles[:-1]
+        if entry_candle_is_forming and len(entry_candles) > 1
+        else entry_candles
+    )
+    volume_provenance = _volume_provenance_diagnostic(
+        volume_candles,
+        group,
+        required=bool((context or {}).get("volume_provenance_required")),
+        context=context,
+    )
     core_key = (
         "entry_core",
         entry_tf,
         len(entry_candles),
         bool(entry_candle_is_forming),
         (context or {}).get("volume_ratio"),
+        (context or {}).get("volume_ratio_source"),
         corroborating_adx,
         current_price is not None,
         location_price,
+        bool(volume_provenance.get("accepted")),
+        volume_provenance.get("reason"),
+        tuple(sorted((volume_provenance.get("sourceCounts") or {}).items())),
+        tuple(volume_provenance.get("selectedInputs") or ()),
     )
     core_result = feature_cache.get(core_key) if feature_cache is not None else None
     if core_result is None:
@@ -2141,12 +2342,13 @@ def score_pair(
         # would then systematically disagree with the confirmed-bar backtest
         # (audit A-6). Drop the forming bar for the volume read; location keeps
         # the live quote via current_price.
-        volume_candles = (
-            entry_candles[:-1]
-            if entry_candle_is_forming and len(entry_candles) > 1
-            else entry_candles
+        volume = _volume_component(
+            entry_snap,
+            volume_candles,
+            context,
+            group,
+            provenance=volume_provenance,
         )
-        volume = _volume_component(entry_snap, volume_candles, context, group)
         core_result = location, level_style, volume
         if feature_cache is not None:
             previous_key = feature_cache.get("_latest_entry_core_key")
@@ -2164,8 +2366,13 @@ def score_pair(
         "volume": volume,
     }
     subsystem_states: dict[str, str] = {}
+    sub_weights: dict[str, float] = {}
+    sub_budget = 0.0
+    price_scale = 1.0
+    sub_weight_scope = "disabled"
     if subsystems_enabled():
-        sub_weights = resolve_subsystem_weights(family)
+        sub_weights = resolve_subsystem_weights(family, group)
+        sub_weight_scope = subsystem_weight_scope(family, group)
         for name in SUBSYSTEM_FACTORS:
             comp, state = subsystem_component((context or {}).get(name))
             components[name] = comp
@@ -2178,7 +2385,7 @@ def score_pair(
         # unavailable, and neutral stubs must not shrink core weights unevenly
         # across pairs with sparse carry/COT coverage.
         sub_budget = sum(
-            resolve_subsystem_weights(family).get(name, 0.0)
+            sub_weights.get(name, 0.0)
             for name in SUBSYSTEM_FACTORS
             if subsystem_states.get(name) == ST_AVAILABLE
         )
@@ -2188,7 +2395,7 @@ def score_pair(
             combined_weights[name] = weights.get(name, 0.0) * price_scale
         for name in SUBSYSTEM_FACTORS:
             if subsystem_states.get(name) == ST_AVAILABLE:
-                combined_weights[name] = resolve_subsystem_weights(family).get(name, 0.0)
+                combined_weights[name] = sub_weights.get(name, 0.0)
             else:
                 combined_weights[name] = 0.0
 
@@ -2673,6 +2880,20 @@ def score_pair(
             "atrPct": _f(entry_snap.get("atr_pct")),
             "subsystemsEnabled": subsystems_enabled(),
             "subsystemStates": subsystem_states or None,
+            "volumeProvenance": volume_provenance,
+            "weighting": {
+                "baseCoreWeights": {
+                    name: round(weights.get(name, 0.0), 4)
+                    for name in CORE_COMPONENTS
+                },
+                "effectiveWeights": {
+                    name: round(combined_weights.get(name, 0.0), 4)
+                    for name in (*CORE_COMPONENTS, *SUBSYSTEM_FACTORS)
+                },
+                "coreScale": round(price_scale, 4),
+                "subsystemBudget": round(sub_budget, 4),
+                "subsystemWeightScope": sub_weight_scope,
+            },
             "legacyFilters": legacy_diag,
             "trendState": legacy_diag.get("trendState"),
             "equityVolumeBlocked": equity_volume_blocked,

@@ -64,6 +64,7 @@ def test_bybit_kline_cache_does_not_serve_partial_bar_as_confirmed(monkeypatch):
 
     fetched = data_feeds._fetch_bybit_klines("BTCUSDT", "M5", 1)
     assert fetched and fetched[-1]["confirmed"] is False
+    assert fetched[-1]["volSource"] == "bybit"
 
     key = ("BTCUSDT", "M5", 1)
     _cached_rows, expiry = data_feeds._bybit_kline_cache[key]

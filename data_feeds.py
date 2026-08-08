@@ -142,6 +142,7 @@ def _bybit_kline_to_candle(
         "close": float(row[4]),
         "volume": float(row[5]),
         "vol": float(row[5]),
+        "volSource": "bybit",
         "turnover": float(row[6]) if len(row) > 6 else 0.0,
         "closed": confirmed,
         "confirmed": confirmed,

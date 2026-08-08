@@ -229,8 +229,10 @@ def test_push_rejects_mismatched_group_and_writes_canonical_tested_group(monkeyp
 
     writes: list[dict] = []
 
-    def fake_push(overlay):
+    def fake_push(overlay, *, provenance=None):
         writes.append(overlay)
+        assert provenance["scoreGroup"] == "forex_majors"
+        assert provenance["symbol"] == "EURUSD"
         return {"written": True}
 
     monkeypatch.setattr(experiment_push, "push_overlay_to_local_config", fake_push)
@@ -257,6 +259,7 @@ def test_push_rejects_mismatched_group_and_writes_canonical_tested_group(monkeyp
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["group"] == "forex_majors"
+    assert payload["auditLogged"] is True
     assert writes == [
         {
             "ENGINE_A_V3_MOMENTUM_BLEND": {

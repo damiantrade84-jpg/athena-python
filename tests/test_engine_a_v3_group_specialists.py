@@ -62,3 +62,30 @@ def test_na_subsystem_does_not_shrink_core_budget(monkeypatch):
     assert price_scale == 1.0
     for name in CORE_COMPONENTS:
         assert abs(weights[name] * price_scale - weights[name]) < 1e-12
+
+
+def test_score_group_subsystem_override_wins_over_family(monkeypatch):
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_V3_SUBSYSTEMS",
+        {
+            "ENABLED": True,
+            "WEIGHTS_BY_FAMILY": {"forex": {"carry": 0.14, "sentiment": 0.08}},
+            "WEIGHTS_BY_SCORE_GROUP": {
+                "forex_crosses": {"carry": 0.05, "sentiment": 0.03}
+            },
+        },
+    )
+    from engine_a_v3.subsystems import (
+        resolve_subsystem_weights,
+        subsystem_weight_scope,
+    )
+
+    majors = resolve_subsystem_weights("forex", "forex_majors")
+    crosses = resolve_subsystem_weights("forex", "forex_crosses")
+    assert majors["carry"] == 0.14
+    assert majors["sentiment"] == 0.08
+    assert crosses["carry"] == 0.05
+    assert crosses["sentiment"] == 0.03
+    assert subsystem_weight_scope("forex", "forex_majors") == "family_override"
+    assert subsystem_weight_scope("forex", "forex_crosses") == "score_group"

@@ -2122,6 +2122,8 @@ def _binance_futures_kline_to_candle(k):
         "close": float(k[4]),
         "volume": float(k[5]),
         "vol": float(k[5]),
+        "volSource": "binance_futures",
+        "provider": "binance",
         "quote_volume": float(k[7]),
         "number_of_trades": int(k[8]),
         "taker_buy_base_volume": float(k[9]),
@@ -3701,8 +3703,12 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     if 'real_volume' in (getattr(bars.dtype, 'names', None) or ()):
         _real_vols = _np.asarray(bars['real_volume'], dtype='float64')
         _vols = _np.where(_real_vols > 0, _real_vols, _tick_vols).tolist()
+        _vol_sources = _np.where(
+            _real_vols > 0, "mt5_real", "mt5_tick"
+        ).tolist()
     else:
         _vols = _tick_vols.tolist()
+        _vol_sources = ["mt5_tick"] * len(_vols)
     candles = [
         {
             "time": _t + "+00:00",
@@ -3711,9 +3717,10 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
             "low": _l,
             "close": _c,
             "vol": _v,
+            "volSource": _vs,
         }
-        for _t, _o, _h, _l, _c, _v in zip(
-            _iso, _opens, _highs, _lows, _closes, _vols
+        for _t, _o, _h, _l, _c, _v, _vs in zip(
+            _iso, _opens, _highs, _lows, _closes, _vols, _vol_sources
         )
     ]
     # Bridge to global _live_prices using a live MT5 tick (bid/ask mid) so the
@@ -16019,10 +16026,15 @@ def analyze_pair(
     _v3_micro = resolve_live_microstructure_metrics(pair, runtime_cache=_micro_cache)
     _v3_ctx = build_quant_context(
         volume_ratio=_v3_vr,
+        volume_ratio_source="dukascopy" if _v3_vr is not None else None,
         display=pair.get("display"),
         pair_type=pair.get("type"),
         microstructure_metrics=_v3_micro,
     )
+    # Live scoring must never treat an unstamped or broker tick-count series as
+    # exchange-traded volume. Backtest/research callers remain backward
+    # compatible unless they opt into this explicit live provenance contract.
+    _v3_ctx["volume_provenance_required"] = True
 
     # The legacy (pre-policy) evaluation is a deliberate shadow: its score feeds
     # the rollback path in timeframe_policy.apply_authoritative_policy_result and

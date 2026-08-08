@@ -139,7 +139,8 @@ def resolve_engine_a_scoring_profile(
     )
 
     layers_raw = (
-        group_block.get("trend_layers")
+        group_style_block.get("trend_layers")
+        or group_block.get("trend_layers")
         or style_block.get("trend_layers")
         or default_block.get("trend_layers")
     )
@@ -150,20 +151,31 @@ def resolve_engine_a_scoring_profile(
 
     trend_weights = dict(_DEFAULT_TREND_WEIGHTS)
     trend_weights = _merge_mapping(trend_weights, _STYLE_TREND_WEIGHTS.get(resolved_style))
+    trend_weights = _merge_mapping(trend_weights, default_block.get("trend_weights"))
+    trend_weights = _merge_mapping(trend_weights, style_block.get("trend_weights"))
+    # Flat group weights remain a backward-compatible all-style override.
+    # A nested group.<style>.trend_weights block is the most specific surface
+    # and prevents an intraday tuning from silently replacing the swing stack.
+    trend_weights = _merge_mapping(trend_weights, group_block.get("trend_weights"))
     trend_weights = _merge_mapping(
-        trend_weights,
-        group_block.get("trend_weights") or style_block.get("trend_weights") or default_block.get("trend_weights"),
+        trend_weights, group_style_block.get("trend_weights")
     )
 
     momentum_tf = str(
-        group_block.get("momentum_tf")
+        group_style_block.get("momentum_tf")
+        or group_block.get("momentum_tf")
         or style_block.get("momentum_tf")
         or default_block.get("momentum_tf")
         or "H4"
     ).upper()
-    group_momentum_tf = str(group_block.get("momentum_tf") or "").upper() or None
+    group_momentum_tf = str(
+        group_style_block.get("momentum_tf")
+        or group_block.get("momentum_tf")
+        or ""
+    ).upper() or None
     regime_tf = str(
-        group_block.get("regime_tf")
+        group_style_block.get("regime_tf")
+        or group_block.get("regime_tf")
         or style_block.get("regime_tf")
         or default_block.get("regime_tf")
         or momentum_tf

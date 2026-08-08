@@ -171,6 +171,7 @@ def _microstructure_entry(
 def build_quant_context(
     *,
     volume_ratio: Any = None,
+    volume_ratio_source: str | None = None,
     display: str | None = None,
     pair_type: str | None = None,
     as_of_date: str | None = None,
@@ -182,6 +183,9 @@ def build_quant_context(
     if volume_ratio is not None:
         try:
             context["volume_ratio"] = float(volume_ratio)
+            source = str(volume_ratio_source or "").strip().lower()
+            if source:
+                context["volume_ratio_source"] = source
         except (TypeError, ValueError):
             pass
 
