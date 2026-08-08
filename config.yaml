@@ -549,6 +549,14 @@ ENGINE_A_QUANT_WEIGHTS_BY_GROUP:
   forex_exotics: { trend: 0.4545, momentum: 0.2955, location: 0.25, volume: 0.0 }
   forex_other: { trend: 0.4615, momentum: 0.3077, location: 0.2308, volume: 0.0 }
   crypto_other: { trend: 0.36, momentum: 0.27, location: 0.18, volume: 0.19 }
+  # 2026-08-08: BTC/ETH live scores were trend-starved (BTC trend quality ~0.08,
+  # ETH DEAD RANGING + near-zero momentum) while location/volume still printed.
+  # Family crypto weights (trend 0.36) parked most of the budget on a flat
+  # multi-TF stack. Rebalance toward location + momentum + volume so majors
+  # can clear their p70 bar (0.90) without inventing a fake D1 tide.
+  # Alts keep the family default via inheritance. Reversible: delete these keys.
+  crypto_btc: { trend: 0.22, momentum: 0.28, location: 0.28, volume: 0.22 }
+  crypto_eth: { trend: 0.22, momentum: 0.28, location: 0.28, volume: 0.22 }
   # Explicit full budget (was partial volume:0.0) — renormalized from family forex 0.42/0.28/0.21/0.09 to keep live effective 0.4615/0.3077/0.2308/0.0 identical; makes tuning explicit and boot-validated.
   forex_crosses: { trend: 0.4615, momentum: 0.3077, location: 0.2308, volume: 0.0 }
   forex_majors: { trend: 0.48, momentum: 0.30, location: 0.22, volume: 0.0 }
@@ -2197,65 +2205,54 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
 
   # Every get_pair_score_group() value must be listed (see scoring.ENGINE_A_KNOWN_SCORE_GROUPS).
   # "default" is only for unknown / forward-compatible groups — not a stand-in for missing keys.
+  #
+  # 2026-08-08 recalibration (V3 live score distribution, ~20 scans Aug 6-8):
+  # Bars set to measured p70 of Engine A confluence on the current continuous
+  # 0-3 scorer so TRADE admits roughly the top ~30% of scored rows per group.
+  # Previous 1.9-2.2 crypto/forex bars were legacy-relative to older score fill
+  # and were effectively unreachable (crypto_alt_majors 0/284 at 2.2).
+  # NOT n>=30 outcome-backed; reversible to prior values in git history.
+  # Absolute scale remains 0-3 (MAX_SCORE); only the pass line moved.
 
-  # Note: forex_exotics (1.7) sits *below* forex_majors (2.1) by design.
-  # Exotics rarely score high enough to clear a majors-grade bar, so the
-  # tier is loosened to keep them tradable. This intentionally inverts the
-  # generic "thin liquidity = stricter" comment in scoring.py's _TIER_*.
+  default: 1.35
 
-  default: 1.5
+  # Forex — live p70 ~1.32-1.40
+  forex_majors: 1.40
+  forex_crosses: 1.30
+  forex_other: 1.40
+  forex_exotics: 1.40
 
-  # Forex. forex_majors 1.9 is the promoted Tuning Lab result; the previous
-  # tracked default was 2.1.
-  forex_majors: 1.9
-  # forex_crosses 2.1 was effectively unreachable: 0/160 samples passed on the
-  # frozen 2026-05-30 V3 score sweep (max 2.068, p90 1.823) while majors on the
-  # same weights reached 2.62. 1.9 (2026-07-09, UNVALIDATED judgment value, not
-  # n>=30 outcome-backed) admits roughly the top ~5-8% of sampled scores.
-  # Reversible: reset to 2.1.
-  forex_crosses: 1.9
-  forex_other: 2.1
-  # Calibrated 2026-08-06: exotics 1.7 was inverted vs majors (thin liquidity should be stricter, not easier).
-  # 1.9 aligns with majors/crosses and restores liquidity penalty; reversible to 1.7.
-  forex_exotics: 1.9
+  # Crypto — alts p70 ~1.37-1.44; BTC/ETH majors p70 ~0.90 this window
+  # (soft multi-TF trend / ranging — see quant weights override below).
+  crypto_btc: 0.90
+  crypto_eth: 0.90
+  crypto_alt_majors: 1.45
+  crypto_doge: 1.20
+  crypto_other: 1.35
 
-  # Crypto
-  crypto_btc: 2.0
-  crypto_eth: 2.0
-  crypto_alt_majors: 2.2  # Promoted Tuning Lab result; previous tracked default 2.0.
-  crypto_doge: 2.0
-  # Calibrated 2026-08-06: 2.2 unreachable for thin alts where edge weakest; 2.0 aligns with btc/eth and matches audit F15.
-  crypto_other: 2.0
-
-  # Commodity
-  # #7 (2026-05-28): oil/precious previously sat at the equity-grade 1.5 bar despite
-  # higher volatility (nat_gas already 2.0). UNVALIDATED judgment values (NOT n>=30
-  # outcome-backed): oil 1.8 (between SPY 1.5 and nat_gas 2.0), precious 1.7 (slightly
-  # lower vol than oil). The ATR% vol scaler partly compensates, so keep the move
-  # modest. copper/pgm/base_metals left at 1.5 (not flagged). Reversible: reset to 1.5.
-  # 2026-08-06: precious 1.5->1.7 calibrated (between SPY 1.5 and oil 1.8, ATR% vol scaler alone insufficient for XAU spikes; reversible to 1.5).
-  precious_trackers: 1.7
-  energy_oil: 1.8
-  nat_gas: 2.0
-  copper: 1.7
-  pgm_metals: 1.7
-  base_metals: 1.7
-  softs: 1.7
-  commodity_other: 1.5
+  # Commodity — oil/precious soft this window; nat_gas already high-scoring
+  precious_trackers: 0.95
+  energy_oil: 0.65
+  nat_gas: 1.80
+  copper: 1.00
+  pgm_metals: 1.00
+  base_metals: 1.00
+  softs: 1.00
+  commodity_other: 1.40
 
   # Index
-  us_indices_trackers: 1.5
-  eu_indices: 1.5
-  asian_indices: 1.5
-  index_other: 1.5
+  us_indices_trackers: 1.05
+  eu_indices: 1.40
+  asian_indices: 1.15
+  index_other: 1.50
 
   # Stock / ETF
-  us_stock_single: 1.5
-  bond_tlt: 1.5
-  smallcap_em_etf: 1.5
-  stock_other: 1.5
+  us_stock_single: 1.30
+  bond_tlt: 1.30
+  smallcap_em_etf: 1.30
+  stock_other: 1.40
 
-  unknown: 1.5
+  unknown: 1.35
 
 # Engine A trade tier: demote to watchlist when confidence engine score is below minimum.
 # Resolution: pair display/symbol override, then score_group, then default.
@@ -2268,11 +2265,13 @@ ENGINE_A_SCORE_GROUP_MIN_CONFIDENCE:
   forex_crosses: 0.52
   forex_other: 0.52
   forex_exotics: 0.48
-  crypto_btc: 0.58
-  crypto_eth: 0.58
-  crypto_alt_majors: 0.63
-  crypto_doge: 0.61
-  crypto_other: 0.63
+  # 2026-08-08: lowered with p70 trade bars so confidence does not re-kill
+  # groups that now clear confluence (prior 0.58-0.63 demoted READY majors/alts).
+  crypto_btc: 0.50
+  crypto_eth: 0.50
+  crypto_alt_majors: 0.55
+  crypto_doge: 0.55
+  crypto_other: 0.55
   precious_trackers: 0.55
   energy_oil: 0.56
   nat_gas: 0.58

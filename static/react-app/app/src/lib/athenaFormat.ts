@@ -353,16 +353,12 @@ export function engineBScoreBreakdown(
 }
 
 /**
- * Confluence as a percent of the achievable maximum (score / maxScore).
+ * Confluence as a percent of the absolute scale maximum (score / maxScore).
  *
- * This used to be anchored to the per-pair threshold — `round(score/threshold*67)`
- * — which is a threshold-clearance ratio, not a quality percentage. Group
- * thresholds span 1.5-2.2 on the same 0-3 scale, so the number was not
- * comparable across score groups and saturated early: an index signal at
- * 2.24/3.00 (threshold 1.5) displayed 100% while a perfect forex_majors signal
- * at 3.00/3.00 (threshold 2.1) displayed 96%. It also disagreed with the list
- * sort, which ranks on the absolute score. Threshold clearance is now surfaced
- * separately by `confluenceThresholdPct` so the bar can mark it.
+ * maxScore is Engine A V3 MAX_SCORE (3.0). Group trade bars (p70-recalibrated
+ * ~0.9-1.8) sit on the same axis and are marked separately via
+ * `confluenceThresholdPct` — do not rescale the bar around the threshold or
+ * scores stop being comparable across groups.
  */
 export function confluencePct(
   sig: EngineASignal | null | undefined,

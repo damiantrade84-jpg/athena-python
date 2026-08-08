@@ -342,6 +342,15 @@ export default function DashboardPanel() {
                 {recentSignals.map((sig, i) => {
                   const score = sig.confluenceScore ?? sig.score;
                   const max = sig.maxScore ?? 3.0;
+                  const th =
+                    sig.confluenceThreshold
+                    ?? (sig as { threshold?: number }).threshold
+                    ?? null;
+                  const clearsTh =
+                    Number.isFinite(Number(score))
+                    && th != null
+                    && Number(th) > 0
+                    && Number(score) >= Number(th);
                   const label = String(sig.display || sig.pair || sig.symbol || `signal-${i}`);
                   const entryPrice = sig.price ?? sig.entry;
                   const livePrice = priceFor(sig);
@@ -361,8 +370,16 @@ export default function DashboardPanel() {
                         >
                           {livePrice ? fmtNum(livePrice, livePrice > 100 ? 2 : 5) : '—'}
                         </span>
-                        <span className="readout text-[11px] text-muted-foreground">
+                        <span
+                          className={`readout text-[11px] ${clearsTh ? 'text-long' : 'text-muted-foreground'}`}
+                          title={
+                            th != null
+                              ? `Confluence ${fmtNum(score, 2)} / max ${fmtNum(max, 1)} · trade bar ${fmtNum(th, 2)}`
+                              : `Confluence ${fmtNum(score, 2)} / max ${fmtNum(max, 1)}`
+                          }
+                        >
                           {fmtNum(score, 2)}/{fmtNum(max, 1)}
+                          {th != null ? ` · th ${fmtNum(th, 2)}` : ''}
                         </span>
                         <Button
                           size="sm"

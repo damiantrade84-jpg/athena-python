@@ -619,12 +619,18 @@ function EngineAV3SignalCard({
         {hasQuality && (
           <ScoreLine
             caption="Decision score"
-            fraction={`${fmtNum(score, 2)}/${fmtNum(max, 2)}`}
+            fraction={
+              Number.isFinite(max)
+                ? `${fmtNum(score, 2)}/${fmtNum(max, 2)}`
+                : fmtNum(score, 2)
+            }
             pct={conf}
             thresholdPct={thresholdPct}
             passed={passed}
             thresholdTitle={
-              threshold != null ? `Trade threshold ${fmtNum(threshold, 2)} of ${fmtNum(max, 2)}` : undefined
+              threshold != null
+                ? `Trade bar (group p70-style) ${fmtNum(threshold, 2)} on 0–${fmtNum(Number.isFinite(max) ? max : 3, 1)} scale · ${passed ? 'cleared' : 'below'}`
+                : undefined
             }
           />
         )}

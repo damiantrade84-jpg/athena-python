@@ -292,16 +292,18 @@ def test_min_confluence_threshold_uses_configured_score_group_thresholds(monkeyp
 
 
 def test_crypto_engine_a_scan_threshold_resolves_to_score_group_floor():
-    pairs = [
-        {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"},
-        {"display": "ETH/USDT", "symbol": "ETHUSDT", "type": "crypto"},
-        {"display": "SOL/USDT", "symbol": "SOLUSDT", "type": "crypto"},
+    """Each crypto pair uses its group p70 bar, not a flat asset-class floor."""
+    cases = [
+        ({"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}, "crypto_btc", 0.90),
+        ({"display": "ETH/USDT", "symbol": "ETHUSDT", "type": "crypto"}, "crypto_eth", 0.90),
+        ({"display": "SOL/USDT", "symbol": "SOLUSDT", "type": "crypto"}, "crypto_alt_majors", 1.45),
     ]
+    thresholds = CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"]
+    for pair, expected_group, expected_floor in cases:
+        assert get_pair_score_group(pair) == expected_group
+        assert get_score_threshold(pair) == expected_floor
+        assert thresholds[expected_group] == expected_floor
 
-    for pair in pairs:
-        assert get_score_threshold(pair) == 2.0
-
-    assert CONFIG["AUTO_TRADE_MIN_SCORE"]["crypto"] == 2.0
     assert get_score_threshold(
         {"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"},
     ) == CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"]["crypto_btc"]
@@ -310,17 +312,14 @@ def test_crypto_engine_a_scan_threshold_resolves_to_score_group_floor():
 def test_forex_engine_a_scan_thresholds_are_explicit_strict_floor():
     """Every forex pair resolves to an explicit group floor, never a default.
 
-    The floor is per group, not a single number: majors and the forex_other
-    fallback sit at 2.1 while crosses sit at 1.9. EUR/CHF and AUD/CHF have been
-    forex_crosses since before policy v4, so asserting 2.1 for them was testing
-    a value the config has never held.
+    Floors are per-group p70 bars on the V3 0-3 scale (2026-08-08 recalibration).
     """
     cases = [
-        ({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}, "forex_majors", 2.1),
-        ({"display": "EUR/CHF", "symbol": "EURCHF", "type": "forex"}, "forex_crosses", 1.9),
-        ({"display": "AUD/CHF", "symbol": "AUDCHF", "type": "forex"}, "forex_crosses", 1.9),
+        ({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}, "forex_majors", 1.40),
+        ({"display": "EUR/CHF", "symbol": "EURCHF", "type": "forex"}, "forex_crosses", 1.30),
+        ({"display": "AUD/CHF", "symbol": "AUDCHF", "type": "forex"}, "forex_crosses", 1.30),
         # Not in any routing table — exercises the forex_other fallback.
-        ({"display": "EUR/NOK", "symbol": "EURNOK", "type": "forex"}, "forex_other", 2.1),
+        ({"display": "EUR/NOK", "symbol": "EURNOK", "type": "forex"}, "forex_other", 1.40),
     ]
 
     thresholds = CONFIG["ENGINE_A_SCORE_GROUP_THRESHOLDS"]
@@ -333,11 +332,11 @@ def test_forex_engine_a_scan_thresholds_are_explicit_strict_floor():
 
 def test_equity_and_commodity_groups_use_explicit_stable_floor():
     examples = [
-        ({"display": "AAPL", "type": "stock"}, "us_stock_single", 1.5),
-        ({"display": "SPY", "type": "stock"}, "us_indices_trackers", 1.5),
-        ({"display": "XAU/USD", "type": "commodity"}, "precious_trackers", 1.5),
-        ({"display": "Copper", "type": "commodity"}, "copper", 1.7),
-        ({"display": "DAX 40", "type": "index"}, "eu_indices", 1.5),
+        ({"display": "AAPL", "type": "stock"}, "us_stock_single", 1.30),
+        ({"display": "SPY", "type": "stock"}, "us_indices_trackers", 1.05),
+        ({"display": "XAU/USD", "type": "commodity"}, "precious_trackers", 0.95),
+        ({"display": "Copper", "type": "commodity"}, "copper", 1.00),
+        ({"display": "DAX 40", "type": "index"}, "eu_indices", 1.40),
     ]
     for pair, expected_group, expected_threshold in examples:
         assert get_pair_score_group(pair) == expected_group
