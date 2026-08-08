@@ -157,6 +157,132 @@ def _scan_speed_state(
     return state
 
 
+def _ensure_speed_adapted_lower_tfs(
+    runtime,
+    pair: dict,
+    *,
+    style: str,
+    score_group: str | None,
+    speed_state,
+    lim: dict[str, int],
+    raw_candles: dict[str, Any],
+    preloaded_market_state: dict[str, Any],
+    preloaded_candles_for_a: dict[str, Any],
+    lower_results: dict[str, tuple[list | None, dict | None]],
+    force_refresh: bool = False,
+) -> list[str]:
+    """Load lower TFs required after speed/liquidity demotes M15→M30.
+
+    Baseline prefetch resolves policy *without* ``speed_state`` (trigger M15).
+    After THIN/SLOW adaptation the authoritative trigger is often M30; without
+    this fill, ``attach_timeframe_policy_payload`` fails closed on
+    ``missing_required_closed_timeframes:M30`` even when M15 is fully fresh.
+    """
+    from timeframe_policy import resolve_timeframe_policy
+
+    needed: set[str] = set()
+    style_key = str(style or "intraday").strip().lower() or "intraday"
+    style_args = (style_key, f"engine_b_{style_key}")
+    for style_arg in style_args:
+        try:
+            pol = resolve_timeframe_policy(
+                pair.get("display") or pair.get("symbol") or "",
+                pair.get("type", ""),
+                score_group,
+                style_arg,
+                speed_state,
+            )
+        except Exception as exc:
+            log.debug(
+                "[SCAN] speed-adapted policy resolve failed for %s style=%s: %s",
+                pair.get("display", "?"),
+                style_arg,
+                exc,
+            )
+            continue
+        for tf_obj in (
+            getattr(pol, "setup_tf", None),
+            getattr(pol, "trigger_tf", None),
+            getattr(pol, "execution_tf", None),
+        ):
+            tf = str(getattr(tf_obj, "value", tf_obj) or "").upper()
+            if tf and tf not in {"D1", "H4", "H1"}:
+                needed.add(tf)
+
+    loaded: list[str] = []
+    for tf in sorted(needed):
+        existing_state = preloaded_market_state.get(tf) if isinstance(preloaded_market_state, dict) else None
+        existing_confirmed = (
+            list((existing_state or {}).get("confirmed") or [])
+            if isinstance(existing_state, dict)
+            else list(raw_candles.get(tf) or [])
+        )
+        if existing_confirmed:
+            continue
+        if tf not in lim:
+            continue
+        try:
+            candles, meta = _fetch_ab_crypto_signal_candles(
+                runtime,
+                pair,
+                tf,
+                int(lim[tf]),
+                force_refresh=force_refresh,
+            )
+        except Exception as fetch_err:
+            log.debug(
+                "[SCAN] %s speed-adapted TF %s fetch failed: %s",
+                pair.get("display", "?"),
+                tf,
+                fetch_err,
+            )
+            continue
+        lower_results[tf] = (candles, meta)
+        raw_candles[tf] = candles
+        if not candles:
+            continue
+        try:
+            from athena_app.services.market_state import get_tf_market_state
+
+            provider_symbol = (
+                (
+                    runtime.mt5_map_symbol(
+                        pair.get("display") or pair.get("symbol") or ""
+                    )
+                    if pair.get("source") == "mt5"
+                    and callable(getattr(runtime, "mt5_map_symbol", None))
+                    else pair.get("mt5_symbol")
+                )
+                if pair.get("source") == "mt5"
+                else (pair.get("bybit_symbol") or pair.get("symbol"))
+            )
+            state = get_tf_market_state(
+                pair,
+                tf,
+                candles=list(candles or []),
+                provider_symbol=provider_symbol,
+            )
+            preloaded_market_state[tf] = state
+            active = list(state.get("confirmed") or [])
+            if state.get("forming"):
+                active.append(state["forming"])
+            preloaded_candles_for_a[tf] = active
+            if state.get("confirmed"):
+                loaded.append(tf)
+        except Exception as state_err:
+            # Fail open on series presence: raw bars still help consumers that
+            # do not require split market_state.
+            preloaded_candles_for_a[tf] = list(candles or [])
+            loaded.append(tf)
+            log.debug(
+                "[SCAN] %s speed-adapted TF %s state split failed: %s",
+                pair.get("display", "?"),
+                tf,
+                state_err,
+            )
+    return loaded
+
+
 def _engine_b_scan_confirmation_gate_enabled(config: dict | None = None) -> bool:
     """Return True when Engine A *trade* tier should require Engine B confirmation.
 
@@ -2617,6 +2743,27 @@ def run_full_scan(
                     current_session=_speed_session,
                     scheduled_event=_speed_scheduled_event,
                 )
+                # THIN/SLOW demotes M15→M30 after baseline prefetch. Load any
+                # newly required lower TFs before analyze_pair / entry readiness.
+                _speed_loaded_tfs = _ensure_speed_adapted_lower_tfs(
+                    r,
+                    pair,
+                    style=_pair_style,
+                    score_group=_policy_score_group,
+                    speed_state=_speed_state,
+                    lim=_lim,
+                    raw_candles=raw_candles,
+                    preloaded_market_state=preloaded_market_state,
+                    preloaded_candles_for_a=preloaded_candles_for_a,
+                    lower_results=_lower_results,
+                    force_refresh=refresh_market_data,
+                )
+                if _speed_loaded_tfs:
+                    log.debug(
+                        "[SCAN] %s loaded speed-adapted TFs: %s",
+                        pair.get("display", "?"),
+                        ",".join(_speed_loaded_tfs),
+                    )
                 fetch_meta = {
                     "D1": _d1_meta or get_candle_fetch_meta(pair, "D1", _lim["D1"]),
                     "H4": _h4_meta or get_candle_fetch_meta(pair, "H4", _lim["H4"]),

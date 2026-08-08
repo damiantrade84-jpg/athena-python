@@ -793,6 +793,45 @@ def evaluate_engine_b_snapshot(
                 resolved_profile,
                 regime,
             )
+        # No exclusive BOS alignment (often dual CLEAR LONG+SHORT). Still surface
+        # the strongest CLEAR side so loc/trigger/space failures are visible and
+        # watchlist rows can carry a structural direction. ``passed`` is forced
+        # False — dual CLEAR without exclusive BOS must never execute.
+        if eligible:
+            def _eligible_rank(candidate: dict[str, Any]) -> tuple[int, float]:
+                conf = candidate.get("confidence") or {}
+                try:
+                    score = float(candidate.get("score") or 0.0)
+                except (TypeError, ValueError):
+                    score = 0.0
+                return (1 if bool(conf.get("structure_ok")) else 0, score)
+
+            best = max(eligible, key=_eligible_rank)
+            conf_out = dict(best.get("confidence") or {})
+            conf_out["passed"] = False
+            conf_out["checklist_passed"] = False
+            fails = list(conf_out.get("failed_gate_names") or [])
+            if "structure_direction_ambiguous" not in fails:
+                fails.append("structure_direction_ambiguous")
+            conf_out["failed_gate_names"] = fails
+            structure_out = dict(best.get("structure") or {})
+            structure_out.update(conf_out)
+            selected = {
+                "direction": best["direction"],
+                "score": float(best["score"] or 0.0),
+                "passed": False,
+                "structure": structure_out,
+                "confidence": conf_out,
+            }
+            return EngineBSnapshotResult(
+                ENGINE_B_SNAPSHOT_CONTRACT_VERSION,
+                selected,
+                tuple(candidates),
+                "structure_direction_gates_pending",
+                resolved_style,
+                resolved_profile,
+                regime,
+            )
         return EngineBSnapshotResult(
             ENGINE_B_SNAPSHOT_CONTRACT_VERSION,
             None,
