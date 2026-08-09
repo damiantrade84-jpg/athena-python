@@ -21,6 +21,9 @@ from .providers import ProviderDataError, RuntimeProviderAdapter
 from .quality import normalize_and_validate
 
 
+_BACKTEST_V3_CONTEXT_TIMEFRAMES = {"D1", "H4", "H1", "M15"}
+
+
 def _calendar_for(asset_type: str, provider: str | None = None) -> tuple[str, str]:
     asset = str(asset_type or "").lower()
     if asset == "crypto":
@@ -98,6 +101,9 @@ def resolve_policy_requirements(pair: dict[str, Any], engine: str, style: str) -
         effective_policy["setup_tf"], effective_policy["trigger_tf"], effective_policy["execution_tf"],
         *effective_policy.get("required_closed_tfs", []),
     }
+    # Match Backtest V3: tuned roles select the evaluation ladder, while the
+    # production evaluators still require the shared D1/H4/H1/M15 context.
+    timeframes.update(_BACKTEST_V3_CONTEXT_TIMEFRAMES)
     if effective_policy.get("atr_tf"):
         timeframes.add(effective_policy["atr_tf"])
     reconstruction_tf = _forming_reconstruction_source(engine, effective_policy, CONFIG)
