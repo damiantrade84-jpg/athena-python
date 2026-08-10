@@ -40,7 +40,7 @@ def _telegram_command_specs() -> list[tuple[str, str]]:
     return [
         ("scan", "Engine A scan by asset class"),
         ("engineb", "Engine B naked-structure scan"),
-        ("fullscan", "Full Engine A and B scan"),
+        ("fullscan", "Full scan: Engine A, B, or both"),
         ("enginec", "Engine C consensus scan"),
         ("scalp", "Engine D scalp scan"),
         ("signal", "Analyse one pair"),
@@ -60,6 +60,47 @@ def _telegram_command_specs() -> list[tuple[str, str]]:
         ("resume", "Lift kill switch"),
         ("help", "Show command help"),
     ]
+
+
+_FULLSCAN_ASSET_CLASSES = ("crypto", "forex", "commodity", "stock", "index")
+_FULLSCAN_ENGINES = {
+    "a": "a",
+    "enginea": "a",
+    "engine_a": "a",
+    "b": "b",
+    "engineb": "b",
+    "engine_b": "b",
+    "both": "both",
+}
+
+
+def _parse_fullscan_args(args: list[str]) -> tuple[str, list[str]] | None:
+    """Parse /fullscan [a|b|both] [all|asset_class], retaining legacy scope-only use."""
+    values = [str(value).strip().lower() for value in args if str(value).strip()]
+    if len(values) > 2:
+        return None
+
+    engine = "both"
+    requested = "all"
+    engine_seen = False
+    scope_seen = False
+    for value in values:
+        if value == "stocks":
+            value = "stock"
+        if value in _FULLSCAN_ENGINES:
+            if engine_seen:
+                return None
+            engine = _FULLSCAN_ENGINES[value]
+            engine_seen = True
+        elif value == "all" or value in _FULLSCAN_ASSET_CLASSES:
+            if scope_seen:
+                return None
+            requested = value
+            scope_seen = True
+        else:
+            return None
+
+    return engine, list(_FULLSCAN_ASSET_CLASSES if requested == "all" else (requested,))
 
 # ── Pair name fuzzy matching ──────────────────────────────────────────────────
 
@@ -702,7 +743,7 @@ def _build_and_run(token: str, chat_ids: list[str]):
             "🤖 *Sentinel Pro — Commands*\n\n"
             "`/scan crypto`       Engine A scan by class\n"
             "`/engineb crypto`    Engine B naked scan\n"
-            "`/fullscan [class]`  Full Engine A + B scan\n"
+            "`/fullscan [a|b|both] [class]`  Full scan (default: both/all)\n"
             "`/enginec forex`      Engine C consensus scan\n"
             "`/scalp BTC/USDT`     Engine D scalp scan\n"
             "`/signal ETH/USDT`   Analyse a single pair\n"
@@ -1119,21 +1160,18 @@ def _build_and_run(token: str, chat_ids: list[str]):
     async def cmd_fullscan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not _guard(update):
             return
-        requested = context.args[0].lower() if context.args else "all"
-        requested = "stock" if requested == "stocks" else requested
-        asset_classes = ["crypto", "forex", "commodity", "stock", "index"]
-        if requested != "all":
-            if requested not in asset_classes:
-                await update.message.reply_text(
-                    "Usage: `/fullscan [all|crypto|forex|commodity|stock|index]`",
-                    parse_mode="Markdown",
-                )
-                return
-            asset_classes = [requested]
-
-        scope = requested.upper()
+        parsed = _parse_fullscan_args(context.args)
+        if parsed is None:
+            await update.message.reply_text(
+                "Usage: `/fullscan [a|b|both] [all|crypto|forex|commodity|stock|index]`",
+                parse_mode="Markdown",
+            )
+            return
+        engine, asset_classes = parsed
+        scope = "ALL" if len(asset_classes) == len(_FULLSCAN_ASSET_CLASSES) else asset_classes[0].upper()
+        engine_label = {"a": "Engine A", "b": "Engine B", "both": "Engine A + B"}[engine]
         msg = await update.message.reply_text(
-            f"Running full Engine A + B scan: *{scope}*...",
+            f"Running full {engine_label} scan: *{scope}*...",
             parse_mode="Markdown",
         )
         totals = {"a": 0, "b": 0}
@@ -1143,36 +1181,38 @@ def _build_and_run(token: str, chat_ids: list[str]):
         try:
             for index, asset_class in enumerate(asset_classes, start=1):
                 await msg.edit_text(
-                    f"Full scan `{index}/{len(asset_classes)}`: *{asset_class.upper()}* (Engine A + B)...",
+                    f"Full scan `{index}/{len(asset_classes)}`: *{asset_class.upper()}* ({engine_label})...",
                     parse_mode="Markdown",
                 )
-                a_resp = await _run_in_thread(lambda ac=asset_class: _safe_json(req.post(
-                    f"{_BASE}/api/scan",
-                    json={"style": "auto", "asset_class": ac},
-                    timeout=_TIMEOUT_SCAN,
-                )))
-                if a_resp.get("error"):
-                    failures.append(f"A/{asset_class}: {a_resp['error']}")
-                else:
-                    a_signals = a_resp.get("tradeSignals", a_resp.get("signals", [])) or []
-                    totals["a"] += len(a_signals)
-                    top_a.extend(a_signals)
+                if engine in {"a", "both"}:
+                    a_resp = await _run_in_thread(lambda ac=asset_class: _safe_json(req.post(
+                        f"{_BASE}/api/scan",
+                        json={"style": "auto", "asset_class": ac},
+                        timeout=_TIMEOUT_SCAN,
+                    )))
+                    if a_resp.get("error"):
+                        failures.append(f"A/{asset_class}: {a_resp['error']}")
+                    else:
+                        a_signals = a_resp.get("tradeSignals", a_resp.get("signals", [])) or []
+                        totals["a"] += len(a_signals)
+                        top_a.extend(a_signals)
 
-                b_resp = await _run_in_thread(lambda ac=asset_class: _safe_json(req.post(
-                    f"{_BASE}/api/scan-naked",
-                    json={"assetClass": ac, "style": "auto"},
-                    timeout=_TIMEOUT_SCAN,
-                )))
-                if b_resp.get("error"):
-                    failures.append(f"B/{asset_class}: {b_resp['error']}")
-                else:
-                    b_signals = b_resp.get("signals", []) or []
-                    totals["b"] += len(b_signals)
-                    top_b.extend(b_signals)
+                if engine in {"b", "both"}:
+                    b_resp = await _run_in_thread(lambda ac=asset_class: _safe_json(req.post(
+                        f"{_BASE}/api/scan-naked",
+                        json={"assetClass": ac, "style": "auto"},
+                        timeout=_TIMEOUT_SCAN,
+                    )))
+                    if b_resp.get("error"):
+                        failures.append(f"B/{asset_class}: {b_resp['error']}")
+                    else:
+                        b_signals = b_resp.get("signals", []) or []
+                        totals["b"] += len(b_signals)
+                        top_b.extend(b_signals)
 
             failure_note = f"\nFailures: `{len(failures)}`" if failures else ""
             await msg.edit_text(
-                f"*Full Engine A + B Scan - {scope}*\n"
+                f"*Full {engine_label} Scan - {scope}*\n"
                 f"Engine A signals: `{totals['a']}` | Engine B signals: `{totals['b']}`"
                 f"{failure_note}",
                 parse_mode="Markdown",

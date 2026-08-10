@@ -254,7 +254,7 @@ def test_scalp_card_includes_strict_fabio_and_gate():
 
 def test_telegram_command_specs_include_ops_commands():
     commands = dict(telegram_bot._telegram_command_specs())
-    assert commands["fullscan"] == "Full Engine A and B scan"
+    assert commands["fullscan"] == "Full scan: Engine A, B, or both"
 
     assert commands["engineb"] == "Engine B naked-structure scan"
     assert "scan" in commands
@@ -262,6 +262,24 @@ def test_telegram_command_specs_include_ops_commands():
     assert "guardian" in commands
     assert "feeds" in commands
     assert "lastscan" in commands
+
+
+def test_fullscan_args_support_engine_selection_and_legacy_scope():
+    assert telegram_bot._parse_fullscan_args([]) == (
+        "both", ["crypto", "forex", "commodity", "stock", "index"]
+    )
+    assert telegram_bot._parse_fullscan_args(["crypto"]) == ("both", ["crypto"])
+    assert telegram_bot._parse_fullscan_args(["b", "crypto"]) == ("b", ["crypto"])
+    assert telegram_bot._parse_fullscan_args(["stock", "enginea"]) == ("a", ["stock"])
+    assert telegram_bot._parse_fullscan_args(["a"]) == (
+        "a", ["crypto", "forex", "commodity", "stock", "index"]
+    )
+
+
+def test_fullscan_args_reject_ambiguous_or_unknown_values():
+    assert telegram_bot._parse_fullscan_args(["a", "b"]) is None
+    assert telegram_bot._parse_fullscan_args(["crypto", "forex"]) is None
+    assert telegram_bot._parse_fullscan_args(["engine-c"]) is None
 
 
 def test_audit_orphan_reconcileable():
