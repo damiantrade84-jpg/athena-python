@@ -1307,3 +1307,48 @@ def test_evaluator_confirms_conditional_m5_signal_on_prerequisite_rung(monkeypat
     confirmation = signal.factorDiagnostics["triggerConfirmation"]
     assert confirmation["passed"] is True
     assert confirmation["timeframe"] == "M15"
+
+
+def test_direction_deadband_flat_is_reported_in_diagnostics():
+    """A FLAT resolved by the deadband must say so.
+
+    When |dirSum| lands inside directionDeadband the direction becomes FLAT and
+    every component contribution is zeroed, so the payload shows score 0.00 with
+    nothing explaining it. `minDirectionalFailed` cannot cover this case: the
+    directional ramp only runs once direction is already LONG/SHORT, so it stays
+    False. Regression for the 2026-08-11 GC=F rows (score 0.00, dirSum -0.0228,
+    deadband 0.05) where subsystem drag cancelled a coherent ADX-50 uptrend.
+    """
+    candles = _candles()
+    route = route_specialist({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"})
+    base = baseline_profile("forex_majors", "intraday")
+
+    # A deadband of 1.0 swallows any achievable |dirSum|, forcing FLAT.
+    flat_profile = EngineAV3Profile.create(
+        score_group=base.score_group,
+        horizon=base.horizon,
+        indicator_periods=dict(base.indicator_periods),
+        weights=dict(base.weights),
+        direction_deadband=1.0,
+        trade_threshold=base.trade_threshold,
+        exit_policy="SINGLE_TP1",
+        status="UNVALIDATED",
+    )
+    quant = score_pair(route, "intraday", candles, profile=flat_profile)
+    diag = quant.factor_diagnostics or {}
+
+    assert quant.direction == "FLAT"
+    assert diag.get("directionDeadbandFlat") is True
+    assert diag.get("directionDeadband") == pytest.approx(1.0)
+    assert diag.get("dirSumAbs") == pytest.approx(abs(diag["dirSum"]), abs=1e-3)
+    # Per-factor signed shares of dirSum must be present so an opposing
+    # subsystem is visible rather than merely implied.
+    assert isinstance(diag.get("dirContributions"), dict)
+    assert diag["dirContributions"], "dirContributions must not be empty"
+
+    # A normal deadband on the same candles resolves a direction, and the flag
+    # must then be False rather than always-on.
+    quant_normal = score_pair(route, "intraday", candles, profile=base)
+    normal_diag = quant_normal.factor_diagnostics or {}
+    if quant_normal.direction in ("LONG", "SHORT"):
+        assert normal_diag.get("directionDeadbandFlat") is False

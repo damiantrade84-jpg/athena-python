@@ -2778,3 +2778,91 @@ def test_calculate_confidence_rejects_terminal_lifecycle_candidates(
     assert conf["canonical_trade_ok"] is False
     assert f"lifecycle_{lifecycle_state}" in conf["failed_gate_names"]
     assert f"engine_b_lifecycle_{lifecycle_state}" in conf["hard_fail_reasons"]
+
+
+def _trend_pullback_res_without_trigger():
+    """BOS + price back at the broken level, but no candle trigger.
+
+    Zone/OB/breakout location paths are all off, so trend_pullback is the only
+    remaining location path and the trigger conjunct decides the outcome.
+    """
+    res = _base_res_long()
+    res.update(
+        {
+            "bos_confirmed": True,
+            "choch_confirmed": False,
+            "strong_close": False,
+            "inside_break_candle": False,
+            "engulfing_candle": False,
+            "zone_touched": False,
+            "near_active_zone": False,
+            "ob_at_zone": False,
+            "fvg_overlap": False,
+            "fvg_reaction_confirmed": False,
+            "liquidity_sweep": False,
+            "active_zone_distance": 5.0,
+            "trigger_ok": False,
+            "bos_data": {"last_broken_high": 100.2, "last_broken_low": 97.0},
+            # _near_bos_level reads res["current_price"], not the parameter.
+            "current_price": 100.0,
+            "distance_to_res": 3.0,
+        }
+    )
+    return res
+
+
+def _confidence_for(res):
+    return engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        entry_candles=[],
+        style_profile={
+            "min_room_atr": 0.35,
+            "min_rr": 1.0,
+            "require_macro_align": False,
+            "checklist_mode": "flexible",
+        },
+    )
+
+
+def test_location_does_not_double_charge_a_missing_trigger(monkeypatch):
+    """Default (decoupled): a missing trigger costs entry_ok only, not location.
+
+    In the 2026-08-11 scans every row that cleared structure and failed location
+    also failed trigger (39/39), so `loc` never rejected anything on its own —
+    it just re-reported the trigger and made the funnel unreadable.
+    """
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_LOCATION_REQUIRES_TRIGGER", False)
+    out = _confidence_for(_trend_pullback_res_without_trigger())
+
+    assert out["location_ok"] is True
+    assert out["location_mode"] == "trend_pullback"
+    # The catalyst requirement is untouched — it lives in entry_ok alone.
+    assert out["entry_ok"] is False
+    fails = out.get("failed_gate_names") or []
+    assert "trigger" in fails
+    assert "loc" not in fails
+
+
+def test_location_requires_trigger_flag_restores_the_coupled_form(monkeypatch):
+    """The change stays reversible from config."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_LOCATION_REQUIRES_TRIGGER", True)
+    out = _confidence_for(_trend_pullback_res_without_trigger())
+
+    assert out["location_ok"] is False
+    assert out["entry_ok"] is False
+    fails = out.get("failed_gate_names") or []
+    assert "loc" in fails
+    assert "trigger" in fails
+
+
+def test_location_blocked_by_names_the_unavailable_paths(monkeypatch):
+    """A bare `loc` cannot be told apart from a trigger shadowing it."""
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_LOCATION_REQUIRES_TRIGGER", True)
+    out = _confidence_for(_trend_pullback_res_without_trigger())
+
+    blocked = out.get("location_blocked_by") or []
+    assert "no_zone_at_price" in blocked
+    assert "no_ob_at_zone" in blocked
+    assert "no_breakout" in blocked

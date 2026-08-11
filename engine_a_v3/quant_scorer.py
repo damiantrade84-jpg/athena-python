@@ -2474,16 +2474,30 @@ def score_pair(
     # Direction = sign of the weighted directional sum over active components,
     # except in mean-reversion regime where the fade direction is authoritative.
     dir_terms: list[tuple[float, float]] = []
+    # Named, weight-applied contributions to dir_sum, for diagnostics only. A
+    # score of 0.00 with a strong coherent trend is otherwise unexplainable from
+    # the payload: subsystem drag (carry/sentiment) can cancel trend+momentum
+    # and push |dir_sum| under the deadband, which zeroes every contribution.
+    dir_contributions: dict[str, float] = {}
     for n, c in active.items():
         if not c.directional:
             continue
         dir_terms.append((combined_weights.get(n, 0.0), c.signal * c.quality))
+        dir_contributions[n] = combined_weights.get(n, 0.0) * c.signal * c.quality
     if subsystems_enabled():
         for n in SUBSYSTEM_FACTORS:
             if _subsystem_contributes(n):
                 comp = components[n]
                 dir_terms.append((combined_weights.get(n, 0.0), comp.signal * comp.quality))
+                dir_contributions[n] = (
+                    combined_weights.get(n, 0.0) * comp.signal * comp.quality
+                )
     dir_sum = sum(w * term for w, term in dir_terms) / weight_sum
+    if weight_sum > 0:
+        dir_contributions = {
+            name: round(value / weight_sum, 6)
+            for name, value in dir_contributions.items()
+        }
     mr_opposition_blocked = False
     if level_style == "mean_reversion" and location.signal != 0.0:
         direction = "LONG" if location.signal > 0 else "SHORT"
@@ -2536,6 +2550,13 @@ def score_pair(
         direction, dsign = "SHORT", -1.0
     else:
         direction, dsign = "FLAT", 0.0
+
+    # A FLAT resolved by the deadband zeroes every component contribution, so
+    # the payload shows score 0.00 with no gate or reason attached to it.
+    # `minDirectionalFailed` does NOT cover this case: the directional ramp
+    # below only runs when direction is already LONG/SHORT, so a sub-deadband
+    # dir_sum leaves that flag False. Record it explicitly.
+    direction_deadband_flat = direction == "FLAT" and not mr_opposition_blocked
 
     # Directional ramp (V2 port): abort weak |dir_sum|; soft-span multiplies confluence.
     dir_ramp_mult = 1.0
@@ -2891,6 +2912,16 @@ def score_pair(
             "dirSum": round(dir_sum, 4),
             "directionalRampMult": round(dir_ramp_mult, 4),
             "minDirectionalFailed": min_directional_failed,
+            # True when direction resolved FLAT purely because |dirSum| sat
+            # inside directionDeadband — the case minDirectionalFailed cannot
+            # report (see the comment at the direction resolution above).
+            "directionDeadbandFlat": direction_deadband_flat,
+            "directionDeadband": round(float(profile.direction_deadband), 6),
+            "dirSumAbs": round(abs(dir_sum), 6),
+            # Signed, weight-applied share of dirSum per factor. Makes an
+            # opposing subsystem (carry/sentiment) visible when it cancels a
+            # coherent trend instead of merely damping it.
+            "dirContributions": dir_contributions,
             "mrOppositionBlocked": mr_opposition_blocked,
             "mrAdxCeiling": round(_resolve_mr_adx_ceiling(asset_type, group), 4) if level_style == "mean_reversion" else None,
             "trendCoherence": coherence or {"error": "no_ema_data"},

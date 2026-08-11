@@ -825,10 +825,17 @@ def evaluate_engine_b_snapshot(
             conf_out = dict(best.get("confidence") or {})
             conf_out["passed"] = False
             conf_out["checklist_passed"] = False
-            fails = list(conf_out.get("failed_gate_names") or [])
-            if direction_failure and direction_failure not in fails:
-                fails.append(direction_failure)
-            conf_out["failed_gate_names"] = fails
+            # `structure_direction_*` is a selector label, not a gate: it says
+            # this snapshot could not pick a side, which is a restatement of
+            # structure_ok being false on every candidate. Appending it to
+            # `failed_gate_names` put a phantom entry in the funnel blocker
+            # histogram for every such row (46 of 102 in the 2026-08-11 scans),
+            # ranking it alongside real gates. It travels on
+            # `structure_direction_status` below, which is where consumers read
+            # it from.
+            conf_out["failed_gate_names"] = list(
+                conf_out.get("failed_gate_names") or []
+            )
             conf_out["structure_direction_status"] = (
                 "resolved" if direction_failure is None else direction_failure
             )

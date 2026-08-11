@@ -284,6 +284,13 @@ def test_role_override_applies_per_group_and_style(monkeypatch) -> None:
     assert swing.trigger_tf == Timeframe.H1
     assert swing.execution_mode == ExecutionMode.LIVE_QUOTE
     assert swing.diagnostics.role_override_applied is True
+    # The advisory execution context follows an overridden trigger. Left behind
+    # on the template default (M15) it made execution_tf != trigger_tf, so
+    # evaluate_execution_timeframe took the non-shared branch and re-tested a
+    # faster forming bar against an already-confirmed trigger.
+    assert swing.execution_tf == Timeframe.H1
+    assert "execution" in swing.diagnostics.role_override_patched_roles
+    assert intraday.execution_tf == Timeframe.M15
 
     # A group/style without a configured row keeps the universal ladder.
     standard = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday")
@@ -1104,6 +1111,78 @@ def test_shared_trigger_execution_tf_is_satisfied_by_the_confirmed_trigger() -> 
     assert signal["direction"] == "LONG"
 
 
+def test_role_override_trigger_is_not_overturned_by_a_faster_forming_bar(
+    monkeypatch,
+) -> None:
+    """A Tuning Lab trigger override must move execution with it.
+
+    Regression for the 2026-08-10 GC=F row: the override set trigger=M30 but
+    execution stayed on the template default M15, so the live M15 move was
+    compared against an already-confirmed M30 trigger and returned OPPOSED.
+    The signal was decision=TRADE, qualified=True, score 1.1285 over a 1.08
+    threshold, and was demoted to watchlist by entryReadiness=PENDING.
+    """
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_TF_ROLE_OVERRIDES",
+        {
+            "ENABLED": True,
+            "BY_GROUP": {
+                # precious_trackers resolves here via
+                # engine_a_groups.TIMEFRAME_POLICY_GROUP_ALIASES.
+                "liquid_metals": {"intraday": {"trigger": "M30"}},
+            },
+        },
+    )
+    signal = {
+        "score": 1.1285,
+        "direction": "LONG",
+        "trigger_ok": True,
+        "current_price": 4391.6,
+    }
+    states = {
+        tf: {
+            "confirmed": [
+                {
+                    "time": "2026-08-10T08:00:00Z",
+                    "open": 4380.0,
+                    "high": 4395.0,
+                    "low": 4378.0,
+                    "close": 4392.0,
+                }
+            ],
+            "stale": False,
+        }
+        for tf in ("D1", "H4", "H1", "M30", "M15")
+    }
+    # M15 is falling while the confirmed M30 trigger is long.
+    states["M15"]["forming"] = {
+        "time": "2026-08-10T08:30:00Z",
+        "open": 4392.0,
+        "high": 4392.5,
+        "low": 4380.0,
+        "close": 4381.0,
+    }
+
+    attach_timeframe_policy_payload(
+        signal,
+        {"display": "XAU/USD", "type": "commodity", "score_group": "precious_trackers"},
+        "intraday",
+        engine="engine_a",
+        market_states=states,
+    )
+
+    assert signal["triggerTf"] == "M30"
+    assert signal["executionTf"] == "M30"
+    assert signal["entryReadiness"] == "READY", signal.get("entryReadinessReason")
+    assert signal["executionTimingStatus"] == "SHARED_TRIGGER_CONFIRMED"
+    # Timing must never rewrite the thesis.
+    assert signal["score"] == 1.1285
+    assert signal["direction"] == "LONG"
+
+
 def test_mt5_execution_timing_uses_bid_candle_close_not_quote_midpoint() -> None:
     signal = {
         "direction": "SHORT",
@@ -1511,6 +1590,17 @@ def test_m1_roles_are_rejected_outside_scalp_templates(monkeypatch) -> None:
     assert native.trigger_tf == Timeframe.M1
 
     # A (hypothetical) non-scalp template that resolves M1 fails closed.
+    #
+    # The shipped ENGINE_TF_ROLE_OVERRIDES matrix rewrites forex_majors_standard
+    # trigger to M15 for both styles, so with it enabled the M1 patch below never
+    # reaches the guard at all — the resolved ladder is a clean H4/M15 with no M1
+    # in any role. Disable it here so this test exercises the invariant it names
+    # rather than an artefact of the override matrix.
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG, "ENGINE_TF_ROLE_OVERRIDES", {"ENABLED": False, "BY_GROUP": {}}
+    )
     monkeypatch.setitem(
         timeframe_policy._SYMBOL_OVERRIDES,
         "EURUSD",
@@ -1530,6 +1620,22 @@ def test_m1_roles_are_rejected_outside_scalp_templates(monkeypatch) -> None:
             assert "M1" in str(exc)
         else:
             raise AssertionError(f"M1 accepted for {engine_id}/{style}")
+
+    # The guard covers the execution role too, so an M1 stranded there — the
+    # state the role-override path used to leave behind — still fails closed.
+    monkeypatch.setitem(
+        timeframe_policy._SYMBOL_OVERRIDES,
+        "EURUSD",
+        {"execution": Timeframe.M1, "profile": "BROKEN_M1_EXECUTION_PATCH"},
+    )
+    try:
+        resolve_timeframe_policy(
+            "EUR/USD", "forex", "forex_majors", "intraday", engine_id="engine_a"
+        )
+    except PolicyConfigurationError as exc:
+        assert "M1" in str(exc)
+    else:
+        raise AssertionError("M1 execution role accepted outside scalp templates")
 
 
 def test_cold_start_keeps_baseline_and_reports_unavailable() -> None:

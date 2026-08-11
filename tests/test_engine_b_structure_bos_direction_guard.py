@@ -347,7 +347,12 @@ def test_snapshot_surfaces_dual_clear_side_with_gates_not_blank(monkeypatch):
     assert result.rejection_reason == "structure_direction_gates_pending"
     fails = (result.selected.get("confidence") or {}).get("failed_gate_names") or []
     assert "loc" in fails
-    assert "structure_direction_ambiguous" in fails
+    # The direction label is a selector status, never a failed gate name.
+    assert "structure_direction_ambiguous" not in fails
+    assert (
+        result.selected["confidence"]["structure_direction_status"]
+        == "structure_direction_ambiguous"
+    )
 
 
 def test_snapshot_uses_unique_choch_side_without_false_ambiguity(monkeypatch):
@@ -494,5 +499,9 @@ def test_snapshot_labels_no_directional_structure_as_unresolved(monkeypatch):
 
     assert result.selected is not None
     fails = (result.selected.get("confidence") or {}).get("failed_gate_names") or []
-    assert "structure_direction_unresolved" in fails
+    assert "structure_direction_unresolved" not in fails
     assert "structure_direction_ambiguous" not in fails
+    assert (
+        result.selected["confidence"]["structure_direction_status"]
+        == "structure_direction_unresolved"
+    )

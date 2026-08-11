@@ -1144,13 +1144,35 @@ def _apply_engine_b_structure_ready_scan_tier(
         return tier, reason
 
     diagnostics = signal.setdefault("scanDiagnostics", [])
+    b_reason = str(
+        detail.get("reason") or "Engine B structure ready; awaiting trigger"
+    )
     diagnostics.append(
         {
             "code": "engine_b_structure_ready_watchlist",
-            "detail": detail.get("reason", "Engine B structure ready; awaiting trigger"),
+            "detail": b_reason,
         }
     )
-    return "watchlist", str(detail.get("reason") or "Engine B structure ready; awaiting trigger")
+    # When this helper actually promotes the row (skip -> watchlist) the Engine B
+    # reason is what explains its new visibility, so it wins.
+    #
+    # When the row is ALREADY watchlist, Engine A demoted it for a reason of its
+    # own — entryReadiness PENDING, execution timing, eligibility — and this
+    # helper is changing nothing but the text. Overwriting it there attributes
+    # the demotion to the wrong engine: that is how the 2026-08-10 GC=F row
+    # (decision=TRADE, qualified=True, score 1.1285 >= its 1.08 threshold,
+    # demoted purely by entryReadiness=PENDING) came to be labelled "Engine B
+    # commodity near miss; blocked by space, quality_ratio<0.35". The Engine B
+    # context is still recorded in scanDiagnostics above either way.
+    incoming = str(reason or "").strip()
+    generic_reasons = {
+        "V3 specialist is awaiting confirmation",
+        "V3 specialist returned NO_SIGNAL",
+        "V3 signal is not trade-qualified",
+    }
+    if tier == "watchlist" and incoming and incoming not in generic_reasons:
+        return "watchlist", incoming
+    return "watchlist", b_reason
 
 
 # --- Engine B independent scan helpers --------------------------------------
@@ -1940,6 +1962,11 @@ def _attach_engine_b_scan_gate_funnel(
         "engines_aligned": sig.get("engine_b_direction_aligned_with_a"),
         "structure_ok": _scalar_bool_gate(cnf.get("structure_ok")),
         "location_ok": _scalar_bool_gate(cnf.get("location_ok")),
+        # Which location paths were unavailable. Without this a bare `loc` in
+        # failed_gate_names cannot be distinguished from a trigger failure
+        # shadowing the trend-pullback path.
+        "location_blocked_by": cnf.get("location_blocked_by"),
+        "location_mode": cnf.get("location_mode"),
         "entry_ok": _scalar_bool_gate(cnf.get("entry_ok")),
         "room_ok": _scalar_bool_gate(cnf.get("room_ok")),
         "space_gate_ok": _scalar_bool_gate(cnf.get("space_gate_ok")),

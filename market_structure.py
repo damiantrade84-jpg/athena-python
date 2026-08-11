@@ -7452,9 +7452,24 @@ class NakedEngine:
             or bool(res.get("choch_confirmed"))
             or bool(res.get("liquidity_sweep"))
         )
+        # The trend-pullback path is a LOCATION predicate: BOS/CHoCH/sweep with
+        # price back at a zone or at the broken level. Requiring `trigger_ok`
+        # here charged one missing candle pattern to two separate gates — the
+        # row failed `loc` *and* `trigger`, and every location failure in the
+        # 2026-08-11 scans that cleared structure was caused by the absent
+        # trigger, never by location on its own. Location now answers "is price
+        # somewhere structurally meaningful"; `entry_ok` alone answers "is there
+        # a catalyst". The trigger-at-location requirement is unaffected:
+        # `_trigger_at_location` is only consulted when `trigger_ok` is already
+        # True, and in that case both forms of `_trend_pullback` are identical.
+        # Reversible: ENGINE_B_LOCATION_REQUIRES_TRIGGER: true restores the
+        # coupled form.
+        _location_requires_trigger = bool(
+            config.CONFIG.get("ENGINE_B_LOCATION_REQUIRES_TRIGGER", False)
+        )
         _trend_pullback = (
             _trend_pullback_legs
-            and trigger_ok
+            and (trigger_ok or not _location_requires_trigger)
             and (zone_ok or _near_bos_level)
         )
 
@@ -8367,6 +8382,28 @@ class NakedEngine:
             else:
                 _trigger_failure_reasons.append("entry_catalyst_missing")
 
+        # Name which location paths were unavailable. A bare `loc` cannot be
+        # told apart from a trigger failure shadowing it, which is what made the
+        # scan funnel unreadable: `loc` and `trigger` co-occurred on every row.
+        _location_blocked_by = []
+        if not location_ok:
+            if not zone_ok:
+                _location_blocked_by.append("no_zone_at_price")
+            if not ob_at_zone:
+                _location_blocked_by.append("no_ob_at_zone")
+            if not breakout_ok:
+                _location_blocked_by.append("no_breakout")
+            elif not allow_breakout_entry:
+                _location_blocked_by.append("breakout_entry_disallowed")
+            elif _forex_ranging_continuation_blocked:
+                _location_blocked_by.append("forex_ranging_continuation_blocked")
+            if not _trend_pullback_legs:
+                _location_blocked_by.append("no_trend_pullback_leg")
+            elif not (zone_ok or _near_bos_level):
+                _location_blocked_by.append("trend_pullback_off_level")
+            if not _fvg_sweep_location:
+                _location_blocked_by.append("no_fvg_sweep_location")
+
         failed_gate_names = []
         if not structure_ok:
             failed_gate_names.append("struct")
@@ -8731,6 +8768,7 @@ class NakedEngine:
             "structure_bos_opposes": bool(_structure_bos_opposes),
             "location_passed": location_ok,
             "location_mode": location_mode,
+            "location_blocked_by": _location_blocked_by or None,
             "location_distance_atr": round(location_distance_atr, 4)
             if location_distance_atr is not None
             else None,

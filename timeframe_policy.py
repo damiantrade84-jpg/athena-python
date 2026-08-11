@@ -1169,6 +1169,18 @@ def _apply_role_override(
                 f"group {group!r} style {style!r}"
             )
         kwargs[role] = tf
+    # The advisory execution context follows the trigger (see ``_group_template``
+    # and the Engine D native template, which both set execution=trigger).
+    # ``execution`` is deliberately not an overridable role — it is derived, not
+    # independently adapted (see ``_clamp_adaptive_roles``). Without this, an
+    # override that moves the trigger left execution behind on the template
+    # default, so ``evaluate_execution_timeframe`` took the non-shared branch and
+    # re-tested a *faster* forming bar against an already-confirmed trigger:
+    # a confirmed M30 trigger was overturned by the live M15 move and the signal
+    # was demoted to PENDING/watchlist. Only derive when the template kept the
+    # invariant, so a deliberately decoupled template is never silently rewritten.
+    if "trigger" in kwargs and selected.execution == selected.trigger:
+        kwargs["execution"] = kwargs["trigger"]
     patched = replace(selected, **kwargs)
     try:
         validate_timeframe_role_order(

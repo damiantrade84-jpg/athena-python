@@ -301,3 +301,55 @@ def test_analyze_pair_legacy_fallback_when_runtime_not_initialized(monkeypatch):
     )
     out = scanner.analyze_pair({"display": "EUR/USD"}, "neutral")
     assert out["direction"] == "LONG"
+
+
+def test_engine_b_structure_ready_scan_tier_preserves_an_engine_a_demotion_reason():
+    """Engine B text must not overwrite Engine A's own demotion reason.
+
+    Regression for the 2026-08-10 GC=F row: Engine A had already demoted a
+    trade-qualified signal to watchlist via entryReadiness=PENDING, and this
+    helper relabelled it "Engine B commodity near miss", hiding the real cause.
+    """
+    signal = {
+        "scanDiagnostics": [],
+        "engine_b_structure_ready_detail": {
+            "reason": "Engine B commodity near miss; blocked by space",
+            "execution_allowed": False,
+        },
+    }
+
+    tier, reason = _apply_engine_b_structure_ready_scan_tier(
+        signal,
+        "watchlist",
+        "execution timeframe M30 opposed signal direction",
+        config=_structure_ready_config(enabled=True),
+    )
+
+    assert tier == "watchlist"
+    assert reason == "execution timeframe M30 opposed signal direction"
+    # The Engine B context is still recorded, just not as the headline reason.
+    assert any(
+        d.get("code") == "engine_b_structure_ready_watchlist"
+        for d in signal["scanDiagnostics"]
+    )
+
+
+def test_engine_b_structure_ready_scan_tier_replaces_a_generic_watchlist_reason():
+    """A placeholder Engine A reason carries no information, so Engine B's wins."""
+    signal = {
+        "scanDiagnostics": [],
+        "engine_b_structure_ready_detail": {
+            "reason": "Engine B structure ready; awaiting price-action trigger",
+            "execution_allowed": False,
+        },
+    }
+
+    tier, reason = _apply_engine_b_structure_ready_scan_tier(
+        signal,
+        "watchlist",
+        "V3 specialist is awaiting confirmation",
+        config=_structure_ready_config(enabled=True),
+    )
+
+    assert tier == "watchlist"
+    assert "awaiting price-action trigger" in reason
