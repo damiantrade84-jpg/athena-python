@@ -1935,6 +1935,13 @@ def _attach_engine_a_v3_atr_provenance(
     """Wire Engine A V3 level ATR provenance onto scan/review signal payloads."""
     from atr_diagnostics import attach_engine_a_v3_atr_provenance
 
+    try:
+        from engine_a_v3.routing import route_specialist
+
+        _score_group = route_specialist(pair).score_group
+    except Exception:
+        _score_group = None
+
     return attach_engine_a_v3_atr_provenance(
         signal,
         pair,
@@ -1945,6 +1952,7 @@ def _attach_engine_a_v3_atr_provenance(
         entry_tf=entry_tf,
         entry_candles=entry_candles,
         config=CONFIG if isinstance(CONFIG, dict) else {},
+        score_group=_score_group,
         bybit_atr_and_candles_fn=_bybit_atr_and_candles_for_levels,
     )
 
@@ -1965,12 +1973,33 @@ def _bybit_atr_and_candles_for_levels(
         resolved_style = "swing"
     tf = str(atr_tf or "").strip().upper()
     if not tf:
-        # Fail closed: a hardcoded style->ATR-TF fallback here would diverge
-        # from the policy-resolved ATR source (structure TF) for the same style.
+        # Resolve the same concrete level-ATR rung used by Engine A geometry.
+        # In particular, do not restore the old style->D1/H4/H1 mapping: it can
+        # diverge from the active policy setup/structure rung.
+        try:
+            from atr_diagnostics import resolve_engine_a_v3_levels_atr_tf
+
+            tf = (
+                resolve_engine_a_v3_levels_atr_tf(
+                    pair,
+                    resolved_style,
+                    config=CONFIG if isinstance(CONFIG, dict) else None,
+                )
+                or ""
+            )
+        except Exception as exc:
+            log.warning(
+                "[ENGINE_A] %s: failed to resolve policy level ATR timeframe: %s",
+                symbol,
+                exc,
+            )
+            tf = ""
+    if tf not in {"D1", "H4", "H1", "M30", "M15", "M5", "M1"}:
         log.warning(
-            "[ENGINE_A] %s: Bybit level ATR requested without an atr_tf; "
+            "[ENGINE_A] %s: invalid or unavailable Bybit level ATR timeframe %r; "
             "skipping Bybit ATR feed",
             symbol,
+            tf or None,
         )
         return None, None
     end_ms = None
@@ -3445,12 +3474,13 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
             stale_unshifted_age_sec=get_mt5_fetch_stale_unshifted_age_sec(),
         )
 
-        # MT5 can briefly omit the current M15/M30 history bucket, or an M5
-        # forex bucket after terminal/service recovery, even while current
-        # ticks are arriving. Retry once only when the normalized tick is fresh
-        # under the same per-asset threshold as the live-quote gate.
-        # Closed/frozen markets do not retry, and a still-stale retry remains
-        # blocked downstream.
+        # MT5 can omit current/recent M15/M30 history (lazy symbol sync, session
+        # reopen, bulk-scan first touch) — or M5 forex buckets after recovery —
+        # even while current ticks are arriving. Retry once when the normalized
+        # tick is fresh under the same per-asset threshold as the live-quote
+        # gate (any positive bucket lag; closed/frozen markets fail the tick
+        # age check and do not retry). A still-stale retry remains blocked
+        # downstream by the freshness gate.
         if tf in ("M15", "M30") or (
             tf == "M5" and str(pair.get("type") or "").strip().lower() == "forex"
         ):
@@ -11657,6 +11687,14 @@ def api_feature_toggles():
             ],
             "label": "A/B Profitability Hard Gates",
         },
+        "entry_timing_gates": {
+            "config_keys": ["ENGINE_A_ENTRY_TIMING_GATES_ENABLED"],
+            "label": "Entry Timing Gates (trigger / M15–M30)",
+        },
+        "session_gates": {
+            "config_keys": ["ENGINE_A_SESSION_GATES_ENABLED"],
+            "label": "Session Gates",
+        },
     }
 
     def _get_state():
@@ -11669,6 +11707,10 @@ def api_feature_toggles():
             "profitability_gates": bool(
                 CONFIG.get("ENGINE_AB_PROFITABILITY_GATES_ENFORCED", False)
             ),
+            "entry_timing_gates": bool(
+                CONFIG.get("ENGINE_A_ENTRY_TIMING_GATES_ENABLED", False)
+            ),
+            "session_gates": bool(CONFIG.get("ENGINE_A_SESSION_GATES_ENABLED", False)),
         }
 
     if request.method == "GET":
@@ -11723,6 +11765,24 @@ def api_feature_toggles():
         log.warning(
             f"[FEATURE] A/B Profitability Hard Gates "
             f"{'ENABLED' if new_val else 'ADVISORY'}"
+        )
+
+    elif feature == "entry_timing_gates":
+        current = bool(CONFIG.get("ENGINE_A_ENTRY_TIMING_GATES_ENABLED", False))
+        new_val = not current if action == "toggle" else (action == "enable")
+        CONFIG["ENGINE_A_ENTRY_TIMING_GATES_ENABLED"] = new_val
+        log.warning(
+            f"[FEATURE] Entry Timing Gates (trigger/M15-M30) "
+            f"{'ENABLED' if new_val else 'DISABLED'}"
+        )
+
+    elif feature == "session_gates":
+        current = bool(CONFIG.get("ENGINE_A_SESSION_GATES_ENABLED", False))
+        new_val = not current if action == "toggle" else (action == "enable")
+        CONFIG["ENGINE_A_SESSION_GATES_ENABLED"] = new_val
+        log.warning(
+            f"[FEATURE] Session Gates "
+            f"{'ENABLED' if new_val else 'DISABLED'}"
         )
 
     return jsonify(_get_state())
@@ -15932,7 +15992,22 @@ def analyze_pair(
                 }
                 _blocked["is_forming"] = is_forming
                 _attach_engine_a_v3_atr_provenance(
-                    _blocked, pair, style, d1, h4, h1
+                    _blocked,
+                    pair,
+                    style,
+                    d1,
+                    h4,
+                    h1,
+                    entry_tf=(
+                        _policy_timeframes["setup"]
+                        if _policy_timeframes
+                        else _v3_live_entry_tf
+                    ),
+                    entry_candles=(
+                        _v3_candles.get(_policy_timeframes["setup"], [])
+                        if _policy_timeframes
+                        else _v3_entry_candles
+                    ),
                 )
                 return _attach_v3_intermarket_confirmation(
                     _blocked,
@@ -15959,7 +16034,22 @@ def analyze_pair(
             _blocked["dataFreshness"]["diagnostics"] = _freshness_diag
             _blocked["is_forming"] = is_forming
             _attach_engine_a_v3_atr_provenance(
-                _blocked, pair, style, d1, h4, h1
+                _blocked,
+                pair,
+                style,
+                d1,
+                h4,
+                h1,
+                entry_tf=(
+                    _policy_timeframes["setup"]
+                    if _policy_timeframes
+                    else _v3_live_entry_tf
+                ),
+                entry_candles=(
+                    _v3_candles.get(_policy_timeframes["setup"], [])
+                    if _policy_timeframes
+                    else _v3_entry_candles
+                ),
             )
             return _attach_v3_intermarket_confirmation(
                 _blocked,

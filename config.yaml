@@ -278,6 +278,10 @@ ENGINE_A_V3_SETUP_UPGRADE:
   # opposition is still blocked by ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD.
   # Raise toward 0.75 to re-tighten without a code change.
   MR_MIN_CONFLUENCE_FRAC: 0.0
+# Master toggles (Scan Config UI). Default OFF — gates are optional demotions.
+# Nested ENGINE_A_V3_* session blocks below only apply when SESSION_GATES is true.
+ENGINE_A_ENTRY_TIMING_GATES_ENABLED: false
+ENGINE_A_SESSION_GATES_ENABLED: false
 ENGINE_A_V3_SESSION_SCORING:
   ENABLED: true
   MIN_SCORE: 0.40  # raised with quant session gate (was 0.35)
@@ -412,7 +416,14 @@ ENGINE_A_V3_STRUCTURAL_GEOMETRY:
 # scoring.get_blocked_trend_states) — it must NOT demote live scans.
 ENGINE_A_V3_LEGACY_FILTERS:
   ENABLED: true
-  FOREX_EMA_CLUSTER: true
+  # 2026-08-09 audit (C-3): disabled — the same compressed-EMA-stack condition is
+  # already penalized by the V3 trend-separation multiplier
+  # (engine_a_v3/quant_scorer.py:571-578, config-gated and still enabled), so this
+  # legacy filter double-penalized forex with a second multiplier plus a hard
+  # soft_cap. Diagnostics stay on (ENGINE_A_FOREX_EMA_CLUSTER_DIAGNOSTICS_ENABLED);
+  # the V2-path ENGINE_A_FOREX_EMA_CLUSTER_PENALTY_ENABLED is untouched.
+  # Reversible: set back to true.
+  FOREX_EMA_CLUSTER: false
   CRYPTO_LATE_TREND: true
   BLOCKED_TREND_STATES: true
 # Commodity setup lookback / touch / extension (overrides hardcoded defaults).
@@ -428,6 +439,13 @@ ENGINE_A_V3_COMMODITY_SETUP_PARAMS:
 ENGINE_A_V3_EQUITY_VOLUME_FLOOR:
   ENABLED: true
   MIN_QUALITY: 0.15
+  # 2026-08-09 audit (S1): skip the floor for groups with no approved live
+  # volume source (_allowed_volume_sources() empty — e.g. bond_tlt,
+  # smallcap_em_etf). Their volume can never clear provenance, so the floor was
+  # a blanket TRADE block under enforcement; the weight is now 0.0 for those
+  # groups instead. Groups with approved sources (us_stock_single, stock_other)
+  # keep the floor. Reversible: set to false to restore the blanket block.
+  SKIP_WHEN_NO_APPROVED_SOURCE: true
 # Crypto funding/OI conflict demotion (off until analyze_pair wires context).
 ENGINE_A_V3_CRYPTO_DERIV_GUARD:
   ENABLED: false
@@ -535,9 +553,30 @@ ENGINE_A_V3_TREND_HEALTH:
 # Tunable live with no code change, e.g.:
 #   crypto_btc: { trend: 0.40, momentum: 0.25, location: 0.15, volume: 0.20 }
 ENGINE_A_QUANT_WEIGHTS_BY_GROUP:
-  us_indices_trackers: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
-  eu_indices: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
-  asian_indices: { trend: 0.45, momentum: 0.22, location: 0.18, volume: 0.15 }
+  # 2026-08-09 audit (M1/I1/S1): index + commodity + non-EODHD equity_etf groups
+  # score a volume component that can never clear live provenance —
+  # _allowed_volume_sources() returns empty for all of them
+  # (engine_a_v3/quant_scorer.py:1647-1653; enforcement athena.py:16097). Under
+  # enforcement their volume quality is pinned to 0 while still carrying weight —
+  # dead denominator budget, same defect forex had. Zeroed volume and
+  # renormalized the remaining budget preserving relative proportions, per the
+  # 2026-08-06 forex precedent below. Thresholds rescaled by the exact inverse
+  # factor (see ENGINE_A_SCORE_GROUP_THRESHOLDS comment).
+  # Reversible: restore the prior entries from git history.
+  us_indices_trackers: { trend: 0.5294, momentum: 0.2588, location: 0.2118, volume: 0.0 }
+  eu_indices: { trend: 0.5294, momentum: 0.2588, location: 0.2118, volume: 0.0 }
+  asian_indices: { trend: 0.5294, momentum: 0.2588, location: 0.2118, volume: 0.0 }
+  index_other: { trend: 0.4691, momentum: 0.3086, location: 0.2223, volume: 0.0 }
+  precious_trackers: { trend: 0.4886, momentum: 0.2841, location: 0.2273, volume: 0.0 }
+  energy_oil: { trend: 0.4886, momentum: 0.2841, location: 0.2273, volume: 0.0 }
+  nat_gas: { trend: 0.4886, momentum: 0.2841, location: 0.2273, volume: 0.0 }
+  copper: { trend: 0.4886, momentum: 0.2841, location: 0.2273, volume: 0.0 }
+  pgm_metals: { trend: 0.4886, momentum: 0.2841, location: 0.2273, volume: 0.0 }
+  base_metals: { trend: 0.4886, momentum: 0.2841, location: 0.2273, volume: 0.0 }
+  softs: { trend: 0.4886, momentum: 0.2841, location: 0.2273, volume: 0.0 }
+  commodity_other: { trend: 0.4886, momentum: 0.2841, location: 0.2273, volume: 0.0 }
+  bond_tlt: { trend: 0.4675, momentum: 0.2987, location: 0.2338, volume: 0.0 }
+  smallcap_em_etf: { trend: 0.4675, momentum: 0.2987, location: 0.2338, volume: 0.0 }
   # 2026-08-06 audit: forex volume weight is now 0.0 for EVERY forex group.
   # forex_majors/forex_crosses already excluded it (MT5 "volume" on spot FX is
   # tick count — price-change activity, not traded size), but forex_exotics kept
@@ -555,6 +594,9 @@ ENGINE_A_QUANT_WEIGHTS_BY_GROUP:
   # multi-TF stack. Rebalance toward location + momentum + volume so majors
   # can clear their p70 bar (0.90) without inventing a fake D1 tide.
   # Alts keep the family default via inheritance. Reversible: delete these keys.
+  # 2026-08-09 review (batch-2 C1): KEPT as a documented workaround — the real
+  # fix is diagnosing why the trend signal is dead (follow-up F2), not further
+  # score engineering.
   crypto_btc: { trend: 0.22, momentum: 0.28, location: 0.28, volume: 0.22 }
   crypto_eth: { trend: 0.22, momentum: 0.28, location: 0.28, volume: 0.22 }
   # Explicit full budget (was partial volume:0.0) — renormalized from family forex 0.42/0.28/0.21/0.09 to keep live effective 0.4615/0.3077/0.2308/0.0 identical; makes tuning explicit and boot-validated.
@@ -2231,25 +2273,31 @@ ENGINE_A_SCORE_GROUP_THRESHOLDS:
   crypto_other: 1.35
 
   # Commodity — oil/precious soft this window; nat_gas already high-scoring
-  precious_trackers: 0.95
-  energy_oil: 0.65
-  nat_gas: 1.80
-  copper: 1.00
-  pgm_metals: 1.00
-  base_metals: 1.00
-  softs: 1.00
-  commodity_other: 1.40
+  # 2026-08-09: rescaled by exact 1/(1-volume_weight) inverse of the weight
+  # renormalization above (commodity /0.88, named index /0.85, index_other
+  # /0.81, bond+smallcap /0.77) so admission rates are preserved exactly under
+  # enforced volume provenance. Caveat: the Aug 6-7 part of the calibration
+  # window predates provenance enforcement (bee5671a, 08-08), so these bars
+  # remain judgment-anchored pending the 30-day re-measure (follow-up F1).
+  precious_trackers: 1.08
+  energy_oil: 0.74
+  nat_gas: 2.05
+  copper: 1.14
+  pgm_metals: 1.14
+  base_metals: 1.14
+  softs: 1.14
+  commodity_other: 1.59
 
   # Index
-  us_indices_trackers: 1.05
-  eu_indices: 1.40
-  asian_indices: 1.15
-  index_other: 1.50
+  us_indices_trackers: 1.24
+  eu_indices: 1.65
+  asian_indices: 1.35
+  index_other: 1.85
 
   # Stock / ETF
   us_stock_single: 1.30
-  bond_tlt: 1.30
-  smallcap_em_etf: 1.30
+  bond_tlt: 1.69
+  smallcap_em_etf: 1.69
   stock_other: 1.40
 
   unknown: 1.35
@@ -2506,6 +2554,14 @@ AUTO_TRADE_MIN_CONVICTION:
 
   default: 0.50
 
+# 2026-08-09 audit note (X3): this weight feeds the scanner's combinedConviction
+# field (scoreNorm x weight when Engine B is absent) — that field is display /
+# Engine-C input only. The live auto-execution gate reads
+# executionConvictionEffective, derived from scoreAttribution/scoreNorm for
+# engine_a rows (auto_trader.py:273-296, 1741-1747), and V3-contract rows are
+# blocked from auto-execution entirely (ENGINE_A_V3_MANUAL_DEMO_ONLY). The
+# "A-only conviction unreachable" math (0.50/0.60 => scoreNorm 0.833) therefore
+# does NOT describe the live path.
 AUTO_TRADE_A_ONLY_WEIGHT:
 
   default: 0.60
@@ -4537,6 +4593,11 @@ ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE:
   scalp: 0.30
   intraday: 0.35
   swing: 0.40
+# 2026-08-09 review (X1): placeholders KEPT by explicit decision — no n>=30
+# outcome evidence yet to retune against, and reverting to `total` restores a
+# floor that cannot bind. Shadow calibration (THRESHOLD_AUDIT /
+# CALIBRATION_DIAGNOSTICS) continues collecting would-pass data; retune only
+# after n>=30 per style.
 
 # ── Engine B structural fixes (2026-08-06 audit) ───────────────────────────
 # BOS reference swing. `legacy_second_last` restores the fixed peak_idx[-2]

@@ -1479,9 +1479,18 @@ def _v3_session_multiplier(
     """
     try:
         from config import CONFIG
+        from engine_a_v3.gate_toggles import session_gates_enabled
+
         cfg = CONFIG.get("ENGINE_A_V3_SESSION_STRENGTHENED") or {}
-        if not cfg.get("ENABLED", False):
-            return 1.0, {"enabled": False}
+        if not session_gates_enabled(CONFIG) or not cfg.get("ENABLED", False):
+            return 1.0, {
+                "enabled": False,
+                "reason": (
+                    "session_gates_disabled"
+                    if not session_gates_enabled(CONFIG)
+                    else "session_strengthened_disabled"
+                ),
+            }
         if family not in {"equity_etf", "index"} and group not in {"us_indices_trackers", "eu_indices", "asian_indices", "index_other", "us_stock_single", "stock_other", "bond_tlt", "smallcap_em_etf"}:
             return 1.0, {"enabled": True, "applied": False, "reason": "family_not_equity_index"}
         parsed = _parse_bar_time(bar_time)
@@ -2670,19 +2679,33 @@ def score_pair(
         legacy_diag["legacyMultDemotedTrade"] = True
 
     equity_volume_blocked = False
+    equity_volume_floor_diag = {"enabled": False, "applied": False, "reason": ""}
     if family == "equity_etf" and decision == "TRADE":
         try:
             from config import CONFIG
 
             vol_cfg = CONFIG.get("ENGINE_A_V3_EQUITY_VOLUME_FLOOR") or {}
             if vol_cfg.get("ENABLED", True):
-                min_q = float(vol_cfg.get("MIN_QUALITY", 0.15))
-                if (not volume.available) or volume.quality < min_q:
-                    decision = "WATCH"
-                    equity_volume_blocked = True
+                equity_volume_floor_diag["enabled"] = True
+                # 2026-08-09 (S1): groups with no approved live volume source
+                # can never satisfy the floor under provenance enforcement.
+                # Skip it (their volume weight is 0.0) instead of blanket-
+                # blocking TRADE on data that is structurally unavailable.
+                _skip_no_source = bool(vol_cfg.get("SKIP_WHEN_NO_APPROVED_SOURCE", True))
+                if _skip_no_source and not _allowed_volume_sources(group):
+                    equity_volume_floor_diag["reason"] = "no_approved_live_volume_source"
+                else:
+                    min_q = float(vol_cfg.get("MIN_QUALITY", 0.15))
+                    if (not volume.available) or volume.quality < min_q:
+                        decision = "WATCH"
+                        equity_volume_blocked = True
+                        equity_volume_floor_diag["applied"] = True
+                        equity_volume_floor_diag["reason"] = "volume_quality_below_floor"
         except Exception:
             decision = "WATCH"
             equity_volume_blocked = True
+            equity_volume_floor_diag["applied"] = True
+            equity_volume_floor_diag["reason"] = "error"
 
     # ── Session / Spread / Correlation gates ───────────────────────────
     # These demote TRADE→WATCH when enabled. The session multiplier is keyed to
@@ -2711,9 +2734,12 @@ def score_pair(
     try:
         from config import CONFIG
 
+        from engine_a_v3.gate_toggles import entry_timing_gates_enabled
+
         tg_cfg = CONFIG.get("ENGINE_A_TRIGGER_EVIDENCE_SOFT_GATE") or {}
         if (
-            bool(tg_cfg.get("ENABLED", True))
+            entry_timing_gates_enabled(CONFIG)
+            and bool(tg_cfg.get("ENABLED", True))
             and isinstance(trigger_evidence, Mapping)
             and trigger_evidence.get("available")
             and direction in ("LONG", "SHORT")
@@ -2808,6 +2834,7 @@ def score_pair(
             "minDirectionalFailed": min_directional_failed,
             "legacyFilters": legacy_diag,
             "equityVolumeBlocked": equity_volume_blocked,
+            "equityVolumeFloor": equity_volume_floor_diag,
             "cryptoDerivBlocked": crypto_deriv_blocked,
             "maxAttainableScore": max_attainable,
             "thresholdUnreachable": threshold_unreachable,
@@ -2897,6 +2924,7 @@ def score_pair(
             "legacyFilters": legacy_diag,
             "trendState": legacy_diag.get("trendState"),
             "equityVolumeBlocked": equity_volume_blocked,
+            "equityVolumeFloor": equity_volume_floor_diag,
             "cryptoDerivBlocked": crypto_deriv_blocked,
             "sessionGate": session_gate_detail,
             "spreadGate": spread_gate_detail,

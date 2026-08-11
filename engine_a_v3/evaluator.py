@@ -839,14 +839,16 @@ def evaluate_engine_a_v3(
             setup_diagnostics["qualityFloorError"] = type(quality_exc).__name__
 
     # Session scoring gate (config-gated, forex-only): a forex setup must also
-    # pass the session context score when ENGINE_A_V3_SESSION_SCORING.ENABLED.
+    # pass the session context score when ENGINE_A_V3_SESSION_SCORING.ENABLED
+    # and the Scan Config master ENGINE_A_SESSION_GATES_ENABLED is true.
     # Exceptions fail closed (block upgrade) — never silently allow the upgrade.
     if use_setup and route.family == "forex":
         try:
             from config import CONFIG
+            from engine_a_v3.gate_toggles import session_gates_enabled
 
             session_cfg = CONFIG.get("ENGINE_A_V3_SESSION_SCORING") or {}
-            if session_cfg.get("ENABLED"):
+            if session_gates_enabled(CONFIG) and session_cfg.get("ENABLED"):
                 min_score = float(session_cfg.get("MIN_SCORE", 0.35))
                 if not session_score_passes(
                     primary,
@@ -856,6 +858,9 @@ def evaluate_engine_a_v3(
                 ):
                     use_setup = False
                     setup_diagnostics["sessionGateBlocked"] = True
+            else:
+                setup_diagnostics["sessionGateSkipped"] = True
+                setup_diagnostics["sessionGateSkipReason"] = "session_gates_disabled"
         except Exception as session_exc:
             use_setup = False
             setup_diagnostics["sessionGateBlocked"] = True
@@ -940,8 +945,10 @@ def evaluate_engine_a_v3(
         try:
             from config import CONFIG
 
+            from engine_a_v3.gate_toggles import session_gates_enabled
+
             q_sess = CONFIG.get("ENGINE_A_V3_QUANT_SESSION_GATE") or {}
-            if q_sess.get("ENABLED", True):
+            if session_gates_enabled(CONFIG) and q_sess.get("ENABLED", True):
                 min_score = float(q_sess.get("MIN_SCORE", 0.40))
                 if not session_score_passes(
                     primary,
@@ -952,8 +959,16 @@ def evaluate_engine_a_v3(
                     decision = "WATCH"
                     quant_session_blocked = True
         except Exception:
-            decision = "WATCH"
-            quant_session_blocked = True
+            # Fail closed only when session gates are intended to be on.
+            try:
+                from engine_a_v3.gate_toggles import session_gates_enabled as _sg
+
+                if _sg():
+                    decision = "WATCH"
+                    quant_session_blocked = True
+            except Exception:
+                decision = "WATCH"
+                quant_session_blocked = True
     demo_research_unpromoted_allowed = (
         not promotion.qualified and _demo_research_unpromoted_trade_allowed()
     )

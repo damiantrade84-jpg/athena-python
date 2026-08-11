@@ -2010,6 +2010,11 @@ CONFIG: dict = {
         "ENABLED": True,
         "BY_GROUP": {},
     },
+    # Scan-config UI masters. Nested session/trigger blocks only enforce when
+    # these are true. Default false so entry-timing and session demotions are off
+    # until the operator re-enables them under Scan Config.
+    "ENGINE_A_ENTRY_TIMING_GATES_ENABLED": False,
+    "ENGINE_A_SESSION_GATES_ENABLED": False,
     "ENGINE_A_V3_QUANT_SESSION_GATE": {
         "ENABLED": True,
         "MIN_SCORE": 0.40,

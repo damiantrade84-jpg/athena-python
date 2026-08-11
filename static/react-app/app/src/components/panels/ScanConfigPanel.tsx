@@ -28,6 +28,8 @@ interface FeatureToggles {
   sentiment_gate?: boolean;
   event_risk?: boolean;
   profitability_gates?: boolean;
+  entry_timing_gates?: boolean;
+  session_gates?: boolean;
 }
 
 interface ExecutionConfig {
@@ -185,6 +187,8 @@ export default function ScanConfigPanel() {
                         {key === 'sentiment_gate' && 'Block trades on bearish sentiment'}
                         {key === 'event_risk' && 'Block trades around macro events'}
                         {key === 'profitability_gates' && 'Restore minimum RR and max-SL blocks for Engine A/B'}
+                        {key === 'entry_timing_gates' && 'When on: block trade tier if trigger not confirmed or M15/M30 opposed. Default off.'}
+                        {key === 'session_gates' && 'When on: forex session-context + equity cash-session demotions. Default off.'}
                       </p>
                     </div>
                     <Switch

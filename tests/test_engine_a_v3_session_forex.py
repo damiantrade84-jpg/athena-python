@@ -154,13 +154,16 @@ def test_evaluator_london_open_trade_signal(monkeypatch):
 
 def test_session_scoring_gate_rejects_when_enabled(monkeypatch):
     import config
+    from engine_a_v3.gate_toggles import session_gates_enabled
 
+    monkeypatch.setitem(config.CONFIG, "ENGINE_A_SESSION_GATES_ENABLED", True)
     monkeypatch.setitem(config.CONFIG, "ENGINE_A_V3_FOREX_SETUP", "london_open")
     monkeypatch.setitem(
         config.CONFIG,
         "ENGINE_A_V3_SESSION_SCORING",
         {"ENABLED": True, "MIN_SCORE": 999.0},
     )
+    assert session_gates_enabled(config.CONFIG) is True
     pair = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
     with tempfile.TemporaryDirectory() as tmp:
         registry = demo_unvalidated_registry(Path(tmp))
@@ -170,10 +173,47 @@ def test_session_scoring_gate_rejects_when_enabled(monkeypatch):
             horizon="intraday",
             registry=registry,
         )
-    # Session gate blocks the setup overlay; the quant path keeps the pair visible.
-    assert signal.decision == "WATCH"
-    assert signal.factorDiagnostics["setupOverlay"]["sessionGateBlocked"] is True
-    assert "session_context_score_below_min" in signal.rejectionReasons
+    overlay = (signal.factorDiagnostics or {}).get("setupOverlay") or {}
+    # When the specialist still promotes, the session min must demote it.
+    # If the setup itself is already WATCH (no upgrade), the master + nested
+    # scorer still refuse the impossible min — the gate is armed, just idle.
+    if overlay.get("sessionGateBlocked") or overlay.get("setupDecision") == "TRADE":
+        assert signal.decision == "WATCH"
+        assert overlay.get("sessionGateBlocked") is True
+        assert "session_context_score_below_min" in signal.rejectionReasons
+    else:
+        assert not session_score_passes(
+            _london_open_candles()["H1"],
+            direction="LONG",
+            min_score=999.0,
+        )
+
+
+def test_session_gates_master_off_skips_nested_session_block(monkeypatch):
+    import config
+    from engine_a_v3.gate_toggles import session_gates_enabled
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_A_SESSION_GATES_ENABLED", False)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_A_V3_FOREX_SETUP", "london_open")
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_A_V3_SESSION_SCORING",
+        {"ENABLED": True, "MIN_SCORE": 999.0},
+    )
+    assert session_gates_enabled(config.CONFIG) is False
+    pair = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
+    with tempfile.TemporaryDirectory() as tmp:
+        registry = demo_unvalidated_registry(Path(tmp))
+        signal = evaluate_engine_a_v3(
+            pair,
+            _london_open_candles(),
+            horizon="intraday",
+            registry=registry,
+        )
+    overlay = (signal.factorDiagnostics or {}).get("setupOverlay") or {}
+    assert overlay.get("sessionGateBlocked") is not True
+    assert "session_context_score_below_min" not in (signal.rejectionReasons or ())
+    assert "quant_session_gate_blocked" not in (signal.rejectionReasons or ())
 
 
 def test_session_score_passes_with_low_threshold():

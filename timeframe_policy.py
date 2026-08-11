@@ -2998,6 +2998,20 @@ def attach_timeframe_policy_payload(
     )
     signal.update(execution_timing)
     execution_status = str(execution_timing.get("executionTimingStatus") or "UNAVAILABLE")
+    _timing_cfg = config
+    if _timing_cfg is None:
+        try:
+            from config import CONFIG as _timing_cfg_src
+
+            _timing_cfg = _timing_cfg_src
+        except Exception:
+            _timing_cfg = {}
+    try:
+        from engine_a_v3.gate_toggles import entry_timing_gates_enabled
+
+        _timing_gates_on = entry_timing_gates_enabled(_timing_cfg)
+    except Exception:
+        _timing_gates_on = False
     if policy.policy_source == PolicySource.CONFIG_CONFLICT:
         readiness = "CONFIG_ERROR"
         reason = "CONFIG_CONFLICT"
@@ -3008,27 +3022,46 @@ def attach_timeframe_policy_payload(
         readiness = "UNAVAILABLE"
         reason = "stale_required_closed_timeframes:" + ",".join(stale)
     elif not trigger_confirmed:
-        readiness = "PENDING"
-        reason = (
-            "confirmed trigger condition not met"
-            if trigger_supplied
-            else "confirmed trigger condition not supplied"
-        )
+        if _timing_gates_on:
+            readiness = "PENDING"
+            reason = (
+                "confirmed trigger condition not met"
+                if trigger_supplied
+                else "confirmed trigger condition not supplied"
+            )
+        else:
+            readiness = "READY"
+            reason = (
+                "entry_timing_gates_disabled: trigger condition advisory only"
+                if trigger_supplied
+                else "entry_timing_gates_disabled: trigger not supplied (advisory)"
+            )
     elif execution_status in {"UNAVAILABLE", "STALE"}:
+        # Data integrity for the execution rung stays fail-closed even when
+        # optional timing gates are off.
         readiness = "UNAVAILABLE"
         reason = (
             f"execution timeframe {policy.execution_tf.value} "
             f"{execution_status.lower()}"
         )
     elif execution_status in {"OPPOSED", "NEUTRAL"}:
-        readiness = "PENDING"
-        reason = (
-            f"execution timeframe {policy.execution_tf.value} "
-            f"{execution_status.lower()} signal direction"
-        )
+        if _timing_gates_on:
+            readiness = "PENDING"
+            reason = (
+                f"execution timeframe {policy.execution_tf.value} "
+                f"{execution_status.lower()} signal direction"
+            )
+        else:
+            readiness = "READY"
+            reason = (
+                f"entry_timing_gates_disabled: execution timeframe "
+                f"{policy.execution_tf.value} {execution_status.lower()} "
+                f"(advisory only)"
+            )
     else:
         readiness = "READY"
         reason = "required closed timeframes, trigger, and execution timing are aligned"
+    signal["entryTimingGatesEnabled"] = bool(_timing_gates_on)
     signal["entryReadiness"] = readiness
     signal["entryReadinessReason"] = reason
     signal["triggerConfirmed"] = trigger_confirmed

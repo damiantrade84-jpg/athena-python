@@ -34,14 +34,30 @@ def classify_engine_a_v3_signal(signal: dict[str, Any], pair: dict[str, Any]) ->
     if readiness_value is not None:
         readiness = str(readiness_value).strip().upper() or "UNAVAILABLE"
         if readiness != "READY":
+            # Optional Scan Config master: when entry-timing gates are off,
+            # PENDING from trigger/M15–M30 oppose must not demote trade tier.
+            # Missing/stale required closed TFs and CONFIG_ERROR still demote.
+            try:
+                from engine_a_v3.gate_toggles import entry_timing_gates_enabled
+
+                _timing_on = entry_timing_gates_enabled()
+            except Exception:
+                _timing_on = False
             readiness_reason = str(
                 signal.get("entryReadinessReason")
                 or "execution timing is not ready"
             ).strip()
-            return (
-                "watchlist",
-                f"Engine A entry {readiness.lower()}: {readiness_reason}",
+            _timing_pending = readiness == "PENDING" and (
+                "trigger" in readiness_reason.lower()
+                or "opposed" in readiness_reason.lower()
+                or "neutral" in readiness_reason.lower()
+                or "entry_timing_gates_disabled" in readiness_reason.lower()
             )
+            if _timing_on or readiness != "PENDING" or not _timing_pending:
+                return (
+                    "watchlist",
+                    f"Engine A entry {readiness.lower()}: {readiness_reason}",
+                )
     if not pair.get("enabled", True):
         return "watchlist", reason or "Pair is disabled"
     if signal.get("exchangeClosed"):

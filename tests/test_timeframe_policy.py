@@ -920,7 +920,14 @@ def test_auto_policy_preserves_legacy_intraday_default() -> None:
     assert equity.style == "intraday"
 
 
-def test_engine_a_payload_attachment_does_not_change_score_or_direction() -> None:
+def test_engine_a_payload_attachment_does_not_change_score_or_direction(
+    monkeypatch,
+) -> None:
+    monkeypatch.setitem(
+        __import__("config", fromlist=["CONFIG"]).CONFIG,
+        "ENGINE_A_ENTRY_TIMING_GATES_ENABLED",
+        True,
+    )
     signal = {
         "score": 2.15,
         "confluenceScore": 2.15,
@@ -997,7 +1004,12 @@ def test_engine_b_entry_ok_catalyst_sets_ready_when_raw_trigger_ok_false() -> No
     assert signal["triggerConfirmed"] is True
 
 
-def test_engine_b_trigger_false_without_entry_ok_stays_pending() -> None:
+def test_engine_b_trigger_false_without_entry_ok_stays_pending(monkeypatch) -> None:
+    monkeypatch.setitem(
+        __import__("config", fromlist=["CONFIG"]).CONFIG,
+        "ENGINE_A_ENTRY_TIMING_GATES_ENABLED",
+        True,
+    )
     signal = {"trigger_ok": False, "entry_ok": False, "structural_verdict": "CLEAR"}
     states = {
         tf: {"confirmed": [{"time": "2026-07-13T10:00:00Z"}], "stale": False}
@@ -1013,6 +1025,32 @@ def test_engine_b_trigger_false_without_entry_ok_stays_pending() -> None:
 
     assert signal["entryReadiness"] == "PENDING"
     assert signal["entryReadinessReason"] == "confirmed trigger condition not met"
+    assert signal["triggerConfirmed"] is False
+
+
+def test_engine_b_trigger_false_ready_when_entry_timing_gates_disabled(
+    monkeypatch,
+) -> None:
+    monkeypatch.setitem(
+        __import__("config", fromlist=["CONFIG"]).CONFIG,
+        "ENGINE_A_ENTRY_TIMING_GATES_ENABLED",
+        False,
+    )
+    signal = {"trigger_ok": False, "entry_ok": False, "structural_verdict": "CLEAR"}
+    states = {
+        tf: {"confirmed": [{"time": "2026-07-13T10:00:00Z"}], "stale": False}
+        for tf in ("D1", "H4", "H1", "M30", "M15")
+    }
+    attach_timeframe_policy_payload(
+        signal,
+        {"display": "EUR/USD", "type": "forex", "score_group": "forex_majors"},
+        "intraday",
+        engine="engine_b",
+        market_states=states,
+    )
+
+    assert signal["entryReadiness"] == "READY"
+    assert "entry_timing_gates_disabled" in str(signal.get("entryReadinessReason") or "")
     assert signal["triggerConfirmed"] is False
 
 
