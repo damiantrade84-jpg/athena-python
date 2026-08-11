@@ -547,6 +547,78 @@ def save_engine_b_scan_gate_funnel(
     return meta
 
 
+def save_engine_b_standalone_scan_diagnostics(
+    scan_payload: dict[str, Any] | None,
+    *,
+    output_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Persist the standalone ``/api/scan-naked`` response and per-pair debug rows.
+
+    These artifacts use dedicated names so a Scan B run cannot overwrite the
+    combined full-scan snapshot used by the existing funnel audit.
+    """
+    od = resolve_funnel_output_directory(output_dir)
+    latest = od / "latest_scan_naked.json"
+    meta = {
+        "engine_b_standalone_scan_saved": False,
+        "engine_b_standalone_scan_path": str(_PosixRel.repo_relative(latest)).replace(
+            "\\", "/"
+        ),
+        "engine_b_standalone_scan_saved_error": None,
+    }
+    try:
+        od.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        payload = scan_payload if isinstance(scan_payload, dict) else {}
+        latest.write_text(_json_dumps(payload), encoding="utf-8")
+        (od / f"scan_naked_{stamp}.json").write_text(
+            _json_dumps(payload),
+            encoding="utf-8",
+        )
+        meta["engine_b_standalone_scan_saved"] = True
+        _sentinel_log.info(
+            "[ENGINE_B_STANDALONE_PERSIST] wrote %s",
+            latest,
+        )
+    except OSError as exc:
+        meta["engine_b_standalone_scan_saved_error"] = str(exc)
+        log.warning("[ENGINE_B_STANDALONE_PERSIST] write failed (non-fatal): %s", exc)
+        _sentinel_log.warning(
+            "[ENGINE_B_STANDALONE_PERSIST] write failed (non-fatal): %s",
+            exc,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        meta["engine_b_standalone_scan_saved_error"] = str(exc)
+        log.warning(
+            "[ENGINE_B_STANDALONE_PERSIST] unexpected failure (non-fatal): %s",
+            exc,
+        )
+        _sentinel_log.warning(
+            "[ENGINE_B_STANDALONE_PERSIST] unexpected failure (non-fatal): %s",
+            exc,
+        )
+    return meta
+
+
+def maybe_persist_engine_b_standalone_scan_diagnostics(
+    scan_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist standalone Scan B diagnostics under the existing funnel controls."""
+    if not bool(CONFIG.get("ENGINE_B_SCAN_GATE_FUNNEL_ENABLED", True)):
+        return {
+            "engine_b_standalone_scan_saved": False,
+            "engine_b_standalone_scan_path": None,
+            "engine_b_standalone_scan_persist_skipped": "ENGINE_B_SCAN_GATE_FUNNEL_DISABLED",
+        }
+    if not engine_b_gate_funnel_persist_enabled():
+        return {
+            "engine_b_standalone_scan_saved": False,
+            "engine_b_standalone_scan_path": None,
+            "engine_b_standalone_scan_persist_skipped": "ENGINE_B_SCAN_GATE_FUNNEL_PERSIST_DISABLED",
+        }
+    return save_engine_b_standalone_scan_diagnostics(scan_payload)
+
+
 def maybe_persist_engine_b_scan_gate_funnel(
     scan_result: dict[str, Any],
     *,

@@ -8861,6 +8861,7 @@ def api_scan_naked():
         "gate_fail_struct": 0,
         "gate_fail_loc": 0,
         "gate_fail_trigger": 0,
+        "gate_fail_macro": 0,
         "gate_fail_rr": 0,
         "gate_fail_other": 0,
         "unknown_reject": 0,
@@ -8879,6 +8880,9 @@ def api_scan_naked():
         for g in failed_names:
             if "trigger" in str(g).lower():
                 return "trigger"
+        for g in failed_names:
+            if str(g).lower() == "macro":
+                return "macro"
         for g in failed_names:
             gl = str(g).lower()
             if gl == "rr_gate" or gl.startswith("rr=") or gl.startswith("rr"):
@@ -8914,6 +8918,7 @@ def api_scan_naked():
                     "struct": "gate_fail_struct",
                     "loc": "gate_fail_loc",
                     "trigger": "gate_fail_trigger",
+                    "macro": "gate_fail_macro",
                     "rr": "gate_fail_rr",
                     "other": "gate_fail_other",
                 }.get(bucket, "gate_fail_other")
@@ -9493,22 +9498,6 @@ def api_scan_naked():
                     rr1 = rr
                 if rr2 is None:
                     rr2 = rr
-                if rr < style_profile["min_rr"]:
-                    debug_row["failed_gate_names"].append(f"rr_gate")
-                    if "rr_gate" not in _direction_debug["debug_gate_failed_names"]:
-                        _direction_debug["debug_gate_failed_names"].append("rr_gate")
-                    _direction_debug["rr_failed"] = True
-                    _direction_debug["passed_all_gates"] = False
-                    _direction_debug["final_reject_reason"] = (
-                        f"rr={rr:.2f} < min_rr={style_profile['min_rr']}"
-                    )
-                    debug_row["direction_details"][direction] = _direction_debug
-                    log.debug(
-                        f"[NAKED-DBG] {pair['display']} {direction}: "
-                        f"rr={rr:.2f} < min_rr={style_profile['min_rr']} - REJECTED"
-                    )
-                    continue
-
                 # Signal passed all gates
                 if direction == "LONG":
                     debug_row["long_passed"] = True
@@ -9786,22 +9775,22 @@ def api_scan_naked():
                         debug_row["engine_b_rejection_reasons"] = _best_signal.get(
                             "engine_b_rejection_reasons"
                         )
-                        local_results.append({"rejectedDiagnostic": _best_signal, "debug": debug_row})
+                        local_results.append({"rejectedDiagnostic": _best_signal})
                     else:
                         local_results.append(_best_signal)
                 except Exception:
                     local_results.append(_best_signal)
 
-            if debug_mode:
-                local_results.append({"debug": debug_row})
+            # Always retain one per-pair diagnostic row for the persisted
+            # standalone Scan B artifact.  The HTTP response only exposes these
+            # rows when debug mode is requested.
+            local_results.append({"debug": debug_row})
 
         except Exception as e:
             debug_row["final_reject_reason"] = f"exception: {str(e)}"
             log.warning(f"[NAKED SCAN] {pair.get('display')} error: {e}")
             _best_signal = None
-            if debug_mode:
-                return {"debug": debug_row}
-            return []
+            return {"debug": debug_row}
         finally:
             _had = (
                 _best_signal is not None
@@ -9837,7 +9826,7 @@ def api_scan_naked():
                     if debug_mode and row.get("debug"):
                         debug_rows.append(row["debug"])
                     continue
-                if debug_mode and row.get("debug"):
+                if row.get("debug"):
                     debug_rows.append(row["debug"])
                     log.debug(f"[DEBUG] Added debug row for {row['debug'].get('pair')}")
                 else:
@@ -9983,40 +9972,52 @@ def api_scan_naked():
         print(f"Gate fail - structure: {engine_b_funnel['gate_fail_struct']}")
         print(f"Gate fail - location: {engine_b_funnel['gate_fail_loc']}")
         print(f"Gate fail - trigger: {engine_b_funnel['gate_fail_trigger']}")
+        print(f"Gate fail - macro: {engine_b_funnel['gate_fail_macro']}")
         print(f"Gate fail - RR: {engine_b_funnel['gate_fail_rr']}")
         print(f"Gate fail - other: {engine_b_funnel['gate_fail_other']}")
         print(f"Unknown reject: {engine_b_funnel['unknown_reject']}")
         print("="*80 + "\n")
 
-        return jsonify(_json_safe({
-            "success": True,
-            "signals": results,
-            "debugRows": debug_rows,
-            "rejectedDiagnostics": rejected_diagnostics,
-            "scanFunnel": engine_b_funnel,
-            "totalPairs": engine_b_funnel["total"],
-            "activePairs": len(candidate_pairs),
-            "skippedSessionPairs": [pair.get("display") for pair in session_closed_pairs],
-            "marketDataRefreshed": refresh_market_data,
-        }))
-
-    global _last_engine_b_scan_results
-    _last_engine_b_scan_results = {
-        "signals": results,
-        "scanFunnel": engine_b_funnel,
-        "rejectedDiagnostics": rejected_diagnostics,
-    }
-
-    return jsonify(_json_safe({
+    scanned_at = datetime.now(timezone.utc).isoformat()
+    diagnostic_payload = _json_safe({
         "success": True,
+        "scannedAt": scanned_at,
         "signals": results,
-        "rejectedDiagnostics": rejected_diagnostics,
+        "debugRows": debug_rows,
         "scanFunnel": engine_b_funnel,
+        "rejectedDiagnostics": rejected_diagnostics,
         "totalPairs": engine_b_funnel["total"],
         "activePairs": len(candidate_pairs),
         "skippedSessionPairs": [pair.get("display") for pair in session_closed_pairs],
         "marketDataRefreshed": refresh_market_data,
-    }))
+        "assetClass": asset_class or "all",
+        "style": requested_style,
+    })
+    try:
+        from athena_app.diagnostics.engine_b_gate_funnel_persist import (
+            maybe_persist_engine_b_standalone_scan_diagnostics,
+        )
+
+        diagnostic_payload.update(
+            maybe_persist_engine_b_standalone_scan_diagnostics(diagnostic_payload)
+        )
+    except Exception as persist_exc:
+        diagnostic_payload["engine_b_standalone_scan_saved"] = False
+        diagnostic_payload["engine_b_standalone_scan_saved_error"] = type(
+            persist_exc
+        ).__name__
+        log.warning(
+            "[NAKED SCAN] standalone diagnostics persistence unavailable: %s",
+            persist_exc,
+        )
+
+    global _last_engine_b_scan_results
+    _last_engine_b_scan_results = dict(diagnostic_payload)
+
+    response_payload = dict(diagnostic_payload)
+    if not debug_mode:
+        response_payload.pop("debugRows", None)
+    return jsonify(response_payload)
 
 
 @app.route("/api/webhook", methods=["POST"])

@@ -2646,6 +2646,28 @@ def engine_b_confidence_passes(
     passed = bool(conf.get("passed", False)) and score_floor_ok
     if isinstance(conf_data, dict):
         conf_data["passed"] = bool(passed)
+        try:
+            from engine_b_canonical_actionability import (
+                synchronize_engine_b_final_actionability,
+            )
+
+            synchronize_engine_b_final_actionability(
+                conf_data,
+                final_passed=passed,
+            )
+        except Exception as exc:
+            # The score floor is final even if optional canonical diagnostics
+            # cannot be refreshed.  Keep the critical booleans fail-closed and
+            # make the synchronization failure visible in logs/payloads.
+            conf_data["final_engine_b_passed"] = bool(passed)
+            conf_data["confidence_passed"] = bool(passed)
+            if not passed:
+                conf_data["engine_b_canonical_actionable"] = False
+                conf_data["is_actionable"] = False
+                conf_data["canonical_trade_ok"] = False
+                conf_data["suggested_levels_executable"] = False
+            conf_data["canonical_final_sync_error"] = type(exc).__name__
+            log.warning("[ENGINE_B] final actionability sync failed: %s", exc)
     try:
         from calibration_diagnostics import (
             build_engine_b_calibration_row,
@@ -8361,6 +8383,8 @@ class NakedEngine:
             failed_gate_names.append(
                 f"trigger_tf={actual_trigger_tf or 'missing'}(expected={expected_trigger_tf})"
             )
+        if require_macro_align and not macro_ok:
+            failed_gate_names.append("macro")
         if not space_gate_ok:
             failed_gate_names.append("space")
         if not rr_ok:

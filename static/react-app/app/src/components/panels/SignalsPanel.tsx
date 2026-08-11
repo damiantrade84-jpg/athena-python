@@ -203,6 +203,7 @@ const ENGINE_B_FUNNEL_LABELS: Record<string, string> = {
   gate_fail_struct: 'Gate: structure',
   gate_fail_loc: 'Gate: location',
   gate_fail_trigger: 'Gate: trigger',
+  gate_fail_macro: 'Gate: macro',
   gate_fail_rr: 'Gate: RR',
   gate_fail_other: 'Gate: other',
   unknown_reject: 'Unknown',

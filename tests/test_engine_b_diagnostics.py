@@ -1298,6 +1298,15 @@ def test_engine_b_confidence_passes_enforces_min_score_floor(monkeypatch):
     style_profile = {"min_score": 5.0}
     conf = {
         "passed": True,
+        "checklist_passed": True,
+        "final_engine_b_passed": True,
+        "confidence_passed": True,
+        "engine_b_canonical_actionable": True,
+        "engine_b_canonical_status": "ACTIONABLE",
+        "canonical_status": "ACTIONABLE",
+        "canonical_trade_ok": True,
+        "is_actionable": True,
+        "suggested_levels_executable": True,
         "gate_score": 3.0,
         "gate_max_possible": 5.0,
         "score": 3.0,
@@ -1314,6 +1323,16 @@ def test_engine_b_confidence_passes_enforces_min_score_floor(monkeypatch):
     assert conf["score_floor_blocked"] is True
     assert conf["score_floor_reason"] == "min_score<5.00"
     assert "min_score<5.00" in conf["failed_gate_names"]
+    assert conf["final_engine_b_passed"] is False
+    assert conf["confidence_passed"] is False
+    assert conf["checklist_passed"] is False
+    assert conf["engine_b_canonical_actionable"] is False
+    assert conf["engine_b_canonical_status"] == "REJECT_CONFIDENCE_GATE"
+    assert conf["canonical_status"] == "REJECT_CONFIDENCE_GATE"
+    assert conf["canonical_trade_ok"] is False
+    assert conf["is_actionable"] is False
+    assert conf["suggested_levels_executable"] is False
+    assert "ENGINE_B_CONFIDENCE_PASSED_FALSE" in conf["engine_b_rejection_reasons"]
 
 
 def test_engine_b_confidence_passes_stamps_quality_ratio_floor(monkeypatch):

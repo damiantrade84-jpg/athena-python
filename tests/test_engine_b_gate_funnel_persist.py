@@ -11,8 +11,10 @@ from config import CONFIG
 from athena_app.diagnostics.engine_b_gate_funnel_persist import (
     flatten_scan_to_funnel_rows,
     maybe_persist_engine_b_scan_gate_funnel,
+    maybe_persist_engine_b_standalone_scan_diagnostics,
     regenerate_funnel_artifacts_from_scan_file,
     save_engine_b_scan_gate_funnel,
+    save_engine_b_standalone_scan_diagnostics,
     scheduled_engine_b_scan_gate_funnel_meta,
     summarize_funnel_rows,
 )
@@ -176,6 +178,42 @@ def test_save_writes_artifacts():
         assert len(stamped) == 1
         assert (tmp_path / "latest_funnel_rows.jsonl").exists()
         assert (tmp_path / "latest_funnel_summary.json").exists()
+
+
+def test_save_standalone_scan_writes_dedicated_artifacts():
+    with tempfile.TemporaryDirectory() as td:
+        tmp_path = Path(td)
+        payload = {
+            "success": True,
+            "scannedAt": "2026-08-11T12:00:00+00:00",
+            "signals": [],
+            "debugRows": [{"pair": "EUR/USD", "failed_gate_names": ["macro"]}],
+            "scanFunnel": {"total": 1, "gate_fail_macro": 1},
+        }
+
+        meta = save_engine_b_standalone_scan_diagnostics(
+            payload,
+            output_dir=tmp_path,
+        )
+
+        assert meta["engine_b_standalone_scan_saved"] is True
+        latest = tmp_path / "latest_scan_naked.json"
+        assert latest.exists()
+        assert '"gate_fail_macro": 1' in latest.read_text(encoding="utf-8")
+        assert len(list(tmp_path.glob("scan_naked_*.json"))) == 1
+        assert not (tmp_path / "latest_full_scan.json").exists()
+
+
+def test_maybe_persist_standalone_respects_existing_disable_switch(monkeypatch):
+    monkeypatch.setitem(CONFIG, "ENGINE_B_SCAN_GATE_FUNNEL_ENABLED", False)
+
+    out = maybe_persist_engine_b_standalone_scan_diagnostics({"signals": []})
+
+    assert out["engine_b_standalone_scan_saved"] is False
+    assert (
+        out["engine_b_standalone_scan_persist_skipped"]
+        == "ENGINE_B_SCAN_GATE_FUNNEL_DISABLED"
+    )
 
 
 def test_save_write_failure_non_fatal(monkeypatch):

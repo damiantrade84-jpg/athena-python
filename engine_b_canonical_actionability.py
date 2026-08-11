@@ -806,6 +806,95 @@ def route_engine_b_candidate(status: str, *, enforce: bool = False) -> str:
     return "rejected_diagnostics"
 
 
+def synchronize_engine_b_final_actionability(
+    conf: dict[str, Any],
+    *,
+    final_passed: bool,
+) -> dict[str, Any]:
+    """Keep post-evaluator pass fields and canonical routing consistent.
+
+    ``calculate_confidence`` attaches canonical fields before the external
+    style/regime score floor runs.  This helper is deliberately downgrade-only:
+    a passing score floor cannot promote an existing canonical rejection, while
+    a failed floor must not leave stale ACTIONABLE/executable fields behind.
+    """
+    if not isinstance(conf, dict):
+        return conf
+
+    final_passed = bool(final_passed)
+    conf["final_engine_b_passed"] = final_passed
+    conf["confidence_passed"] = final_passed
+    if "checklist_passed" in conf:
+        conf["checklist_passed"] = final_passed
+
+    if final_passed:
+        return conf
+
+    canonical_keys_present = any(
+        key in conf
+        for key in (
+            "engine_b_canonical_actionable",
+            "engine_b_canonical_status",
+            "canonical_trade_ok",
+            "canonical_status",
+            "is_actionable",
+        )
+    )
+    if not canonical_keys_present:
+        return conf
+
+    confidence_reason = "ENGINE_B_CONFIDENCE_PASSED_FALSE"
+    raw_reasons = conf.get("engine_b_rejection_reasons") or []
+    if not isinstance(raw_reasons, (list, tuple, set)):
+        raw_reasons = [raw_reasons]
+    reasons = [str(reason) for reason in raw_reasons if reason]
+    if confidence_reason not in reasons:
+        reasons.append(confidence_reason)
+    reasons = sorted(set(reasons))
+
+    current_status = str(
+        conf.get("engine_b_canonical_status") or conf.get("canonical_status") or ""
+    )
+    preserve_existing_reject = current_status in _REJECT_STATUSES
+    canonical_status = (
+        current_status if preserve_existing_reject else STATUS_REJECT_CONFIDENCE
+    )
+    primary_reason = (
+        conf.get("canonical_primary_reject_reason") if preserve_existing_reject else None
+    )
+    if not primary_reason:
+        primary_reason = next(
+            (reason for reason in reasons if reason != confidence_reason),
+            confidence_reason,
+        )
+
+    conf["engine_b_canonical_actionable"] = False
+    conf["is_actionable"] = False
+    conf["canonical_trade_ok"] = False
+    conf["suggested_levels_executable"] = False
+    conf["engine_b_canonical_status"] = canonical_status
+    conf["canonical_status"] = canonical_status
+    conf["structural_status"] = _structural_status_alias(canonical_status)
+    conf["engine_b_rejection_reasons"] = reasons
+    conf["structural_rejection_reasons"] = reasons
+    conf["canonical_primary_reject_reason"] = primary_reason
+    conf["canonical_secondary_reject_reasons"] = [
+        reason for reason in reasons if reason != primary_reason
+    ]
+    raw_badge_state = conf.get("canonical_badge_state")
+    badge_state = dict(raw_badge_state) if isinstance(raw_badge_state, dict) else {}
+    badge_state["confidence"] = "FAILED"
+    badge_state["trade"] = "FAIL"
+    conf["canonical_badge_state"] = badge_state
+    routing = route_engine_b_candidate(
+        canonical_status,
+        enforce=bool(_cfg().get("ENFORCE_ROUTING", False)),
+    )
+    conf["final_candidate_routing"] = routing
+    conf["final_routing"] = routing
+    return conf
+
+
 def should_block_normal_routing(status: str) -> bool:
     if not bool(_cfg().get("ENFORCE_ROUTING", False)):
         return False

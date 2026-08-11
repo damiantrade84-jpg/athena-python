@@ -447,6 +447,20 @@ def test_rr_gate_failure_surfaced_from_engine_b_funnel():
     assert "rr" in reason.lower()
 
 
+def test_standalone_scan_does_not_reapply_advisory_rr_floor():
+    """The shared evaluator owns RR enforcement; Scan B must not hard-block it again."""
+    text = (REPO_ROOT / "athena.py").read_text(encoding="utf-8")
+    body = text.split('@app.route("/api/scan-naked", methods=["POST"])', 1)[1]
+    body = body.split('@app.route("/api/webhook", methods=["POST"])', 1)[0]
+
+    assert "engine_b_confidence_passes(" in body
+    assert 'if rr < style_profile["min_rr"]' not in body
+    assert "maybe_persist_engine_b_standalone_scan_diagnostics" in body
+    assert '"debugRows": debug_rows' in body
+    assert '"gate_fail_macro": 0' in body
+    assert '"macro": "gate_fail_macro"' in body
+
+
 # ---------------------------------------------------------------------------
 # Safety: independence does not promote B-only setups to live auto-trade
 # ---------------------------------------------------------------------------

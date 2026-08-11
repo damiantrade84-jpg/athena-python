@@ -716,6 +716,7 @@ def test_stock_typed_commodity_tracker_score_group_forces_swing_macro_alignment(
 
     assert conf["macro_ok"] is False
     assert conf["passed"] is False
+    assert "macro" in conf["failed_gate_names"]
 
 
 def test_index_and_precious_etf_score_groups_route_to_etf_engine_b_class():
