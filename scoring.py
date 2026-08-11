@@ -1493,24 +1493,18 @@ def _a_only_required_score(pair: dict, signal: dict) -> float | None:
 def _signal_confidence_for_gate(signal: dict) -> float | None:
     """Resolve the Engine A confidence value used by trade-tier gating.
 
-    V3 publishes the continuous quality fields ``conviction`` and
-    ``scoreNorm``; legacy Engine A payloads publish ``confidence`` or a
-    ``confidenceDetail`` value.  Keep the contracts separate and prefer the
-    V3 fields whenever a V3 payload is identified.
+    Only consume an independently published ``confidence`` value.  Engine A V3
+    publishes ``conviction`` as an alias of ``scoreNorm`` (the confluence score
+    divided by its maximum), so using either field here would apply a second
+    threshold to the same score that already qualified the signal.
     """
-    is_v3 = (
-        str(signal.get("engine") or "").upper() == "ENGINE_A_V3"
-        or str(signal.get("contractVersion") or "").startswith("3.")
-    )
-    keys = ("conviction", "scoreNorm") if is_v3 else ("confidence",)
-    for key in keys:
-        raw = signal.get(key)
-        if raw is not None:
-            try:
-                value = float(raw)
-                return value if math.isfinite(value) else None
-            except (TypeError, ValueError):
-                pass
+    raw = signal.get("confidence")
+    if raw is not None:
+        try:
+            value = float(raw)
+            return value if math.isfinite(value) else None
+        except (TypeError, ValueError):
+            pass
     detail = signal.get("confidenceDetail")
     if isinstance(detail, dict):
         raw = detail.get("confidence")
@@ -1520,15 +1514,15 @@ def _signal_confidence_for_gate(signal: dict) -> float | None:
                 return value if math.isfinite(value) else None
             except (TypeError, ValueError):
                 pass
-    if is_v3:
-        raw = signal.get("confidence")
-        if raw is not None:
-            try:
-                value = float(raw)
-                return value if math.isfinite(value) else None
-            except (TypeError, ValueError):
-                pass
     return None
+
+
+def _signal_independent_confidence_supplied(signal: dict) -> bool:
+    """Return True when a non-null independent confidence field was supplied."""
+    if signal.get("confidence") is not None:
+        return True
+    detail = signal.get("confidenceDetail")
+    return isinstance(detail, dict) and detail.get("confidence") is not None
 
 
 def _classify_signal(signal: dict, pair: dict) -> tuple[str, str]:

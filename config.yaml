@@ -4564,14 +4564,14 @@ ENGINE_B_STYLE_MIN_SCORE_BY_STYLE:
   swing: 5.0
 
 # Basis for the Engine B style/regime score floor.
-#   total         — legacy: compare ENGINE_B_STYLE_MIN_SCORE_BY_STYLE against
-#                   confidence.score (currently non-binding, see note above).
+#   total         — production mode: retain the legacy total-score comparison
+#                   and record the provisional quality ratios as shadow data.
 #   quality_ratio — compare confidence.quality_pct/100 against
-#                   ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE.
-# The quality ratios below are PLACEHOLDERS, not calibrated values. While the
-# basis remains total, calibration diagnostics record whether each signal would
-# pass them as a non-gating shadow. Do not switch the basis to quality_ratio
-# until they are backed by outcome evidence.
+#                   ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE. Research-only until
+#                   every activated style is backed by n>=30 linked outcomes.
+# The quality ratios below are PLACEHOLDERS, not calibrated values. Calibration
+# diagnostics record whether each signal would pass them without allowing the
+# placeholders to reject an otherwise valid Engine B setup.
 # 2026-08-06 audit: switched total -> quality_ratio. Under `total` the floor was
 # structurally incapable of rejecting anything. gate_confirmations has 5 entries
 # and `passed` requires ALL of them, so gate_score == 5 for every passing signal;
@@ -4581,23 +4581,17 @@ ENGINE_B_STYLE_MIN_SCORE_BY_STYLE:
 # (5.0 x 1.10 = 5.5) bound at all, where it silently became a demand for ~67%
 # quality on forex. The floor was a no-op dressed as a gate.
 #
-# ⚠ The ratios below are the PLACEHOLDER values that were already in this file;
-# they are NOT outcome-calibrated (no n>=30 evidence). This flip is the one
-# change in the audit that alters Engine B pass/fail on unvalidated numbers, and
-# it will reject signals that previously passed. It is enabled because a floor
-# that cannot bind is worse than an approximate one, but treat the ratios as
-# provisional and calibrate them against outcomes.
-# Revert with: ENGINE_B_MIN_SCORE_BASIS: total
-ENGINE_B_MIN_SCORE_BASIS: quality_ratio
+# 2026-08-11 correction: returned the uncalibrated ratios to shadow-only after
+# the active floor was confirmed to reject valid-checklist rows without n>=30
+# linked outcomes. Switching to quality_ratio is an explicit future promotion
+# and must include that evidence plus focused gate tests.
+ENGINE_B_MIN_SCORE_BASIS: total
 ENGINE_B_MIN_QUALITY_RATIO_BY_STYLE:
   scalp: 0.30
   intraday: 0.35
   swing: 0.40
-# 2026-08-09 review (X1): placeholders KEPT by explicit decision — no n>=30
-# outcome evidence yet to retune against, and reverting to `total` restores a
-# floor that cannot bind. Shadow calibration (THRESHOLD_AUDIT /
-# CALIBRATION_DIAGNOSTICS) continues collecting would-pass data; retune only
-# after n>=30 per style.
+# Shadow calibration (THRESHOLD_AUDIT / CALIBRATION_DIAGNOSTICS) continues
+# collecting quality_ratio_would_pass; promote only after n>=30 per style.
 
 # ── Engine B structural fixes (2026-08-06 audit) ───────────────────────────
 # BOS reference swing. `legacy_second_last` restores the fixed peak_idx[-2]

@@ -82,6 +82,7 @@ def classify_engine_a_v3_signal(signal: dict[str, Any], pair: dict[str, Any]) ->
         from config import CONFIG
         from scoring import (
             _signal_confidence_for_gate,
+            _signal_independent_confidence_supplied,
             get_min_confidence_threshold,
             get_pair_score_group,
         )
@@ -91,11 +92,16 @@ def classify_engine_a_v3_signal(signal: dict[str, Any], pair: dict[str, Any]) ->
             conf = _signal_confidence_for_gate(signal)
             score_group = get_pair_score_group(pair)
             if conf is None:
-                return (
-                    "watchlist",
-                    f"Engine A confidence unavailable for {score_group} minimum {min_conf:.2f}",
-                )
-            if conf < min_conf:
+                # V3 conviction/scoreNorm are the already-gated confluence score,
+                # not independent confidence.  Skip this optional gate when no
+                # independent confidence was published, but fail closed when a
+                # supplied value is malformed or non-finite.
+                if _signal_independent_confidence_supplied(signal):
+                    return (
+                        "watchlist",
+                        f"Engine A confidence invalid for {score_group} minimum {min_conf:.2f}",
+                    )
+            elif conf < min_conf:
                 return (
                     "watchlist",
                     f"Engine A confidence {conf:.2f} below {score_group} minimum {min_conf:.2f}",

@@ -175,6 +175,27 @@ def test_v3_score_norm_is_not_reused_as_confidence_for_scoring_or_scanner(monkey
     assert scanner_classify(signal, pair)[0] == "trade"
 
 
+@pytest.mark.parametrize("confidence", ["not-a-number", float("nan"), float("inf")])
+def test_v3_malformed_independent_confidence_fails_closed(monkeypatch, confidence):
+    monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", True)
+    signal = _v3_trade_signal(confidence=confidence)
+    pair = {
+        "display": "EUR/USD",
+        "symbol": "EURUSD",
+        "type": "forex",
+        "score_group": "forex_majors",
+        "enabled": True,
+    }
+
+    scoring_tier, scoring_reason = scoring_classify(signal, pair)
+    scanner_tier, scanner_reason = scanner_classify(signal, pair)
+
+    assert scoring_tier == "watchlist"
+    assert scanner_tier == "watchlist"
+    assert "confidence invalid" in scoring_reason.lower()
+    assert "confidence invalid" in scanner_reason.lower()
+
+
 def test_scanner_and_scoring_agree_on_trade(monkeypatch):
     monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_MIN_CONFIDENCE_ENABLED", False)
     signal = _v3_trade_signal()

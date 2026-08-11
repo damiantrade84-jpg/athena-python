@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
+import yaml
 
 import calibration_diagnostics
 from calibration_diagnostics import build_engine_a_calibration_row, build_engine_b_calibration_row
@@ -12,6 +14,13 @@ from calibration_diagnostics import build_engine_a_calibration_row, build_engine
 
 def _write_jsonl(path, rows):
     path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+
+
+def test_checked_in_engine_b_placeholder_quality_floor_is_shadow_only():
+    repo_root = Path(__file__).resolve().parents[1]
+    cfg = yaml.safe_load((repo_root / "config.yaml").read_text(encoding="utf-8"))
+
+    assert cfg["ENGINE_B_MIN_SCORE_BASIS"] == "total"
 
 
 def test_engine_b_quality_floor_is_recorded_as_shadow_when_total_basis_is_active(
