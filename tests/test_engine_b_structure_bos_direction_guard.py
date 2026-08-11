@@ -68,6 +68,7 @@ def test_long_blocked_when_structure_bos_exclusively_bearish(monkeypatch):
     )
     assert out["structure_ok"] is False
     assert out["structure_bos_direction_conflict"] is True
+    assert out["structure_direction_sources"] == []
     assert out["structure_bos_opposes"] is True
     diag = out.get("engine_b_diagnostics") or {}
     assert ENGINE_B_REASON_STRUCTURE_BOS_DIRECTION_CONFLICT in (
@@ -347,3 +348,151 @@ def test_snapshot_surfaces_dual_clear_side_with_gates_not_blank(monkeypatch):
     fails = (result.selected.get("confidence") or {}).get("failed_gate_names") or []
     assert "loc" in fails
     assert "structure_direction_ambiguous" in fails
+
+
+def test_snapshot_uses_unique_choch_side_without_false_ambiguity(monkeypatch):
+    """A score-floor failure must not relabel unique CHoCH as ambiguous."""
+    from engine_b_snapshot import evaluate_engine_b_snapshot
+    from unittest.mock import patch
+
+    class _FakeEngine:
+        def precompute_structure_data(self, *a, **k):
+            return {"_ok": True, "atr": 1.0}
+
+        def analyze_structure_direction(self, precompute, current_price, direction):
+            return {
+                "structural_verdict": "CLEAR",
+                "atr": 1.0,
+                "asset_type": "forex",
+                "bos_confirmed": False,
+                "bos_data": {"bos_bull": False, "bos_bear": False},
+                "choch_confirmed": direction == "SHORT",
+                "choch_data": {"choch_bull": False, "choch_bear": True},
+                "liquidity_sweep": False,
+                "recommended_stop_loss": 99.0 if direction == "LONG" else 101.0,
+                "recommended_take_profit": 105.0 if direction == "LONG" else 95.0,
+            }
+
+        def calculate_confidence(self, res, current_price, direction, **kwargs):
+            if direction == "SHORT":
+                return {
+                    "score": 4.8,
+                    "passed": False,
+                    "structure_ok": True,
+                    "failed_gate_names": ["min_score<5.00"],
+                    "lifecycle_state": "forming",
+                }
+            return {
+                "score": 4.9,
+                "passed": False,
+                "structure_ok": False,
+                "failed_gate_names": ["struct", "min_score<5.00"],
+                "lifecycle_state": "forming",
+            }
+
+    pair = {"display": "EUR/CAD", "symbol": "EURCAD", "type": "forex"}
+    role = {
+        tf: [{"close": 1.0, "high": 1.1, "low": 0.9, "open": 1.0, "vol": 1}]
+        for tf in ("D1", "H4", "H1", "M15")
+    }
+    with patch(
+        "engine_b_snapshot.resolve_engine_b_style_profile",
+        return_value=(
+            "intraday",
+            {
+                "style": "intraday",
+                "entry_tf": "M15",
+                "structure_tf": "H4",
+                "fallback_rr": 2.0,
+                "min_score": 5.0,
+            },
+        ),
+    ):
+        result = evaluate_engine_b_snapshot(
+            pair,
+            role,
+            current_price=1.0,
+            style="intraday",
+            score_group="forex_crosses",
+            atr_override=0.01,
+            regime_label="TRENDING",
+            engine=_FakeEngine(),
+            context_mode="historical",
+            gate_fn=lambda conf, *a, **k: (bool(conf.get("passed")), 5.0),
+        )
+
+    assert result.selected is not None
+    assert result.selected["direction"] == "SHORT"
+    fails = (result.selected.get("confidence") or {}).get("failed_gate_names") or []
+    assert "min_score<5.00" in fails
+    assert "structure_direction_ambiguous" not in fails
+    assert "structure_direction_unresolved" not in fails
+    assert result.selected["confidence"]["structure_direction_status"] == "resolved"
+
+
+def test_snapshot_labels_no_directional_structure_as_unresolved(monkeypatch):
+    """Dual analysis success without structure evidence is unresolved, not ambiguous."""
+    from engine_b_snapshot import evaluate_engine_b_snapshot
+    from unittest.mock import patch
+
+    class _FakeEngine:
+        def precompute_structure_data(self, *a, **k):
+            return {"_ok": True, "atr": 1.0}
+
+        def analyze_structure_direction(self, precompute, current_price, direction):
+            return {
+                "structural_verdict": "CLEAR",
+                "atr": 1.0,
+                "asset_type": "crypto",
+                "bos_confirmed": False,
+                "bos_data": {"bos_bull": False, "bos_bear": False},
+                "choch_confirmed": False,
+                "liquidity_sweep": False,
+                "recommended_stop_loss": 99.0 if direction == "LONG" else 101.0,
+                "recommended_take_profit": 105.0 if direction == "LONG" else 95.0,
+            }
+
+        def calculate_confidence(self, res, current_price, direction, **kwargs):
+            return {
+                "score": 4.0 if direction == "LONG" else 3.0,
+                "passed": False,
+                "structure_ok": False,
+                "failed_gate_names": ["struct"],
+                "lifecycle_state": "forming",
+            }
+
+    pair = {"display": "ALT/USDT", "symbol": "ALTUSDT", "type": "crypto"}
+    role = {
+        tf: [{"close": 1.0, "high": 1.1, "low": 0.9, "open": 1.0, "vol": 1}]
+        for tf in ("D1", "H4", "H1", "M15")
+    }
+    with patch(
+        "engine_b_snapshot.resolve_engine_b_style_profile",
+        return_value=(
+            "intraday",
+            {
+                "style": "intraday",
+                "entry_tf": "M15",
+                "structure_tf": "H4",
+                "fallback_rr": 2.0,
+                "min_score": 3.0,
+            },
+        ),
+    ):
+        result = evaluate_engine_b_snapshot(
+            pair,
+            role,
+            current_price=1.0,
+            style="intraday",
+            score_group="crypto_other",
+            atr_override=0.01,
+            regime_label="TRENDING",
+            engine=_FakeEngine(),
+            context_mode="historical",
+            gate_fn=lambda conf, *a, **k: (bool(conf.get("passed")), 3.0),
+        )
+
+    assert result.selected is not None
+    fails = (result.selected.get("confidence") or {}).get("failed_gate_names") or []
+    assert "structure_direction_unresolved" in fails
+    assert "structure_direction_ambiguous" not in fails

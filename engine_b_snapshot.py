@@ -793,10 +793,12 @@ def evaluate_engine_b_snapshot(
                 resolved_profile,
                 regime,
             )
-        # No exclusive BOS alignment (often dual CLEAR LONG+SHORT). Still surface
-        # the strongest CLEAR side so loc/trigger/space failures are visible and
-        # watchlist rows can carry a structural direction. ``passed`` is forced
-        # False — dual CLEAR without exclusive BOS must never execute.
+        # ``structuralVerdict=CLEAR`` means analysis succeeded; it is not itself
+        # directional evidence. Prefer a unique structure_ok side (CHoCH, guarded
+        # fresh sequence, or guarded liquidity sweep). Only label ambiguity when
+        # multiple sides actually have directional structure. With no directional
+        # side, surface the best diagnostic candidate as unresolved. In every
+        # branch ``passed`` remains False until the original gate stack passes.
         if eligible:
             def _eligible_rank(candidate: dict[str, Any]) -> tuple[int, float]:
                 conf = candidate.get("confidence") or {}
@@ -806,14 +808,30 @@ def evaluate_engine_b_snapshot(
                     score = 0.0
                 return (1 if bool(conf.get("structure_ok")) else 0, score)
 
-            best = max(eligible, key=_eligible_rank)
+            directional = [
+                candidate
+                for candidate in eligible
+                if bool((candidate.get("confidence") or {}).get("structure_ok"))
+            ]
+            if len(directional) == 1:
+                best = directional[0]
+                direction_failure = None
+            elif len(directional) > 1:
+                best = max(directional, key=_eligible_rank)
+                direction_failure = "structure_direction_ambiguous"
+            else:
+                best = max(eligible, key=_eligible_rank)
+                direction_failure = "structure_direction_unresolved"
             conf_out = dict(best.get("confidence") or {})
             conf_out["passed"] = False
             conf_out["checklist_passed"] = False
             fails = list(conf_out.get("failed_gate_names") or [])
-            if "structure_direction_ambiguous" not in fails:
-                fails.append("structure_direction_ambiguous")
+            if direction_failure and direction_failure not in fails:
+                fails.append(direction_failure)
             conf_out["failed_gate_names"] = fails
+            conf_out["structure_direction_status"] = (
+                "resolved" if direction_failure is None else direction_failure
+            )
             structure_out = dict(best.get("structure") or {})
             structure_out.update(conf_out)
             selected = {

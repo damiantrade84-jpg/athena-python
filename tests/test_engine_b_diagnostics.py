@@ -16,11 +16,14 @@ from market_structure import (
     ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT,
     ENGINE_B_REASON_FOREX_ADX_LOW,
     ENGINE_B_REASON_NO_TRIGGER_PATTERN,
+    ENGINE_B_REASON_OPPOSITE_TRIGGER_PRESENT,
+    ENGINE_B_REASON_RAW_TRIGGER_MISSING,
     ENGINE_B_REASON_RESISTANCE_TOO_CLOSE,
     ENGINE_B_REASON_SEQUENCE_COUNTER_TREND,
     ENGINE_B_REASON_STRUCTURAL_TP_TOO_CLOSE,
     ENGINE_B_REASON_SUPPORT_TOO_CLOSE,
     ENGINE_B_REASON_TP_WRONG_SIDE,
+    ENGINE_B_REASON_TRIGGER_OFF_LOCATION,
     NakedEngine,
     _engine_b_structural_target_price,
     _engine_b_structural_tp_buffer_atr_mult,
@@ -1250,11 +1253,13 @@ def test_calculate_confidence_structural_tp_wrong_side_emits_diagnostic():
     assert out["execution_tp"] is not None
 
 
-def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst():
+def test_calculate_confidence_flexible_mode_accepts_liquidity_sweep_catalyst(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_MULTIPLIERS_ENABLED", False)
     res = _base_res_long()
     res["bos_confirmed"] = False
     res["trigger_ok"] = False
     res["liquidity_sweep"] = True
+    res["sweep_direction"] = "LONG"
     res["ob_at_zone"] = False
     res["distance_to_res"] = 3.0
     res["recommended_stop_loss"] = 99.0
@@ -1306,6 +1311,9 @@ def test_engine_b_confidence_passes_enforces_min_score_floor(monkeypatch):
     assert min_score_scaled == 5.0
     assert gate_ok is False
     assert conf["passed"] is False
+    assert conf["score_floor_blocked"] is True
+    assert conf["score_floor_reason"] == "min_score<5.00"
+    assert "min_score<5.00" in conf["failed_gate_names"]
 
 
 def test_engine_b_confidence_passes_stamps_quality_ratio_floor(monkeypatch):
@@ -1431,6 +1439,65 @@ def test_calculate_confidence_emits_no_trigger_pattern_when_missing():
     )
     codes = out.get("engine_b_diagnostics", {}).get("reason_codes", [])
     assert ENGINE_B_REASON_NO_TRIGGER_PATTERN in codes
+
+
+def test_trigger_failure_reports_off_location_without_weakening_gate(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TRIGGER_AT_LOCATION_ENABLED", True)
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_TRIGGER_AT_LOCATION_MAX_ATR", 1.0)
+    res = _base_res_long()
+    res.update({
+        "bos_confirmed": False,
+        "bos_data": {"bos_bull": False, "bos_bear": False},
+        "choch_confirmed": True,
+        "zone_touched": False,
+        "near_active_zone": False,
+        "ob_at_zone": False,
+        "active_zone_distance": 2.5,
+        "strong_close": False,
+    })
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    assert out["trigger_ok"] is True
+    assert out["entry_ok"] is False
+    assert out["trigger_location_blocked"] is True
+    assert out["trigger_failure_reason"] == ENGINE_B_REASON_TRIGGER_OFF_LOCATION
+    assert ENGINE_B_REASON_TRIGGER_OFF_LOCATION in out["failed_gate_names"]
+
+
+def test_trigger_failure_reports_opposite_pattern_separately():
+    res = _base_res_long()
+    res.update({
+        "trigger_ok": False,
+        "opposing_trigger_ok": True,
+        "opposing_trigger_pattern": "ENGULFING",
+        "strong_close": False,
+        "inside_break_candle": False,
+        "engulfing_candle": False,
+    })
+    out = engine.calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        learning_ctx=None,
+        entry_candles=[],
+        style_profile={"min_room_atr": 0.35, "min_rr": 1.0, "require_macro_align": False},
+    )
+
+    assert out["entry_ok"] is False
+    assert out["trigger_failure_reason"] == ENGINE_B_REASON_RAW_TRIGGER_MISSING
+    assert out["trigger_failure_reasons"] == [
+        ENGINE_B_REASON_RAW_TRIGGER_MISSING,
+        ENGINE_B_REASON_OPPOSITE_TRIGGER_PRESENT,
+    ]
+    assert ENGINE_B_REASON_OPPOSITE_TRIGGER_PRESENT in out["failed_gate_names"]
+    assert out["opposing_trigger_pattern"] == "ENGULFING"
 
 
 def test_engine_b_research_lab_micro_breakout_can_satisfy_entry_gate(monkeypatch):

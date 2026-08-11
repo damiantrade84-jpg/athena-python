@@ -2752,6 +2752,14 @@ CONFIG: dict = {
     # Structure direction evidence is BOS / CHoCH / aligned sweep. Set true only
     # to restore legacy sequence-as-direction behaviour.
     "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED": False,
+    # Guarded replacements for the legacy all-or-nothing sequence authority.
+    # Defaults stay fail-closed; config.yaml opts production scans in. A swing
+    # sequence must be fresh and aligned on every independent structure/bias
+    # rung. A liquidity sweep must carry an explicit direction, occur at a
+    # recognised location, and have no fresh opposing sequence.
+    "ENGINE_B_FRESH_SEQUENCE_STRUCTURE_ENABLED": False,
+    "ENGINE_B_LIQUIDITY_SWEEP_STRUCTURE_ENABLED": False,
+    "ENGINE_B_LIQUIDITY_SWEEP_STRUCTURE_REQUIRE_LOCATION": True,
     # Fast/conditional-M5 pairs only: when M15 trigger is not armed but location
     # is OK and structure supports the side, allow M5 to confirm pullback turn
     # (refinement — never flips direction). Default ON.

@@ -825,6 +825,9 @@ ENGINE_B_REASON_SEQUENCE_COUNTER_TREND = "sequence_counter_trend"
 # green-light the counter-BOS direction).
 ENGINE_B_REASON_STRUCTURE_BOS_DIRECTION_CONFLICT = "structure_bos_direction_conflict"
 ENGINE_B_REASON_NO_TRIGGER_PATTERN = "no_trigger_pattern"
+ENGINE_B_REASON_RAW_TRIGGER_MISSING = "raw_trigger_missing"
+ENGINE_B_REASON_OPPOSITE_TRIGGER_PRESENT = "opposite_trigger_present"
+ENGINE_B_REASON_TRIGGER_OFF_LOCATION = "trigger_off_location"
 ENGINE_B_REASON_BOS_WITHOUT_VOLUME = "bos_without_volume"
 ENGINE_B_REASON_BOS_VOLUME_BELOW_THRESHOLD = "bos_volume_below_threshold"
 ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT = "d1_pd_array_conflict"
@@ -845,6 +848,134 @@ def _float_cfg(key: str, default: float) -> float:
         return float(config.CONFIG.get(key, default))
     except (TypeError, ValueError):
         return float(default)
+
+
+def _engine_b_guarded_structure_evidence(res: dict, direction: str) -> dict:
+    """Resolve bounded sequence/sweep direction evidence for ``structure_ok``.
+
+    This intentionally does not re-enable
+    ``ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED``. That legacy switch changes
+    several consumers at once and allows a stale single-rung sequence to become
+    direction authority. The guarded path requires measurable freshness and
+    agreement across each genuinely independent sequence rung. Liquidity sweeps
+    require explicit direction and structural location, and fail closed against
+    fresh/unknown-age opposing sequences or opposing BOS.
+    """
+
+    direction_u = str(direction or "").upper()
+    h1_seq = str(res.get("current_swing_sequence") or "").upper()
+    h4_seq = str(res.get("macro_swing_sequence") or "").upper()
+    long_side = direction_u == "LONG"
+    short_side = direction_u == "SHORT"
+
+    micro_aligned = (long_side and h1_seq == "HH_HL") or (
+        short_side and h1_seq == "LH_LL"
+    )
+    macro_aligned = (long_side and h4_seq == "HH_HL") or (
+        short_side and h4_seq == "LH_LL"
+    )
+    micro_opposed = (long_side and h1_seq == "LH_LL") or (
+        short_side and h1_seq == "HH_HL"
+    )
+    macro_opposed = (long_side and h4_seq == "LH_LL") or (
+        short_side and h4_seq == "HH_HL"
+    )
+
+    structure_tf = str(res.get("structure_tf") or "").strip().upper()
+    macro_tf = str(res.get("macro_sequence_tf") or "").strip().upper()
+    # Unknown provenance stays conservative and is treated as independent.
+    macro_independent = not (
+        structure_tf and macro_tf and structure_tf == macro_tf
+    )
+
+    def _flag(value) -> bool:
+        # Fail closed on strings such as "False"; bool("False") is True.
+        return isinstance(value, (bool, np.bool_)) and bool(value)
+
+    def _age(value):
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if math.isfinite(parsed) and parsed >= 0 else None
+
+    fresh_bars = _float_cfg("ENGINE_B_SWING_SEQUENCE_FRESH_BARS", 10.0)
+    micro_age = _age(res.get("current_swing_sequence_age"))
+    macro_age = _age(res.get("macro_swing_sequence_age"))
+    freshness_enabled = fresh_bars > 0
+    micro_fresh = bool(
+        freshness_enabled
+        and micro_aligned
+        and micro_age is not None
+        and micro_age <= fresh_bars
+    )
+    macro_fresh = bool(
+        freshness_enabled
+        and macro_aligned
+        and macro_age is not None
+        and macro_age <= fresh_bars
+    )
+
+    bos_data = res.get("bos_data") if isinstance(res.get("bos_data"), dict) else {}
+    opposing_bos = bool(
+        (long_side and _flag(bos_data.get("bos_bear")))
+        or (short_side and _flag(bos_data.get("bos_bull")))
+    ) and not _flag(res.get("choch_confirmed"))
+
+    fresh_sequence_ok = bool(
+        config.CONFIG.get("ENGINE_B_FRESH_SEQUENCE_STRUCTURE_ENABLED", False)
+        and micro_fresh
+        and (not macro_independent or macro_fresh)
+        and not opposing_bos
+    )
+
+    # Unknown age cannot prove an opposing directional sequence is stale, so it
+    # blocks the restored sweep path. A measured age beyond FRESH_BARS does not.
+    micro_opposition_active = bool(
+        micro_opposed and (micro_age is None or micro_age <= fresh_bars)
+    )
+    macro_opposition_active = bool(
+        macro_independent
+        and macro_opposed
+        and (macro_age is None or macro_age <= fresh_bars)
+    )
+    sweep_direction = str(res.get("sweep_direction") or "").upper()
+    sweep_location_ok = bool(
+        _flag(res.get("zone_touched"))
+        or _flag(res.get("near_active_zone"))
+        or _flag(res.get("ob_at_zone"))
+    )
+    require_sweep_location = bool(
+        config.CONFIG.get(
+            "ENGINE_B_LIQUIDITY_SWEEP_STRUCTURE_REQUIRE_LOCATION", True
+        )
+    )
+    liquidity_sweep_ok = bool(
+        config.CONFIG.get("ENGINE_B_LIQUIDITY_SWEEP_STRUCTURE_ENABLED", False)
+        and _flag(res.get("liquidity_sweep"))
+        and sweep_direction == direction_u
+        and (sweep_location_ok or not require_sweep_location)
+        and not micro_opposition_active
+        and not macro_opposition_active
+        and not opposing_bos
+    )
+
+    return {
+        "fresh_sequence_ok": fresh_sequence_ok,
+        "liquidity_sweep_ok": liquidity_sweep_ok,
+        "micro_sequence_aligned": bool(micro_aligned),
+        "macro_sequence_aligned": bool(macro_aligned),
+        "micro_sequence_age": micro_age,
+        "macro_sequence_age": macro_age,
+        "macro_sequence_independent": bool(macro_independent),
+        "fresh_bars": fresh_bars,
+        "sweep_direction_explicit": sweep_direction in {"LONG", "SHORT"},
+        "sweep_location_ok": sweep_location_ok,
+        "fresh_opposing_sequence": bool(
+            micro_opposition_active or macro_opposition_active
+        ),
+        "opposing_bos": opposing_bos,
+    }
 
 
 # ``VOLATILITY_SCALER_BANDS`` is calibrated on H4 ATR% (see the per-row comments
@@ -2480,6 +2611,9 @@ def engine_b_confidence_passes(
             or (effective_min > 0 and gate_max_possible > 0 and effective_min > gate_max_possible)
         )
         conf_data["score_floor_ok"] = bool(score_floor_ok)
+        conf_data["score_floor_blocked"] = bool(not score_floor_ok)
+        conf_data["score_floor_reason"] = None
+        conf_data["quality_floor_blocked"] = False
         if basis == "quality_ratio":
             conf_data["min_quality_ratio"] = round(float(min_ratio), 4)
             conf_data["quality_ratio"] = round(float(quality_ratio), 4)
@@ -2487,6 +2621,7 @@ def engine_b_confidence_passes(
             # UI do not show "all gates green" while confidence_passed is false.
             if not score_floor_ok and min_ratio > 0:
                 conf_data["quality_floor_blocked"] = True
+                conf_data["score_floor_reason"] = f"quality_ratio<{min_ratio:.2f}"
                 fails = list(conf_data.get("failed_gate_names") or [])
                 floor_code = f"quality_ratio<{min_ratio:.2f}"
                 if floor_code not in fails and not any(
@@ -2496,6 +2631,18 @@ def engine_b_confidence_passes(
                 conf_data["failed_gate_names"] = fails
             else:
                 conf_data["quality_floor_blocked"] = False
+        elif not score_floor_ok and effective_min > 0:
+            # Total-score floors are just as binding as quality-ratio floors.
+            # Keep them visible so direction fallback cannot masquerade as a
+            # structure ambiguity when the candidate simply missed min_score.
+            floor_code = f"min_score<{effective_min:.2f}"
+            conf_data["score_floor_reason"] = floor_code
+            fails = list(conf_data.get("failed_gate_names") or [])
+            if floor_code not in fails and not any(
+                str(g).startswith("min_score") for g in fails
+            ):
+                fails.append(floor_code)
+            conf_data["failed_gate_names"] = fails
     passed = bool(conf.get("passed", False)) and score_floor_ok
     if isinstance(conf_data, dict):
         conf_data["passed"] = bool(passed)
@@ -7020,6 +7167,13 @@ class NakedEngine:
             _sweep_dir is None or _sweep_dir == direction
         )
         _choch_aligned = bool(res.get("choch_confirmed", False))
+        _guarded_structure = _engine_b_guarded_structure_evidence(res, direction)
+        _fresh_sequence_structure_ok = bool(
+            _guarded_structure.get("fresh_sequence_ok")
+        )
+        _liquidity_sweep_structure_ok = bool(
+            _guarded_structure.get("liquidity_sweep_ok")
+        )
         # Forex ADX is exposed as a diagnostic (engine_b_overlay / Marcus Reid /
         # tests) but no longer gates structure_ok. Consumers can use it as a
         # soft conviction signal. Computed ahead of the structure gate so the
@@ -7069,12 +7223,15 @@ class NakedEngine:
                 or _sweep_aligned
             )
         else:
-            # Sequence retired from direction: exclusive break/character only.
-            # Aligned sweep remains entry/confluence aid, not sole HTF direction
-            # (EURNZD: bull_sweep on a sell-off was still passing LONG).
+            # The unsafe legacy direction switch remains off. Guarded sequence
+            # and liquidity paths restore classic naked-structure evidence only
+            # when freshness, independent-rung agreement, direction, location,
+            # and opposing-structure checks all pass.
             structure_ok = (not _hard_counter_veto) and (
                 bool(res.get("bos_confirmed", False))
                 or _choch_aligned
+                or _fresh_sequence_structure_ok
+                or _liquidity_sweep_structure_ok
             )
         structure_gate_original_ok = bool(structure_ok)
         structure_gate_disabled = bool(profile.get("disable_structure_gate", False))
@@ -7103,6 +7260,20 @@ class NakedEngine:
         )
         if _structure_bos_dir_conflict:
             structure_ok = False
+
+        _structure_direction_sources = []
+        if bool(res.get("bos_confirmed", False)):
+            _structure_direction_sources.append("bos")
+        if _choch_aligned:
+            _structure_direction_sources.append("choch")
+        if _fresh_sequence_structure_ok:
+            _structure_direction_sources.append("fresh_sequence")
+        if _liquidity_sweep_structure_ok:
+            _structure_direction_sources.append("liquidity_sweep")
+        if _structure_bos_dir_conflict:
+            # Report effective admission evidence. An unreversed opposing BOS
+            # invalidates every otherwise aligned source for this direction.
+            _structure_direction_sources = []
 
         # Forex ADX is exposed as a diagnostic (engine_b_overlay / Marcus Reid /
         # tests) but no longer gates structure_ok. Consumers can use it as a
@@ -7883,6 +8054,12 @@ class NakedEngine:
                 # context used by the profile bonus/output path below.
                 _quality_res = dict(res)
                 _quality_res["profile_context"] = _profile_vp_context
+                _quality_res["fresh_sequence_structure_ok"] = (
+                    _fresh_sequence_structure_ok
+                )
+                _quality_res["liquidity_sweep_structure_ok"] = (
+                    _liquidity_sweep_structure_ok
+                )
                 # Resolve the group-scoped weight table once. The
                 # Stochastic/CCI/Williams %R oscillator trio costs three
                 # O(n x period) series per evaluated bar (twice — once per
@@ -8149,6 +8326,25 @@ class NakedEngine:
         if not dxy_ok:
             passed = False
 
+        _trigger_failure_reasons = []
+        if not entry_ok:
+            if _trigger_location_blocked:
+                _trigger_failure_reasons.append(
+                    ENGINE_B_REASON_TRIGGER_OFF_LOCATION
+                )
+            elif _ft_trap_blocked:
+                _trigger_failure_reasons.append("follow_through_trap")
+            elif not trigger_ok:
+                _trigger_failure_reasons.append(
+                    ENGINE_B_REASON_RAW_TRIGGER_MISSING
+                )
+                if bool(res.get("opposing_trigger_ok")):
+                    _trigger_failure_reasons.append(
+                        ENGINE_B_REASON_OPPOSITE_TRIGGER_PRESENT
+                    )
+            else:
+                _trigger_failure_reasons.append("entry_catalyst_missing")
+
         failed_gate_names = []
         if not structure_ok:
             failed_gate_names.append("struct")
@@ -8156,6 +8352,11 @@ class NakedEngine:
             failed_gate_names.append("loc")
         if not entry_ok:
             failed_gate_names.append("trigger")
+            failed_gate_names.extend(
+                reason
+                for reason in _trigger_failure_reasons
+                if reason not in failed_gate_names
+            )
         if not trigger_timeframe_gate_ok:
             failed_gate_names.append(
                 f"trigger_tf={actual_trigger_tf or 'missing'}(expected={expected_trigger_tf})"
@@ -8212,6 +8413,9 @@ class NakedEngine:
                 _diag_codes.append(ENGINE_B_REASON_BOS_VOLUME_BELOW_THRESHOLD)
             else:
                 _diag_codes.append(ENGINE_B_REASON_BOS_WITHOUT_VOLUME)
+        for _trigger_reason in _trigger_failure_reasons:
+            if _trigger_reason not in _diag_codes:
+                _diag_codes.append(_trigger_reason)
         if _d1_conflict:
             _diag_codes.append(ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT)
         if _aggtrade_required and not _aggtrade_available:
@@ -8405,11 +8609,23 @@ class NakedEngine:
             "structure_ok": structure_ok,
             "structure_gate_original_ok": structure_gate_original_ok,
             "structure_gate_disabled": structure_gate_disabled,
+            "structure_direction_sources": list(_structure_direction_sources),
+            "fresh_sequence_structure_ok": _fresh_sequence_structure_ok,
+            "liquidity_sweep_structure_ok": _liquidity_sweep_structure_ok,
+            "guarded_structure_diagnostics": _guarded_structure,
             "macro_ok": macro_ok,
             "zone_ok": zone_ok,
             "breakout_ok": breakout_ok,
             "location_ok": location_ok,
             "trigger_ok": trigger_ok,
+            "trigger_failure_reason": (
+                _trigger_failure_reasons[0]
+                if _trigger_failure_reasons
+                else None
+            ),
+            "trigger_failure_reasons": list(_trigger_failure_reasons),
+            "opposing_trigger_ok": bool(res.get("opposing_trigger_ok")),
+            "opposing_trigger_pattern": res.get("opposing_trigger_pattern"),
             "original_location_ok": original_location_ok,
             "original_trigger_ok": original_trigger_ok,
             "tape_ok": tape_ok,

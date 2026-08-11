@@ -4627,12 +4627,22 @@ ENGINE_B_TRIGGER_AT_LOCATION_MAX_ATR: 1.0
 # Expect fewer Engine B passes on thin / structurally unmapped instruments.
 ENGINE_B_SPACE_RR_SUBSTITUTE_ALLOW_SYNTHETIC: false
 
-# Swing sequence as CONFLUENCE (never direction authority or a veto — that stays
-# off under ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED). Retiring the sequence
-# from direction also removed it from scoring entirely, so the classic
-# HH_HL/LH_LL read stopped contributing anywhere and Engine B's structure score
-# rests solely on BOS/CHoCH. Staleness was the defect, not the read: credit now
-# decays linearly to zero as the defining swing ages past FRESH_BARS.
+# Keep the unsafe legacy switch off: it lets a single stale HH_HL/LH_LL vote
+# across direction selection, structure, trigger regime, and M5 refinement.
+ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED: false
+
+# Restore classic HH_HL/LH_LL structure through a bounded gate instead. The
+# structure-rung sequence must be direction-aligned and fresh; when the macro
+# sequence is from an independent timeframe it must also align and be fresh.
+# Missing/malformed ages fail closed. Exclusive opposing BOS still overrides.
+ENGINE_B_FRESH_SEQUENCE_STRUCTURE_ENABLED: true
+
+# Restore liquidity-sweep structure only when the sweep has an explicit LONG/
+# SHORT direction, is at a recognised zone/OB location, and no fresh (or age-
+# unknown) swing sequence opposes it. This does not alter trigger timeframes.
+ENGINE_B_LIQUIDITY_SWEEP_STRUCTURE_ENABLED: true
+ENGINE_B_LIQUIDITY_SWEEP_STRUCTURE_REQUIRE_LOCATION: true
+
 ENGINE_B_SWING_SEQUENCE_CONFLUENCE_ENABLED: true
 ENGINE_B_SWING_SEQUENCE_FRESH_BARS: 10
 ENGINE_B_SWING_SEQUENCE_CONFLUENCE_BONUS: 0.10

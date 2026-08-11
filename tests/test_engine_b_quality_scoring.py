@@ -69,6 +69,41 @@ def test_structure_alignment_break_evidence_beats_swing_sequence():
     assert swing_only == pytest.approx(0.0)
 
 
+def test_guarded_sequence_and_sweep_receive_bounded_structure_quality(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", False
+    )
+    guarded_sequence = compute_structure_alignment_score(
+        {
+            "current_swing_sequence": "HH_HL",
+            "macro_swing_sequence": "HH_HL",
+            "fresh_sequence_structure_ok": True,
+        },
+        "LONG",
+    )
+    guarded_sweep = compute_structure_alignment_score(
+        {
+            "current_swing_sequence": "CONTRACTION",
+            "macro_swing_sequence": "CONTRACTION",
+            "liquidity_sweep_structure_ok": True,
+        },
+        "LONG",
+    )
+    directionless_sweep = compute_structure_alignment_score(
+        {
+            "current_swing_sequence": "CONTRACTION",
+            "macro_swing_sequence": "CONTRACTION",
+            "liquidity_sweep": True,
+            "sweep_direction": None,
+        },
+        "LONG",
+    )
+
+    assert guarded_sequence == pytest.approx(0.55)
+    assert guarded_sweep == pytest.approx(0.45)
+    assert directionless_sweep == pytest.approx(0.0)
+
+
 def test_structure_alignment_legacy_sequence_ladder_restorable(monkeypatch):
     monkeypatch.setitem(
         config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", True

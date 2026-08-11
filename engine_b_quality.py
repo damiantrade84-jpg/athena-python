@@ -159,10 +159,12 @@ def compute_structure_alignment_score(res: dict[str, Any], direction: str) -> fl
     bos = bool(res.get("bos_confirmed", False))
     choch = bool(res.get("choch_confirmed", False))
     raw_sweep = bool(res.get("liquidity_sweep", False))
-    # Direction-aligned sweep only (mirrors calculate_confidence._sweep_aligned):
-    # an opposing sweep is evidence for the other side, not this candidate.
+    guarded_sequence = bool(res.get("fresh_sequence_structure_ok", False))
+    guarded_sweep = bool(res.get("liquidity_sweep_structure_ok", False))
+    # Direction-aligned sweep only. Missing direction is not evidence for either
+    # side and must not earn quality after the guarded sweep path rejects it.
     _sweep_dir = str(res.get("sweep_direction") or "").upper() or None
-    aligned_sweep = raw_sweep and (_sweep_dir is None or _sweep_dir == dir_u)
+    aligned_sweep = raw_sweep and _sweep_dir == dir_u
     # bos_mtf_confirmed is direction-blind; only credit the multi-TF break when
     # it is in the trade direction (bos_confirmed is direction-aware), so an
     # opposing MTF BOS cannot inflate a counter-trend candidate's alignment.
@@ -193,8 +195,13 @@ def compute_structure_alignment_score(res: dict[str, Any], direction: str) -> fl
             score = 0.85
         elif choch:
             score = 0.70
-        elif aligned_sweep:
+        elif aligned_sweep or guarded_sweep:
             score = 0.45
+        elif guarded_sequence:
+            # A fresh structure-rung sequence, confirmed on every independent
+            # macro rung, is weaker than CHoCH/BOS but no longer scores as zero
+            # after it legitimately satisfies the guarded structure gate.
+            score = 0.55
         else:
             score = 0.0
 
