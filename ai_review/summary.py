@@ -7,6 +7,10 @@ from typing import Any
 
 from ai_review.context_diagnostics import context_tradeability_penalty
 from ai_review.engine_snapshots import extract_engine_snapshots
+from ai_review.visual_text import (
+    has_visual_contradiction_text,
+    is_directional_visual_contradiction,
+)
 
 _HUMAN_ACTION_MAP = {
     "take": "trade",
@@ -65,10 +69,15 @@ def _map_human_action(raw: str) -> str:
 
 
 def _score_visual(ai_review: dict[str, Any]) -> int:
-    contradiction = str(ai_review.get("visual_contradiction") or "").strip()
+    contradiction = ai_review.get("visual_contradiction")
     confirmation = str(ai_review.get("visual_confirmation") or "").strip()
-    if contradiction:
+    # Only hard-penalize directional chart-vs-engine conflict. Non-directional
+    # caveats (chop, stale capture, thin PA) stay mid-band so tradeability is
+    # not forced to 0 when structure still aligns.
+    if is_directional_visual_contradiction(contradiction):
         return 22
+    if has_visual_contradiction_text(contradiction):
+        return 48
     if confirmation:
         lower = confirmation.lower()
         if any(w in lower for w in ("strong", "clear", "aligned", "confirms", "confirm")):
@@ -79,7 +88,18 @@ def _score_visual(ai_review: dict[str, Any]) -> int:
     return 45
 
 
-def _score_entry(ai_review: dict[str, Any]) -> int:
+def _score_entry(
+    ai_review: dict[str, Any],
+    engine_a_ctx: dict[str, Any] | None = None,
+) -> int:
+    # Prefer geometry-based entry quality when engine context is available (P1-1).
+    if isinstance(engine_a_ctx, dict) and engine_a_ctx:
+        try:
+            from ai_review.review_geometry import score_entry_quality
+
+            return score_entry_quality(engine_a_ctx=engine_a_ctx, ai_review=ai_review)
+        except Exception:
+            pass
     text = _text_blob(ai_review.get("entry_quality"))
     score = 72
     for pattern in _POOR_ENTRY_PATTERNS:
@@ -87,6 +107,14 @@ def _score_entry(ai_review: dict[str, Any]) -> int:
             score -= 18
     if not text.strip():
         score = 50
+    # If context stamped a precomputed score, use it.
+    if isinstance(engine_a_ctx, dict):
+        pre = engine_a_ctx.get("entry_quality_score")
+        try:
+            if pre is not None:
+                return _clamp(float(pre))
+        except (TypeError, ValueError):
+            pass
     return _clamp(score)
 
 
@@ -145,8 +173,11 @@ def _tradeability_penalties(
     engine_a_ctx: dict[str, Any],
 ) -> float:
     penalty = 0.0
-    if ai_review.get("visual_contradiction"):
+    contradiction = ai_review.get("visual_contradiction")
+    if is_directional_visual_contradiction(contradiction):
         penalty += 28
+    elif has_visual_contradiction_text(contradiction):
+        penalty += 10
     entry_text = _text_blob(ai_review.get("entry_quality"))
     for pattern in _POOR_ENTRY_PATTERNS:
         if pattern in entry_text:
@@ -218,8 +249,10 @@ def _final_reason(
     note = str(concordance.get("divergence_note") or "").strip()
     if note:
         return note[:500]
-    if ai_review.get("visual_contradiction"):
+    if is_directional_visual_contradiction(ai_review.get("visual_contradiction")):
         return "Visual chart contradicts engine setup"
+    if has_visual_contradiction_text(ai_review.get("visual_contradiction")):
+        return "Visual caveats reduce confidence; direction not fully contradicted"
     if human_action == "watch":
         return "Setup needs better timing or context before trade"
     if human_action == "reject":
@@ -276,8 +309,22 @@ def build_ai_review_summary(
     human_raw = ms.get("humanAction") or ai_review.get("human_action") or "wait"
     human_action = _map_human_action(str(human_raw))
     visual = _score_visual(ai_review)
-    entry = _score_entry(ai_review)
+    # _score_entry already prefers the geometry scorer and passes ai_review, so
+    # its result carries both geometry and the model's text cues. The stamped
+    # entry_quality_score is the pre-provider pass (ai_review=None) and is only
+    # a fallback — overriding with it here discarded the text-aware score (F4).
+    entry = _score_entry(ai_review, engine_a_ctx)
     risk = _score_risk(ai_review, engine_a_ctx, mismatch_warnings)
+    # Prefer live RR risk pressure when geometry says chase.
+    rg = (engine_a_ctx or {}).get("risk_geometry") or {}
+    try:
+        rr_live = float(rg.get("rr_live_tp1") or rg.get("rr_live") or 0)
+        if rr_live and rr_live < 1.0:
+            risk = min(risk, 35)
+        elif rr_live and rr_live < 1.5:
+            risk = min(risk, 55)
+    except (TypeError, ValueError):
+        pass
     alignment = _score_engine_alignment(engine_a_ctx, concordance, ai_review)
     tradeability = _score_tradeability(alignment, visual, entry, ai_review, engine_a_ctx)
     overall = _overall_score(tradeability, visual, entry, risk)
@@ -301,9 +348,35 @@ def build_ai_review_summary(
     confidence = max(0, min(100, confidence))
 
     setup_type = str(ms.get("setupType") or ai_review.get("setup_type") or "").strip() or None
+    # P2-5: separate target setup type (plan) from observed geometry.
+    target_setup_type = setup_type
+    observed_setup_type = None
+    zone = str((engine_a_ctx or {}).get("zone_status") or "").upper()
+    disp = None
+    try:
+        from ai_review.review_geometry import displacement_atr
+
+        geom = (engine_a_ctx or {}).get("geometry") or {}
+        ema = ((engine_a_ctx or {}).get("ema_levels") or {}).get("ema21")
+        atr_v = ((engine_a_ctx or {}).get("atr") or {}).get("atr_value")
+        disp = displacement_atr(
+            geom.get("current_price") or geom.get("live_price"),
+            ema,
+            atr_v,
+        )
+    except Exception:
+        disp = None
+    if zone in {"ABOVE_ZONE", "BELOW_ZONE"} or (disp is not None and abs(disp) > 1.5):
+        observed_setup_type = "EXTENDED_CONTINUATION"
+    elif zone == "IN_ZONE":
+        observed_setup_type = "AT_STRUCTURE"
     engine_d = dict(snapshots.get("engineD") or {})
     if setup_type and engine_d.get("setupType") is None:
         engine_d = {**engine_d, "setupType": setup_type}
+
+    watch_state = (engine_a_ctx or {}).get("watch_state")
+    if isinstance(watch_state, dict) and watch_state.get("state") == "WATCH":
+        human_action = "wait"
 
     return {
         "provider": provider_meta.get("provider") or None,
@@ -312,6 +385,12 @@ def build_ai_review_summary(
         "fallbackUsed": bool(provider_meta.get("fallback_used")),
         "humanAction": human_action,
         "setupType": setup_type,
+        "targetSetupType": target_setup_type,
+        "observedSetupType": observed_setup_type,
+        "zoneStatus": (engine_a_ctx or {}).get("zone_status"),
+        "watchState": watch_state if isinstance(watch_state, dict) else None,
+        "executionPermitted": (engine_a_ctx or {}).get("execution_permitted"),
+        "symbolAliasApplied": (engine_a_ctx or {}).get("symbol_alias_applied"),
         "overallScore": overall,
         "tradeabilityScore": tradeability,
         "engineAlignmentScore": alignment,

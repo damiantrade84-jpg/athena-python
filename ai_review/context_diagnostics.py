@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from ai_review.engine_b_structure_contract import has_engine_b_structure_evidence
+
 from market_structure import build_engine_b_profile_vp_context
 
 
@@ -96,16 +98,110 @@ def _score_attribution(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+# P2-4: the multiplicative v12 score hangs on FACTOR_MIN_DIRECTIONAL. If the
+# review layer cannot see these fields it cannot verify whether the gate passed,
+# so completeness must say so instead of scoring the context as merely "partial".
+_REQUIRED_FACTOR_FIELDS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "factor_min_directional",
+        ("minDirectional", "min_directional"),
+        "FACTOR_MIN_DIRECTIONAL floor",
+    ),
+    (
+        "factor_effective_min_directional",
+        ("effectiveMinDirectional", "effective_min_directional"),
+        "Effective min-directional after group override",
+    ),
+    (
+        "factor_trend_coherence",
+        ("trendCoherence", "trend_coherence"),
+        "Trend coherence (agreement_count / coherence_ratio)",
+    ),
+)
+
+# Ceiling applied when any required factor diagnostic is absent. Chosen below the
+# "partial" band so an unverifiable context can never present as near-complete
+# (the audit saw score 84 on an entirely empty factorDiagnostics block).
+FACTOR_UNVERIFIABLE_SCORE_CAP = 40
+
+
+def _factor_diagnostics(engine_a_ctx: dict[str, Any]) -> dict[str, Any]:
+    raw = engine_a_ctx.get("factor_diagnostics") or engine_a_ctx.get("factorDiagnostics")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _factor_field_present(factors: dict[str, Any], aliases: tuple[str, ...]) -> bool:
+    for alias in aliases:
+        if alias not in factors:
+            continue
+        value = factors.get(alias)
+        if value is None:
+            continue
+        # An empty dict carries no agreement_count / coherence_ratio evidence.
+        if isinstance(value, dict) and not value:
+            continue
+        return True
+    return False
+
+
+def _is_engine_a_review(engine_a_ctx: dict[str, Any]) -> bool:
+    """Only Engine A reviews carry a multiplicative factor score.
+
+    Engine B is naked structure and never emits ``factorDiagnostics``, so the
+    requirement must not fire on Engine B contexts or on ad-hoc contexts that
+    do not declare an engine.
+    """
+    if str(engine_a_ctx.get("primary_engine") or "").upper() == "A":
+        return True
+    return str(engine_a_ctx.get("review_type") or "").lower() == "engine_a_chart"
+
+
+def _missing_factor_diagnostics(engine_a_ctx: dict[str, Any]) -> list[dict[str, Any]]:
+    """Required factor-diagnostic fields absent from the payload."""
+    if not _is_engine_a_review(engine_a_ctx):
+        return []
+    factors = _factor_diagnostics(engine_a_ctx)
+    missing: list[dict[str, Any]] = []
+    for key, aliases, label in _REQUIRED_FACTOR_FIELDS:
+        if _factor_field_present(factors, aliases):
+            continue
+        missing.append(
+            _detail(
+                key=key,
+                label=label,
+                reason=(
+                    f"{aliases[0]} missing from payload — the multiplicative score "
+                    f"gate cannot be verified from this review context"
+                ),
+                impact="high",
+                blocks_trade=True,
+            )
+        )
+    return missing
+
+
+def _has_real_engine_b_structure(structure: Any) -> bool:
+    """True only when real Engine B structure evidence is present.
+
+    ``sanitize_engine_b_structure_profile_fields({})`` still stamps
+    ``profile_vp_context``, so a non-empty dict alone is not evidence.
+    Delegates to the shared contract so this cannot drift from the overlay
+    renderer again (P1-5).
+    """
+    return has_engine_b_structure_evidence(structure)
+
+
 def _engine_b_in_review(engine_a_ctx: dict[str, Any]) -> bool:
     overlays = engine_a_ctx.get("screenshot_overlays") or []
     if isinstance(overlays, list) and "engine_b" in overlays:
         return True
+    # Primary Engine B chart reviews always include structure context.
+    if str(engine_a_ctx.get("primary_engine") or "").upper() == "B":
+        return True
+    if str(engine_a_ctx.get("review_type") or "").lower() == "engine_b_chart":
+        return True
     struct = engine_a_ctx.get("structure_context") or engine_a_ctx.get("engine_b") or {}
-    return isinstance(struct, dict) and bool(
-        struct.get("structural_verdict")
-        or struct.get("nearest_support_zone")
-        or struct.get("nearest_resistance_zone")
-    )
+    return _has_real_engine_b_structure(struct)
 
 
 def _engine_snapshot_not_applicable(engine_key: str, engine_a_ctx: dict[str, Any]) -> bool:
@@ -116,14 +212,56 @@ def _engine_snapshot_not_applicable(engine_key: str, engine_a_ctx: dict[str, Any
     return False
 
 
+def _normalize_missing_token(item: str) -> str:
+    """Collapse spaces/hyphens/underscores so engine_b_* matches engineB*."""
+    return (
+        str(item or "")
+        .strip()
+        .lower()
+        .replace(" ", "")
+        .replace("-", "")
+        .replace("_", "")
+    )
+
+
 def _classify_engine_snapshot_missing(
     item: str,
     engine_a_ctx: dict[str, Any],
     not_applicable: list[dict[str, str]],
 ) -> bool:
-    lower = item.lower().replace(" ", "")
+    raw_lower = str(item or "").strip().lower()
+    lower = _normalize_missing_token(item)
+    # Explicit Engine B structure-context labels from the model (common on Engine A reviews).
+    structure_markers = (
+        "enginebstructurecontext",
+        "enginebstructure",
+        "structurecontext",
+        "enginebcontext",
+    )
+    if any(marker in lower for marker in structure_markers) or (
+        "structure" in raw_lower and "engine" in raw_lower and "b" in raw_lower
+    ):
+        if _engine_snapshot_not_applicable("engineB", engine_a_ctx):
+            _append_unique(
+                not_applicable,
+                _not_applicable(
+                    "engine_b_structure_context",
+                    "Engine B structure context",
+                    "Optional Engine B overlay — not part of this Engine A chart review",
+                ),
+            )
+            return True
+        # Engine B is in-scope but structure payload empty: keep as optional, not required.
+        if not _has_real_engine_b_structure(
+            engine_a_ctx.get("structure_context") or engine_a_ctx.get("engine_b")
+        ):
+            # Fall through to optional path in caller via False? Better handle here
+            # by returning False so caller can optional — actually caller only treats
+            # True as "handled". Return True after tagging optional is cleaner if we
+            # pass optional list... Keep API: return True only for notApplicable.
+            return False
     for engine_key in ("engineB", "engineC", "engineD"):
-        prefix = engine_key.lower()
+        prefix = _normalize_missing_token(engine_key)
         if lower.startswith(f"{prefix}.") or lower.startswith(prefix):
             if _engine_snapshot_not_applicable(engine_key, engine_a_ctx):
                 _append_unique(
@@ -135,7 +273,7 @@ def _classify_engine_snapshot_missing(
                     ),
                 )
                 return True
-    if "engineb" in lower or "engine b" in item.lower():
+    if "engineb" in lower or "engine b" in raw_lower:
         if _engine_snapshot_not_applicable("engineB", engine_a_ctx):
             _append_unique(
                 not_applicable,
@@ -360,8 +498,11 @@ def _classify_missing_items(
     structure_context = engine_a_ctx.get("structure_context")
     if not isinstance(structure_context, dict):
         structure_context = engine_a_ctx.get("engine_b")
-    has_engine_b_structure_context = isinstance(structure_context, dict) and bool(structure_context)
+    has_engine_b_structure_context = _has_real_engine_b_structure(structure_context)
 
+    # Only when real Engine B structure is present but VP is untrusted for the
+    # asset — avoid flagging VP N/A on bare Engine A contexts with empty
+    # sanitize-stamped structure dicts.
     if has_engine_b_structure_context and not resistance.get("profileLevelsTrusted", True):
         _append_unique(
             not_applicable,
@@ -529,6 +670,33 @@ def _classify_missing_items(
                     ),
                 )
             continue
+        # Engine B structure asked for while Engine B is in-scope but empty:
+        # optional diagnostic only (overlay optional on Engine A reviews).
+        _norm_item = _normalize_missing_token(item)
+        if any(
+            marker in _norm_item
+            for marker in (
+                "enginebstructurecontext",
+                "enginebstructure",
+                "structurecontext",
+                "enginebcontext",
+            )
+        ) or ("structure" in lower and "engine" in lower and "b" in lower):
+            if not has_engine_b_structure_context:
+                _append_unique(
+                    optional,
+                    _detail(
+                        key="engine_b_structure_context",
+                        label="Engine B structure context",
+                        reason=(
+                            "Engine B structure overlay requested but no real BOS/CHoCH/zone "
+                            "payload was available for this review"
+                        ),
+                        impact="low",
+                        blocks_trade=False,
+                    ),
+                )
+                continue
         _append_unique(
             optional,
             _detail(
@@ -608,12 +776,23 @@ def build_context_diagnostics(
         atr,
         resistance,
     )
+    # P2-4: factorDiagnostics are required inputs, not optional colour.
+    factor_gaps = _missing_factor_diagnostics(engine_a_ctx)
+    for gap in factor_gaps:
+        _append_unique(required, gap)
+
     score = _score(required, optional)
-    status = "insufficient" if required else "partial" if optional else "complete"
+    if factor_gaps:
+        score = min(score, FACTOR_UNVERIFIABLE_SCORE_CAP)
+        status = "unverifiable"
+    else:
+        status = "insufficient" if required else "partial" if optional else "complete"
     return {
         "contextCompleteness": {
             "score": score,
             "status": status,
+            "factorDiagnosticsVerifiable": not factor_gaps,
+            "missingFactorDiagnostics": [gap["key"] for gap in factor_gaps],
             "missingRequired": [item["label"] for item in required],
             "missingOptional": [item["label"] for item in optional],
             "notApplicable": [item["label"] for item in not_applicable],

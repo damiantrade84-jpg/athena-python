@@ -692,6 +692,7 @@ def evaluate_engine_a_v3(
             validationArtifact=None,
             validationStatus="UNAVAILABLE",
             executionScope="NONE",
+            setupLabel="NO_SIGNAL",
             engineATradeEnabled=False,
         )
 
@@ -972,12 +973,25 @@ def evaluate_engine_a_v3(
     demo_research_unpromoted_allowed = (
         not promotion.qualified and _demo_research_unpromoted_trade_allowed()
     )
+    demo_unvalidated_artifact = bool(
+        promotion.artifact and str(promotion.artifact.status or "") == "DEMO_UNVALIDATED"
+    )
+    # P0-2: DEMO_UNVALIDATED must never emit TRADE (setup_label SHADOW only).
+    if decision == "TRADE" and demo_unvalidated_artifact:
+        decision = "WATCH"
     if decision == "TRADE" and levels is None:
         decision = "WATCH"
     elif decision == "TRADE" and not promotion.qualified and not demo_research_unpromoted_allowed:
         decision = "WATCH"
+    elif decision == "TRADE" and demo_unvalidated_artifact:
+        decision = "WATCH"
 
-    promotion_execution_allowed = promotion.qualified or demo_research_unpromoted_allowed
+    # Demo-unvalidated research may observe WATCH/SHADOW but never execute TRADE.
+    promotion_execution_allowed = (
+        False
+        if demo_unvalidated_artifact
+        else (promotion.qualified or demo_research_unpromoted_allowed)
+    )
     qualified = decision == "TRADE" and promotion_execution_allowed and levels is not None
     executable_levels = levels
     targets = executable_levels.targets if executable_levels else ()
@@ -1047,7 +1061,7 @@ def evaluate_engine_a_v3(
         if demo_research_unpromoted_allowed
         else "UNAVAILABLE"
     )
-    execution_scope = "DEMO_ONLY" if promotion_execution_allowed else "NONE"
+    execution_scope = "NONE"  # finalized after late demotions
 
     predicates: tuple[PredicateResult, ...] = ()
     if not compact_replay:
@@ -1109,7 +1123,25 @@ def evaluate_engine_a_v3(
         setup_diagnostics["activeEntryGateBlocked"] = True
 
     # Recompute after late demotions (blocked trend / equity volume / crypto deriv).
+    if decision == "TRADE" and demo_unvalidated_artifact:
+        decision = "WATCH"
     qualified = decision == "TRADE" and promotion_execution_allowed and levels is not None
+
+    # setup_label is derived from artifact_status (P0-2), not set independently.
+    if demo_unvalidated_artifact:
+        setup_label = "SHADOW"
+        execution_scope = "NONE"
+    elif decision == "TRADE" and qualified:
+        setup_label = "TRADE"
+        execution_scope = "DEMO_ONLY" if (
+            promotion.qualified or demo_research_unpromoted_allowed
+        ) else "LIVE"
+    elif decision == "WATCH":
+        setup_label = "RESEARCH" if validation_status == "UNVALIDATED" else "WATCH"
+        execution_scope = "NONE"
+    else:
+        setup_label = str(decision or "NO_SIGNAL")
+        execution_scope = "NONE"
 
     if compact_replay and qualified:
         # Full diagnostics are required only for emitted trade metadata. The
@@ -1216,6 +1248,7 @@ def evaluate_engine_a_v3(
         validationArtifact=promotion.artifact,
         validationStatus=validation_status,
         executionScope=execution_scope,
+        setupLabel=setup_label,
         scoringProfile=None if compact_unqualified else profile.to_dict(),
         exitPolicy=profile.exit_policy,
         componentScores=(

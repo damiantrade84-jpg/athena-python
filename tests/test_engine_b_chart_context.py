@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ai_review.engine_b_context import assemble_engine_b_context
 from ai_review.prompt_builder import build_chart_review_prompt
+from style_resolver import resolve_auto_style
 
 
 def _pair():
@@ -91,8 +92,14 @@ def test_assemble_engine_b_context_auto_style_uses_shared_pair_policy():
     )
 
     assert ctx is not None
-    assert seen["style"] == "swing"
-    assert ctx["analyze_style"] == "swing"
+    # Single-name stocks moved to the intraday role ladder in 2a1171e0
+    # (2026-08-07); style_resolver.py:112-113 states the rationale. The test's
+    # purpose is that Engine B uses the *shared* pair policy rather than its own
+    # inference, so it asserts against the shared resolver.
+    expected = resolve_auto_style("auto", stock, asset_type=stock["type"])
+    assert expected == "intraday"
+    assert seen["style"] == expected
+    assert ctx["analyze_style"] == expected
 
 
 def test_build_chart_review_prompt_b_mode_uses_engine_b_playbook_only():

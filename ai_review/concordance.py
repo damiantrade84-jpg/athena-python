@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from ai_review.context_diagnostics import build_context_diagnostics
+from ai_review.visual_text import (
+    has_visual_contradiction_text,
+    is_directional_visual_contradiction,
+)
 
 _DOWNGRADE = {
     "agree": "partial",
@@ -82,7 +86,7 @@ def _divergence_from_ai(
         return "entry_displacement", "AI reported chart contradicts entry timing"
 
     risks = [str(r).lower() for r in (ai_review.get("risks") or [])]
-    if ai_review.get("visual_contradiction"):
+    if is_directional_visual_contradiction(ai_review.get("visual_contradiction")):
         return "visual_contradiction", "AI reported visual contradiction"
     for risk in risks:
         if "atr" in risk or "freshness" in risk:
@@ -98,6 +102,9 @@ def _divergence_from_ai(
         for marker in ("late", "chasing", "extended", "poor entry", "bad entry")
     ):
         return "entry_displacement", "AI flagged entry quality as late/chasing/extended"
+
+    if has_visual_contradiction_text(ai_review.get("visual_contradiction")):
+        return "other", "AI reported non-directional visual caveat"
 
     human_action = str(ai_review.get("human_action") or "wait").lower()
     if human_action in ("wait", "needs_fresher_data", "needs_better_rr"):
@@ -128,10 +135,14 @@ def compute_engine_a_ai_concordance(
         divergence_type = "missing_context"
         divergence_note = "Required Engine A diagnostics missing"
     elif passed and ai_verdict == "VALID":
-        if ai_review.get("visual_contradiction"):
+        if is_directional_visual_contradiction(ai_review.get("visual_contradiction")):
             concordance = "partial"
             divergence_type = "visual_contradiction"
             divergence_note = "Engine A passed but AI reported visual contradiction"
+        elif has_visual_contradiction_text(ai_review.get("visual_contradiction")):
+            concordance = "partial"
+            divergence_type = "other"
+            divergence_note = "Engine A passed; AI noted non-directional visual caveat"
         else:
             concordance = "agree"
     elif passed and ai_verdict == "CAUTION":
@@ -227,7 +238,7 @@ def _divergence_from_ai_b(
         return "entry_displacement", "AI reported chart contradicts entry timing"
 
     risks = [str(r).lower() for r in (ai_review.get("risks") or [])]
-    if ai_review.get("visual_contradiction"):
+    if is_directional_visual_contradiction(ai_review.get("visual_contradiction")):
         return "visual_contradiction", "AI reported visual contradiction"
     for risk in risks:
         if "atr" in risk or "freshness" in risk:
@@ -243,6 +254,9 @@ def _divergence_from_ai_b(
         for marker in ("late", "chasing", "extended", "poor entry", "bad entry")
     ):
         return "entry_displacement", "AI flagged entry quality as late/chasing/extended"
+
+    if has_visual_contradiction_text(ai_review.get("visual_contradiction")):
+        return "other", "AI reported non-directional visual caveat"
 
     human_action = str(ai_review.get("human_action") or "wait").lower()
     if human_action in ("wait", "needs_fresher_data", "needs_better_rr"):
@@ -273,10 +287,14 @@ def compute_engine_b_ai_concordance(
         divergence_type = "missing_context"
         divergence_note = "Required Engine B diagnostics missing"
     elif passed and ai_verdict == "VALID":
-        if ai_review.get("visual_contradiction"):
+        if is_directional_visual_contradiction(ai_review.get("visual_contradiction")):
             concordance = "partial"
             divergence_type = "visual_contradiction"
             divergence_note = "Engine B passed but AI reported visual contradiction"
+        elif has_visual_contradiction_text(ai_review.get("visual_contradiction")):
+            concordance = "partial"
+            divergence_type = "other"
+            divergence_note = "Engine B passed; AI noted non-directional visual caveat"
         else:
             concordance = "agree"
     elif passed and ai_verdict == "CAUTION":

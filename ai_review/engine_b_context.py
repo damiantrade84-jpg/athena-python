@@ -358,6 +358,15 @@ def assemble_engine_b_context(
         },
         "signal": res,
     }
-    ctx["ohlcv_bars"] = select_ohlcv_bars_for_chart(seed_row or {}, timeframe, screenshot_meta)
+    # Prefer candles attached on the live naked-analysis result (AI-review path
+    # stamps limited *Candles series). Fall back to seed_row only if present —
+    # scan rows stay lean and usually have no OHLC, which previously left
+    # candle_anatomy / price-action facts empty.
+    candle_host: dict[str, Any] = dict(res) if isinstance(res, dict) else {}
+    if isinstance(seed_row, dict):
+        for key, val in seed_row.items():
+            if str(key).endswith("Candles") and key not in candle_host and val:
+                candle_host[key] = val
+    ctx["ohlcv_bars"] = select_ohlcv_bars_for_chart(candle_host, timeframe, screenshot_meta)
     ctx["engine_b_prompt_context"] = build_engine_b_prompt_context(ctx)
     return ctx

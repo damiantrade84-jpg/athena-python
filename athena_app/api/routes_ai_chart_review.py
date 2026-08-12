@@ -48,10 +48,15 @@ from ai_review.provider_meta import (
     provider_error_response,
     provider_meta_from_persisted,
 )
+from ai_review.engine_b_structure_contract import has_engine_b_structure_evidence
+from ai_review.gate_hygiene import normalize_review_gates
+from ai_review.review_geometry import attach_review_geometry
+from ai_review.symbol_parity import evaluate_symbol_parity
+from ai_review.watch_log import log_watch_transition, resolve_watch_transition
+from ai_review.timestamp_contract import evaluate_review_freshness
 from ai_review.providers.router import run_chart_review
 from ai_review.summary import build_ai_review_summary
 from ai_review.timeframe_routing import resolve_timeframe_route
-from ai_review.timestamp_contract import evaluate_timestamp_mismatch
 from ai_review.validation import decode_screenshot_bytes, validate_request
 
 log = logging.getLogger("sentinel.ai_chart_review")
@@ -294,6 +299,19 @@ def _attach_review_summary(
     diagnostic_source = diagnostic_ai_review or ai_review
     clean_ai_review = sanitize_ai_review_missing_context(engine_ctx, diagnostic_source)
     response["ai_review"] = clean_ai_review
+
+    # F4: the pre-provider geometry pass runs with ai_review=None, so the SL
+    # thesis check never saw requiredConfirmation and always fell back to
+    # ema50. Re-run it now that the model's text exists. Geometry is
+    # recomputed identically; only the text-derived inputs are added.
+    try:
+        engine_ctx.update(
+            attach_review_geometry(engine_ctx, ai_review=clean_ai_review)
+        )
+        if isinstance(engine_ctx.get("risk_geometry"), dict):
+            engine_ctx["riskGeometry"] = engine_ctx["risk_geometry"]
+    except Exception:  # never fail the review on an advisory recompute
+        pass
     structured = clean_ai_review.get("structured") or {}
     if not isinstance(structured, dict):
         structured = {}
@@ -505,6 +523,45 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         review_type = _review_type_for_primary(primary_engine)
         chart_review_type = _chart_review_type_label(primary_engine)
 
+        # P0-1: hard symbol parity before any levels / provider dispatch.
+        resolve_pair = getattr(runtime, "resolve_pair_fn", None)
+        engine_pair = resolve_pair(symbol) if callable(resolve_pair) else None
+        entry_for_basis = None
+        if isinstance(origin_signal, dict):
+            try:
+                entry_for_basis = float(
+                    origin_signal.get("entry") or origin_signal.get("price") or 0
+                ) or None
+            except (TypeError, ValueError):
+                entry_for_basis = None
+        # Unconditional: a review with neither a candidate nor a resolved pair has
+        # nothing to prove the chart symbol against, which is a reject, not a skip.
+        parity = evaluate_symbol_parity(
+            symbol,
+            origin_signal if isinstance(origin_signal, dict) else None,
+            engine_pair=engine_pair if isinstance(engine_pair, dict) else None,
+            engine_entry=entry_for_basis,
+        )
+        if not parity.get("ok"):
+            return (
+                jsonify(
+                    {
+                        "error": "symbol_parity_mismatch",
+                        "reason": parity.get("reason"),
+                        "detail": parity.get("detail")
+                        or "Chart symbol does not match engine candidate",
+                        "chart_symbol": symbol,
+                        "engine_keys": parity.get("engine_keys") or [],
+                        "diagnostics": "UNAVAILABLE",
+                        "levels_emitted": False,
+                        "execution_permitted": False,
+                        "symbol_alias_applied": parity.get("symbol_alias_applied"),
+                    }
+                ),
+                409,
+            )
+        symbol_alias_applied = parity.get("symbol_alias_applied")
+
         if primary_engine == "B":
             engine_ctx = assemble_engine_b_context(
                 symbol,
@@ -526,9 +583,13 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 analyze_pair_fn=getattr(runtime, "analyze_pair_fn", None),
                 btc_bias_fn=getattr(runtime, "btc_bias_fn", None),
                 origin_signal=origin_signal,
+                naked_analysis_fn=getattr(runtime, "naked_analysis_fn", None),
             )
             if engine_ctx is None:
                 return jsonify({"error": "Engine A returned no result"}), 422
+
+        if symbol_alias_applied:
+            engine_ctx["symbol_alias_applied"] = symbol_alias_applied
 
         atr = engine_ctx.setdefault("atr", {})
         freshness = classify_atr_freshness(
@@ -539,7 +600,81 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         atr["atr_freshness_status"] = freshness.get("status")
         atr["max_expected_age_seconds"] = freshness.get("max_expected_age_seconds")
 
-        mismatch_warnings = evaluate_timestamp_mismatch(engine_ctx, screenshot_meta, cfg)
+        # Review-layer live geometry (RR live, zone status, SL thesis, WATCH).
+        geom = attach_review_geometry(engine_ctx)
+        engine_ctx.update(geom)
+        if isinstance(engine_ctx.get("risk_geometry"), dict):
+            engine_ctx["riskGeometry"] = engine_ctx["risk_geometry"]
+
+        # Phase 4: record the WATCH transition (observational only — WATCH never
+        # bypasses risk_check() and never sizes anything).
+        _watch = engine_ctx.get("watch_state")
+        if isinstance(_watch, dict):
+            _transition = resolve_watch_transition(previous=None, current=_watch)
+            if _transition:
+                _geom_block = engine_ctx.get("geometry") or {}
+                engine_ctx["watch_transition"] = log_watch_transition(
+                    transition=_transition,
+                    watch_state=_watch,
+                    price=_geom_block.get("current_price")
+                    or _geom_block.get("live_price"),
+                    atr=(engine_ctx.get("atr") or {}).get("atr_value"),
+                    symbol=symbol,
+                )
+
+        # P2-1/P2-2/P2-3: honest applicable-gate view. Presentation only —
+        # Engine A's own pass/fail is preserved on each gate's engineValue.
+        _origin = origin_signal if isinstance(origin_signal, dict) else {}
+        _predicates = _origin.get("predicates") or engine_ctx.get("predicates")
+        if _predicates:
+            engine_ctx["component_gates"] = normalize_review_gates(
+                predicates=_predicates,
+                score_group=(
+                    _origin.get("scoreGroup")
+                    or _origin.get("score_group")
+                    or engine_ctx.get("score_group")
+                    or engine_ctx.get("asset_group")
+                ),
+                scan_timestamp=(
+                    engine_ctx.get("review_timestamp")
+                    or engine_ctx.get("scan_timestamp")
+                ),
+                quant_weights_by_group=runtime.CONFIG.get(
+                    "ENGINE_A_QUANT_WEIGHTS_BY_GROUP"
+                ),
+            )
+            engine_ctx["componentGates"] = engine_ctx["component_gates"]
+
+        # P2-7: enforce freshness pre-provider (no API spend on stale reviews).
+        # review_timestamp is stamped now() at context assembly, so capture skew
+        # alone is always small on a normal submit; the candidate age is what
+        # catches stale levels joined to freshly rebuilt factors.
+        freshness = evaluate_review_freshness(engine_ctx, screenshot_meta, cfg)
+        mismatch_warnings = freshness["warnings"]
+        max_delta = freshness["maxSeconds"]
+        engine_ctx["levels_provenance"] = freshness["levelsProvenance"]
+        if freshness["blocking"] and bool(
+            cfg.get("ENFORCE_CAPTURE_SKEW_PRE_PROVIDER", True)
+        ):
+            primary_block = freshness["blocking"][0]
+            return (
+                jsonify(
+                    {
+                        "error": primary_block["reason"],
+                        "detail": primary_block["detail"],
+                        "blocking": freshness["blocking"],
+                        "mismatch_warnings": mismatch_warnings,
+                        "max_seconds": max_delta,
+                        "capture_skew_seconds": freshness["captureSkewSeconds"],
+                        "candidate_age_seconds": freshness["candidateAgeSeconds"],
+                        "levels_provenance": freshness["levelsProvenance"],
+                        "diagnostics": "UNAVAILABLE",
+                        "levels_emitted": False,
+                        "execution_permitted": False,
+                    }
+                ),
+                409,
+            )
         if primary_engine == "B" and not _engine_b_source_fresh(engine_ctx):
             mismatch_warnings.append(
                 "engine_b_latest_trigger_candle_stale_or_unavailable"
@@ -554,17 +689,9 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             )
             if overlay_status != "ready":
                 return jsonify({"error": "engine_b_overlay_not_fresh"}), 409
+            # P1-5: use the shared contract, not a third private key list.
             struct = engine_ctx.get("structure_context") or {}
-            if not isinstance(struct, dict) or not any(
-                struct.get(k)
-                for k in (
-                    "structural_verdict",
-                    "nearest_support_zone",
-                    "nearest_resistance_zone",
-                    "bos_data",
-                    "choch_data",
-                )
-            ):
+            if not has_engine_b_structure_evidence(struct):
                 mismatch_warnings.append(
                     "engine_b_overlays_enabled_but_server_structure_context_empty"
                 )

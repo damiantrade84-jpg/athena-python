@@ -1299,6 +1299,13 @@ def _generic_chart_provider(pair: dict, chart_source: str) -> str:
     return source or str(chart_source or "unknown").lower()
 
 
+def _commodity_chart_instrument_identity(pair: dict) -> dict:
+    """Chart-facing commodity identity: catalog futures ticker ≠ execution spot CFD."""
+    from athena_app.services.commodity_identity import commodity_instrument_identity
+
+    return commodity_instrument_identity(pair)
+
+
 def _generic_candle_policy(pair: dict, chart_source: str) -> str:
     ptype = str(pair.get("type") or "").lower()
     source = str(pair.get("source") or "").lower()
@@ -1520,6 +1527,11 @@ def api_candles():
     )
 
     provider = _generic_chart_provider(pair, chart_source)
+    instrument = (
+        _commodity_chart_instrument_identity(pair)
+        if str(ptype or "").lower() == "commodity"
+        else None
+    )
     return jsonify(
         {
             "candles": result,
@@ -1539,6 +1551,7 @@ def api_candles():
                 (CONFIG.get("ENGINE_A_VWAP_FILTER") or {}).get("ENABLED", False)
             ),
             "price_precision": _overlay_precision_for(pair),
+            "instrument": instrument,
         }
     )
 

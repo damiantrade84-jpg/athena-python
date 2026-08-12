@@ -1,0 +1,11 @@
+# Intentional chart-symbol ↔ engine-symbol aliases for AI chart review.
+# Silent futures↔spot joins are prohibited. Each entry must declare a basis
+# tolerance (price units). Observed basis is stamped on the review payload.
+#
+# Example (disabled by default — do not enable SI=F↔XAG/USD without ops sign-off):
+# - chart: "SI=F"
+#   engine: "XAG/USD"
+#   basis_tolerance: 0.50
+#   note: "COMEX continuous futures vs MT5 XAGUSD spot CFD"
+
+aliases: []

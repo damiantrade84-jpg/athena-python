@@ -6,7 +6,14 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from ai_review.engine_b_structure_contract import (
+    describe_engine_b_structure_evidence,
+    evaluate_tp_clears_resistance,
+    has_engine_b_structure_evidence,
+    resolve_nearest_levels,
+)
 from ai_review.engine_snapshots import extract_engine_snapshots
+from ai_review.score_attribution import build_component_decomposition
 from market_structure import build_engine_b_profile_vp_context, sanitize_engine_b_structure_profile_fields
 from scoring import get_pair_score_group
 from style_resolver import normalize_style, resolve_auto_style
@@ -558,6 +565,12 @@ def _score_attribution(
         ),
         "scoreSource": "backend_engine_a",
         "aiReviewCanMutateScore": False,
+        # P2-6: all components, plus the residual the multiplicative formula
+        # leaves unattributed, plus what "contribution" actually means.
+        "componentDecomposition": build_component_decomposition(
+            factor_diag,
+            raw_score=technical_raw if technical_raw is not None else final_score,
+        ),
     }
 
 
@@ -823,6 +836,110 @@ def _news_sentiment_block(signal: dict[str, Any]) -> dict[str, Any]:
             if val is not None:
                 block[key] = val
     return block
+
+
+def _engine_b_structure_evidence(payload: Any) -> bool:
+    """True when a nested Engine B payload has real structure evidence.
+
+    Delegates to the shared contract so this predicate cannot drift away from
+    the overlay renderer again (P1-5).
+    """
+    return has_engine_b_structure_evidence(payload)
+
+
+def _pick_engine_b_structure_payload(
+    signal: dict[str, Any] | None,
+    origin: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Best-effort Engine B structure for Engine A chart-review context.
+
+    Engine A scan rows often omit a full nested engine_b block. Prefer any
+    real structure payload on the live re-analysis signal, then the origin
+    candidate (scan/UI card). Empty dict is fine — diagnostics treat B
+    structure as optional for Engine A-primary reviews.
+    """
+    nested_keys = (
+        "engine_b",
+        "naked_data",
+        "engineB",
+        "engine_b_result",
+        "engineBResult",
+    )
+    for src in (signal, origin):
+        if not isinstance(src, dict):
+            continue
+        for key in nested_keys:
+            val = src.get(key)
+            if _engine_b_structure_evidence(val):
+                return dict(val)
+        # Origin/scan row may itself be Engine B-shaped.
+        if _engine_b_structure_evidence(src) and (
+            src.get("is_naked")
+            or str(src.get("engine") or "").upper() in {"B", "ENGINE_B", "NAKED"}
+            or src.get("structural_verdict")
+        ):
+            return dict(src)
+    # Last resort: return nested dict even if sparse so VP sanitize can stamp context.
+    for src in (signal, origin):
+        if not isinstance(src, dict):
+            continue
+        for key in nested_keys:
+            val = src.get(key)
+            if isinstance(val, dict) and val:
+                return dict(val)
+    return {}
+
+
+def _build_structure_context(
+    signal: dict[str, Any] | None,
+    origin: dict[str, Any] | None,
+    *,
+    pair: dict[str, Any],
+    structure_refetch: dict[str, Any] | None = None,
+    sl: float | None = None,
+    tp1: float | None = None,
+    tp2: float | None = None,
+) -> dict[str, Any]:
+    """Engine B structure for the review panel, with levels flattened.
+
+    P1-5 populates ``nearest_support`` / ``nearest_resistance`` (previously
+    ``n/a`` because only the zone dicts travelled) and records why a structure
+    refetch failed instead of leaving the gap unexplained. P1-6 then evaluates
+    ``tp_clears_resistance`` for TP1 and TP2 independently.
+    """
+    struct = sanitize_engine_b_structure_profile_fields(
+        _pick_engine_b_structure_payload(signal, origin),
+        str(pair.get("type") or ""),
+    )
+    if not isinstance(struct, dict):
+        struct = {}
+
+    evidence = describe_engine_b_structure_evidence(struct)
+    struct["structure_evidence"] = evidence
+    struct["structure_refetch"] = structure_refetch or {"attempted": False, "ok": None}
+
+    levels = resolve_nearest_levels(struct)
+    struct["nearest_support"] = levels["nearest_support"]
+    struct["nearest_resistance"] = levels["nearest_resistance"]
+
+    direction = str(
+        (origin or {}).get("direction") or (signal or {}).get("direction") or ""
+    ).upper()
+    targets = {"tp1": tp1, "tp2": tp2}
+    struct["tp_clears_resistance"] = evaluate_tp_clears_resistance(
+        direction=direction,
+        entry=_to_float((signal or {}).get("price")),
+        targets=targets,
+        structure=struct,
+    )
+
+    # P1-4: without structural levels the review layer must not narrate
+    # structural claims about SL/TP placement.
+    struct["structural_levels_available"] = bool(evidence.get("present"))
+    struct["suppress_structural_language"] = not evidence.get("present")
+    if sl is not None:
+        struct["sl_reference"] = sl
+    return struct
 
 
 def select_ohlcv_bars_for_chart(
@@ -1283,6 +1400,7 @@ def assemble_engine_a_context(
     analyze_pair_fn: Callable[..., dict[str, Any] | None] | None = None,
     btc_bias_fn: Callable[[], str] | None = None,
     origin_signal: dict[str, Any] | None = None,
+    naked_analysis_fn: Callable[..., tuple[Any, Any, str | None]] | None = None,
 ) -> dict[str, Any] | None:
     resolve_pair = resolve_pair_fn or _default_resolve_pair
     analyze_pair = analyze_pair_fn or _default_analyze_pair
@@ -1302,6 +1420,70 @@ def assemble_engine_a_context(
     signal = analyze_pair(pair, btc_bias, style=style)
     if not signal:
         return None
+
+    # P1-5: when Engine A scan seed has no real Engine B structure but the chart
+    # enabled engine_b overlays (or structure is empty), refresh via naked
+    # analysis so server structure_context matches the overlay renderer.
+    structure_seed = _pick_engine_b_structure_payload(signal, origin)
+    structure_refetch: dict[str, Any] = {"attempted": False, "ok": None}
+    overlays = list((screenshot_meta or {}).get("overlays") or [])
+    need_structure = not _engine_b_structure_evidence(structure_seed) and (
+        "engine_b" in overlays or True  # always try once for review completeness
+    )
+    if need_structure and callable(naked_analysis_fn):
+        try:
+            direction = str(
+                origin.get("direction") or signal.get("direction") or ""
+            ).upper()
+            if direction in ("LONG", "SHORT"):
+                seed = {
+                    "symbol": pair.get("symbol") or symbol,
+                    "pair": pair.get("display") or symbol,
+                    "display": pair.get("display") or symbol,
+                    "type": pair.get("type"),
+                    "direction": direction,
+                    "style": style,
+                    "is_naked": True,
+                    "engine": "B",
+                }
+                res, _pair_obj, err = naked_analysis_fn(seed, overlay_only=True)
+                if err:
+                    structure_refetch = {"attempted": True, "ok": False, "reason": str(err)}
+                elif not isinstance(res, dict):
+                    structure_refetch = {
+                        "attempted": True,
+                        "ok": False,
+                        "reason": "naked analysis returned no payload",
+                    }
+                elif not _engine_b_structure_evidence(res):
+                    structure_refetch = {
+                        "attempted": True,
+                        "ok": False,
+                        "reason": "payload carried no structure evidence under either contract",
+                    }
+                else:
+                    signal = dict(signal)
+                    signal["engine_b"] = res
+                    structure_refetch = {
+                        "attempted": True,
+                        "ok": True,
+                        "evidence": describe_engine_b_structure_evidence(res),
+                    }
+            else:
+                structure_refetch = {
+                    "attempted": False,
+                    "ok": False,
+                    "reason": f"direction {direction!r} is not LONG/SHORT",
+                }
+        except Exception as exc:  # noqa: BLE001 - never fail the review on structure
+            # P1-5: this used to be a bare `pass`, which produced the reported
+            # symptom exactly — bands drawn client-side, structure empty
+            # server-side, no error surfaced anywhere.
+            structure_refetch = {
+                "attempted": True,
+                "ok": False,
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
 
     factor_diag = _merge_factor_diagnostics(dict(signal.get("factorDiagnostics") or {}), signal)
     atr_diag = dict(signal.get("atrDiagnostics") or {})
@@ -1389,6 +1571,8 @@ def assemble_engine_a_context(
         "symbol": signal.get("symbol") or pair.get("symbol"),
         "timeframe": timeframe,
         "analyze_style": style,
+        "primary_engine": "A",
+        "review_type": "engine_a_chart",
         "chart_timeframe": (screenshot_meta or {}).get("chart_timeframe") or timeframe,
         "scoring_profile": signal.get("scoringProfile")
         or (screenshot_meta or {}).get("scoring_profile"),
@@ -1501,9 +1685,14 @@ def assemble_engine_a_context(
         else {},
         "mismatch_warnings": [],
         "funding_oi": _funding_oi_block(signal),
-        "structure_context": sanitize_engine_b_structure_profile_fields(
-            signal.get("engine_b") if isinstance(signal.get("engine_b"), dict) else {},
-            str(pair.get("type") or ""),
+        "structure_context": _build_structure_context(
+            signal,
+            origin,
+            pair=pair,
+            structure_refetch=structure_refetch,
+            sl=sl,
+            tp1=tp,
+            tp2=_to_float(signal.get("tp2")),
         ),
         "ema_levels": _ema_levels(signal, factor_diag),
         "htf_swing_highs": [

@@ -182,6 +182,7 @@ Rules:
 - Do not mark funding/OI missing for non-crypto assets.
 - Do not mark carry missing for non-forex assets.
 - Do not mark COT missing for assets where addonType is not cot/cot_proxy.
+- Do not put engine_b_structure_context / Engine B structure in missing_context when engineBContext.available is false or absent — Engine B structure is an optional overlay on Engine A reviews (use notApplicable, not missing).
 - If nonVisualContext says a driver is unavailable, report it as unavailable, not as bearish/bullish.
 - Do NOT put chartCapturedAt, scanTimestamp, or latestCandleTimestamp in missing_context — use metadata only.
 - For crypto, equity_session is not applicable — put in notApplicable, not missing.

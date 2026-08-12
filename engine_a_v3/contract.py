@@ -83,6 +83,8 @@ class EngineASetupSignal:
     validationArtifact: ValidationArtifact | None
     validationStatus: str = "UNAVAILABLE"
     executionScope: str = "NONE"
+    # Derived from validation artifact + decision (never TRADE under DEMO_UNVALIDATED).
+    setupLabel: str | None = None
     # Continuous quality fields (repopulated by the quant scorer; V3 left these None).
     confluenceScore: float | None = None
     maxScore: float | None = None
@@ -124,6 +126,14 @@ class EngineASetupSignal:
                 "style": self.horizon,
                 "entry": self.price,
                 "tp": self.tp1,
+                "setup_label": self.setupLabel,
+                "setupLabel": self.setupLabel,
+                "execution_permitted": bool(
+                    self.setupLabel == "TRADE"
+                    and self.qualified
+                    and self.engineATradeEnabled
+                    and self.executionScope not in ("NONE", None, "")
+                ),
                 # Headline rr must describe the headline tp (tp1) — the level the
                 # default SINGLE_TP1 policy executes. rr2 stays available for the
                 # TP2 runner under SPLIT_50_50.

@@ -8,6 +8,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -36,6 +37,7 @@ from athena_app.api.routes_ai_chart_review import (
     register_ai_chart_review_routes,
 )
 from config import CONFIG, get_ai_model
+from timeframe_policy import resolve_timeframe_policy
 
 _PNG_1X1 = base64.b64encode(
     bytes.fromhex(
@@ -49,6 +51,19 @@ def _png_data_url() -> str:
     return f"data:image/png;base64,{_PNG_1X1}"
 
 
+def _fresh_iso(offset_seconds: float = 0.0) -> str:
+    """Timestamp relative to now.
+
+    Route fixtures must stay inside the pre-dispatch capture-skew window
+    (``MISMATCH_WARN_MAX_SECONDS``, default 120s) or the review is rejected
+    before the provider is called. Frozen literals silently age out, so the
+    original fixture offsets are preserved relative to the current clock.
+    """
+    return (
+        datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)
+    ).isoformat()
+
+
 def _base_request(**overrides):
     body = {
         "symbol": "BTCUSDT",
@@ -59,7 +74,8 @@ def _base_request(**overrides):
             "width": 1280,
             "height": 720,
             "native_chart": True,
-            "captured_at": "2026-05-21T16:31:02+00:00",
+            # 7s after the scan, matching the original fixture offset.
+            "captured_at": _fresh_iso(7),
             "chart_timeframe": "H4",
             "overlays": ["candles"],
         },
@@ -75,14 +91,21 @@ def _engine_a_ctx(**overrides):
         "asset_group": "crypto",
         "direction": "LONG",
         "regime": "trend",
-        "scan_timestamp": "2026-05-21T16:30:55+00:00",
-        "candidate_timestamp": "2026-05-21T16:30:55+00:00",
-        "latest_candle_ts": "2026-05-21T16:00:00+00:00",
+        "scan_timestamp": _fresh_iso(0),
+        "candidate_timestamp": _fresh_iso(0),
+        # ~31min before the scan, matching the original fixture offset.
+        "latest_candle_ts": _fresh_iso(-1855),
         "confluence_score": 2.4,
         "threshold": 2.0,
         "max_score_override": 3.0,
         "passed": True,
-        "factor_diagnostics": {"trendCoherence": {"aligned": True}},
+        # minDirectional / effectiveMinDirectional / trendCoherence are required
+        # completeness inputs (P2-4); without them the context is unverifiable.
+        "factor_diagnostics": {
+            "trendCoherence": {"aligned": True, "agreement_count": 4, "coherence_ratio": 0.8},
+            "minDirectional": 0.05,
+            "effectiveMinDirectional": 0.05,
+        },
         "multiplier_diagnostics": {"equity_session_multiplier": 1.02},
         "equity_session": {
             "applied": True,
@@ -160,7 +183,12 @@ def _make_app(tmp_db: str, enabled: bool = True, openai_enabled: bool = True, pr
     cfg["AI_CHART_REVIEW"] = ai_cfg
 
     def _resolve(symbol: str):
-        return {"symbol": symbol, "display": symbol, "type": "crypto", "source": "binance"}
+        # display must be the canonical pair form. get_pair_score_group keys off
+        # it, so "BTCUSDT" falls through to crypto_other (swing-only since
+        # 766d0135) while the real "BTC/USDT" is crypto_btc (intraday). The bare
+        # form made the timeframe-route assertions unreachable.
+        display = "BTC/USDT" if symbol.upper() == "BTCUSDT" else symbol
+        return {"symbol": symbol, "display": display, "type": "crypto", "source": "binance"}
 
     def _analyze(pair, btc_bias, style="swing"):
         return {
@@ -175,7 +203,10 @@ def _make_app(tmp_db: str, enabled: bool = True, openai_enabled: bool = True, pr
             "rr1": 2.0,
             "atr": 1200.0,
             "regime": "trend",
-            "timestamp": "2026-05-21T16:30:55+00:00",
+            # Becomes engine_ctx.scan_timestamp. Must stay inside the candidate-age
+            # window or the review is rejected pre-dispatch as stale levels joined
+            # to freshly rebuilt factors.
+            "timestamp": _fresh_iso(0),
             "factorDiagnostics": {
                 "equity_session": {
                     "enabled": True,
@@ -774,6 +805,31 @@ def test_timestamp_mismatch_creates_warning():
     meta = {"captured_at": "2026-05-21T16:34:15+00:00"}
     warnings = evaluate_timestamp_mismatch(ctx, meta, {"MISMATCH_WARN_MAX_SECONDS": 120})
     assert warnings
+    assert any("scan_timestamp" in w for w in warnings)
+
+
+def test_timestamp_mismatch_prefers_review_timestamp_over_old_scan():
+    """Capture aligned with live review build must not flag solely because the origin scan is older."""
+    ctx = _engine_a_ctx(
+        scan_timestamp="2026-05-21T16:30:00+00:00",
+        review_timestamp="2026-05-21T16:34:00+00:00",
+    )
+    meta = {"captured_at": "2026-05-21T16:34:05+00:00"}
+    warnings = evaluate_timestamp_mismatch(ctx, meta, {"MISMATCH_WARN_MAX_SECONDS": 120})
+    assert not any("chart captured" in w and "review_timestamp" in w for w in warnings)
+    assert not any("chart captured" in w and "scan_timestamp" in w for w in warnings)
+    # Origin candidate age is still reported as a separate advisory.
+    assert any("candidate scan_timestamp is" in w for w in warnings)
+
+
+def test_timestamp_mismatch_flags_stale_capture_vs_review_timestamp():
+    ctx = _engine_a_ctx(
+        scan_timestamp="2026-05-21T16:30:00+00:00",
+        review_timestamp="2026-05-21T16:34:00+00:00",
+    )
+    meta = {"captured_at": "2026-05-21T16:40:00+00:00"}
+    warnings = evaluate_timestamp_mismatch(ctx, meta, {"MISMATCH_WARN_MAX_SECONDS": 120})
+    assert any("chart captured" in w and "review_timestamp" in w for w in warnings)
 
 
 def test_route_rejects_image_above_max_bytes(tmp_audit_db):
@@ -1275,10 +1331,18 @@ def test_timeframe_route_attached_to_success_response(tmp_audit_db):
     assert data["timeframe_route"] == route
     assert data["engine_a_context"]["timeframe_route"] == route
     assert route["contextTf"] == "H4"
-    assert route["entryTf"] == "H1"
     assert route["executionTf"] == "M15"
     assert route["autoSelectTf"] == "M15"
     assert route["mode"] == "entry_wait"
+    # The route's job is to mirror the authoritative policy, so assert that
+    # rather than a hardcoded rung. entryTf was pinned to "H1", which matches
+    # neither v4 style ladder (intraday setup=H4, swing setup=H4) — see the
+    # open ladder question recorded in the fixpack verification report.
+    policy = resolve_timeframe_policy(
+        "BTCUSDT", "crypto", "crypto_btc", "intraday", engine_id="engine_a"
+    ).payload()
+    assert route["entryTf"] == policy["setupTf"]
+    assert route["autoSelectTf"] == policy["triggerTf"]
 
 
 def test_timeframe_route_dedup_response_has_route(tmp_audit_db):
@@ -1331,7 +1395,10 @@ def test_context_diagnostics_attached_to_success_response(tmp_audit_db):
         resp = client.post("/api/ai/chart-review", json=body)
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["contextCompleteness"]["metadata"]["chartCapturedAt"] == "2026-05-21T16:31:02+00:00"
+    assert (
+        data["contextCompleteness"]["metadata"]["chartCapturedAt"]
+        == body["screenshot_meta"]["captured_at"]
+    )
     assert data["contextCompleteness"]["metadata"]["chartProvider"] is None
     assert "chart captured timestamp" not in data["contextCompleteness"]["missingRequired"]
     assert "chart captured timestamp" not in data["contextCompleteness"]["missingOptional"]
@@ -1362,6 +1429,32 @@ def test_context_diagnostics_forex_engine_b_missing_not_optional():
     assert any("Engine B" in label or "Funding" in label for label in na_labels)
 
 
+def test_engine_a_review_engine_b_structure_context_is_not_applicable():
+    """Model often lists engine_b_structure_context on Engine A reviews; it must not show as missing."""
+    ctx = _engine_a_ctx()
+    ctx["primary_engine"] = "A"
+    ctx["review_type"] = "engine_a_chart"
+    ctx["screenshot_overlays"] = ["candles", "emas"]
+    ctx["structure_context"] = {}  # sanitize-stamped-empty shape
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 48,
+                "human_action": "wait",
+                "missing_context": ["engine_b_structure_context"],
+            }
+        )
+    )
+    diag = build_context_diagnostics(ctx, ai)
+    assert "engine_b_structure_context" not in diag["contextCompleteness"]["missingOptional"]
+    assert "engine_b_structure_context" not in diag["contextCompleteness"]["missingRequired"]
+    na_keys = [item["key"] for item in diag["missingContextDetailed"]["notApplicable"]]
+    assert "engine_b_structure_context" in na_keys
+    sanitized = sanitize_ai_review_missing_context(ctx, ai)
+    assert "engine_b_structure_context" not in sanitized["missing_context"]
+
+
 def test_context_diagnostics_forex_profile_levels_untrusted(monkeypatch):
     monkeypatch.setitem(CONFIG, "ENGINE_B_PROFILE_SCORING_ENABLED", True)
     monkeypatch.setitem(
@@ -1375,6 +1468,8 @@ def test_context_diagnostics_forex_profile_levels_untrusted(monkeypatch):
     ctx["asset_class"] = "forex"
     ctx["structure_context"] = sanitize_engine_b_structure_profile_fields(
         {
+            "structural_verdict": "CLEAR",
+            "bos_confirmed": True,
             "prev_session_poc": 65150.0,
             "prev_session_vah": 66200.0,
             "prev_session_val": 64200.0,
@@ -1842,6 +1937,83 @@ def test_summary_engine_bcd_null_safe():
     assert summary["engineD"]["setupType"] is None
 
 
+def test_non_directional_visual_contradiction_does_not_hard_zero_tradeability():
+    """Chop/stale/PA caveats must not force visual=22 / tradeability≈0 like a direction flip."""
+    ctx = _engine_a_ctx(passed=True)
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 48,
+                "human_action": "wait",
+                "visual_confirmation": "Chart directionally consistent with LONG zone retest",
+                "visual_contradiction": "Chop under major MAs; stale capture; empty candle PA payload",
+                "engine_a_alignment": "gates and CHoCH-long align directionally",
+                "entry_quality": "zone retest acceptable",
+                "atr_rr_assessment": "thin RR vs structural stop",
+                "freshness_assessment": "freshness skew",
+                "supporting_reasons": ["structureOk true", "chochConfirmed aligns LONG"],
+                "risks": ["Stop-out risk on wide structural SL", "Chop under major MAs", "Stale capture"],
+                "missing_context": [],
+            }
+        )
+    )
+    concordance = compute_engine_a_ai_concordance(ctx, ai, cfg={})
+    assert concordance["divergence_type"] != "visual_contradiction"
+    summary = build_ai_review_summary(
+        ctx, ai, concordance, build_provider_meta(provider="grok", model="grok-4.5"),
+        engine_snapshots=ctx["engine_snapshots"],
+    )
+    assert summary["visualConfirmationScore"] >= 40
+    assert summary["tradeabilityScore"] > 0
+
+
+def test_directional_visual_contradiction_still_hard_penalizes():
+    ctx = _engine_a_ctx(passed=True)
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 40,
+                "human_action": "wait",
+                "visual_confirmation": "",
+                "visual_contradiction": "Chart direction opposite to engine LONG bias",
+                "engine_a_alignment": "direction conflict",
+                "entry_quality": "against engine",
+                "supporting_reasons": [],
+                "risks": ["direction conflict"],
+                "missing_context": [],
+            }
+        )
+    )
+    concordance = compute_engine_a_ai_concordance(ctx, ai, cfg={})
+    assert concordance["divergence_type"] == "visual_contradiction"
+    summary = build_ai_review_summary(
+        ctx, ai, concordance, build_provider_meta(provider="grok", model="grok-4.5"),
+        engine_snapshots=ctx["engine_snapshots"],
+    )
+    assert summary["visualConfirmationScore"] == 22
+
+
+def test_select_ohlcv_bars_prefers_attached_h4_candles():
+    from ai_review.engine_a_context import select_ohlcv_bars_for_chart
+
+    bars = select_ohlcv_bars_for_chart(
+        {
+            "h4Candles": [
+                {"time": "2026-05-21T12:00:00+00:00", "open": 1, "high": 2, "low": 0.5, "close": 1.5},
+                {"time": "2026-05-21T16:00:00+00:00", "open": 1.5, "high": 2.5, "low": 1.4, "close": 2.0},
+            ]
+        },
+        "H4",
+        {"chart_timeframe": "H4"},
+    )
+    assert len(bars) == 2
+    assert bars[-1]["close"] == 2.0
+
+
 def test_apply_parse_fallback_overrides_model():
     meta = build_provider_meta(provider="anthropic", model="claude-opus-4-7")
     ai = normalize_chart_review_response("broken")
@@ -1911,7 +2083,14 @@ def test_resolve_chart_review_analyze_style_does_not_infer_style_from_chart_tf()
     assert resolve_chart_review_analyze_style({"chart_timeframe": "H4"}, {"type": "crypto"}) == "intraday"
     assert resolve_chart_review_analyze_style({"chart_timeframe": "M1"}, {"type": "crypto"}) == "intraday"
     assert resolve_chart_review_analyze_style({"signal_style": "scalp"}, {"type": "crypto"}) == "scalp"
-    assert resolve_chart_review_analyze_style({"chart_timeframe": "D1"}, {"type": "stock"}) == "swing"
+    # Session-bound classes moved to the intraday role ladder in 2a1171e0
+    # (2026-08-07, "Balance Engine A/B TF ladders"); style_resolver.py:108-115
+    # states the rationale. The assertion below predates that change (d17d188a,
+    # 2026-05-22). The point of this test is that the *chart timeframe* is not
+    # what decides the style — D1 here must not yield "swing" by inference.
+    assert resolve_chart_review_analyze_style({"chart_timeframe": "D1"}, {"type": "stock"}) == "intraday"
+    # A class that is still swing under auto, to keep both branches covered.
+    assert resolve_chart_review_analyze_style({"chart_timeframe": "M15"}, {"type": "forex", "scoreGroup": "forex_exotics"}) == "swing"
 
 
 def test_build_engine_a_prompt_context_includes_factor_scores():

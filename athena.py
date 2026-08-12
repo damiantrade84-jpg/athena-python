@@ -482,10 +482,15 @@ FOREX_PAIRS.extend(
 
 COMMODITY_PAIRS = [
     {
+        # Catalog id still carries Yahoo continuous-futures ticker for legacy
+        # research aliases; live OHLC/levels/execution are MT5 XAUUSD spot CFD.
+        # GC=F is futures_proxy only (COT/research) — never a pricing series.
         "symbol": "GC=F",
         "type": "commodity",
         "display": "XAU/USD",
         "source": "mt5",
+        "futures_proxy": "GC=F",
+        "price_series_kind": "spot_cfd",
         "enabled": True,
     },  # SQN +1.92, WR 64.7%, 17 trades (2026-03-15 ATR-fix confirmed)
     {
@@ -496,10 +501,15 @@ COMMODITY_PAIRS = [
         "enabled": True,
     },
     {
+        # SI=F is COMEX continuous silver futures (contango, different session/
+        # feed). Live OHLC/levels/execution are MT5 XAGUSD spot CFD (display
+        # XAG/USD). SI=F is futures_proxy only — never chart/score against it.
         "symbol": "SI=F",
         "type": "commodity",
         "display": "XAG/USD",
         "source": "mt5",
+        "futures_proxy": "SI=F",
+        "price_series_kind": "spot_cfd",
         "enabled": True,
     },  # SQN -0.07 - DISABLE (borderline, no edge confirmed)
     {
@@ -1640,22 +1650,31 @@ def _vendor_overrides(pair: dict) -> dict:
     return _VENDOR_SYMBOL_OVERRIDES.get(pair.get("display", ""), {})
 
 
+def _is_continuous_futures_ticker(symbol: str | None) -> bool:
+    from athena_app.services.commodity_identity import is_continuous_futures_ticker
+
+    return is_continuous_futures_ticker(symbol)
+
+
+def _commodity_instrument_identity(pair: dict | None) -> dict:
+    from athena_app.services.commodity_identity import commodity_instrument_identity
+
+    return commodity_instrument_identity(pair)
+
+
 def _yfinance_symbol_for_pair(pair: dict) -> str | None:
+    """Resolve a yfinance ticker for *pricing* history only.
 
-    override = pair.get("yfinanceSymbol") or _vendor_overrides(pair).get("yfinance")
+    Continuous futures (=F) are never returned for MT5-primary commodity CFDs
+    unless the pair explicitly opts in via yfinanceSymbol / vendor yfinance.
+    SI=F ≠ XAG/USD spot; GC=F ≠ XAU/USD spot.
+    """
+    from athena_app.services.commodity_identity import resolve_yfinance_pricing_symbol
 
-    if override:
-        return override
-
-    sym = pair.get("symbol")
-    if (
-        pair.get("type") in {"stock", "etf", "etf_bond"}
-        and isinstance(sym, str)
-        and sym.endswith(".US")
-    ):
-        return sym[:-3]
-
-    return sym
+    return resolve_yfinance_pricing_symbol(
+        pair,
+        vendor_yfinance=_vendor_overrides(pair).get("yfinance"),
+    )
 
 
 def _eodhd_ticker_for_pair(pair: dict) -> str | None:
@@ -8479,6 +8498,36 @@ def _compute_naked_analysis(
         except Exception as _rec_err:
             log.debug(f"[AI_RECONCILE] {pair_obj.get('display')}: skipped ({_rec_err})")
             res["ai_reconciliation"] = {"ai_agreement_label": "UNAVAILABLE"}
+
+        # Limited OHLC series for AI chart-review strategy facts (candle anatomy /
+        # PA). Scan/list payloads that never call naked_analysis stay lean; this
+        # path already held the series in memory for scoring.
+        try:
+            _ai_cr = CONFIG.get("AI_CHART_REVIEW") or {}
+            _chart_limit = int(_ai_cr.get("STRATEGY_LAYER_OHLCV_LIMIT") or 80)
+        except (TypeError, ValueError):
+            _chart_limit = 80
+        try:
+            _series_by_tf: dict[str, list] = {}
+            if d1:
+                _series_by_tf["D1"] = d1
+            if h4:
+                _series_by_tf["H4"] = h4
+            if h1:
+                _series_by_tf["H1"] = h1
+            for _tf_key, _series in (_tf_map or {}).items():
+                _k = str(_tf_key or "").upper()
+                if _k and _series and _k not in _series_by_tf:
+                    _series_by_tf[_k] = _series
+            for _tf_key, _series in _series_by_tf.items():
+                res[f"{_tf_key.lower()}Candles"] = _format_engine_a_chart_candles(
+                    _series, limit=_chart_limit
+                )
+        except Exception as _candle_attach_err:
+            log.debug(
+                f"[NAKED] {pair_obj.get('display')}: chart candle attach skipped "
+                f"({_candle_attach_err})"
+            )
 
         return res, pair_obj, None
     except Exception as e:
