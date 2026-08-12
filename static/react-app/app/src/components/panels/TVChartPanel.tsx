@@ -3515,12 +3515,18 @@ export default function TVChartPanel() {
       if (!symbol) {
         throw new Error('No symbol selected');
       }
+      // Stamp capture time as late as possible (immediately before POST) so the
+      // server compares a fresh chart_captured_at to review_timestamp and does
+      // not inherit multi-second delay from canvas encode / meta assembly.
       const reviewRequest = {
         symbol,
         timeframe: tfForBackend,
         provider: aiReviewProvider,
         screenshot_base64: dataUrl,
-        screenshot_meta: meta,
+        screenshot_meta: {
+          ...meta,
+          captured_at: new Date().toISOString(),
+        },
       };
 
       const applyReviewResponse = (response: AIChartReviewResponse) => {

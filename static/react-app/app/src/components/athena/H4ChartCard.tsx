@@ -21,22 +21,32 @@ import { fmtNum, toNum } from '@/lib/utils';
 
 interface RawCandle {
   t?: string | number;
+  time?: string | number;
   o?: number | string;
+  open?: number | string;
   h?: number | string;
+  high?: number | string;
   l?: number | string;
+  low?: number | string;
   c?: number | string;
+  close?: number | string;
   v?: number | string;
+  volume?: number | string;
 }
 
-interface PairScanResp {
-  pair?: { symbol?: string; display?: string; type?: string };
-  signal?: EngineASignal & { h4Candles?: RawCandle[] };
+interface CandlesApiResp {
+  candles?: RawCandle[];
+  symbol?: string;
+  tf?: string;
   error?: string;
 }
 
 interface Props {
   signal: EngineASignal | null;
 }
+
+/** H4 history bar count — matches the prior pair-scan chart contract (~240 bars). */
+const H4_CHART_LIMIT = 240;
 
 function toTimestamp(raw: string | number | undefined): UTCTimestamp | null {
   if (raw == null) return null;
@@ -49,6 +59,16 @@ function toTimestamp(raw: string | number | undefined): UTCTimestamp | null {
     if (Number.isFinite(ms)) return Math.floor(ms / 1000) as UTCTimestamp;
   }
   return null;
+}
+
+function candleField(
+  c: RawCandle,
+  shortKey: 't' | 'o' | 'h' | 'l' | 'c' | 'v',
+  longKey: 'time' | 'open' | 'high' | 'low' | 'close' | 'volume',
+): string | number | undefined {
+  const short = c[shortKey];
+  if (short != null && short !== '') return short;
+  return c[longKey];
 }
 
 function ema(values: number[], period: number): (number | null)[] {
@@ -88,11 +108,12 @@ function ema(values: number[], period: number): (number | null)[] {
 /**
  * H4 candlestick chart for a selected signal.
  *
- * Fetches /api/pair-scan to obtain the same 240-bar H4 series that
- * `analyze_pair()` builds. Renders candles with EMA21/50 overlays and
- * horizontal price lines for Entry / SL / TP1 / TP2 if present on the
- * signal payload. Purely visual — does not call any execution endpoint
- * or alter scoring.
+ * Fetches /api/candles?tf=H4 (same market-data path as TV chart / Vision).
+ * pair-scan deliberately omits OHLC series (attach_chart_candles is AI-review
+ * only), so re-running analyze_pair for the chart always returned empty
+ * h4Candles. Renders candles with EMA21/50 overlays and horizontal price
+ * lines for Entry / SL / TP1 / TP2 from the selected signal. Purely visual —
+ * does not call any execution endpoint or alter scoring.
  */
 export default function H4ChartCard({ signal }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -121,22 +142,25 @@ export default function H4ChartCard({ signal }: Props) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setError(null);
+    const url =
+      `/api/candles?symbol=${encodeURIComponent(symbol)}` +
+      `&tf=H4&limit=${H4_CHART_LIMIT}`;
     apiClient
-      .postJson('/api/pair-scan', { symbol, style: signal?.style || 'auto' })
+      .getJson(url)
       .then((res) => {
         if (cancelled) return;
-        const data = res as PairScanResp;
+        const data = res as CandlesApiResp;
         if (data?.error) {
           setError(data.error);
           setCandles(null);
           return;
         }
-        const list = data?.signal?.h4Candles;
+        const list = data?.candles;
         if (Array.isArray(list) && list.length > 0) {
           setCandles(list);
         } else {
           setCandles([]);
-          setError('No H4 candles returned for this pair');
+          setError(`No H4 candles returned for ${symbol}`);
         }
       })
       .catch((err: unknown) => {
@@ -150,7 +174,7 @@ export default function H4ChartCard({ signal }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [symbol, signal?.style]);
+  }, [symbol]);
 
   // Create / dispose the chart instance tied to the container.
   useEffect(() => {
@@ -243,11 +267,11 @@ export default function H4ChartCard({ signal }: Props) {
     const closes: number[] = [];
     const times: Time[] = [];
     for (const c of candles) {
-      const t = toTimestamp(c.t);
-      const o = toNum(c.o, NaN);
-      const h = toNum(c.h, NaN);
-      const l = toNum(c.l, NaN);
-      const cl = toNum(c.c, NaN);
+      const t = toTimestamp(candleField(c, 't', 'time'));
+      const o = toNum(candleField(c, 'o', 'open'), NaN);
+      const h = toNum(candleField(c, 'h', 'high'), NaN);
+      const l = toNum(candleField(c, 'l', 'low'), NaN);
+      const cl = toNum(candleField(c, 'c', 'close'), NaN);
       if (t == null) continue;
       if (![o, h, l, cl].every(Number.isFinite)) continue;
       rows.push({ time: t, open: o, high: h, low: l, close: cl });
@@ -359,7 +383,7 @@ export default function H4ChartCard({ signal }: Props) {
             <span className="inline-block w-2.5 h-0.5" style={{ background: 'hsl(160, 84%, 39%)' }} />
             TP
           </span>
-          <span className="ml-auto">240 H4 bars · sourced from /api/pair-scan (analyze_pair)</span>
+          <span className="ml-auto">{H4_CHART_LIMIT} H4 bars · sourced from /api/candles</span>
         </div>
       </CardContent>
     </Card>
