@@ -42,7 +42,7 @@ def test_get_ai_api_key_uses_moonshot_as_legacy_grok_fallback(monkeypatch):
     assert get_ai_api_key({}, provider="grok") == "moonshot-key"
 
 
-def test_ai_runtime_descriptor_defaults_to_grok45(monkeypatch):
+def test_ai_runtime_descriptor_defaults_to_grok46(monkeypatch):
     monkeypatch.delenv("AI_REVIEW_PROVIDER", raising=False)
     monkeypatch.delenv("AI_BASE_URL", raising=False)
     monkeypatch.delenv("AI_MODEL", raising=False)
@@ -56,7 +56,7 @@ def test_ai_runtime_descriptor_defaults_to_grok45(monkeypatch):
     assert desc["provider"] == "xAI"
     assert desc["selectedProvider"] == "grok"
     assert desc["base_url"] == "https://api.x.ai/v1"
-    assert desc["model"] == "grok-4.5"
+    assert desc["model"] == "grok-4.6"
     assert desc["key_configured"] is False
 
 

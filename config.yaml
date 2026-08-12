@@ -3015,7 +3015,7 @@ AI_CHART_REVIEW:
   OPENAI_MODEL: "gpt-5.6-sol"
   XAI_REASONING_EFFORT: "low"
 
-AI_CHART_REVIEW_XAI_MODEL: "grok-4.5"  # xAI-only when provider=grok; unused with openai primary
+AI_CHART_REVIEW_XAI_MODEL: "grok-4.6"  # xAI-only when provider=grok; unused with openai primary
 
 # Grok chart review (env overrides; defaults in config.py AI_CHART_REVIEW):
 # AI_CHART_REVIEW_XAI_MAX_TOKENS: 8000   # Grok-only output budget (Claude uses MAX_TOKENS)
@@ -3039,31 +3039,31 @@ OPENAI_REVIEW_TIMEOUT_SECONDS: 240
 
 OPENAI_REVIEW_SDK_MAX_RETRIES: 0
 
-AI_MODEL: "grok-4.5"
+AI_MODEL: "grok-4.6"
 
-XAI_MODEL: "grok-4.5"
+XAI_MODEL: "grok-4.6"
 
 # Lottery Lab AI Pattern Analysis (/api/lottery/ai-analysis) — separate from chart vision.
 LOTTERY_AI_PROVIDER: "grok"
 LOTTERY_AI_MAX_TOKENS: 4000
 LOTTERY_AI_REASONING_EFFORT: "low"   # OpenAI Responses path only
 # LOTTERY_AI_TIMEOUT_SEC: 30         # optional; falls back to AI_REQUEST_TIMEOUT_SEC
-LOTTERY_AI_MODEL: "grok-4.5"
+LOTTERY_AI_MODEL: "grok-4.6"
 
-DEBATE_MODEL: "grok-4.5"
+DEBATE_MODEL: "grok-4.6"
 
-VISION_MODEL: "grok-4.5"              # /api/chart-analysis
+VISION_MODEL: "grok-4.6"              # /api/chart-analysis
 
 NEWS_SENTIMENT_AI_PROVIDER: "grok"
 
-NEWS_SENTIMENT_MODEL: "grok-4.5"      # News AI text; defaults to AI_MODEL if empty
+NEWS_SENTIMENT_MODEL: "grok-4.6"      # News AI text; defaults to AI_MODEL if empty
 
 # Default OpenAI-compatible SDK read timeout is much longer; keep advisory AI bounded.
 AI_REQUEST_TIMEOUT_SEC: 30
 # Bull/Bear/Judge debate uses this (falls back to AI_REQUEST_TIMEOUT_SEC if unset).
 DEBATE_AI_TIMEOUT_SEC: 30
 MARCUS_AI_PROVIDER: "grok"    # Marcus Reid text review (/api/analyze); independent of AI_REVIEW_PROVIDER.
-MARCUS_MODEL: "grok-4.5"      # Marcus Reid model; falls back to AI_MODEL if unset.
+MARCUS_MODEL: "grok-4.6"      # Marcus Reid model; falls back to AI_MODEL if unset.
 
 MARCUS_AI_TIMEOUT_SEC: 90
 # Marcus output budget. On OpenAI Responses, reasoning tokens share this budget;

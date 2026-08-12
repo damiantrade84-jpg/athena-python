@@ -1687,7 +1687,7 @@ def api_news_sentiment():
         xai_api_key=ai_key,
         eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
         current_price=price,
-        model=str(runtime.get("model") or "grok-4.5"),
+        model=str(runtime.get("model") or "grok-4.6"),
     )
     if not result:
         return (

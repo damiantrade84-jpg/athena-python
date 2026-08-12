@@ -161,7 +161,7 @@ def _lottery_ai_runtime(cfg: dict) -> dict:
     provider = str(runtime.get("provider") or requested).strip() or requested
     model = (
         str(cfg.get("LOTTERY_AI_MODEL") or "").strip()
-        or get_ai_model(cfg, "AI_MODEL", "grok-4.5", provider=provider)
+        or get_ai_model(cfg, "AI_MODEL", "grok-4.6", provider=provider)
     )
     try:
         max_tokens = int(cfg.get("LOTTERY_AI_MAX_TOKENS") or 4000)

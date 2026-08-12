@@ -88,7 +88,7 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
     model = get_ai_model(
         CONFIG,
         preferred_key="AI_CHART_REVIEW_XAI_MODEL",
-        fallback="grok-4.5",
+        fallback="grok-4.6",
         provider="grok",
     )
     max_tokens = int(cfg.get("XAI_MAX_TOKENS") or cfg.get("MAX_TOKENS", 1500))

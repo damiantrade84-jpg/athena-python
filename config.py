@@ -40,7 +40,7 @@ def scan_duplicate_top_level_yaml_keys(yaml_text: str) -> dict[str, list[int]]:
 AI_API_KEY_PLACEHOLDER = "YOUR_XAI_API_KEY"
 _LEGACY_AI_API_KEY_PLACEHOLDER = "YOUR_MOONSHOT_API_KEY"
 _AI_BASE_URL_DEFAULT = "https://api.x.ai/v1"
-_AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "grok-4.5")
+_AI_MODEL_DEFAULT = os.environ.get("AI_MODEL", "grok-4.6")
 _OPENAI_BASE_URL_DEFAULT = "https://api.openai.com/v1"
 _OPENAI_REVIEW_MODEL_DEFAULT = "gpt-5.6-sol"
 _AI_REVIEW_PROVIDER_DEFAULT = "grok"
@@ -280,7 +280,7 @@ def get_ai_base_url(cfg: dict | None = None, provider: object | None = None) -> 
 def get_ai_model(
     cfg: dict | None = None,
     preferred_key: str = "AI_MODEL",
-    fallback: str = "grok-4.5",
+    fallback: str = "grok-4.6",
     provider: object | None = None,
 ) -> str:
     cfg = CONFIG if cfg is None else cfg
@@ -736,7 +736,7 @@ def create_ai_client(
 def ai_runtime_descriptor(
     cfg: dict | None = None,
     preferred_model_key: str = "AI_MODEL",
-    fallback_model: str = "grok-4.5",
+    fallback_model: str = "grok-4.6",
 ) -> dict:
     resolved_cfg = CONFIG if cfg is None else cfg
     provider = get_ai_review_provider(resolved_cfg)

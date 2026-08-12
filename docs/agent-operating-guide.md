@@ -96,7 +96,7 @@ After recreating `.venv`: run `python tools/check_ws_env.py` to verify WebSocket
 - `market_intelligence.py` / `pair_context.py` / `ai_strategist.py` — read-only market desk context, pair context, and Strategist summaries
 - `ai_conversation_store.py` / `ai_agent_logger.py` — best-effort chat persistence and audit logging; failures must not block chat/review
 - `athena_app/api/routes_ai_agent.py` — `/api/ai/trade-chat`, conversation routes, and Strategist routes
-- `vision_prompts.py` / `vision_hybrid.py` — chart vision (grok-4.3); **preserve exact footer tokens**
+- `vision_prompts.py` / `vision_hybrid.py` — chart vision (grok-4.6); **preserve exact footer tokens**
 - `lottery_engine.py` — lottery AI (**separate** from chart vision — do not mix)
 - `signal_debate.py` — Engine B debate flow
 - `news_sentiment_feed.py` — sentiment enrichment
@@ -295,7 +295,7 @@ Detailed repeatable workflows live in repo skills. See `docs/codex-guidance.md` 
 
 **Output:** RIGHT EDGE status, TF alignment, per-style ratings, levels.
 
-**Model:** `VISION_MODEL` (grok-4.3), ~800–1100 tokens, temperature from `AITemperatureConfig`.
+**Model:** `VISION_MODEL` (grok-4.6), ~800–1100 tokens, temperature from `AITemperatureConfig`.
 
 **Parser:** exact footer tokens; do not rename/reorder unless explicitly requested.
 

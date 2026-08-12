@@ -1125,7 +1125,7 @@ class AutoTrader:
             _meta_result = run_meta_analysis(
                 self._audit_db,
                 cfg.get("XAI_API_KEY", ""),
-                cfg.get("XAI_MODEL", "grok-4.5"),
+                cfg.get("XAI_MODEL", "grok-4.6"),
             )
             log.info(
                 f"[AUTO] Weekly meta-analysis complete: {_meta_result.get('summary', '')[:100]}"
