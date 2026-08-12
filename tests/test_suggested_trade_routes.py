@@ -183,3 +183,41 @@ def test_clear_terminal_route_keeps_active_watches(app_client):
     assert data["removed"] == 0
     stored = json.loads(active.read_text(encoding="utf-8"))
     assert len(stored["watches"]) == 1
+
+
+def test_runtime_fetch_candles_resolves_pair_dict():
+    from athena_app.api.routes_suggested_trades import _runtime_fetch_candles
+
+    calls = []
+
+    def _fetch(pair, tf, limit):
+        calls.append((pair, tf, limit))
+        return {"candles": [{"c": 1.08}]}
+
+    runtime = SimpleNamespace(
+        fetch_candles=_fetch,
+        resolve_pair=lambda symbol: {"symbol": symbol, "type": "forex"},
+    )
+    fetch_fn = _runtime_fetch_candles(runtime)
+    fetch_fn("EURUSD", "M15", limit=5)
+    assert calls == [({"symbol": "EURUSD", "type": "forex"}, "M15", 5)]
+
+
+def test_runtime_fetch_candles_falls_back_to_symbol_dict():
+    from athena_app.api.routes_suggested_trades import _runtime_fetch_candles
+
+    calls = []
+
+    def _fetch(pair, tf, limit):
+        calls.append(pair)
+        return None
+
+    runtime = SimpleNamespace(fetch_candles=_fetch, resolve_pair=lambda symbol: None)
+    fetch_fn = _runtime_fetch_candles(runtime)
+    fetch_fn("EURUSD", "M15", limit=5)
+    assert calls == [{"symbol": "EURUSD"}]
+
+    runtime_no_resolver = SimpleNamespace(fetch_candles=_fetch)
+    fetch_fn = _runtime_fetch_candles(runtime_no_resolver)
+    fetch_fn("GBPUSD", "H1", limit=5)
+    assert calls[-1] == {"symbol": "GBPUSD"}

@@ -18818,6 +18818,7 @@ register_suggested_trade_routes(
         json_safe=_json_safe,
         log=log,
         fetch_candles=fetch_candles,
+        resolve_pair=lambda symbol: _resolve_pair_from_signal({"symbol": symbol}),
         live_prices=_live_prices,
         live_prices_lock=_live_prices_lock,
     ),
@@ -19613,6 +19614,7 @@ def ensure_runtime_services_started() -> None:
             SimpleNamespace(
                 CONFIG=CONFIG,
                 fetch_candles=fetch_candles,
+                resolve_pair=lambda symbol: _resolve_pair_from_signal({"symbol": symbol}),
                 live_prices=_live_prices,
                 live_prices_lock=_live_prices_lock,
             )

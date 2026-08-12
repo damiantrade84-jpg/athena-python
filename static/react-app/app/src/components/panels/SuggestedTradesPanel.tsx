@@ -255,6 +255,7 @@ export default function SuggestedTradesPanel() {
       symbol,
       display: watch.display || symbol,
       signal: watch.signal,
+      watchId: watch.watch_id,
       preferredTf: watchEntryTf(watch) || watchContextTf(watch) || 'H4',
       autoReview: false,
       createdAt: new Date().toISOString(),

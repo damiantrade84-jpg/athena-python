@@ -32,7 +32,7 @@ def start_suggested_trade_monitor(runtime: SimpleNamespace) -> bool:
     cfg = getattr(runtime, "CONFIG", {}) or {}
     return start_suggested_trade_runner_once(
         cfg=cfg,
-        fetch_candles_fn=getattr(runtime, "fetch_candles", None),
+        fetch_candles_fn=_runtime_fetch_candles(runtime),
         live_prices=getattr(runtime, "live_prices", None),
         live_prices_lock=getattr(runtime, "live_prices_lock", None),
         active_path=DEFAULT_ACTIVE_PATH,
@@ -43,6 +43,32 @@ def start_suggested_trade_monitor(runtime: SimpleNamespace) -> bool:
 def _runtime_cfg() -> dict:
     rt = _runtime
     return getattr(rt, "CONFIG", {}) or {}
+
+
+def _runtime_fetch_candles(runtime: SimpleNamespace | None):
+    """Adapt the monitor's fetch_candles(symbol, tf, limit) calls to the runtime.
+
+    The monitor passes a symbol string; production fetch_candles expects a pair
+    dict. Resolve via the injected resolve_pair callable and fail soft to a
+    minimal {"symbol": ...} dict instead of crashing every evaluation tick.
+    """
+    fetch = getattr(runtime, "fetch_candles", None)
+    if fetch is None:
+        return None
+    resolve = getattr(runtime, "resolve_pair", None)
+
+    def _fetch(symbol: str, tf: str, limit: int = 5):
+        pair = None
+        if callable(resolve):
+            try:
+                pair = resolve(symbol)
+            except Exception:
+                pair = None
+        if not isinstance(pair, dict):
+            pair = {"symbol": symbol}
+        return fetch(pair, tf, limit)
+
+    return _fetch
 
 
 def _filter_watches(watches: list[dict], *, status_filter: str | None, symbol_filter: str) -> list[dict]:
@@ -144,7 +170,7 @@ def register_suggested_trade_routes(app, runtime: SimpleNamespace) -> None:
                 cfg=cfg,
                 active_path=DEFAULT_ACTIVE_PATH,
                 events_path=DEFAULT_EVENTS_PATH,
-                fetch_candles_fn=getattr(rt, "fetch_candles", None),
+                fetch_candles_fn=_runtime_fetch_candles(rt),
                 live_prices=getattr(rt, "live_prices", None),
                 live_prices_lock=getattr(rt, "live_prices_lock", None),
             )

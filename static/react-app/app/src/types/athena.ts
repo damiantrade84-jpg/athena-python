@@ -130,6 +130,7 @@ export interface TvChartIntent {
   primaryEngine?: 'A' | 'B';
   candidateId?: string;
   candidateRevision?: string;
+  watchId?: string;
   preferredTf?: string;
   autoReview?: boolean;
   createdAt: string;
@@ -1984,6 +1985,12 @@ export interface ReviewInputMeta {
   hasChartImage?: boolean;
   hasStructureChartImage?: boolean;
   hasEntryChartImage?: boolean;
+  reviewImagePolicySource?: 'selected_candidate' | 'review_reanalysis' | string;
+  reviewImagePolicyDifferences?: Array<{
+    role?: 'structure' | 'entry' | string;
+    candidate?: string | null;
+    reanalysis?: string | null;
+  }>;
   timeframeRouteApplied?: boolean;
 }
 
@@ -2077,6 +2084,8 @@ export interface AIChartReviewScreenshotMeta {
   /** Server lookup key/assertion only; never a trusted score or entry source. */
   candidate_id?: string;
   candidate_revision?: string;
+  /** Server-side suggested-trade watch lookup key; resolves parity from the persisted watch, not the scan cache. */
+  suggested_watch_id?: string;
   primary_engine?: 'A' | 'B';
   signal_engine?: 'A' | 'B';
   renderedLayers?: Record<string, boolean>;

@@ -110,6 +110,7 @@ export function buildScreenshotMeta(args: {
   candidate_direction?: string;
   candidate_id?: string;
   candidate_revision?: string;
+  suggested_watch_id?: string;
   primary_engine?: 'A' | 'B';
   signal_engine?: 'A' | 'B';
   renderedLayers?: Record<string, boolean>;
@@ -136,6 +137,7 @@ export function buildScreenshotMeta(args: {
     ...(args.candidate_direction ? { candidate_direction: args.candidate_direction } : {}),
     ...(args.candidate_id ? { candidate_id: args.candidate_id } : {}),
     ...(args.candidate_revision ? { candidate_revision: args.candidate_revision } : {}),
+    ...(args.suggested_watch_id ? { suggested_watch_id: args.suggested_watch_id } : {}),
     ...(args.primary_engine ? { primary_engine: args.primary_engine } : {}),
     ...(args.signal_engine ? { signal_engine: args.signal_engine } : {}),
     ...(args.renderedLayers ? { renderedLayers: { ...args.renderedLayers } } : {}),

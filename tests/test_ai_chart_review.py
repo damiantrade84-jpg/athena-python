@@ -8,6 +8,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -181,7 +182,13 @@ def _mock_provider_payload(**overrides):
     return base
 
 
-def _make_app(tmp_db: str, enabled: bool = True, openai_enabled: bool = True, primary_engine: str = "A"):
+def _make_app(
+    tmp_db: str,
+    enabled: bool = True,
+    openai_enabled: bool = True,
+    primary_engine: str = "A",
+    engine_a_rows: list[dict] | None = None,
+):
     app = Flask(__name__)
     cfg = dict(CONFIG)
     cfg["AI_REVIEW_PROVIDER"] = "claude"
@@ -298,6 +305,7 @@ def _make_app(tmp_db: str, enabled: bool = True, openai_enabled: bool = True, pr
         analyze_pair_fn=_analyze,
         btc_bias_fn=lambda: "neutral",
         naked_analysis_fn=_naked_analysis,
+        last_engine_a_rows_fn=lambda: list(engine_a_rows or []),
         last_engine_b_rows_fn=lambda: [],
     )
     register_ai_chart_review_routes(app, runtime)
@@ -433,6 +441,55 @@ def test_route_rejects_entry_image_that_does_not_match_policy_trigger(tmp_audit_
         {"role": "entry", "expected": "M15", "actual": "H4"}
     ]
     mock_call.assert_not_called()
+
+
+def test_route_uses_selected_candidate_trigger_when_reanalysis_policy_differs(
+    tmp_audit_db,
+):
+    candidate = {
+        "signalId": "candidate-m30",
+        "timestamp": _fresh_iso(0),
+        "symbol": "BTCUSDT",
+        "display": "BTC/USDT",
+        "direction": "LONG",
+        "engine": "ENGINE_A_V3",
+        "horizon": "intraday",
+        "structureTf": "H4",
+        "triggerTf": "M30",
+        "executionTf": "M15",
+        "timeframePolicyVersion": "timeframe_policy.v4",
+        "timeframePolicyHash": "candidate-policy-hash",
+        "policyKey": "BTCUSDT:engine_a:intraday",
+    }
+    app = _make_app(tmp_audit_db, engine_a_rows=[candidate])
+    client = app.test_client()
+    body = _base_request()
+    body["screenshot_meta"].update(
+        {
+            "candidate_id": candidate["signalId"],
+            "candidate_revision": candidate["timestamp"],
+            "candidate_direction": "LONG",
+            "signal_style": "intraday",
+        }
+    )
+    body["entry_screenshot_meta"]["chart_timeframe"] = "M30"
+
+    with patch(
+        "ai_review.providers.router.call_anthropic_chart_review",
+        return_value=_mock_provider_payload(),
+    ):
+        resp = client.post("/api/ai/chart-review", json=body)
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["reviewInputMeta"]["entryChartTimeframe"] == "M30"
+    assert data["reviewInputMeta"]["reviewImagePolicySource"] == "selected_candidate"
+    assert data["reviewInputMeta"]["reviewImagePolicyDifferences"] == [
+        {"role": "entry", "candidate": "M30", "reanalysis": "M15"}
+    ]
+    ctx = data["engine_a_context"]
+    assert ctx["review_image_policy"]["triggerTf"] == "M30"
+    assert ctx["timeframe_policy"]["triggerTf"] == "M15"
 
 
 def test_route_rejects_openai_when_disabled(tmp_audit_db):
@@ -1428,6 +1485,8 @@ def test_summary_always_present_on_success(tmp_audit_db):
         "hasChartImage": True,
         "hasStructureChartImage": True,
         "hasEntryChartImage": True,
+        "reviewImagePolicySource": "review_reanalysis",
+        "reviewImagePolicyDifferences": [],
         "timeframeRouteApplied": bool(data["timeframeRoute"].get("enabled")),
     }
 
@@ -3019,3 +3078,77 @@ def test_dedup_engine_b_separate_from_engine_a(tmp_audit_db):
         assert first_b.status_code == 200
         assert mock_call.call_count == 2
 
+
+
+def test_server_candidate_resolves_suggested_watch(monkeypatch):
+    watch = {
+        "watch_id": "w-1",
+        "symbol": "EURUSD",
+        "signal": {
+            "signalId": "old-9",
+            "timestamp": "2026-05-20T10:00:00+00:00",
+            "symbol": "EURUSD",
+            "direction": "SHORT",
+            "entry": 1.085,
+        },
+    }
+    active = Path(tempfile.mkdtemp(prefix="athena_review_watch_")) / "active.json"
+    active.write_text(json.dumps({"watches": [watch]}), encoding="utf-8")
+    monkeypatch.setattr("suggested_trade_monitor.DEFAULT_ACTIVE_PATH", active)
+    runtime = SimpleNamespace(
+        last_engine_a_rows_fn=lambda: [],
+        last_engine_b_rows_fn=lambda: [],
+    )
+
+    engine, candidate, error = _resolve_server_candidate(
+        "EURUSD",
+        {"suggested_watch_id": "w-1", "primary_engine": "A"},
+        {"PRIMARY_ENGINE": "A"},
+        runtime,
+    )
+
+    assert error is None
+    assert candidate is not None
+    assert candidate["signalId"] == "old-9"
+    assert candidate["entry"] == 1.085
+
+
+def test_server_candidate_suggested_watch_not_found(monkeypatch):
+    active = Path(tempfile.mkdtemp(prefix="athena_review_watch_")) / "active.json"
+    active.write_text(json.dumps({"watches": []}), encoding="utf-8")
+    monkeypatch.setattr("suggested_trade_monitor.DEFAULT_ACTIVE_PATH", active)
+    runtime = SimpleNamespace(
+        last_engine_a_rows_fn=lambda: [],
+        last_engine_b_rows_fn=lambda: [],
+    )
+
+    engine, candidate, error = _resolve_server_candidate(
+        "EURUSD",
+        {"suggested_watch_id": "missing"},
+        {"PRIMARY_ENGINE": "A"},
+        runtime,
+    )
+
+    assert error == "suggested_watch_not_found"
+    assert candidate is None
+
+
+def test_server_candidate_suggested_watch_symbol_mismatch(monkeypatch):
+    watch = {"watch_id": "w-2", "symbol": "GBPUSD", "signal": {"symbol": "GBPUSD"}}
+    active = Path(tempfile.mkdtemp(prefix="athena_review_watch_")) / "active.json"
+    active.write_text(json.dumps({"watches": [watch]}), encoding="utf-8")
+    monkeypatch.setattr("suggested_trade_monitor.DEFAULT_ACTIVE_PATH", active)
+    runtime = SimpleNamespace(
+        last_engine_a_rows_fn=lambda: [],
+        last_engine_b_rows_fn=lambda: [],
+    )
+
+    engine, candidate, error = _resolve_server_candidate(
+        "EURUSD",
+        {"suggested_watch_id": "w-2"},
+        {"PRIMARY_ENGINE": "A"},
+        runtime,
+    )
+
+    assert error == "suggested_watch_symbol_mismatch"
+    assert candidate is None

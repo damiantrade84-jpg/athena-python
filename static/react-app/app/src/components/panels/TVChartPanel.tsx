@@ -2387,6 +2387,7 @@ export default function TVChartPanel() {
   const appliedIntentIdRef = useRef<string | null>(null);
   const intentCandidateIdRef = useRef<string | null>(null);
   const intentCandidateRevisionRef = useRef<string | null>(null);
+  const intentWatchIdRef = useRef<string | null>(null);
   const pendingAutoReviewRef = useRef(false);
   const autoReviewRanForIntentRef = useRef<string | null>(null);
   const autoReviewEarliestRunAtRef = useRef<number | null>(null);
@@ -2808,6 +2809,7 @@ export default function TVChartPanel() {
     appliedIntentIdRef.current = tvChartIntent.id;
     intentCandidateIdRef.current = tvChartIntent.candidateId ?? null;
     intentCandidateRevisionRef.current = tvChartIntent.candidateRevision ?? null;
+    intentWatchIdRef.current = tvChartIntent.watchId ?? null;
     const intentSymbol = resolveChartIntentSymbol(tvChartIntent);
     if (!intentSymbol) return;
     setIntentSignal(isEngineSignalLike(tvChartIntent.signal) ? tvChartIntent.signal : null);
@@ -3081,10 +3083,20 @@ export default function TVChartPanel() {
     if (!aiReview) return;
     const reviewCtx = reviewContextFromResponse(aiReview);
     const reviewSymbolKey = aiReviewSymbolKeyRef.current || symbolKey(reviewCtx.symbol);
-    const reviewTimeframe = normalizeBackendTf(reviewCtx.timeframe);
     const currentTf = normalizeBackendTf(timeframe);
+    const reviewTimeframes = [
+      reviewCtx.timeframe,
+      aiReview.reviewInputMeta?.structureChartTimeframe,
+      aiReview.reviewInputMeta?.entryChartTimeframe,
+    ]
+      .map((value) => normalizeBackendTf(value))
+      .filter((value): value is string => Boolean(value));
     const symbolChanged = currentSymbolKey && (!reviewSymbolKey || reviewSymbolKey !== currentSymbolKey);
-    const timeframeChanged = currentTf && reviewTimeframe && reviewTimeframe !== currentTf;
+    const timeframeChanged = Boolean(
+      currentTf
+        && reviewTimeframes.length
+        && !reviewTimeframes.includes(currentTf),
+    );
     const routeTf = normalizeBackendTf(timeframeRoute?.autoSelectTf);
     const autoRouteApplied = timeframeAutoMode && routeTf && currentTf === routeTf;
     if (symbolChanged || (timeframeChanged && !autoRouteApplied)) {
@@ -3521,6 +3533,7 @@ export default function TVChartPanel() {
           chartCandidate?.timestamp,
           chartCandidate?.decisionTime,
         ) ?? undefined,
+        suggested_watch_id: (intentMatchesCurrentSymbol ? intentWatchIdRef.current : null) ?? undefined,
         primary_engine: effectivePrimaryEngine,
         signal_engine: effectivePrimaryEngine,
         review_role: role,

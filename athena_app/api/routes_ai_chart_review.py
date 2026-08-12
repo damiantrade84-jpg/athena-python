@@ -58,6 +58,7 @@ from ai_review.providers.router import run_chart_review
 from ai_review.summary import build_ai_review_summary
 from ai_review.timeframe_routing import normalize_timeframe, resolve_timeframe_route
 from ai_review.validation import decode_screenshot_bytes, validate_request
+from suggested_trade_monitor import load_active_watches
 
 log = logging.getLogger("sentinel.ai_chart_review")
 
@@ -123,6 +124,123 @@ def _resolve_primary_engine(
     return normalize_chart_review_primary_engine(cfg.get("PRIMARY_ENGINE"))
 
 
+def _first_policy_value(
+    sources: list[dict[str, Any]],
+    *keys: str,
+) -> Any:
+    for source in sources:
+        for key in keys:
+            value = source.get(key)
+            if value not in (None, ""):
+                return value
+    return None
+
+
+def _resolve_review_image_policy(
+    engine_ctx: dict[str, Any],
+    origin_signal: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Bind chart-image roles to the exact selected server candidate.
+
+    Live reanalysis may legitimately resolve a different adaptive trigger
+    timeframe (for example, a scan-stamped SLOW M30 trigger can return to the
+    baseline M15 when review reanalysis has no speed state). The two images are
+    evidence for the selected candidate, so their role contract must use that
+    candidate's server stamps. Reanalysis remains available as separate
+    provenance and never gets silently overwritten.
+    """
+    live_policy = engine_ctx.get("timeframe_policy") or {}
+    if not isinstance(live_policy, dict):
+        live_policy = {}
+
+    sources: list[dict[str, Any]] = []
+    if isinstance(origin_signal, dict):
+        sources.append(origin_signal)
+        for key in ("naked_data", "engine_b", "engineB"):
+            nested = origin_signal.get(key)
+            if isinstance(nested, dict):
+                sources.append(nested)
+        for source in list(sources):
+            for key in ("sourceTimeframes", "source_timeframes"):
+                nested = source.get(key)
+                if isinstance(nested, dict):
+                    sources.append(nested)
+
+    candidate_policy = {
+        "timeframePolicyVersion": _first_policy_value(
+            sources, "timeframePolicyVersion", "timeframe_policy_version"
+        ),
+        "timeframePolicyHash": _first_policy_value(
+            sources, "timeframePolicyHash", "timeframe_policy_hash"
+        ),
+        "policyKey": _first_policy_value(sources, "policyKey", "policy_key"),
+        "structureTf": _first_policy_value(
+            sources,
+            "structureTf",
+            "structure_tf",
+            "structure_timeframe",
+            "zoneTf",
+            "zone_tf",
+            "structTf",
+            "struct_tf",
+        ),
+        "triggerTf": _first_policy_value(
+            sources,
+            "triggerTf",
+            "trigger_tf",
+            "trigger_timeframe_actual",
+            "trigger_timeframe_expected",
+            "trigger_timeframe",
+            "entryTf",
+            "entry_tf",
+        ),
+        "executionTf": _first_policy_value(
+            sources, "executionTf", "execution_tf", "executionTimeframe"
+        ),
+    }
+    candidate_complete = all(
+        candidate_policy.get(key) not in (None, "")
+        for key in ("structureTf", "triggerTf")
+    )
+    selected = dict(live_policy)
+    source = "review_reanalysis"
+    if candidate_complete:
+        selected.update(
+            {
+                key: value
+                for key, value in candidate_policy.items()
+                if value not in (None, "")
+            }
+        )
+        source = "selected_candidate"
+
+    differences: list[dict[str, str]] = []
+    if candidate_complete:
+        for key in ("structureTf", "triggerTf"):
+            candidate_value = normalize_timeframe(candidate_policy.get(key))
+            live_value = normalize_timeframe(live_policy.get(key))
+            if candidate_value != live_value:
+                differences.append(
+                    {
+                        "role": "structure" if key == "structureTf" else "entry",
+                        "candidate": candidate_value,
+                        "reanalysis": live_value,
+                    }
+                )
+    diagnostic = {
+        "source": source,
+        "candidatePolicyComplete": candidate_complete,
+        "differences": differences,
+        "candidatePolicy": candidate_policy if candidate_complete else None,
+        "reanalysisPolicy": {
+            "structureTf": live_policy.get("structureTf"),
+            "triggerTf": live_policy.get("triggerTf"),
+            "timeframePolicyHash": live_policy.get("timeframePolicyHash"),
+        },
+    }
+    return selected, diagnostic
+
+
 def _review_image_timeframe_error(
     engine_ctx: dict[str, Any],
     *,
@@ -130,7 +248,11 @@ def _review_image_timeframe_error(
     entry_timeframe: Any,
 ) -> dict[str, Any] | None:
     """Fail closed when browser image roles diverge from policy-v4 roles."""
-    policy = engine_ctx.get("timeframe_policy") or {}
+    policy = (
+        engine_ctx.get("review_image_policy")
+        or engine_ctx.get("timeframe_policy")
+        or {}
+    )
     if not isinstance(policy, dict):
         policy = {}
     raw_expected_structure = policy.get("structureTf") or policy.get("structure_tf")
@@ -164,6 +286,9 @@ def _review_image_timeframe_error(
         "error": "review_image_timeframe_mismatch",
         "detail": "Structure and entry chart images must match server-resolved policy roles",
         "mismatches": mismatches,
+        "policy_source": (
+            (engine_ctx.get("review_image_policy_diagnostic") or {}).get("source")
+        ),
         "execution_permitted": False,
     }
 
@@ -269,6 +394,31 @@ def _runtime_rows(runtime: SimpleNamespace, attr: str) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 
+def _resolve_suggested_watch_candidate(
+    symbol: str,
+    watch_id: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve a review candidate from a server-persisted suggested-trade watch.
+
+    A watch flagged from an earlier review is itself the server-side record, so
+    its stored signal snapshot is an authoritative origin row — it does not need
+    to still exist in the latest scan cache.
+    """
+    try:
+        watches = load_active_watches()
+    except Exception:
+        watches = []
+    requested_symbol = _symbol_key(symbol)
+    for watch in watches:
+        if str(watch.get("watch_id") or "") != watch_id:
+            continue
+        if _symbol_key(str(watch.get("symbol") or "")) != requested_symbol:
+            return None, "suggested_watch_symbol_mismatch"
+        row = watch.get("signal")
+        return (dict(row) if isinstance(row, dict) else {}), None
+    return None, "suggested_watch_not_found"
+
+
 def _resolve_server_candidate(
     symbol: str,
     screenshot_meta: dict[str, Any],
@@ -285,6 +435,13 @@ def _resolve_server_candidate(
     requested_id = str(screenshot_meta.get("candidate_id") or "").strip() or None
     requested_revision = str(screenshot_meta.get("candidate_revision") or "").strip() or None
     requested_direction = str(screenshot_meta.get("candidate_direction") or "").strip().upper()
+    requested_watch_id = str(screenshot_meta.get("suggested_watch_id") or "").strip() or None
+
+    if requested_watch_id:
+        watch_row, watch_error = _resolve_suggested_watch_candidate(symbol, requested_watch_id)
+        if watch_error:
+            return requested_engine, None, watch_error
+        return requested_engine, watch_row, None
 
     sources = {
         "A": _runtime_rows(runtime, "last_engine_a_rows_fn"),
@@ -376,6 +533,15 @@ def _attach_review_input_meta(
         "hasChartImage": bool(structure_image),
         "hasStructureChartImage": bool(structure_image),
         "hasEntryChartImage": bool(entry_image),
+        "reviewImagePolicySource": (
+            (engine_ctx.get("review_image_policy_diagnostic") or {}).get("source")
+        ),
+        "reviewImagePolicyDifferences": list(
+            (engine_ctx.get("review_image_policy_diagnostic") or {}).get(
+                "differences"
+            )
+            or []
+        ),
         "timeframeRouteApplied": bool(isinstance(route, dict) and route.get("enabled")),
     }
 
@@ -685,6 +851,13 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             if engine_ctx is None:
                 return jsonify({"error": "Engine A returned no result"}), 422
 
+        review_image_policy, review_image_policy_diagnostic = (
+            _resolve_review_image_policy(engine_ctx, origin_signal)
+        )
+        engine_ctx["review_image_policy"] = review_image_policy
+        engine_ctx["review_image_policy_diagnostic"] = (
+            review_image_policy_diagnostic
+        )
         timeframe_error = _review_image_timeframe_error(
             engine_ctx,
             structure_timeframe=screenshot_meta.get("chart_timeframe") or timeframe,
@@ -767,6 +940,17 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         for warning in entry_freshness["warnings"]:
             if warning not in mismatch_warnings:
                 mismatch_warnings.append(warning)
+        policy_differences = review_image_policy_diagnostic.get("differences") or []
+        if policy_differences:
+            rendered_differences = ", ".join(
+                f"{item.get('role')} candidate={item.get('candidate')} "
+                f"reanalysis={item.get('reanalysis')}"
+                for item in policy_differences
+            )
+            mismatch_warnings.append(
+                "review image policy follows selected candidate; "
+                f"review-time reanalysis differs ({rendered_differences})"
+            )
         blocking = list(freshness["blocking"])
         for item in entry_freshness["blocking"]:
             if item not in blocking:
