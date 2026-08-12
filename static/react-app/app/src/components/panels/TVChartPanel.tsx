@@ -40,6 +40,7 @@ import { useApiPoll } from '@/hooks/useApiData';
 import { useStore } from '@/hooks/useStore';
 import { engineBScoreBreakdown } from '@/lib/athenaFormat';
 import { apiClient } from '@/lib/apiClient';
+import { resolveChartIntentSymbol } from '@/lib/chartIdentity';
 import {
   isFrontendDebugVisible,
   resolveAtrProvenanceRows,
@@ -2779,7 +2780,7 @@ export default function TVChartPanel() {
     appliedIntentIdRef.current = tvChartIntent.id;
     intentCandidateIdRef.current = tvChartIntent.candidateId ?? null;
     intentCandidateRevisionRef.current = tvChartIntent.candidateRevision ?? null;
-    const intentSymbol = String(tvChartIntent.symbol || '').toUpperCase().trim();
+    const intentSymbol = resolveChartIntentSymbol(tvChartIntent);
     if (!intentSymbol) return;
     setIntentSignal(isEngineSignalLike(tvChartIntent.signal) ? tvChartIntent.signal : null);
     if (currentSymbolKey && intentSymbol !== currentSymbolKey) {

@@ -255,7 +255,11 @@ def assemble_engine_b_context(
     ctx: dict[str, Any] = {
         "primary_engine": "B",
         "review_type": "engine_b_chart",
-        "symbol": pair.get("symbol") or display,
+        # The response symbol must remain the requested chart identity. A
+        # commodity catalog may retain a continuous-futures proxy even though
+        # the live chart/levels use the spot-CFD display identity.
+        "symbol": str(symbol or "").strip() or display,
+        "catalog_symbol": pair.get("symbol"),
         "timeframe": timeframe,
         "analyze_style": style,
         "chart_timeframe": (screenshot_meta or {}).get("chart_timeframe") or timeframe,

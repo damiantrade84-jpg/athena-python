@@ -102,6 +102,35 @@ def test_assemble_engine_b_context_auto_style_uses_shared_pair_policy():
     assert ctx["analyze_style"] == expected
 
 
+def test_assemble_engine_b_context_keeps_spot_chart_identity_separate_from_catalog_proxy():
+    gold = {
+        "symbol": "GC=F",
+        "display": "XAU/USD",
+        "type": "commodity",
+        "source": "mt5",
+        "futures_proxy": "GC=F",
+        "price_series_kind": "spot_cfd",
+    }
+    seen: dict[str, str] = {}
+
+    def naked_analysis_fn(sig, overlay_only=False):
+        seen["seed_symbol"] = sig["symbol"]
+        return _naked_result(), gold, None
+
+    ctx = assemble_engine_b_context(
+        "XAU/USD",
+        "H4",
+        screenshot_meta={"candidate_direction": "LONG", "analyze_style": "intraday"},
+        resolve_pair_fn=lambda _s: gold,
+        naked_analysis_fn=naked_analysis_fn,
+    )
+
+    assert ctx is not None
+    assert seen["seed_symbol"] == "GC=F"
+    assert ctx["symbol"] == "XAU/USD"
+    assert ctx["catalog_symbol"] == "GC=F"
+
+
 def test_build_chart_review_prompt_b_mode_uses_engine_b_playbook_only():
     ctx = {
         "primary_engine": "B",

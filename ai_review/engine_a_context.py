@@ -1568,7 +1568,11 @@ def assemble_engine_a_context(
     rsi_value, rsi_tf = _rsi_from_signal(signal)
 
     ctx = {
-        "symbol": signal.get("symbol") or pair.get("symbol"),
+        # Keep the response bound to the chart request identity. For MT5 spot
+        # commodities, ``pair.symbol`` can be a legacy Yahoo futures proxy
+        # (for example GC=F) while the requested/displayed chart is XAU/USD.
+        "symbol": str(symbol or "").strip() or signal.get("symbol") or pair.get("symbol"),
+        "catalog_symbol": pair.get("symbol"),
         "timeframe": timeframe,
         "analyze_style": style,
         "primary_engine": "A",

@@ -118,6 +118,30 @@ def test_assemble_with_injected_mock_simple_signature():
     assert ctx["symbol"] == "BTCUSDT"
 
 
+def test_assemble_keeps_spot_chart_identity_separate_from_catalog_proxy():
+    gold = {
+        "symbol": "GC=F",
+        "display": "XAU/USD",
+        "type": "commodity",
+        "source": "mt5",
+        "futures_proxy": "GC=F",
+        "price_series_kind": "spot_cfd",
+    }
+    signal = {**_signal_with_cache_hit(), "symbol": "GC=F"}
+
+    ctx = eac.assemble_engine_a_context(
+        "XAU/USD",
+        "H4",
+        resolve_pair_fn=lambda _s: gold,
+        analyze_pair_fn=lambda *_args, **_kwargs: signal,
+        btc_bias_fn=lambda: "neutral",
+    )
+
+    assert ctx is not None
+    assert ctx["symbol"] == "XAU/USD"
+    assert ctx["catalog_symbol"] == "GC=F"
+
+
 def test_assemble_exposes_atr_cache_hit_when_h4_meta_present():
     """H4 cacheHit in candleFetchMeta surfaces as ctx['atr']['atr_cache_hit']."""
 
