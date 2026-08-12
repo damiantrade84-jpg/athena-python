@@ -9,6 +9,36 @@ from engine_a_groups import ENGINE_A_KNOWN_SCORE_GROUPS, resolve_score_group_by_
 KNOWN_SCORE_GROUPS = ENGINE_A_KNOWN_SCORE_GROUPS
 
 
+def intradaily_pullback_overlay_enabled(
+    family: str, subclass: str | None = None
+) -> bool:
+    """Whether the intradaily path should also run the trend-pullback specialist.
+
+    Forex/crypto already declare a pullback id. This gate adds the same
+    overlay to commodity / index / equity and can disable it per family.
+    Precious metals also honor ENGINE_A_V3_XAU_INTRADAY_PULLBACK_ENABLED.
+    """
+    family_key = str(family or "").strip().lower()
+    subclass_key = str(subclass or "").strip().lower()
+    try:
+        from config import CONFIG
+
+        if subclass_key in {"xau", "precious"} and not bool(
+            CONFIG.get("ENGINE_A_V3_XAU_INTRADAY_PULLBACK_ENABLED", True)
+        ):
+            return False
+        cfg = CONFIG.get("ENGINE_A_V3_INTRADAY_PULLBACK_OVERLAY") or {}
+        if isinstance(cfg, dict):
+            if "ENABLED" in cfg and not bool(cfg.get("ENABLED")):
+                return False
+            by_family = cfg.get("BY_FAMILY") or {}
+            if isinstance(by_family, dict) and family_key in by_family:
+                return bool(by_family.get(family_key))
+        return True
+    except Exception:
+        return True
+
+
 @dataclass(frozen=True)
 class SpecialistRoute:
     score_group: str
@@ -35,23 +65,26 @@ class SpecialistRoute:
                 else ("crypto_trend_pullback_continuation",)
             )
         if self.subclass in {"xau", "precious"}:
-            return (
-                ("precious_london_ny_breakout_retest",)
-                if h == "intraday"
-                else ("precious_h4_d1_continuation",)
-            )
+            if h != "intraday":
+                return ("precious_h4_d1_continuation",)
+            ids = ("precious_london_ny_breakout_retest",)
+            if intradaily_pullback_overlay_enabled(self.family, self.subclass):
+                ids = ids + ("precious_trend_pullback",)
+            return ids
         if self.family == "commodity":
-            return (
-                (f"{self.subclass}_breakout_retest",)
-                if h == "intraday"
-                else (f"{self.subclass}_trend_pullback",)
-            )
+            if h != "intraday":
+                return (f"{self.subclass}_trend_pullback",)
+            ids = (f"{self.subclass}_breakout_retest",)
+            if intradaily_pullback_overlay_enabled(self.family, self.subclass):
+                ids = ids + (f"{self.subclass}_trend_pullback",)
+            return ids
         if self.family in {"index", "equity_etf"}:
-            return (
-                (f"{self.subclass}_opening_range_gap_continuation",)
-                if h == "intraday"
-                else (f"{self.subclass}_relative_strength_breakout_pullback",)
-            )
+            if h != "intraday":
+                return (f"{self.subclass}_relative_strength_breakout_pullback",)
+            ids = (f"{self.subclass}_opening_range_gap_continuation",)
+            if intradaily_pullback_overlay_enabled(self.family, self.subclass):
+                ids = ids + (f"{self.subclass}_trend_pullback",)
+            return ids
         return ("unsupported_specialist",)
 
 
@@ -91,6 +124,14 @@ def route_specialist(pair: dict) -> SpecialistRoute:
         "softs",
         "commodity_other",
     }:
+        if group == "precious_trackers" and upper not in {"XAU/USD", "XAG/USD"}:
+            # GLD/SLV/GDX keep precious_trackers periods/threshold but must not
+            # inherit the London/NY metal-session specialist.
+            return SpecialistRoute(group, "equity_etf", "us_stock_single")
+        if upper == "XAU/ZAR":
+            # Cross-metal: stay on commodity_other score/TF (thin M30) but use
+            # the metal session specialist instead of the generic commodity one.
+            return SpecialistRoute(group, "commodity", "precious")
         subclass = "xau" if upper == "XAU/USD" else group.removesuffix("_trackers")
         return SpecialistRoute(group, "commodity", subclass)
     if group in {"us_indices_trackers", "eu_indices", "asian_indices", "index_other"}:

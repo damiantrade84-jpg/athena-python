@@ -1,0 +1,72 @@
+# Research-only sleeve definitions for Engine A point-9 measurement.
+# Overlays are applied in-process to CONFIG and never written to config.yaml.
+schemaVersion: 1
+holdoutFraction: 0.3
+passHoldoutN: 30
+passHoldoutSqn: 2.0
+
+sleeves:
+  F1:
+    description: FX trend continuation only (no MR overlay)
+    style: intraday
+    overlay:
+      ENGINE_A_V3_FOREX_MR_OVERLAY_ENABLED: false
+    pairs:
+      - {display: EUR/USD, symbol: EURUSD=X, type: forex, source: mt5}
+      - {display: GBP/USD, symbol: GBPUSD=X, type: forex, source: mt5}
+      - {display: USD/JPY, symbol: USDJPY=X, type: forex, source: mt5}
+      - {display: AUD/USD, symbol: AUDUSD=X, type: forex, source: mt5}
+      - {display: USD/CAD, symbol: USDCAD=X, type: forex, source: mt5}
+      - {display: USD/CHF, symbol: USDCHF=X, type: forex, source: mt5}
+      - {display: NZD/USD, symbol: NZDUSD=X, type: forex, source: mt5}
+      - {display: EUR/JPY, symbol: EURJPY=X, type: forex, source: mt5}
+      - {display: GBP/JPY, symbol: GBPJPY=X, type: forex, source: mt5}
+      - {display: AUD/JPY, symbol: AUDJPY=X, type: forex, source: mt5}
+
+  F1b:
+    description: FX range-fade only
+    style: intraday
+    overlay:
+      ENGINE_A_V3_FOREX_THESIS: mean_reversion
+    pairs:
+      - {display: EUR/USD, symbol: EURUSD=X, type: forex, source: mt5}
+      - {display: GBP/USD, symbol: GBPUSD=X, type: forex, source: mt5}
+      - {display: USD/JPY, symbol: USDJPY=X, type: forex, source: mt5}
+      - {display: AUD/USD, symbol: AUDUSD=X, type: forex, source: mt5}
+      - {display: USD/CAD, symbol: USDCAD=X, type: forex, source: mt5}
+      - {display: USD/CHF, symbol: USDCHF=X, type: forex, source: mt5}
+      - {display: NZD/USD, symbol: NZDUSD=X, type: forex, source: mt5}
+      - {display: EUR/JPY, symbol: EURJPY=X, type: forex, source: mt5}
+      - {display: GBP/JPY, symbol: GBPJPY=X, type: forex, source: mt5}
+      - {display: AUD/JPY, symbol: AUDJPY=X, type: forex, source: mt5}
+
+  F2:
+    description: US named singles ORB + volume
+    style: intraday
+    overlay: {}
+    pairs:
+      - {display: AAPL, symbol: AAPL.US, type: stock, source: mt5}
+      - {display: NVDA, symbol: NVDA.US, type: stock, source: mt5}
+      - {display: MSFT, symbol: MSFT.US, type: stock, source: mt5}
+      - {display: AMZN, symbol: AMZN.US, type: stock, source: mt5}
+      - {display: META, symbol: META.US, type: stock, source: mt5}
+      - {display: GOOG, symbol: GOOG.US, type: stock, source: mt5}
+
+  F3:
+    description: XAU London/NY + H1 pullback
+    style: intraday
+    overlay: {}
+    pairs:
+      - {display: XAU/USD, symbol: GC=F, type: commodity, source: mt5}
+
+  F4:
+    description: Crypto alt contraction-breakout (Binance store; not Bybit parity)
+    style: intraday
+    overlay: {}
+    venueNote: binance_futures_store_not_bybit
+    pairs:
+      - {display: SOL/USDT, symbol: SOLUSDT, type: crypto, source: binance}
+      - {display: XRP/USDT, symbol: XRPUSDT, type: crypto, source: binance}
+      - {display: BNB/USDT, symbol: BNBUSDT, type: crypto, source: binance}
+      - {display: AVAX/USDT, symbol: AVAXUSDT, type: crypto, source: binance}
+      - {display: LINK/USDT, symbol: LINKUSDT, type: crypto, source: binance}

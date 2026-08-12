@@ -242,21 +242,21 @@ def engine_a_trade_gate_block_reason(
         reason = detail.get("reason") or "Engine A research-only; trade eligibility disabled."
         return f"ENGINE_A_RESEARCH_ONLY: {reason}"
 
-    if not _as_bool(cfg.get("ENGINE_A_TRADE_ELIGIBILITY_ENABLED", True), True):
-        return None
-
-    if trade_enabled is not True:
-        pair = pair_obj if isinstance(pair_obj, dict) else {}
-        if not pair:
-            pair = {
-                "display": sig.get("display") or sig.get("pair"),
-                "symbol": sig.get("symbol"),
-                "type": sig.get("type"),
-                "scoreGroup": sig.get("scoreGroup") or sig.get("score_group"),
-            }
-        detail = resolve_engine_a_trade_eligibility(pair, sig, config=cfg)
-        if not detail.get("enabled"):
-            return f"ENGINE_A_RESEARCH_ONLY: {detail.get('reason', 'Engine A research-only')}"
+    # Always resolve the class/pair evidence map. A stamped
+    # engineATradeEnabled=True (e.g. demo-unvalidated TRADE) must not skip
+    # ENGINE_A_TRADE_ENABLED_BY_CLASS / evidence. When the master switch is
+    # off, resolve_engine_a_trade_eligibility returns enabled=True (legacy).
+    pair = pair_obj if isinstance(pair_obj, dict) else {}
+    if not pair:
+        pair = {
+            "display": sig.get("display") or sig.get("pair"),
+            "symbol": sig.get("symbol"),
+            "type": sig.get("type"),
+            "scoreGroup": sig.get("scoreGroup") or sig.get("score_group"),
+        }
+    detail = resolve_engine_a_trade_eligibility(pair, sig, config=cfg)
+    if not detail.get("enabled"):
+        return f"ENGINE_A_RESEARCH_ONLY: {detail.get('reason', 'Engine A research-only')}"
     return None
 
 

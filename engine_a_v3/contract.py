@@ -138,13 +138,15 @@ class EngineASetupSignal:
                 # default SINGLE_TP1 policy executes. rr2 stays available for the
                 # TP2 runner under SPLIT_50_50.
                 "rr": self.rr1 if self.rr1 is not None else self.rr2,
-                "trade": self.decision == "TRADE" and self.qualified,
-                "executable": self.decision == "TRADE" and self.qualified,
-                "signalTier": {
-                    "TRADE": "trade",
-                    "WATCH": "watchlist",
-                    "NO_SIGNAL": "skip",
-                }.get(self.decision, "skip"),
+                "trade": bool(self.engineATradeEnabled),
+                "executable": bool(self.engineATradeEnabled),
+                "signalTier": (
+                    "trade"
+                    if self.engineATradeEnabled
+                    else "watchlist"
+                    if self.decision in {"TRADE", "WATCH"}
+                    else "skip"
+                ),
                 "signalClass": self.setupId,
                 "score": self.confluenceScore,
                 "threshold": self.confluenceThreshold,

@@ -190,7 +190,7 @@ def test_required_baseline_matrix() -> None:
         "S&P 500": ("index", "us_indices_trackers", "H1", "M30", "M15", M5Role.DISABLED),
         "AAPL": ("stock", "us_stock_single", "H1", "M30", "M15", M5Role.REFINEMENT),
         "BTC/USDT": ("crypto", "crypto_btc", "H4", "H1", "M15", M5Role.REFINEMENT),
-        "SOL/USDT": ("crypto", "crypto_alt_majors", "H4", "H1", "M15", M5Role.REFINEMENT),
+        "SOL/USDT": ("crypto", "crypto_alt_majors", "H4", "H1", "M15", M5Role.DISABLED),
     }
     for symbol, (asset, group, structure, setup, trigger, m5_role) in cases.items():
         policy = resolve_timeframe_policy(symbol, asset, group, "intraday")
@@ -457,7 +457,7 @@ def test_corrected_symbol_specific_profiles() -> None:
         "BTC/USDT": ("crypto", "crypto_btc", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT, "H4", "H1", "M15"),
         "ETH/USDT": ("crypto", "crypto_eth", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT, "H4", "H1", "M15"),
         "BNB/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
-        "SOL/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_MAJORS_FAST", M5Role.REFINEMENT, "H4", "H1", "M15"),
+        "SOL/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
         "XRP/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
         "DOGE/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_OTHER_THIN", M5Role.DISABLED, "H4", "H1", "M30"),
         "ADA/USDT": ("crypto", "crypto_alt_majors", "CRYPTO_ALT_MAJORS", M5Role.DISABLED, "H4", "H1", "M15"),
@@ -559,7 +559,7 @@ def test_timeframe_policy_group_taxonomy_routing() -> None:
         ("TLT", "etf_bond"): "bond_tlt_smallcap_em_etf",
         ("IWM", "etf"): "bond_tlt_smallcap_em_etf",
         ("BTC/USDT", "crypto"): "crypto_majors_fast",
-        ("SOL/USDT", "crypto"): "crypto_majors_fast",
+        ("SOL/USDT", "crypto"): "crypto_alt_majors",
         ("XRP/USDT", "crypto"): "crypto_alt_majors",
         ("DOGE/USDT", "crypto"): "crypto_other_thin",
     }

@@ -870,7 +870,6 @@ _SYMBOL_OVERRIDES: dict[str, dict[str, Any]] = {
     # Crypto.
     "BTCUSDT": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
     "ETHUSDT": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
-    "SOLUSDT": {"m5_policy": M5Policy.CONDITIONAL, "baseline_speed": SpeedClass.FAST, "profile": "CRYPTO_MAJORS_FAST"},
     "BNBUSDT": {"m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
     "XRPUSDT": {"m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},
     "ADAUSDT": {"m5_policy": M5Policy.DISABLED, "profile": "CRYPTO_ALT_MAJORS"},

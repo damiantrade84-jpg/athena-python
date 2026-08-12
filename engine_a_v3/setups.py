@@ -6,7 +6,7 @@ from statistics import fmean
 from typing import Any, Iterable, Mapping
 
 from engine_a_v3.contract import PredicateResult
-from engine_a_v3.routing import SpecialistRoute
+from engine_a_v3.routing import SpecialistRoute, intradaily_pullback_overlay_enabled
 from engine_a_v3.session_forex import (
     asian_session_range,
     in_london_open_window,
@@ -499,6 +499,50 @@ def _trend_direction(
     )
 
 
+def _pullback_rejection_required(family: str | None) -> tuple[bool, float]:
+    """Whether pullback TRADE needs a rejection wick on the touch bar.
+
+    Per-family via ENGINE_A_V3_PULLBACK_REJECTION.BY_FAMILY. A missing family
+    key is off. Failed rejection is WATCH, not a pair demotion.
+    """
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_PULLBACK_REJECTION") or {}
+        if not isinstance(cfg, Mapping) or not bool(cfg.get("ENABLED", False)):
+            return False, 0.0
+        by_family = cfg.get("BY_FAMILY") or {}
+        family_key = str(family or "").strip().lower()
+        if not isinstance(by_family, Mapping) or not family_key:
+            return False, 0.0
+        if family_key not in by_family or not bool(by_family.get(family_key)):
+            return False, 0.0
+        wick = float(cfg.get("WICK_BODY_MIN", 1.0) or 1.0)
+        return True, max(0.0, wick)
+    except Exception:
+        return False, 0.0
+
+
+def _rejection_wick_ok(candle: Mapping[str, Any], direction: str, min_ratio: float) -> bool:
+    try:
+        open_px = float(candle["open"])
+        high_px = float(candle["high"])
+        low_px = float(candle["low"])
+        close_px = float(candle["close"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    span = high_px - low_px
+    if span <= 0:
+        return False
+    body = abs(close_px - open_px)
+    if body <= 0:
+        body = span * 0.01
+    wick = (min(open_px, close_px) - low_px) if direction == "LONG" else (
+        high_px - max(open_px, close_px)
+    )
+    return wick + 1e-12 >= float(min_ratio) * body
+
+
 def _pullback_candidate(
     setup_id: str,
     primary: list[dict],
@@ -510,6 +554,7 @@ def _pullback_candidate(
     series_cache: "SetupSeriesCache | None" = None,
     primary_tf: str | None = None,
     context_tf: str | None = None,
+    family: str | None = None,
 ) -> SetupCandidate:
     periods = periods or SetupPeriods()
     direction, context_predicates = _trend_direction(
@@ -544,6 +589,8 @@ def _pullback_candidate(
         else float(current["close"]) < ema_now and float(current["close"]) < float(current["open"])
     )
     extension = abs(float(current["close"]) - ema_now) <= max_extension_atr * atr
+    reject_required, wick_min = _pullback_rejection_required(family)
+    rejected = (not reject_required) or _rejection_wick_ok(previous, direction, wick_min)
     predicates = context_predicates + (
         _predicate(
             "pullback_touched_ema20",
@@ -559,15 +606,29 @@ def _pullback_candidate(
             f"<= {max_extension_atr:.2f} ATR",
         ),
     )
-    if touched and confirmed and extension:
+    if reject_required:
+        predicates = predicates + (
+            _predicate(
+                "pullback_rejection_wick",
+                rejected,
+                previous["low"] if direction == "LONG" else previous["high"],
+                f"touch-bar rejection wick >= {wick_min:.2f}x body",
+            ),
+        )
+    if touched and confirmed and extension and rejected:
         return SetupCandidate(setup_id, "TRADE", direction, predicates, ())
     if touched and extension:
+        reasons = []
+        if not confirmed:
+            reasons.append("confirmation_close_missing")
+        if reject_required and not rejected:
+            reasons.append("pullback_rejection_missing")
         return SetupCandidate(
             setup_id,
             "WATCH",
             direction,
             predicates,
-            ("confirmation_close_missing",),
+            tuple(reasons) or ("confirmation_close_missing",),
         )
     reasons = tuple(predicate.name for predicate in predicates if not predicate.passed)
     return SetupCandidate(setup_id, "NO_SIGNAL", direction, predicates, reasons)
@@ -1212,6 +1273,7 @@ def detect_setup(
                     series_cache=series_cache,
                     primary_tf=primary_tf,
                     context_tf=context_tf,
+                    family=route.family,
                 ),
             )
             if bool(CONFIG.get("ENGINE_A_V3_FOREX_MR_OVERLAY_ENABLED", False)):
@@ -1247,62 +1309,104 @@ def detect_setup(
                 series_cache=series_cache,
                 primary_tf=primary_tf,
                 context_tf=context_tf,
+                family=route.family,
             ),
         )
     elif route.subclass in {"xau", "precious"}:
-        candidates = (
-            _with_session_gate(
+        if horizon == "intraday":
+            candidates = (
+                _with_session_gate(
+                    _breakout_retest_candidate(
+                        setup_ids[0],
+                        primary,
+                        context,
+                        require_contraction=False,
+                        lookback=24,
+                        periods=periods,
+                        series_cache=series_cache,
+                        context_tf=context_tf,
+                    ),
+                    primary,
+                    route,
+                    display=display,
+                ),
+            )
+            if intradaily_pullback_overlay_enabled(route.family, route.subclass):
+                candidates = candidates + (
+                    _with_session_gate(
+                        _pullback_candidate(
+                            "precious_trend_pullback",
+                            primary,
+                            context,
+                            periods=periods,
+                            series_cache=series_cache,
+                            primary_tf=primary_tf,
+                            context_tf=context_tf,
+                            family=route.family,
+                        ),
+                        primary,
+                        route,
+                        display=display,
+                    ),
+                )
+        else:
+            candidates = (
+                _pullback_candidate(
+                    setup_ids[0],
+                    primary,
+                    context,
+                    periods=periods,
+                    series_cache=series_cache,
+                    primary_tf=primary_tf,
+                    context_tf=context_tf,
+                    family=route.family,
+                ),
+            )
+    elif route.family == "commodity":
+        lookback, touch_distance, max_extension = _commodity_setup_params(route.subclass)
+        if horizon == "intraday":
+            candidates = (
                 _breakout_retest_candidate(
                     setup_ids[0],
                     primary,
                     context,
                     require_contraction=False,
-                    lookback=24,
+                    lookback=lookback,
                     periods=periods,
                     series_cache=series_cache,
                     context_tf=context_tf,
                 ),
-                primary,
-                route,
-                display=display,
             )
-            if horizon == "intraday"
-            else _pullback_candidate(
-                setup_ids[0],
-                primary,
-                context,
-                periods=periods,
-                series_cache=series_cache,
-                primary_tf=primary_tf,
-                context_tf=context_tf,
-            ),
-        )
-    elif route.family == "commodity":
-        lookback, touch_distance, max_extension = _commodity_setup_params(route.subclass)
-        candidates = (
-            _breakout_retest_candidate(
-                setup_ids[0],
-                primary,
-                context,
-                require_contraction=False,
-                lookback=lookback,
-                periods=periods,
-                series_cache=series_cache,
-                context_tf=context_tf,
+            if intradaily_pullback_overlay_enabled(route.family, route.subclass):
+                candidates = candidates + (
+                    _pullback_candidate(
+                        f"{route.subclass}_trend_pullback",
+                        primary,
+                        context,
+                        touch_distance_atr=touch_distance,
+                        max_extension_atr=max_extension,
+                        periods=periods,
+                        series_cache=series_cache,
+                        primary_tf=primary_tf,
+                        context_tf=context_tf,
+                        family=route.family,
+                    ),
+                )
+        else:
+            candidates = (
+                _pullback_candidate(
+                    setup_ids[0],
+                    primary,
+                    context,
+                    touch_distance_atr=touch_distance,
+                    max_extension_atr=max_extension,
+                    periods=periods,
+                    series_cache=series_cache,
+                    primary_tf=primary_tf,
+                    context_tf=context_tf,
+                    family=route.family,
+                ),
             )
-            if horizon == "intraday"
-            else _pullback_candidate(
-                setup_ids[0],
-                primary,
-                context,
-                touch_distance_atr=touch_distance,
-                max_extension_atr=max_extension,
-                periods=periods,
-                series_cache=series_cache,
-                primary_tf=primary_tf,
-                context_tf=context_tf,
-            ),
-        )
     else:
         if horizon == "intraday":
             candidates = (
@@ -1319,6 +1423,19 @@ def detect_setup(
                     context_tf=context_tf,
                 ),
             )
+            if intradaily_pullback_overlay_enabled(route.family, route.subclass):
+                candidates = candidates + (
+                    _pullback_candidate(
+                        f"{route.subclass}_trend_pullback",
+                        primary,
+                        context,
+                        periods=periods,
+                        series_cache=series_cache,
+                        primary_tf=primary_tf,
+                        context_tf=context_tf,
+                        family=route.family,
+                    ),
+                )
         else:
             candidates = tuple(
                 _with_relative_strength(candidate, primary)
@@ -1341,6 +1458,7 @@ def detect_setup(
                         series_cache=series_cache,
                         primary_tf=primary_tf,
                         context_tf=context_tf,
+                        family=route.family,
                     ),
                 )
             )

@@ -333,7 +333,7 @@ def test_forex_engine_a_scan_thresholds_are_explicit_strict_floor():
 def test_equity_and_commodity_groups_use_explicit_stable_floor():
     examples = [
         ({"display": "AAPL", "type": "stock"}, "us_stock_single", 1.30),
-        ({"display": "SPY", "type": "stock"}, "us_indices_trackers", 1.05),
+        ({"display": "SPY", "type": "stock"}, "us_stock_single", 1.30),
         ({"display": "XAU/USD", "type": "commodity"}, "precious_trackers", 0.95),
         ({"display": "Copper", "type": "commodity"}, "copper", 1.00),
         ({"display": "DAX 40", "type": "index"}, "eu_indices", 1.40),
@@ -347,10 +347,10 @@ def test_etf_pairs_map_to_existing_score_groups(caplog):
     """ETF universe uses type=etf; must not resolve to unknown etf_other."""
     thresholds = CONFIG.get("ENGINE_A_SCORE_GROUP_THRESHOLDS") or {}
     examples = [
-        ({"display": "DIA", "type": "etf"}, "us_indices_trackers"),
-        ({"display": "QQQ", "type": "etf"}, "us_indices_trackers"),
-        ({"display": "SPY", "type": "etf"}, "us_indices_trackers"),
-        ({"display": "SOXX", "type": "etf"}, "us_indices_trackers"),
+        ({"display": "DIA", "type": "etf"}, "us_stock_single"),
+        ({"display": "QQQ", "type": "etf"}, "us_stock_single"),
+        ({"display": "SPY", "type": "etf"}, "us_stock_single"),
+        ({"display": "SOXX", "type": "etf"}, "us_stock_single"),
         ({"display": "GLD", "type": "etf"}, "precious_trackers"),
         ({"display": "SLV", "type": "etf"}, "precious_trackers"),
         ({"display": "GDX", "type": "etf"}, "precious_trackers"),

@@ -1959,6 +1959,28 @@ CONFIG: dict = {
         # ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD.
         "MR_MIN_CONFLUENCE_FRAC": 0.0,
     },
+    "ENGINE_A_V3_XAU_INTRADAY_PULLBACK_ENABLED": True,
+    "ENGINE_A_V3_INTRADAY_PULLBACK_OVERLAY": {
+        "ENABLED": True,
+        "BY_FAMILY": {
+            "forex": True,
+            "crypto": True,
+            "commodity": True,
+            "index": True,
+            "equity_etf": True,
+        },
+    },
+    "ENGINE_A_V3_PULLBACK_REJECTION": {
+        "ENABLED": True,
+        "WICK_BODY_MIN": 1.0,
+        "BY_FAMILY": {
+            "forex": True,
+            "crypto": True,
+            "commodity": True,
+            "index": True,
+            "equity_etf": True,
+        },
+    },
     "ENGINE_A_V3_MEAN_REVERSION": {
         "Z_ENTRY": 1.5,
         "EFF_MAX": 0.35,
@@ -3934,6 +3956,8 @@ def _fatal_config_validation(cfg: dict) -> None:
         "ENGINE_A_V3_QUANT_SESSION_GATE",
         "ENGINE_A_V3_SESSION_SCORING",
         "ENGINE_A_V3_SETUP_UPGRADE",
+        "ENGINE_A_V3_PULLBACK_REJECTION",
+        "ENGINE_A_V3_INTRADAY_PULLBACK_OVERLAY",
         "ENGINE_A_V3_EQUITY_VOLUME_FLOOR",
         "ENGINE_A_V3_CRYPTO_DERIV_GUARD",
         "ENGINE_A_V3_LEGACY_FILTERS",

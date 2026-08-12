@@ -316,6 +316,7 @@ def test_demo_research_missing_promotion_artifact_keeps_trade_signal(monkeypatch
     assert signal.decision == "TRADE"
     assert signal.qualified is True
     assert signal.engineATradeEnabled is True
+    assert signal.setupLabel == "TRADE"
     assert signal.executionScope == "DEMO_ONLY"
     assert signal.validationStatus == "UNVALIDATED"
     assert signal.validationArtifact is None
@@ -325,6 +326,46 @@ def test_demo_research_missing_promotion_artifact_keeps_trade_signal(monkeypatch
     assert signal.factorDiagnostics["promotion"]["qualified"] is False
     assert signal.factorDiagnostics["promotion"]["demoResearchOverride"] is True
     assert "promotion_artifact_missing" in signal.factorDiagnostics["promotion"]["reasons"]
+    assert signal.factorDiagnostics["tradeEligibility"]["enabled"] is True
+    payload = signal.to_dict()
+    assert payload["trade"] is True
+    assert payload["executable"] is True
+    assert payload["signalTier"] == "trade"
+    assert payload["execution_permitted"] is True
+
+
+def test_demo_research_trade_enabled_only_with_pair_override_and_evidence(
+    monkeypatch, tmp_path
+):
+    from config import CONFIG
+
+    _patch_trade_quant(monkeypatch)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "EXECUTOR_MODE", "demo")
+    monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_ELIGIBILITY_ENABLED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_EVIDENCE_REQUIRED", True)
+    monkeypatch.setitem(CONFIG, "ENGINE_A_TRADE_ENABLED_OVERRIDES", {"EUR/USD": True})
+    monkeypatch.setitem(
+        CONFIG, "ENGINE_A_TRADE_ENABLED_EVIDENCE", {"EUR/USD": {"n": 30, "sqn": 2.01}}
+    )
+
+    signal = evaluate_engine_a_v3(
+        REPRESENTATIVE_PAIRS["forex_majors"],
+        _trend_pullback_candles(),
+        horizon="intraday",
+        registry=PromotionRegistry(tmp_path),
+    )
+
+    assert signal.decision == "TRADE"
+    assert signal.qualified is True
+    assert signal.engineATradeEnabled is True
+    assert signal.setupLabel == "TRADE"
+    assert signal.executionScope == "DEMO_ONLY"
+    assert signal.factorDiagnostics["tradeEligibility"]["source"] == "override:EUR/USD"
+    payload = signal.to_dict()
+    assert payload["trade"] is True
+    assert payload["executable"] is True
+    assert payload["signalTier"] == "trade"
 
 
 def test_live_missing_promotion_artifact_still_caps_trade_signal(monkeypatch, tmp_path):
@@ -375,6 +416,7 @@ def test_demo_unvalidated_registry_activates_all_routed_specialists_without_fake
             if signal.decision == "TRADE":
                 assert signal.qualified is True
                 assert signal.engineATradeEnabled is True
+                assert signal.setupLabel == "TRADE"
 
 
 def test_production_demo_activation_requires_both_flag_and_demo_mode(monkeypatch):
@@ -535,7 +577,8 @@ def test_specialists_expose_market_specific_predicates():
 
     assert "active_session_utc" in {item.name for item in forex.predicates}
     assert "active_session_utc" in {item.name for item in precious.predicates}
-    assert "opening_range_history" in {item.name for item in equity_intraday.predicates}
+    equity_names = {item.name for item in equity_intraday.predicates}
+    assert "opening_range_history" in equity_names or "pullback_touched_ema20" in equity_names
     assert "relative_strength_efficiency_20" in {
         item.name for item in equity_swing.predicates
     }

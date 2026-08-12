@@ -973,25 +973,12 @@ def evaluate_engine_a_v3(
     demo_research_unpromoted_allowed = (
         not promotion.qualified and _demo_research_unpromoted_trade_allowed()
     )
-    demo_unvalidated_artifact = bool(
-        promotion.artifact and str(promotion.artifact.status or "") == "DEMO_UNVALIDATED"
-    )
-    # P0-2: DEMO_UNVALIDATED must never emit TRADE (setup_label SHADOW only).
-    if decision == "TRADE" and demo_unvalidated_artifact:
-        decision = "WATCH"
     if decision == "TRADE" and levels is None:
         decision = "WATCH"
     elif decision == "TRADE" and not promotion.qualified and not demo_research_unpromoted_allowed:
         decision = "WATCH"
-    elif decision == "TRADE" and demo_unvalidated_artifact:
-        decision = "WATCH"
 
-    # Demo-unvalidated research may observe WATCH/SHADOW but never execute TRADE.
-    promotion_execution_allowed = (
-        False
-        if demo_unvalidated_artifact
-        else (promotion.qualified or demo_research_unpromoted_allowed)
-    )
+    promotion_execution_allowed = promotion.qualified or demo_research_unpromoted_allowed
     qualified = decision == "TRADE" and promotion_execution_allowed and levels is not None
     executable_levels = levels
     targets = executable_levels.targets if executable_levels else ()
@@ -1061,7 +1048,6 @@ def evaluate_engine_a_v3(
         if demo_research_unpromoted_allowed
         else "UNAVAILABLE"
     )
-    execution_scope = "NONE"  # finalized after late demotions
 
     predicates: tuple[PredicateResult, ...] = ()
     if not compact_replay:
@@ -1123,25 +1109,47 @@ def evaluate_engine_a_v3(
         setup_diagnostics["activeEntryGateBlocked"] = True
 
     # Recompute after late demotions (blocked trend / equity volume / crypto deriv).
-    if decision == "TRADE" and demo_unvalidated_artifact:
-        decision = "WATCH"
     qualified = decision == "TRADE" and promotion_execution_allowed and levels is not None
 
-    # setup_label is derived from artifact_status (P0-2), not set independently.
-    if demo_unvalidated_artifact:
-        setup_label = "SHADOW"
-        execution_scope = "NONE"
-    elif decision == "TRADE" and qualified:
+    # When the eligibility master is off, a qualified demo TRADE is execute-ready
+    # (legacy). When the master is on, the class/evidence map decides.
+    trade_enabled = False
+    eligibility_detail: dict[str, Any] | None = None
+    if qualified:
+        try:
+            from engine_a_trade_gate import resolve_engine_a_trade_eligibility
+
+            eligibility_detail = resolve_engine_a_trade_eligibility(
+                pair,
+                {
+                    "display": display,
+                    "pair": display,
+                    "symbol": symbol,
+                    "type": asset_type,
+                    "scoreGroup": route.score_group,
+                    "score_group": route.score_group,
+                },
+            )
+            trade_enabled = bool(eligibility_detail.get("enabled"))
+        except Exception as eligibility_exc:
+            eligibility_detail = {
+                "enabled": False,
+                "research_only": True,
+                "source": "resolver_error",
+                "reason": type(eligibility_exc).__name__,
+            }
+            trade_enabled = False
+
+    execution_scope = "DEMO_ONLY" if promotion_execution_allowed else "NONE"
+
+    if decision == "TRADE" and qualified:
         setup_label = "TRADE"
-        execution_scope = "DEMO_ONLY" if (
-            promotion.qualified or demo_research_unpromoted_allowed
-        ) else "LIVE"
+    elif decision == "TRADE":
+        setup_label = "RESEARCH"
     elif decision == "WATCH":
         setup_label = "RESEARCH" if validation_status == "UNVALIDATED" else "WATCH"
-        execution_scope = "NONE"
     else:
         setup_label = str(decision or "NO_SIGNAL")
-        execution_scope = "NONE"
 
     if compact_replay and qualified:
         # Full diagnostics are required only for emitted trade metadata. The
@@ -1175,6 +1183,12 @@ def evaluate_engine_a_v3(
             "demoResearchOverride": bool(demo_research_unpromoted_allowed),
             "reasons": list(promotion.reasons),
         }
+        if eligibility_detail is not None:
+            factor_diagnostics["tradeEligibility"] = {
+                "enabled": bool(eligibility_detail.get("enabled")),
+                "source": eligibility_detail.get("source"),
+                "reason": eligibility_detail.get("reason"),
+            }
         if quant_session_blocked:
             factor_diagnostics["quantSessionGateBlocked"] = True
         if policy_trigger_tf:
@@ -1261,7 +1275,7 @@ def evaluate_engine_a_v3(
         confluenceThreshold=quant.threshold,
         factorScores=None if compact_unqualified else quant.factor_scores,
         factorDiagnostics=factor_diagnostics,
-        engineATradeEnabled=qualified,
+        engineATradeEnabled=trade_enabled,
         triggerConfirmed=trigger_confirmed,
         levelGateMode=level_gate_mode,
         levelAdvisories=tuple(level_advisories),

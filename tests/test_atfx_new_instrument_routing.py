@@ -521,7 +521,7 @@ def test_etfs_are_not_swept_into_the_share_cfd_group():
     for display, ptype, expected in (
         ("TLT", "etf_bond", "bond_tlt"), ("IWM", "etf", "smallcap_em_etf"),
         ("EEM", "etf", "smallcap_em_etf"), ("GLD", "etf", "precious_trackers"),
-        ("SPY", "stock", "us_indices_trackers"),
+        ("SPY", "stock", "us_stock_single"),
     ):
         pair = {"display": display, "symbol": display, "type": ptype}
         assert resolve_score_group_by_type(pair) == expected, display

@@ -189,6 +189,34 @@ def test_engine_a_trade_gate_block_reason_blocks_explicit_false():
     assert reason.startswith("ENGINE_A_RESEARCH_ONLY:")
 
 
+def test_engine_a_trade_gate_block_reason_does_not_trust_stamped_true_when_class_disabled():
+    sig = _engine_a_signal(
+        pair="EUR/USD",
+        display="EUR/USD",
+        type="forex",
+        engineATradeEnabled=True,
+    )
+    reason = engine_a_trade_gate_block_reason(sig, config=_cfg())
+    assert reason is not None
+    assert reason.startswith("ENGINE_A_RESEARCH_ONLY:")
+    assert "class:forex" in reason
+
+
+def test_engine_a_trade_gate_block_reason_allows_stamped_true_when_override_and_evidence():
+    sig = _engine_a_signal(
+        pair="XAU/USD",
+        display="XAU/USD",
+        type="commodity",
+        engineATradeEnabled=True,
+    )
+    cfg = _cfg(
+        ENGINE_A_TRADE_EVIDENCE_REQUIRED=True,
+        ENGINE_A_TRADE_ENABLED_OVERRIDES={"XAU/USD": True},
+        ENGINE_A_TRADE_ENABLED_EVIDENCE={"XAU/USD": {"n": 30, "sqn": 2.01}},
+    )
+    assert engine_a_trade_gate_block_reason(sig, config=cfg) is None
+
+
 def test_engine_a_trade_gate_block_reason_resolves_missing_field_when_gate_active():
     sig = _engine_a_signal(pair="EUR/USD", display="EUR/USD", type="forex")
     reason = engine_a_trade_gate_block_reason(sig, config=_cfg())

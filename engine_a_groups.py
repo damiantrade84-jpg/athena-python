@@ -51,10 +51,10 @@ _MAJOR_FOREX = {"EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD"
 _FOREX_CROSSES = {
     "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "GBP/AUD",
     "EUR/CHF", "USD/SGD", "AUD/CHF", "AUD/NZD",
-    # 2026-07-28 ATFX additions. G10 broad crosses land on the crosses_broad
-    # ladder (D1/H4/H4/H1/M30) via TIMEFRAME_POLICY_GROUP_ALIASES; the three
-    # yen crosses and the two Scandi USD pairs carry symbol overrides in
-    # timeframe_policy for the liquid ladder, matching EUR/JPY and AUD/JPY.
+    # 2026-07-28 ATFX additions. G10 broad crosses land on forex_crosses_broad
+    # (score group forex_crosses). Live ENGINE_TF_ROLE_OVERRIDES for both
+    # broad and liquid crosses is D1/H4/H4/H1/M15; yen crosses / Scandi USD
+    # still use the liquid policy group for M5/speed identity.
     "AUD/CAD", "CAD/CHF", "EUR/CAD", "EUR/NZD", "GBP/CAD", "GBP/CHF",
     "GBP/NZD", "NZD/CAD", "NZD/CHF",
     "CAD/JPY", "CHF/JPY", "NZD/JPY",
@@ -86,6 +86,7 @@ _ALTCOIN_MAJORS = {
     "XRP/USDT", "ARB/USDT", "OP/USDT", "UNI/USDT",
 }
 _PRECIOUS_TRACKERS = {"XAU/USD", "XAG/USD", "GLD", "SLV", "GDX"}
+_US_INDEX_ETFS = {"SPY", "QQQ", "DIA", "SOXX"}
 _ENERGY_OIL = {"WTI OIL", "BRENT OIL", "USO", "XLE"}
 _BASE_METALS = {"ALUMINIUM", "LEAD", "NICKEL", "ZINC"}
 _SOFTS = {"CATTLE", "COCOA", "COFFEE", "CORN", "COTTON", "SOYBEANS", "SUGAR", "WHEAT"}
@@ -167,6 +168,11 @@ def resolve_score_group_by_type(pair: dict) -> str:
             return "precious_trackers"
         if display in _ENERGY_OIL:
             return "energy_oil"
+        if display in _US_INDEX_ETFS:
+            # Cash-index CFDs stay on us_indices_trackers (no live volume).
+            # These ETFs have EODHD volume and already resolve to the
+            # us_stock_single TF ladder via the .US suffix.
+            return "us_stock_single"
         if display in _US_INDICES_TRACKERS:
             return "us_indices_trackers"
         if display in _US_STOCKS or symbol.endswith(".US"):
@@ -274,7 +280,7 @@ _TF_EXOTICS_LIQUID = {
     "EUR/HUF", "EUR/PLN", "USD/CZK", "USD/HUF", "USD/PLN",
 }
 _TF_EXOTICS_RESTRICTED = {"USD/BRL", "USD/INR", "EUR/ZAR", "GBP/ZAR", "USD/HKD"}
-_TF_CRYPTO_FAST = {"BTC/USDT", "ETH/USDT", "SOL/USDT"}
+_TF_CRYPTO_FAST = {"BTC/USDT", "ETH/USDT"}
 _TF_LIQUID_METALS = {"XAU/USD", "XAG/USD", "GLD", "SLV", "GDX"}
 _TF_INDEX_FAST = {"NASDAQ-100", "DOW JONES", "DAX", "DAX 40"}
 _TF_BOND_SMALLCAP_EM = {"TLT", "IWM", "EEM"}
@@ -430,3 +436,119 @@ def resolve_timeframe_policy_group(pair: dict) -> str:
         # conditional M5 trigger those CFDs are explicitly excluded from.
         return "cash_equity_standard_dynamic"
     return "unknown"
+
+
+# Policy group → known displays that share that TF ladder (Tuning Lab labels).
+_POLICY_GROUP_DISPLAYS: dict[str, tuple[str, ...]] = {
+    "forex_majors_standard": tuple(sorted(_TF_MAJORS_STANDARD)),
+    "forex_majors_fast": tuple(sorted(_TF_MAJORS_FAST)),
+    "forex_crosses_broad": tuple(sorted(_TF_CROSSES_BROAD)),
+    "forex_crosses_liquid": tuple(sorted(_TF_CROSSES_LIQUID)),
+    "forex_exotics_liquid": tuple(sorted(_TF_EXOTICS_LIQUID)),
+    "forex_exotics_restricted": tuple(sorted(_TF_EXOTICS_RESTRICTED)),
+    "crypto_majors_fast": tuple(sorted(_TF_CRYPTO_FAST)),
+    "crypto_alt_majors": tuple(sorted(_ALTCOIN_MAJORS - _TF_CRYPTO_FAST)),
+    "crypto_other_thin": ("DOGE/USDT",),
+    "liquid_metals": tuple(sorted(_TF_LIQUID_METALS)),
+    "energy_oil": tuple(sorted(_ENERGY_OIL)),
+    "nat_gas": ("NAT GAS",),
+    "thin_metals_base_softs": tuple(
+        sorted({"XPT/USD", "XPD/USD"} | _BASE_METALS | _SOFTS)
+    ),
+    "equity_index_fast": tuple(sorted(_TF_INDEX_FAST)),
+    "equity_index_standard": tuple(
+        sorted((_US_INDICES_TRACKERS | _EU_INDICES | _ASIAN_INDICES) - _TF_INDEX_FAST)
+    ),
+    "us_stock_single": tuple(sorted(_US_STOCKS | {"SPY", "AAPL"})),
+    "bond_tlt_smallcap_em_etf": tuple(sorted(_TF_BOND_SMALLCAP_EM)),
+    "cash_equity_standard_dynamic": (),  # large ATFX set; labeled generically
+}
+
+
+def displays_for_policy_group(policy_group: str) -> tuple[str, ...]:
+    """Displays that share one TF-role ladder (for Tuning Lab grouping labels)."""
+    key = str(policy_group or "").strip().lower()
+    return _POLICY_GROUP_DISPLAYS.get(key, ())
+
+
+def policy_group_label_bundle(pair: dict) -> dict[str, object]:
+    """Score-group vs TF-policy labels for one pair (Tuning Lab display).
+
+    Returns keys used by ``/api/experiment/defaults`` so the UI can show which
+    knobs apply to which cohort without fan-out writes.
+    """
+    score_group = resolve_score_group_by_type(pair)
+    tf_policy_group = resolve_timeframe_policy_group(pair)
+    siblings = displays_for_policy_group(tf_policy_group)
+    # Score-group cohort: every known display in the same scoring group.
+    display = str(pair.get("display") or pair.get("pair") or "").strip().upper()
+    ptype = str(pair.get("type") or pair.get("asset_type") or "").lower()
+    score_peers: list[str] = []
+    if score_group == "forex_majors":
+        score_peers = sorted(_MAJOR_FOREX)
+    elif score_group == "forex_crosses":
+        score_peers = sorted(_FOREX_CROSSES)
+    elif score_group == "forex_exotics":
+        score_peers = sorted(_FOREX_EXOTICS)
+    elif score_group == "crypto_btc":
+        score_peers = ["BTC/USDT"]
+    elif score_group == "crypto_eth":
+        score_peers = ["ETH/USDT"]
+    elif score_group == "crypto_doge":
+        score_peers = ["DOGE/USDT"]
+    elif score_group == "crypto_alt_majors":
+        score_peers = sorted(_ALTCOIN_MAJORS)
+    elif score_group == "precious_trackers":
+        score_peers = sorted(_PRECIOUS_TRACKERS)
+    elif score_group == "energy_oil":
+        score_peers = sorted(_ENERGY_OIL)
+    elif score_group == "us_indices_trackers":
+        score_peers = sorted(_US_INDICES_TRACKERS)
+    elif score_group == "eu_indices":
+        score_peers = sorted(_EU_INDICES)
+    elif score_group == "asian_indices":
+        score_peers = sorted(_ASIAN_INDICES)
+    elif score_group == "us_stock_single":
+        score_peers = sorted(_US_STOCKS)
+    elif score_group == "bond_tlt":
+        score_peers = ["TLT"]
+    elif score_group == "smallcap_em_etf":
+        score_peers = sorted(_TF_BOND_SMALLCAP_EM - {"TLT"} | {"IWM", "EEM"})
+    else:
+        score_peers = [display] if display else []
+
+    # Sibling policy groups under the same score group (for "also separate ladders").
+    related_policy: set[str] = set()
+    for peer_display in score_peers:
+        peer_type = ptype
+        if score_group.startswith("crypto"):
+            peer_type = "crypto"
+        elif score_group.startswith("forex"):
+            peer_type = "forex"
+        elif score_group in {
+            "precious_trackers",
+            "energy_oil",
+            "nat_gas",
+            "copper",
+            "pgm_metals",
+            "base_metals",
+            "softs",
+        }:
+            peer_type = "commodity"
+        elif "indices" in score_group or score_group == "us_indices_trackers":
+            peer_type = "index"
+        elif score_group in {"us_stock_single", "bond_tlt", "smallcap_em_etf", "stock_other"}:
+            peer_type = "stock"
+        pg = resolve_timeframe_policy_group(
+            {"display": peer_display, "type": peer_type, "symbol": peer_display}
+        )
+        if pg and pg != "unknown":
+            related_policy.add(pg)
+
+    return {
+        "scoreGroup": score_group,
+        "tfPolicyGroup": tf_policy_group,
+        "tfPolicyPeers": list(siblings),
+        "scoreGroupPeers": score_peers,
+        "relatedTfPolicyGroups": sorted(related_policy),
+    }

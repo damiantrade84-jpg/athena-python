@@ -271,8 +271,10 @@ def audit_execution_gates(
     checks.append(
         AuditCheck(
             id="engine_a_trade_enabled_matches_qualified",
-            status="PASS" if engine_trade_enabled == qualified else "FAIL",
-            detail="engineATradeEnabled must mirror qualified on V3 signals",
+            status="PASS"
+            if (not engine_trade_enabled) or (qualified is True)
+            else "FAIL",
+            detail="engineATradeEnabled requires qualified; research TRADE may stay unqualified for execution",
             evidence={
                 "engineATradeEnabled": engine_trade_enabled,
                 "qualified": qualified,
@@ -283,10 +285,10 @@ def audit_execution_gates(
         AuditCheck(
             id="execution_scope_matches_qualified",
             status="PASS"
-            if (qualified and execution_scope == "DEMO_ONLY")
-            or (not qualified and execution_scope in {"NONE", ""})
+            if (engine_trade_enabled and execution_scope == "DEMO_ONLY")
+            or (not engine_trade_enabled and execution_scope in {"NONE", ""})
             else "FAIL",
-            detail="executionScope is DEMO_ONLY iff qualified",
+            detail="executionScope is DEMO_ONLY iff engineATradeEnabled",
             evidence={"executionScope": execution_scope, "qualified": qualified},
         )
     )

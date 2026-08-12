@@ -278,6 +278,31 @@ ENGINE_A_V3_SETUP_UPGRADE:
   # opposition is still blocked by ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD.
   # Raise toward 0.75 to re-tighten without a code change.
   MR_MIN_CONFLUENCE_FRAC: 0.0
+# Precious-metals alias for the family overlay below. Reversible: false
+# restores XAU/XAG breakout-only without touching other commodities.
+ENGINE_A_V3_XAU_INTRADAY_PULLBACK_ENABLED: true
+# Add the trend-pullback specialist next to the family primary (breakout / ORB)
+# on the intradaily path. Does not hide pairs; quant TRADE is unchanged when
+# neither setup fires. Reversible per family.
+ENGINE_A_V3_INTRADAY_PULLBACK_OVERLAY:
+  ENABLED: true
+  BY_FAMILY:
+    forex: true
+    crypto: true
+    commodity: true
+    index: true
+    equity_etf: true
+# Pullback TRADE requires a rejection wick on the touch bar for every family.
+# Failed rejection is WATCH, not a pair demotion. Reversible per family.
+ENGINE_A_V3_PULLBACK_REJECTION:
+  ENABLED: true
+  WICK_BODY_MIN: 1.0
+  BY_FAMILY:
+    forex: true
+    crypto: true
+    commodity: true
+    index: true
+    equity_etf: true
 # Master toggles (Scan Config UI). Default OFF — gates are optional demotions.
 # Nested ENGINE_A_V3_* session blocks below only apply when SESSION_GATES is true.
 ENGINE_A_ENTRY_TIMING_GATES_ENABLED: false
@@ -457,7 +482,9 @@ ENGINE_A_V3_SUBSYSTEMS:
   ENABLED: true
   WEIGHTS_BY_FAMILY:
     crypto:
-      microstructure: 0.08
+      # Zero while MICROSTRUCTURE_BYBIT_FEEDS_ENABLED is false — a non-zero
+      # budget implied a live micro edge the sockets are not producing.
+      microstructure: 0.0
   # Optional score-group override. Empty means every group inherits its family
   # budget; this surface exists so a validated group experiment need not alter
   # unrelated pairs in the same broad asset family.
@@ -1201,6 +1228,8 @@ ENGINE_A_ORTHO_CONVICTION_WEIGHT_BY_CLASS:
 # trend direction, score math, SL/TP, risk_check, or sizing.
 # Defaults are intentionally conservative after frozen AB6: no pair/class had
 # n>=30 AND SQN>2.0. Enable by display or score_group only after that evidence.
+# Off: demo-unvalidated TRADE stays execute-ready (legacy). Flip true only
+# when the class/evidence map should demote Engine A to research-only.
 ENGINE_A_TRADE_ELIGIBILITY_ENABLED: false
 ENGINE_A_TRADE_ENABLED_DEFAULT: false
 ENGINE_A_TRADE_ENABLED_BY_CLASS:
