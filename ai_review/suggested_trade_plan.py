@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from timeframe_policy import TIMEFRAME_LADDER
+
 SCHEMA_VERSION = "suggested_trade_plan.v1"
 
 _VALID_DIRECTIONS = frozenset({"LONG", "SHORT"})
@@ -24,8 +26,11 @@ _VALID_SOURCES = frozenset(
         "engine_b_candidate",
     }
 )
+_SCALP_SOURCES = frozenset({"ai_scalp_chart_review"})
 _VALID_SCALP_CONTEXT_TF = frozenset({"M5", "M15"})
 _VALID_SCALP_ENTRY_EXEC_TF = frozenset({"M1", "M5"})
+
+_POLICY_TFS = frozenset(tf.value for tf in TIMEFRAME_LADDER)
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -216,3 +221,45 @@ def is_watchable_plan(plan: dict[str, Any] | None) -> bool:
         zh = _coerce_float(plan.get("zoneHigh"))
         return zl is not None and zh is not None
     return False
+
+
+def plan_playbook_warnings(plan: dict[str, Any] | None) -> list[str]:
+    """Deterministic, advisory playbook-consistency warnings for a sanitized plan.
+
+    Never blocks flagging — schema/armable validation is the fail-closed layer.
+    These surface AI feedback that contradicts the timeframe_policy.v4 contract
+    or basic direction/trigger coherence so the UI can show it.
+    """
+    if not isinstance(plan, dict):
+        return []
+    warnings: list[str] = []
+    source = str(plan.get("source") or "").strip()
+    is_scalp = source in _SCALP_SOURCES
+
+    tf_fields = ("contextTf", "entryTf", "executionTf")
+    tfs = {name: str(plan.get(name) or "").upper() for name in tf_fields}
+    for name, value in tfs.items():
+        if not value:
+            continue
+        if value not in _POLICY_TFS:
+            warnings.append(f"{name} {value} is not a timeframe-policy ladder timeframe")
+        elif value == "M1" and not is_scalp:
+            warnings.append(f"{name} M1 is scalp/Engine-D-native only under timeframe_policy.v4")
+
+    direction = str(plan.get("direction") or "").upper()
+    trigger = str(plan.get("triggerType") or "").upper()
+    if direction == "LONG" and trigger == "ACCEPTANCE_BELOW":
+        warnings.append("LONG plan waits for acceptance below level — direction/trigger mismatch vs playbook")
+    if direction == "SHORT" and trigger == "ACCEPTANCE_ABOVE":
+        warnings.append("SHORT plan waits for acceptance above level — direction/trigger mismatch vs playbook")
+
+    action = str(plan.get("action") or "").upper()
+    if action in _VALID_WATCH_ACTIONS and action != "WATCH_ONLY":
+        has_invalidation = (
+            _coerce_float(plan.get("invalidateAbove")) is not None
+            or _coerce_float(plan.get("invalidateBelow")) is not None
+        )
+        if not has_invalidation:
+            warnings.append("no invalidateAbove/invalidateBelow — setup has no playbook invalidation anchor")
+
+    return warnings

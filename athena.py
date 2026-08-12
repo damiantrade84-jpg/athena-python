@@ -18648,7 +18648,10 @@ from athena_app.api.routes_ai_chart_review import register_ai_chart_review_route
 from athena_app.api.routes_ai_scalp_chart_review import register_ai_scalp_chart_review_routes  # noqa: E402
 from athena_app.api.routes_ai_ux import register_ai_ux_routes  # noqa: E402
 from athena_app.api.routes_scalp_orderflow import register_scalp_orderflow_routes  # noqa: E402
-from athena_app.api.routes_suggested_trades import register_suggested_trade_routes  # noqa: E402
+from athena_app.api.routes_suggested_trades import (  # noqa: E402
+    register_suggested_trade_routes,
+    start_suggested_trade_monitor,
+)
 from athena_app.api.routes_backtest import register_backtest_history_routes  # noqa: E402
 from athena_app.api.routes_broker_status import register_broker_status_routes  # noqa: E402
 from athena_app.api.routes_live_dashboard import register_live_dashboard_routes  # noqa: E402
@@ -19601,6 +19604,21 @@ def ensure_runtime_services_started() -> None:
         log.info(
             "[MICRO] Microstructure feeds disabled (set MICROSTRUCTURE_FEEDS_ENABLED: true to enable)"
         )
+
+    # Alert-only suggested trade watch monitor — config-gated, idempotent,
+    # daemon thread. Evaluates flagged watches in the background so READY
+    # flags do not depend on an open browser panel. Never executes.
+    try:
+        start_suggested_trade_monitor(
+            SimpleNamespace(
+                CONFIG=CONFIG,
+                fetch_candles=fetch_candles,
+                live_prices=_live_prices,
+                live_prices_lock=_live_prices_lock,
+            )
+        )
+    except Exception:
+        log.exception("[SUGGESTED] Failed to start suggested trade monitor")
 
 
 if __name__ == "__main__":

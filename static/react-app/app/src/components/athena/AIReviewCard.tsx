@@ -17,6 +17,7 @@ import type {
   AIChartReviewResponse,
   AIChartReviewConcordanceState,
   EvidenceRefClaim,
+  StrategyPlaybookVerdict,
 } from '@/types/athena';
 
 const WhatIfReplayPanel = lazy(() => import('@/components/athena/WhatIfReplayPanel'));
@@ -35,6 +36,14 @@ const VERDICT_TONE: Record<string, Tone> = {
   CAUTION: 'warning',
   INVALID: 'short',
   NO_TRADE: 'default',
+};
+
+const PLAYBOOK_VERDICT_TONE: Record<string, Tone> = {
+  TRADE_VALID: 'long',
+  WAIT_FOR_TRIGGER: 'warning',
+  NO_TRADE: 'default',
+  CONFLICT_REJECT: 'short',
+  DATA_INSUFFICIENT: 'default',
 };
 
 function showList(items: unknown): string[] | null {
@@ -88,6 +97,12 @@ function AIReviewCardImpl({ response }: AIReviewCardProps) {
   const warnings = showList(response.mismatch_warnings);
   const suggestedPlan =
     response.suggestedTradePlan ?? response.suggested_trade_plan ?? ai.suggestedTradePlan;
+  const playbookVerdict: StrategyPlaybookVerdict | null =
+    ai.strategyPlaybookVerdict ??
+    ai.strategy_playbook_verdict ??
+    response.strategyPlaybookVerdict ??
+    response.strategy_playbook_verdict ??
+    null;
   const nonVisualContext =
     response.nonVisualContext ??
     response.engineANonVisualContext ??
@@ -175,6 +190,40 @@ function AIReviewCardImpl({ response }: AIReviewCardProps) {
                 <li key={i} className="note">{w}</li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {/* ── Playbook verdict: AI feedback validated against the loaded playbook ── */}
+        {playbookVerdict && (
+          <div className="rounded border border-primary/25 bg-primary/5 p-2" data-playbook-verdict>
+            <div className="mb-1 flex flex-wrap items-center gap-1.5">
+              <p className="label text-primary">Playbook verdict</p>
+              {playbookVerdict.final_verdict && (
+                <Chip tone={PLAYBOOK_VERDICT_TONE[String(playbookVerdict.final_verdict)] ?? 'default'}>
+                  {String(playbookVerdict.final_verdict).replace(/_/g, ' ')}
+                </Chip>
+              )}
+              {playbookVerdict.matched_strategy_model && (
+                <Chip title="Matched playbook id — validated against loaded playbook YAML">
+                  {playbookVerdict.matched_strategy_model}
+                </Chip>
+              )}
+              {playbookVerdict.classifier_agreement && playbookVerdict.classifier_agreement !== 'N/A' && (
+                <Chip title="Agreement with the deterministic classifier">
+                  classifier: {String(playbookVerdict.classifier_agreement).replace(/_/g, ' ').toLowerCase()}
+                </Chip>
+              )}
+            </div>
+            <div className="grid grid-cols-1 gap-x-6 md:grid-cols-3">
+              <KeyValue label="Location quality" value={showReviewValue(playbookVerdict.location_quality)} />
+              <KeyValue label="Trigger quality" value={showReviewValue(playbookVerdict.trigger_quality)} />
+              <KeyValue label="RR quality" value={showReviewValue(playbookVerdict.rr_quality)} />
+            </div>
+            {playbookVerdict.plain_english_reason && (
+              <p className="note mt-1">{playbookVerdict.plain_english_reason}</p>
+            )}
+            <ListBlock label="Conflict notes" items={showList(playbookVerdict.conflict_notes)} />
+            <ListBlock label="Required next confirmation" items={showList(playbookVerdict.required_next_confirmation)} />
           </div>
         )}
 

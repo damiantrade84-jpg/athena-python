@@ -9,18 +9,20 @@ from pathlib import Path
 
 import pytest
 
-from ai_review.suggested_trade_plan import sanitize_suggested_trade_plan
+from ai_review.suggested_trade_plan import plan_playbook_warnings, sanitize_suggested_trade_plan
 from suggested_trade_monitor import (
     DEFAULT_ACTIVE_PATH,
     DEFAULT_EVENTS_PATH,
     add_watch,
     build_watch_from_flag,
     cancel_watch,
+    clear_terminal_watches,
     evaluate_all_watches_once,
     evaluate_trigger,
     evaluate_watches,
     get_runner_status,
     monitor_config,
+    save_active_watches,
     start_suggested_trade_runner_once,
     validate_flag_payload,
 )
@@ -232,3 +234,128 @@ def test_evaluate_all_watches_once_marks_acceptance_above(monkeypatch):
 def test_start_runner_once_is_idempotent():
     started = start_suggested_trade_runner_once(cfg={"SUGGESTED_TRADE_MONITOR": {"ENABLED": False}})
     assert started is False
+
+
+def test_evaluate_invalidation_marks_watch_invalidated():
+    tmp_dir = Path(tempfile.mkdtemp(prefix="athena_suggested_inv_"))
+    active = tmp_dir / "active.json"
+    events = tmp_dir / "events.jsonl"
+
+    validated, err = validate_flag_payload({
+        "symbol": "EURUSD",
+        "suggestedTradePlan": _valid_plan(invalidateAbove=1.09),
+    })
+    assert err is None
+    watch, add_err = add_watch(validated, active_path=active, events_path=events)
+    assert add_err is None
+    assert watch is not None
+
+    def _fetch(_symbol, _tf, limit=5):
+        return {"candles": [{"c": 1.091}]}
+
+    result = evaluate_all_watches_once(
+        active_path=active,
+        events_path=events,
+        fetch_candles_fn=_fetch,
+    )
+    assert result["updated"] >= 1
+    watches = json.loads(active.read_text(encoding="utf-8"))["watches"]
+    assert watches[0]["status"] == "INVALIDATED"
+    event_rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(e.get("type") == "watch_invalidated" for e in event_rows)
+
+
+def test_evaluate_invalidation_leaves_watch_watching_inside_bounds():
+    tmp_dir = Path(tempfile.mkdtemp(prefix="athena_suggested_inv_ok_"))
+    active = tmp_dir / "active.json"
+    events = tmp_dir / "events.jsonl"
+
+    validated, err = validate_flag_payload({
+        "symbol": "EURUSD",
+        "suggestedTradePlan": _valid_plan(invalidateAbove=1.09),
+    })
+    assert err is None
+    watch, add_err = add_watch(validated, active_path=active, events_path=events)
+    assert add_err is None
+
+    def _fetch(_symbol, _tf, limit=5):
+        return {"candles": [{"c": 1.086}]}
+
+    result = evaluate_all_watches_once(
+        active_path=active,
+        events_path=events,
+        fetch_candles_fn=_fetch,
+    )
+    watches = json.loads(active.read_text(encoding="utf-8"))["watches"]
+    assert watches[0]["status"] == "WATCHING"
+    assert result["evaluated"] == 1
+
+
+def test_clear_terminal_watches_removes_only_terminal():
+    tmp_dir = Path(tempfile.mkdtemp(prefix="athena_suggested_clear_"))
+    active = tmp_dir / "active.json"
+    events = tmp_dir / "events.jsonl"
+    save_active_watches([
+        {"watch_id": "a", "status": "WATCHING"},
+        {"watch_id": "b", "status": "EXPIRED"},
+        {"watch_id": "c", "status": "CANCELLED"},
+        {"watch_id": "d", "status": "INVALIDATED"},
+        {"watch_id": "e", "status": "READY_FOR_REVIEW"},
+    ], active)
+
+    result = clear_terminal_watches(active_path=active, events_path=events)
+    assert result["removed"] == 3
+    assert sorted(result["removed_ids"]) == ["b", "c", "d"]
+    remaining = json.loads(active.read_text(encoding="utf-8"))["watches"]
+    assert sorted(w["watch_id"] for w in remaining) == ["a", "e"]
+    event_rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(e.get("type") == "watches_cleared" for e in event_rows)
+
+
+def test_plan_playbook_warnings_flags_m1_for_non_scalp():
+    plan = sanitize_suggested_trade_plan(
+        {"suggestedTradePlan": _valid_plan(entryTf="M1")},
+        source="ai_chart_review",
+        symbol="EURUSD",
+    )
+    assert plan is not None
+    warnings = plan_playbook_warnings(plan)
+    assert any("M1" in w for w in warnings)
+
+
+def test_plan_playbook_warnings_flags_direction_trigger_mismatch():
+    plan = sanitize_suggested_trade_plan(
+        {"suggestedTradePlan": _valid_plan(direction="LONG", triggerType="ACCEPTANCE_BELOW")},
+        source="ai_chart_review",
+        symbol="EURUSD",
+    )
+    assert plan is not None
+    warnings = plan_playbook_warnings(plan)
+    assert any("mismatch" in w for w in warnings)
+
+
+def test_plan_playbook_warnings_clean_for_coherent_plan():
+    plan = sanitize_suggested_trade_plan(
+        {"suggestedTradePlan": _valid_plan(invalidateBelow=1.08)},
+        source="ai_chart_review",
+        symbol="EURUSD",
+    )
+    assert plan is not None
+    assert plan_playbook_warnings(plan) == []
+
+
+def test_add_watch_stores_playbook_warnings():
+    tmp_dir = Path(tempfile.mkdtemp(prefix="athena_suggested_warn_"))
+    active = tmp_dir / "active.json"
+    events = tmp_dir / "events.jsonl"
+
+    validated, err = validate_flag_payload({
+        "symbol": "EURUSD",
+        "suggestedTradePlan": _valid_plan(entryTf="M1"),
+    })
+    assert err is None
+    watch, add_err = add_watch(validated, active_path=active, events_path=events)
+    assert add_err is None
+    assert watch is not None
+    stored = watch.to_dict()
+    assert any("M1" in w for w in stored["playbook_warnings"])

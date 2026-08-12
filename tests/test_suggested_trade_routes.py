@@ -155,3 +155,31 @@ def test_evaluate_now_marks_zone_reached(app_client):
     assert data["evaluation"]["alert_only"] is True
     watches = data["watches"]
     assert any(w.get("status") == "READY_FOR_REVIEW" for w in watches)
+
+
+def test_clear_terminal_route_removes_finished_watches(app_client):
+    client, active = app_client
+    flag = client.post("/api/suggested-trades/flag", json=_valid_flag_body()).get_json()
+    watch_id = flag["watch"]["watch_id"]
+    client.post(f"/api/suggested-trades/{watch_id}/cancel")
+
+    resp = client.post("/api/suggested-trades/clear-terminal")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["success"] is True
+    assert data["removed"] == 1
+    assert data["alert_only"] is True
+    stored = json.loads(active.read_text(encoding="utf-8"))
+    assert stored["watches"] == []
+
+
+def test_clear_terminal_route_keeps_active_watches(app_client):
+    client, active = app_client
+    client.post("/api/suggested-trades/flag", json=_valid_flag_body())
+
+    resp = client.post("/api/suggested-trades/clear-terminal")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["removed"] == 0
+    stored = json.loads(active.read_text(encoding="utf-8"))
+    assert len(stored["watches"]) == 1

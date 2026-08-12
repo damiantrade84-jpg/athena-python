@@ -80,7 +80,7 @@ export default function Sidebar() {
   const { data: autoTrade, refresh: refreshAutoTrade } = useApiPoll<{ enabled: boolean }>('/api/auto-trade', 15000);
   const { data: perfMetrics } = useApiPoll<PerformanceMetrics>('/api/performance', 60000);
   const { post: postAutoTrade, loading: togglingAutoTrade } = useApiPost<{ enabled: boolean; error?: string }>();
-  const { runner: suggestedTradeRunner } = useSuggestedTradeRunnerStatus();
+  const { runner: suggestedTradeRunner, readyCount: suggestedReadyCount } = useSuggestedTradeRunnerStatus();
 
   const activeSignals  = signals.filter(s => s.status === 'active').length;
   const openPositions  = positions.filter(p => p.status === 'open').length;
@@ -192,6 +192,19 @@ export default function Sidebar() {
                         }}
                       >
                         {count}
+                      </span>
+                    )}
+
+                    {item.id === 'suggestedTrades' && suggestedReadyCount > 0 && (
+                      <span
+                        className="readout shrink-0 rounded-md px-1.5 py-px text-[10px] text-long"
+                        style={{
+                          background: 'hsl(var(--long) / 0.16)',
+                          boxShadow: 'inset 0 0 0 1px hsl(var(--long) / 0.40)',
+                        }}
+                        title={`${suggestedReadyCount} suggested trade${suggestedReadyCount === 1 ? '' : 's'} ready for review — open Suggested Trades`}
+                      >
+                        {suggestedReadyCount} ready
                       </span>
                     )}
 

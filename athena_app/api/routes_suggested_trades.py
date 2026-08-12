@@ -12,6 +12,7 @@ from suggested_trade_monitor import (
     DEFAULT_EVENTS_PATH,
     add_watch,
     cancel_watch,
+    clear_terminal_watches,
     count_watches_by_status,
     evaluate_all_watches_once,
     get_runner_status,
@@ -124,6 +125,15 @@ def register_suggested_trade_routes(app, runtime: SimpleNamespace) -> None:
         if err:
             return jsonify({"success": False, "error": err}), 404
         return jsonify(rt.json_safe({"success": True, "watch": watch, "alert_only": True}))
+
+    @app.route("/api/suggested-trades/clear-terminal", methods=["POST"])
+    def api_suggested_trades_clear_terminal():
+        rt = _runtime
+        result = clear_terminal_watches(
+            active_path=DEFAULT_ACTIVE_PATH,
+            events_path=DEFAULT_EVENTS_PATH,
+        )
+        return jsonify(rt.json_safe({"success": True, **result, "alert_only": True}))
 
     @app.route("/api/suggested-trades/evaluate-now", methods=["POST"])
     def api_suggested_trades_evaluate_now():

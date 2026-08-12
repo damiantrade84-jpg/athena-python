@@ -87,6 +87,7 @@ export interface SuggestedTradeWatch {
   lastCheckedAt?: string | null;
   cancelled_at?: string | null;
   notes?: string | null;
+  playbook_warnings?: string[];
   signal?: unknown;
   suggested_trade_plan?: SuggestedTradePlan;
   suggestedTradePlan?: SuggestedTradePlan;
@@ -1559,6 +1560,8 @@ export interface AIChartReviewNormalized extends TradeSkillReview {
   missing_context?: string[];
   human_action?: AIChartReviewHumanAction;
   raw_model_response?: string;
+  strategyPlaybookVerdict?: StrategyPlaybookVerdict | null;
+  strategy_playbook_verdict?: StrategyPlaybookVerdict | null;
 }
 
 export type AIChartReviewSummaryHumanAction = 'trade' | 'wait' | 'reject' | 'watch';
@@ -2024,6 +2027,24 @@ export interface AIChartReviewResponse {
   resistanceMap?: AIChartReviewResistanceMap;
   suggestedTradePlan?: SuggestedTradePlan | null;
   suggested_trade_plan?: SuggestedTradePlan | null;
+  strategyPlaybookVerdict?: StrategyPlaybookVerdict | null;
+  strategy_playbook_verdict?: StrategyPlaybookVerdict | null;
+}
+
+export interface StrategyPlaybookVerdict {
+  final_verdict?: 'TRADE_VALID' | 'WAIT_FOR_TRIGGER' | 'NO_TRADE' | 'CONFLICT_REJECT' | 'DATA_INSUFFICIENT' | string;
+  matched_strategy_model?: string;
+  direction?: 'LONG' | 'SHORT' | 'NONE' | string;
+  market_state?: string | null;
+  location_quality?: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN' | string;
+  trigger_quality?: 'CONFIRMED' | 'PARTIAL' | 'MISSING' | 'INVALID' | string;
+  invalidation_level?: number | null;
+  target_logic?: string | null;
+  rr_quality?: 'GOOD' | 'ACCEPTABLE' | 'POOR' | 'UNKNOWN' | string;
+  conflict_notes?: string[];
+  required_next_confirmation?: string[];
+  classifier_agreement?: 'AGREE' | 'OVERRIDE_ADDED' | 'OVERRIDE_REJECTED' | 'N/A' | string;
+  plain_english_reason?: string;
 }
 
 export interface AIChartReviewScreenshotMeta {

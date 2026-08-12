@@ -13,7 +13,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from ai_review.suggested_trade_plan import is_watchable_plan, sanitize_suggested_trade_plan
+from ai_review.suggested_trade_plan import (
+    is_watchable_plan,
+    plan_playbook_warnings,
+    sanitize_suggested_trade_plan,
+)
 
 WATCH_STATUSES = frozenset({
     "FLAGGED",
@@ -74,6 +78,7 @@ class SuggestedTrade:
     last_evaluated_at: str | None = None
     last_price: float | None = None
     notes: str | None = None
+    playbook_warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -167,6 +172,7 @@ def build_watch_from_flag(validated: dict[str, Any]) -> SuggestedTrade:
         context_tf=plan.get("contextTf"),
         execution_tf=plan.get("executionTf"),
         expires_at=expires_at,
+        playbook_warnings=plan_playbook_warnings(plan),
     )
 
 
@@ -269,6 +275,26 @@ def cancel_watch(
     return found, None
 
 
+def clear_terminal_watches(
+    *,
+    active_path: Path | None = None,
+    events_path: Path | None = None,
+) -> dict[str, Any]:
+    """Remove terminal watches (EXPIRED/CANCELLED/INVALIDATED) from active.json."""
+    terminal = ("EXPIRED", "CANCELLED", "INVALIDATED")
+    watches = load_active_watches(active_path)
+    kept = [w for w in watches if str(w.get("status")) not in terminal]
+    removed_ids = [str(w.get("watch_id")) for w in watches if str(w.get("status")) in terminal]
+    if removed_ids:
+        save_active_watches(kept, active_path)
+        append_event(events_path or DEFAULT_EVENTS_PATH, {
+            "type": "watches_cleared",
+            "watch_ids": removed_ids,
+            "at": _utc_now_iso(),
+        })
+    return {"removed": len(removed_ids), "removed_ids": removed_ids, "remaining": len(kept)}
+
+
 def _latest_close(candles: list[dict[str, Any]] | None) -> float | None:
     if not candles:
         return None
@@ -329,6 +355,48 @@ def evaluate_trigger(
             return True, "live price in zone"
         return False, None
 
+    return False, None
+
+
+def evaluate_invalidation(
+    watch: dict[str, Any],
+    *,
+    latest_close: float | None = None,
+    live_price: float | None = None,
+) -> tuple[bool, str | None]:
+    """Check the plan's own invalidateAbove/invalidateBelow anchors.
+
+    Deterministic: uses only levels the AI plan stamped at flag time. Close
+    takes precedence over live price, mirroring evaluate_trigger.
+    """
+    plan = watch.get("suggested_trade_plan")
+    if not isinstance(plan, dict):
+        plan = watch
+    inv_above = plan.get("invalidateAbove") if "invalidateAbove" in plan else plan.get("invalidate_above")
+    inv_below = plan.get("invalidateBelow") if "invalidateBelow" in plan else plan.get("invalidate_below")
+
+    price = latest_close if latest_close is not None else live_price
+    if price is None:
+        return False, None
+    try:
+        price = float(price)
+    except (TypeError, ValueError):
+        return False, None
+
+    if inv_below is not None:
+        try:
+            below = float(inv_below)
+        except (TypeError, ValueError):
+            below = None
+        if below is not None and price < below:
+            return True, f"price below invalidation {below}"
+    if inv_above is not None:
+        try:
+            above = float(inv_above)
+        except (TypeError, ValueError):
+            above = None
+        if above is not None and price > above:
+            return True, f"price above invalidation {above}"
     return False, None
 
 
@@ -407,6 +475,25 @@ def evaluate_watches(
             watch["last_price"] = live_price
         elif latest_close is not None:
             watch["last_price"] = latest_close
+
+        invalidated, inv_note = evaluate_invalidation(
+            watch,
+            latest_close=latest_close,
+            live_price=live_price,
+        )
+        if invalidated:
+            watch["status"] = "INVALIDATED"
+            if inv_note:
+                watch["notes"] = inv_note
+            updated += 1
+            append_event(events_path or DEFAULT_EVENTS_PATH, {
+                "type": "watch_invalidated",
+                "watch_id": watch.get("watch_id"),
+                "symbol": symbol,
+                "note": inv_note,
+                "at": _utc_now_iso(),
+            })
+            continue
 
         reached, note = evaluate_trigger(
             watch,

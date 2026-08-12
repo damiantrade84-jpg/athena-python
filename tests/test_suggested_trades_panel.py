@@ -52,7 +52,7 @@ def test_suggested_trades_panel_does_not_execute():
 def test_suggested_trades_panel_keeps_full_watch_table():
     source = _read(PANEL)
 
-    assert "watches.map" in source or "watches)" in source
+    assert "visibleWatches.map" in source or "watches.map" in source or "watches)" in source
     assert "Cancel Watch" in source
     assert "Evaluate now" in source or "evaluateNow" in source
     assert "watchProgressText" in source or "Ready for review" in source or "LEVEL_REACHED" in source
@@ -75,3 +75,44 @@ def test_sidebar_includes_suggested_trades_nav():
     assert "'suggestedTrades'" in source
     assert "useSuggestedTradeRunnerStatus" in source
     assert "runnerBadgeLabel" in source
+
+
+def test_suggested_trades_panel_ready_cta_deep_links_to_chart():
+    source = _read(PANEL)
+    assert "Review & Execute" in source
+    assert "Ready — review & execute on chart" in source
+    # Ready CTA reuses chart intents; execution still happens only on chart panels.
+    assert "openInTvChart" in source
+    assert "openInScalpWorkbench" in source
+
+
+def test_suggested_trades_panel_sorts_ready_first():
+    source = _read(PANEL)
+    assert "STATUS_RANK" in source
+    assert "READY_FOR_REVIEW" in source
+
+
+def test_suggested_trades_panel_clear_finished():
+    source = _read(PANEL)
+    assert "/api/suggested-trades/clear-terminal" in source
+    assert "Clear finished" in source
+    assert "Show finished watches" in source
+
+
+def test_suggested_trades_panel_shows_playbook_warnings():
+    source = _read(PANEL)
+    assert "Playbook warnings" in source
+    assert "data-playbook-warnings" in source
+    assert "playbook_warnings" in source
+
+
+def test_suggested_trades_panel_toasts_on_new_ready():
+    source = _read(PANEL)
+    assert "Suggested trade ready:" in source
+    assert "seenReadyIdsRef" in source
+
+
+def test_sidebar_shows_suggested_ready_count():
+    source = _read(SIDEBAR)
+    assert "readyCount" in source
+    assert "ready for review" in source

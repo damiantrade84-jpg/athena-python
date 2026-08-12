@@ -6,7 +6,9 @@ import {
   Copy,
   ExternalLink,
   ListChecks,
+  PlayCircle,
   RefreshCw,
+  Trash2,
   XCircle,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -25,6 +27,34 @@ import type {
 
 const POLL_MS = 5000;
 const FRONTEND_EVAL_MS = 8000;
+
+const STATUS_RANK: Record<string, number> = {
+  READY_FOR_REVIEW: 0,
+  LEVEL_REACHED: 0,
+  WATCHING: 1,
+  FLAGGED: 1,
+  EXPIRED: 2,
+  CANCELLED: 2,
+  INVALIDATED: 2,
+};
+
+function watchStatus(watch: SuggestedTradeWatch): string {
+  return String(watch.status || '').toUpperCase();
+}
+
+function isReadyStatus(status: string): boolean {
+  return status === 'READY_FOR_REVIEW' || status === 'LEVEL_REACHED';
+}
+
+function isTerminalStatus(status: string): boolean {
+  return status === 'EXPIRED' || status === 'CANCELLED' || status === 'INVALIDATED';
+}
+
+function watchPlaybookWarnings(watch: SuggestedTradeWatch): string[] {
+  const raw = watch.playbook_warnings ?? (watch as { playbookWarnings?: unknown }).playbookWarnings;
+  if (!Array.isArray(raw)) return [];
+  return raw.map(String);
+}
 
 function watchTriggerType(watch: SuggestedTradeWatch): string {
   return String(watch.trigger_type || watch.triggerType || '').toUpperCase();
@@ -68,8 +98,8 @@ export function watchProgressText(watch: SuggestedTradeWatch): string {
 
   if (status === 'EXPIRED') return 'Expired';
   if (status === 'CANCELLED') return 'Cancelled';
-  if (status === 'INVALIDATED') return 'Invalidated';
-  if (status === 'READY_FOR_REVIEW' || status === 'LEVEL_REACHED') {
+  if (status === 'INVALIDATED') return 'Invalidated — setup no longer valid';
+  if (isReadyStatus(status)) {
     return 'Level reached — review now';
   }
   if (trigger === 'ACCEPTANCE_ABOVE' && level != null) {
@@ -112,9 +142,12 @@ export default function SuggestedTradesPanel() {
   const [payload, setPayload] = useState<SuggestedTradesListResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [showFinished, setShowFinished] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionWatchId, setActionWatchId] = useState<string | null>(null);
   const hasDataRef = useRef(false);
+  const seenReadyIdsRef = useRef<Set<string> | null>(null);
 
   const runner = payload?.runner;
   const watches = useMemo(
@@ -124,19 +157,38 @@ export default function SuggestedTradesPanel() {
   const counts = payload?.counts || {};
   const needsFrontendEval = !runner?.active || runner?.mode === 'frontend_poll' || runner?.mode === 'manual_only';
 
+  const applyPayload = useCallback((res: SuggestedTradesListResponse) => {
+    hasDataRef.current = true;
+    const readyWatches = (Array.isArray(res?.watches) ? res.watches : [])
+      .filter((w) => isReadyStatus(watchStatus(w)))
+      .map((w) => ({ id: String(w.watch_id || ''), label: String(w.display || w.symbol || 'setup') }))
+      .filter((w) => w.id);
+    const seen = seenReadyIdsRef.current;
+    seenReadyIdsRef.current = new Set(readyWatches.map((w) => w.id));
+    if (seen !== null) {
+      const fresh = readyWatches.filter((w) => !seen.has(w.id));
+      if (fresh.length > 0) {
+        showToast(
+          `Suggested trade ready: ${fresh.map((w) => w.label).join(', ')} — open chart to review`,
+          'success',
+        );
+      }
+    }
+    setPayload(res);
+  }, [showToast]);
+
   const refresh = useCallback(async () => {
     if (!hasDataRef.current) setLoading(true);
     setError(null);
     try {
       const res = await apiClient.getJson('/api/suggested-trades') as SuggestedTradesListResponse;
-      hasDataRef.current = true;
-      setPayload(res);
+      applyPayload(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load suggested trades');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyPayload]);
 
   const evaluateNow = useCallback(async () => {
     setEvaluating(true);
@@ -149,13 +201,13 @@ export default function SuggestedTradesPanel() {
       if (res?.error && !res.ok) {
         setError(res.error);
       }
-      setPayload(res);
+      applyPayload(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Evaluate failed');
     } finally {
       setEvaluating(false);
     }
-  }, []);
+  }, [applyPayload]);
 
   useEffect(() => {
     void refresh();
@@ -173,6 +225,23 @@ export default function SuggestedTradesPanel() {
     }, FRONTEND_EVAL_MS);
     return () => window.clearInterval(timer);
   }, [needsFrontendEval, evaluateNow]);
+
+  const sortedWatches = useMemo(
+    () => [...watches].sort((a, b) => {
+      const ra = STATUS_RANK[watchStatus(a)] ?? 1;
+      const rb = STATUS_RANK[watchStatus(b)] ?? 1;
+      return ra - rb;
+    }),
+    [watches],
+  );
+  const terminalCount = useMemo(
+    () => sortedWatches.filter((w) => isTerminalStatus(watchStatus(w))).length,
+    [sortedWatches],
+  );
+  const visibleWatches = useMemo(
+    () => (showFinished ? sortedWatches : sortedWatches.filter((w) => !isTerminalStatus(watchStatus(w)))),
+    [sortedWatches, showFinished],
+  );
 
   const openInTvChart = useCallback((watch: SuggestedTradeWatch) => {
     const symbol = String(watch.symbol || '').toUpperCase();
@@ -213,6 +282,14 @@ export default function SuggestedTradesPanel() {
     setActivePanel('scalpWorkbench');
   }, [setActivePanel, setScalpWorkbenchIntent, showToast]);
 
+  const reviewReadyWatch = useCallback((watch: SuggestedTradeWatch) => {
+    if (isScalpSourceWatch(watch)) {
+      openInScalpWorkbench(watch);
+    } else {
+      openInTvChart(watch);
+    }
+  }, [openInScalpWorkbench, openInTvChart]);
+
   const cancelWatch = useCallback(async (watch: SuggestedTradeWatch) => {
     const watchId = watch.watch_id;
     if (!watchId) return;
@@ -228,6 +305,24 @@ export default function SuggestedTradesPanel() {
     }
   }, [refresh, showToast]);
 
+  const clearFinished = useCallback(async () => {
+    setClearing(true);
+    try {
+      const res = await apiClient.postJson('/api/suggested-trades/clear-terminal', {}) as {
+        success?: boolean;
+        removed?: number;
+        error?: string;
+      };
+      const removed = res?.removed ?? 0;
+      showToast(`Cleared ${removed} finished watch${removed === 1 ? '' : 'es'}`, 'info');
+      await refresh();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Clear failed', 'error');
+    } finally {
+      setClearing(false);
+    }
+  }, [refresh, showToast]);
+
   const copyWatchJson = useCallback(async (watch: SuggestedTradeWatch) => {
     try {
       await navigator.clipboard.writeText(JSON.stringify(watch, null, 2));
@@ -236,11 +331,6 @@ export default function SuggestedTradesPanel() {
       showToast('Copy failed', 'error');
     }
   }, [showToast]);
-
-  const isScalpSource = (watch: SuggestedTradeWatch) => {
-    const src = String(watch.source || '').toLowerCase();
-    return src.includes('scalp');
-  };
 
   return (
     <Card className="h-full">
@@ -259,6 +349,12 @@ export default function SuggestedTradesPanel() {
               <Activity className={cn('mr-1.5 h-3.5 w-3.5', evaluating && 'animate-pulse')} />
               Evaluate Now
             </Button>
+            {terminalCount > 0 && (
+              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => void clearFinished()} disabled={clearing}>
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                Clear finished ({terminalCount})
+              </Button>
+            )}
           </div>
         </div>
 
@@ -305,23 +401,30 @@ export default function SuggestedTradesPanel() {
           </div>
         )}
 
-        {watches.map((watch) => {
-          const status = String(watch.status || '').toUpperCase();
-          const ready = status === 'READY_FOR_REVIEW' || status === 'LEVEL_REACHED';
-          const cancelled = status === 'CANCELLED' || status === 'EXPIRED' || status === 'INVALIDATED';
+        {visibleWatches.map((watch) => {
+          const status = watchStatus(watch);
+          const ready = isReadyStatus(status);
+          const terminal = isTerminalStatus(status);
+          const playbookWarnings = watchPlaybookWarnings(watch);
           return (
             <div
               key={watch.watch_id || `${watch.symbol}-${watch.created_at}`}
               className={cn(
                 'rounded-md border border-border/60 bg-card/50 p-3 space-y-3',
-                ready && 'border-long/30 bg-long/5',
+                ready && 'border-long/40 bg-long/5',
               )}
             >
+              {ready && (
+                <div className="rounded border border-long/40 bg-long/10 px-2 py-1.5 text-[11px] font-medium text-long">
+                  Ready — review & execute on chart
+                </div>
+              )}
+
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium text-sm">{watch.display || watch.symbol}</span>
-                    <Badge variant="outline" className="text-[10px]">{status || 'UNKNOWN'}</Badge>
+                    <Badge variant="outline" className={cn('text-[10px]', ready && 'border-long/50 text-long')}>{status || 'UNKNOWN'}</Badge>
                     <Badge variant="outline" className="text-[10px]">{sourceLabel(watch.source)}</Badge>
                   </div>
                   <div className="mt-1 text-[11px] text-muted-foreground">{watchProgressText(watch)}</div>
@@ -343,18 +446,35 @@ export default function SuggestedTradesPanel() {
                 <div>Last checked: {formatTs(watchLastCheckedAt(watch))}</div>
               </div>
 
+              {playbookWarnings.length > 0 && (
+                <div className="rounded border border-warning/30 bg-warning/5 px-2 py-1.5" data-playbook-warnings>
+                  <p className="text-[10px] font-medium text-warning">Playbook warnings</p>
+                  <ul className="list-disc pl-4 text-[10px] text-warning/90">
+                    {playbookWarnings.map((warning, i) => (
+                      <li key={i}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <div className="flex flex-wrap gap-2">
+                {ready && (
+                  <Button size="sm" className="h-7 text-[10px]" onClick={() => reviewReadyWatch(watch)}>
+                    <PlayCircle className="mr-1 h-3 w-3" />
+                    Review & Execute →
+                  </Button>
+                )}
                 <Button size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => openInTvChart(watch)}>
                   <ExternalLink className="mr-1 h-3 w-3" />
                   Open in TV Chart
                 </Button>
-                {isScalpSource(watch) && (
+                {isScalpSourceWatch(watch) && (
                   <Button size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => openInScalpWorkbench(watch)}>
                     <BarChart2 className="mr-1 h-3 w-3" />
                     Open in Scalp Workbench
                   </Button>
                 )}
-                {!cancelled && (
+                {!terminal && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -374,7 +494,22 @@ export default function SuggestedTradesPanel() {
             </div>
           );
         })}
+
+        {terminalCount > 0 && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="w-full text-[11px] text-muted-foreground"
+            onClick={() => setShowFinished((prev) => !prev)}
+          >
+            {showFinished ? 'Hide finished watches' : `Show finished watches (${terminalCount})`}
+          </Button>
+        )}
       </CardContent>
     </Card>
   );
+}
+
+function isScalpSourceWatch(watch: SuggestedTradeWatch): boolean {
+  return String(watch.source || '').toLowerCase().includes('scalp');
 }

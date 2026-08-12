@@ -3,6 +3,13 @@ import type { SuggestedTradeRunnerStatus } from '@/types/athena';
 
 interface SuggestedTradeStatusResponse {
   ok?: boolean;
+  counts?: {
+    active?: number;
+    ready?: number;
+    expired?: number;
+    cancelled?: number;
+    invalidated?: number;
+  };
   runner?: SuggestedTradeRunnerStatus;
   alert_only?: boolean;
 }
@@ -17,6 +24,7 @@ export function useSuggestedTradeRunnerStatus(enabled = true) {
   );
   return {
     runner: data?.runner,
+    readyCount: data?.counts?.ready ?? 0,
     loading,
     error,
     refresh,
