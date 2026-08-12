@@ -85,14 +85,24 @@ candidate-age advisory was never matched.
 Replaced with `evaluate_review_freshness()` in `ai_review/timestamp_contract.py`,
 returning a structured decision consumed by the route.
 
-**Policy decision — stale levels may NOT join fresh factors.** The review rebuilds
-factors live but copies entry/SL/TP from the origin candidate, so a stale
-candidate presents as fresh. That combination is the trigger-zone drift this pack
-exists to stop, and Athena's contract requires entry/SL provenance to travel
-together and ambiguous safety data to reject. Candidate age over
-`MISMATCH_WARN_MAX_SECONDS` is therefore **blocking**, pre-dispatch, under
-`ENFORCE_CANDIDATE_AGE_PRE_PROVIDER` (default true, config-reversible).
-`levels_provenance` is emitted on every review naming both clocks.
+**Policy decision — corrected 2026-08-12 after a live `stale_candidate_levels`
+rejection on AUD/NZD.** Candidate age is **advisory, not blocking**
+(`ENFORCE_CANDIDATE_AGE_PRE_PROVIDER` defaults false; set it true for the
+stricter behaviour).
+
+The original decision rested on a wrong premise — that entry/SL/TP are all copied
+from the origin candidate. They are not. `ai_review/engine_a_context.py` takes
+`price`, `stop_loss` and `take_profit` from the live re-analysis (`signal`);
+only `candidate_entry` comes from `origin`, and it is labelled as such alongside
+`price_displacement_from_candidate_entry`. Blocking on age therefore rejected
+reviews whose levels were current, which is the ordinary workflow: a candidate
+opened from a scan card is routinely older than the window.
+
+The genuine risk from an old candidate is entry/trigger-zone drift, and that is
+measured directly rather than inferred from a clock — `zone_status`
+(ABOVE_ZONE/BELOW_ZONE clears `execution_permitted`), `rr_live` recomputed at
+live price, and the displacement field. Those remain blocking.
+`levels_provenance` is still emitted on every review naming both clocks.
 
 Missing `captured_at` now also blocks rather than warning — an unprovable capture
 age cannot be treated as fresh.

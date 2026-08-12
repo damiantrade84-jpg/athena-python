@@ -31,8 +31,14 @@ def _now() -> datetime:
 # --- F1 ---------------------------------------------------------------------
 
 
-def test_scan1_replay_blocks_on_stale_candidate_despite_fresh_capture():
-    """Audit scan 1: capture ~9s old, candidate 1429s old -> must NOT dispatch."""
+def test_scan1_replay_reports_candidate_age_without_blocking():
+    """Audit scan 1: capture ~9s old, candidate 1429s old.
+
+    Candidate age is advisory. Only ``candidate_entry`` comes from the origin
+    candidate; price/SL/TP are rebuilt live, so an old candidate is not by
+    itself stale levels. Blocking on age rejected ordinary reviews opened from
+    a scan card. Entry drift is caught by zone_status / rr_live instead.
+    """
     now = _now()
     result = evaluate_review_freshness(
         {
@@ -42,13 +48,14 @@ def test_scan1_replay_blocks_on_stale_candidate_despite_fresh_capture():
         {"captured_at": _iso(now - timedelta(seconds=9))},
         CFG,
     )
-    assert result["ok"] is False
-    reasons = [b["reason"] for b in result["blocking"]]
-    assert "stale_candidate_levels" in reasons
-    # The capture itself was genuinely fresh — that is the whole trap.
-    assert result["captureSkewSeconds"] == pytest.approx(9, abs=1)
-    assert "capture_skew_exceeded" not in reasons
+    assert result["ok"] is True
+    assert result["blocking"] == []
+    # Still measured and surfaced, just not a rejection.
     assert result["candidateAgeSeconds"] == pytest.approx(1429, abs=1)
+    assert any("candidate scan_timestamp" in w for w in result["warnings"])
+    assert result["levelsProvenance"]["sharedClock"] is False
+    # The capture itself was genuinely fresh.
+    assert result["captureSkewSeconds"] == pytest.approx(9, abs=1)
 
 
 def test_levels_provenance_names_the_two_clocks():
@@ -108,20 +115,20 @@ def test_missing_capture_timestamp_blocks_rather_than_warns():
     assert "capture_timestamp_missing" in [b["reason"] for b in result["blocking"]]
 
 
-def test_candidate_age_enforcement_is_config_reversible():
+def test_candidate_age_blocking_is_opt_in_via_config():
+    """Off by default; available for anyone who wants the stricter behaviour."""
     now = _now()
     ctx = {
         "review_timestamp": _iso(now),
         "scan_timestamp": _iso(now - timedelta(seconds=1429)),
     }
     meta = {"captured_at": _iso(now - timedelta(seconds=9))}
-    off = evaluate_review_freshness(
-        ctx, meta, {**CFG, "ENFORCE_CANDIDATE_AGE_PRE_PROVIDER": False}
+    assert evaluate_review_freshness(ctx, meta, CFG)["ok"] is True
+    on = evaluate_review_freshness(
+        ctx, meta, {**CFG, "ENFORCE_CANDIDATE_AGE_PRE_PROVIDER": True}
     )
-    assert off["ok"] is True
-    # Still reported, just not blocking.
-    assert any("candidate scan_timestamp" in w for w in off["warnings"])
-    assert off["candidateAgeSeconds"] == pytest.approx(1429, abs=1)
+    assert on["ok"] is False
+    assert "stale_candidate_levels" in [b["reason"] for b in on["blocking"]]
 
 
 def test_comparison_basis_is_reported():

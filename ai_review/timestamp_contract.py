@@ -125,19 +125,31 @@ def evaluate_review_freshness(
                 "seconds": None,
             }
         )
+    # Candidate age is advisory, not blocking. Only ``candidate_entry`` comes
+    # from the origin candidate; ``stop_loss`` / ``take_profit`` / ``price`` are
+    # taken from the live re-analysis (engine_a_context assembles them from
+    # ``signal``, not ``origin``), so an old candidate does not by itself mean
+    # stale levels. Blocking on age alone rejected the normal workflow — a
+    # candidate opened from a scan card minutes later is routinely older than
+    # the window while its levels are current.
+    #
+    # The real risk from an old candidate is entry/trigger-zone drift, and that
+    # is measured directly rather than inferred from a clock:
+    # ``price_displacement_from_candidate_entry``, ``zone_status``
+    # (ABOVE_ZONE/BELOW_ZONE clears execution_permitted) and ``rr_live``
+    # recomputed at live price. Those remain blocking.
     if (
         candidate_age is not None
         and candidate_age > max_delta
-        and bool(cfg.get("ENFORCE_CANDIDATE_AGE_PRE_PROVIDER", True))
+        and bool(cfg.get("ENFORCE_CANDIDATE_AGE_PRE_PROVIDER", False))
     ):
         blocking.append(
             {
                 "reason": "stale_candidate_levels",
                 "detail": (
                     f"candidate scan_timestamp is {int(candidate_age)}s old at review "
-                    f"(max {int(max_delta)}s); entry/SL/TP are copied from that "
-                    f"candidate while factors were rebuilt live, so the levels are "
-                    f"stale even though the context looks fresh"
+                    f"(max {int(max_delta)}s); candidate_entry is from that candidate "
+                    f"while price/SL/TP were rebuilt live"
                 ),
                 "seconds": candidate_age,
             }
