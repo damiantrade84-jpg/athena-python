@@ -194,3 +194,52 @@ playbooks:
       Prefer this classification over any directional model when price is
       chopping around POC with no displacement, even if Engine A score is
       above threshold.
+
+  - id: BASE_BREAKOUT_CONTINUATION
+    enabled: true
+    engines: [A, B]
+    asset_groups: ["*"]
+    description: >
+      Confirmed breakout from a quality consolidation base in an established
+      trend — the core setup of proven breakout traders (Minervini VCP,
+      O'Neil cup-and-handle, Darvas box, Qullamaggie continuation breakout).
+      Direction is WITH the break. Quality requires contraction: successive
+      pullbacks getting shallower with volume drying up into the final
+      contraction, then a confirmed body close beyond the level with volume
+      expansion on real-volume assets. Retest/acceptance entries after the
+      break are the preferred timing variant.
+    required_context:
+      - established_trend_or_prior_momentum_leg_in_break_direction
+      - identifiable_base_or_consolidation_with_contraction
+      - confirmed_body_close_beyond_base_level (not a wick probe)
+      - no_close_back_inside_prior_range_after_break
+    confirmation:
+      - volume_expansion_on_breakout (real-volume assets only, ~1.4-1.5x average or more)
+      - volume_dry_up_during_final_contraction
+      - retest_of_broken_level_holds (acceptance) or follow-through closes in break direction
+      - momentum_aligned (rsi/macd supporting break direction)
+    invalid_if:
+      - close_back_inside_prior_range_within_1_2_bars (failed breakout — see FAILED_BREAKOUT_REVERSAL)
+      - breakout_from_wide_loose_or_erratic_base (distribution, not contraction)
+      - entry_extended_multiple_atr_beyond_pivot_with_no_retest_and_degraded_rr (chasing)
+      - breakout_against_server_resolved_trend_roles
+    invalidation_logic: >
+      Reference invalidation is a confirmed close back inside the base below
+      the broken level, or below the low of the final contraction. For Engine
+      A or B, the server-emitted deterministic SL is authoritative; assess it
+      against this structural rationale, but never replace or move it.
+    target_logic: >
+      Reference targets are the measured move (base depth projected from the
+      breakout point) and the next visible opposing structure. For Engine A
+      or B, server-emitted deterministic TP1/TP2 are authoritative; never
+      replace or recompute them from this reference.
+    ai_review_rule: >
+      A breakout is only tradeable continuation when the base shows real
+      contraction and the break is a confirmed body close (ideally with
+      volume expansion where volume is real). A wick through the level is a
+      probe, not a break; a close back inside within 1-2 bars is a failed
+      breakout — classify FAILED_BREAKOUT_REVERSAL or no_setup instead. Do
+      not approve chasing: if entry is measurably extended beyond the pivot
+      in ATR terms with no retest and degraded RR, classify as wait. For
+      forex/tick or mixed volume, never demand volume confirmation — judge
+      contraction by range only.

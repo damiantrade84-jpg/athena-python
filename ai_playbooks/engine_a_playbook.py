@@ -87,10 +87,35 @@ def get_engine_a_playbook() -> dict:
             "MEAN_REVERSION_AT_VALUE": "Ranging/balancing regime (low ADX) with RSI extreme at a value edge; counter-trend only with clear rejection.",
             "NO_TRADE": "Conflicted factors, missing required context, or hard invalidation.",
         },
+        "chartReadingProtocol": {
+            "purpose": "How to read the chart image itself (bases, breakouts, candles, volume) before judging Engine A direction and timing. Advisory chart craft distilled from proven breakout/swing traders (Minervini VCP, O'Neil cup-and-handle, Darvas box, Qullamaggie continuation, Wyckoff/price-action candles). Never overrides deterministic scores or gates.",
+            "baseQuality": [
+                "A tradable continuation base shows contraction: successive pullbacks get shallower and candles overlap less (volatility contraction). Wide, loose, erratic bases after an advance read as distribution, not a coiled spring.",
+                "Volume should dry up into the final contraction and expand on the breakout leg. Rising volume on down-legs inside the base is a warning. For forex/tick or mixed volume, do not score volume — use range contraction only.",
+                "Best continuation candidates sit near highs in an established uptrend (higher highs/higher lows above rising EMAs); breakouts from deep, extended, or basing-after-collapse structures are lower quality.",
+            ],
+            "breakoutValidity": [
+                "A breakout is valid only on a confirmed body close beyond the level — wicks/shadows through a level are probes, not breaks.",
+                "Valid breakouts show volume expansion (roughly 1.4-1.5x average or more on real-volume assets) and follow-through; a breakout that closes back inside the prior range within 1-2 bars is a FAILED breakout — downgrade and consider the opposite read.",
+                "Retest/acceptance entries (price breaks, pulls back to the broken level, holds, resumes) are preferred timing over chasing the impulse candle.",
+                "Measure extension in ATR units (atrDiagnostics.atr_tf): entry far beyond the pivot with no retest AND degraded RR is late — WAIT, not ENTRY_NOW.",
+            ],
+            "candleConfirmation": [
+                "At pullback/structure levels look for rejection candles: bullish/bearish engulfing, pin bar (hammer/shooting star) with wick >= 2x body, or an inside-bar break in the trade direction — followed by a close in the direction of the trade.",
+                "A single candle pattern in mid-range with no level, no trend context, and no follow-through is noise, not confirmation.",
+                "Confirmed bars only: the rightmost forming candle is not proof of a close, breakout, or rejection.",
+                "Exhaustion read: after a long directional run, climactic wide-range candles into a level with wick rejection argue for WAIT, not continuation entry.",
+            ],
+            "targetContext": [
+                "Classical measured-move context: pattern depth projected from the breakout point gives a sanity check on whether server TP1/TP2 are realistic relative to structure; never recompute or replace server levels.",
+                "Prefer entries where the opposing structure/zone leaves room to TP1 before the next major level.",
+            ],
+        },
         "invalidations": [
             "Identify what would invalidate the directional thesis.",
             "Check whether SL is structurally valid relative to ATR and structure.",
             "Reject when RR is unacceptable after confirmation requirements.",
+            "A confirmed close back inside the broken level against the trade direction invalidates a breakout/continuation read.",
         ],
         "mustRejectIf": [
             "Direction valid but entry is measurably extended (far from value/structure with no pullback AND RR degraded), exhausted, or chasing — not merely continuing after a confirmed BOS with acceptance.",

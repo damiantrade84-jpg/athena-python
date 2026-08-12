@@ -86,10 +86,32 @@ def get_engine_b_playbook() -> dict:
             "engineBContext.volumeProfileContext": "POC/VAH/VAL availability per asset class. When disabled, do not cite volume-profile levels for this asset.",
             "engineBContext.score / maxScore / threshold / passed / direction": "Engine B's deterministic result — advisory context only; never mutate or override it.",
         },
+        "chartReadingProtocol": {
+            "purpose": "How to read the chart image itself (sweeps, retests, rejection candles, acceptance) before judging Engine B structure/zone claims. Advisory chart craft distilled from Wyckoff spring/upthrust logic and price-action confirmation practice. Server-stamped engineBContext flags stay authoritative — visual reads confirm or question timing, never re-derive BOS/OB/FVG/BAG state or mutate gates.",
+            "sweepAndReclaim": [
+                "A real liquidity sweep (Wyckoff spring/upthrust) shows a wick or brief push through an OBVIOUS pool (equal highs/lows, prior swing, session extreme) then a close back inside the prior range with displacement. Wick through + close back inside + strong reversal candle = valid; drift through and holding beyond the pool = no sweep.",
+                "Volume or range expansion on the sweep candle with immediate rejection strengthens the read; for forex/tick or mixed volume rely on range/displacement, not volume.",
+                "Failed-sweep follow-through risk: if price reclaims the broken level in the original break direction after the sweep, the reversal thesis is invalid.",
+            ],
+            "zoneRetestConfirmation": [
+                "At the active zone (support for LONG, resistance for SHORT) a valid triggerTf trigger is a rejection candle: pin bar with wick >= 2x body into the zone, engulfing away from the zone, or an inside-bar break in the trade direction, followed by a close away from the zone.",
+                "Price merely touching or sitting inside the zone band without rejection is not entry evidence — that is locationOk only, still needs entryOk.",
+                "Confirmed bars only: the rightmost forming candle is not proof of rejection, close, or sweep.",
+            ],
+            "acceptanceVsChase": [
+                "After a BOS/displacement, acceptance means closes holding beyond the broken level on the trigger/structure TF — a single spike wick is not acceptance.",
+                "Entering the second or third extended displacement candle far from the zone with no retest is chasing; prefer the retest of the breaker/zone. Measure extension in ATR (atrTf) units.",
+                "Exhaustion read: climactic wide-range candles into the OPPOSING zone with wick rejection argue against fresh continuation entries.",
+            ],
+            "targetContext": [
+                "Sanity-check server TP1/TP2 against visible opposing structure: TP1 should be reachable before the next major opposing zone (tp1PathClear owns this deterministically). Never recompute or replace server levels.",
+            ],
+        },
         "invalidations": [
             "Identify exact invalidation level or zone.",
             "State what would prove the structure setup wrong.",
             "Verify stop is structurally valid and RR acceptable.",
+            "A confirmed close back through the swept/broken level in the original break direction invalidates the sweep/reclaim read.",
         ],
         "mustRejectIf": [
             "SHORT with locationOk=false while entry is through active support/demand (shorting into demand without rejection).",
