@@ -7,6 +7,8 @@ import os
 import time
 from typing import Any
 
+from ai_review.payload_schema import review_image_inputs
+
 from ai_review.provider_meta import ProviderChartReviewError, build_provider_meta
 from config import (
     CONFIG,
@@ -70,9 +72,10 @@ def build_openai_responses_payload(
 ) -> dict[str, Any]:
     cfg = CONFIG if cfg is None else cfg
     review_cfg = cfg.get(cfg_key) if isinstance(cfg.get(cfg_key), dict) else {}
-    data_url = str(payload.screenshot_base64 or "")
-    if not data_url.startswith("data:image/png;base64,"):
-        raise ValueError("non-PNG data URL reached provider")
+    review_images = review_image_inputs(payload)
+    for review_image in review_images:
+        if not review_image["data_url"].startswith("data:image/png;base64,"):
+            raise ValueError(f"non-PNG {review_image['role'].lower()} image reached provider")
     model = (
         str(review_cfg.get("OPENAI_MODEL") or "").strip()
         or get_ai_model(cfg, provider="openai")
@@ -94,7 +97,16 @@ def build_openai_responses_payload(
                 "role": "user",
                 "content": [
                     {"type": "input_text", "text": str(payload.prompt or "")},
-                    {"type": "input_image", "image_url": data_url},
+                    {
+                        "type": "input_text",
+                        "text": f"IMAGE 1 — STRUCTURE ({review_images[0]['timeframe']})",
+                    },
+                    {"type": "input_image", "image_url": review_images[0]["data_url"]},
+                    {
+                        "type": "input_text",
+                        "text": f"IMAGE 2 — ENTRY/TRIGGER ({review_images[1]['timeframe']})",
+                    },
+                    {"type": "input_image", "image_url": review_images[1]["data_url"]},
                 ],
             }
         ],
@@ -157,7 +169,7 @@ def call_openai_chart_review(
         latency_ms,
         timeout,
         max_retries,
-        len(str(payload.screenshot_base64 or "")),
+        sum(len(image["data_url"]) for image in review_image_inputs(payload)),
     )
     meta = build_provider_meta(
         provider="openai",

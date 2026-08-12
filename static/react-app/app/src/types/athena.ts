@@ -1977,9 +1977,13 @@ export interface ReviewInputMeta {
   signalEngine?: 'A' | 'B' | 'D' | 'unknown' | string;
   signalTimeframe?: string | null;
   chartTimeframe?: string | null;
+  structureChartTimeframe?: string | null;
+  entryChartTimeframe?: string | null;
   hasEngineASignal?: boolean;
   hasEngineBOverlay?: boolean;
   hasChartImage?: boolean;
+  hasStructureChartImage?: boolean;
+  hasEntryChartImage?: boolean;
   timeframeRouteApplied?: boolean;
 }
 
@@ -2002,6 +2006,8 @@ export interface AIChartReviewResponse {
   timestamps: {
     scan_timestamp?: string | null;
     chart_captured_at?: string | null;
+    structure_chart_captured_at?: string | null;
+    entry_chart_captured_at?: string | null;
     latest_candle_ts?: string | null;
   };
   mismatch_warnings: string[];
@@ -2074,6 +2080,7 @@ export interface AIChartReviewScreenshotMeta {
   primary_engine?: 'A' | 'B';
   signal_engine?: 'A' | 'B';
   renderedLayers?: Record<string, boolean>;
+  review_role?: 'structure' | 'entry';
 }
 
 export interface AIChartReviewChartSnapshot {
@@ -2135,10 +2142,15 @@ export interface AIChartReviewChartSnapshot {
 
 export interface AIChartReviewRequest {
   symbol: string;
+  /** Server-resolved structure timeframe represented by screenshot_base64. */
   timeframe: string;
   provider?: AIChartReviewProvider;
+  /** Structure/zone chart image. */
   screenshot_base64: string;
   screenshot_meta: AIChartReviewScreenshotMeta;
+  /** Trigger/entry chart image. */
+  entry_screenshot_base64: string;
+  entry_screenshot_meta: AIChartReviewScreenshotMeta;
 }
 
 export interface EngineBHotlistCandidate {

@@ -1987,9 +1987,13 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
     ema_periods = _resolve_ema_periods(score_group, asset_type)
     rsi_period = _resolve_rsi_period(score_group, asset_type)
     components = fd.get("components") if isinstance(fd.get("components"), dict) else {}
+    timeframe_policy = engine_a_ctx.get("timeframe_policy") or {}
+    if not isinstance(timeframe_policy, dict):
+        timeframe_policy = {}
     entry_timeframe = _first_present(
         fd.get("entryTimeframe"),
         fd.get("entry_timeframe"),
+        timeframe_policy.get("triggerTf"),
         engine_a_ctx.get("execution_timeframe"),
     )
     risk_geometry = _resolved_risk_geometry(
@@ -2010,10 +2014,28 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "normalizedScore": ea.get("normalizedScore"),
         "passed": ea.get("passed") if ea.get("passed") is not None else engine_a_ctx.get("passed"),
         "activeFactors": ea.get("activeFactors"),
+        "timeframePolicy": {
+            key: timeframe_policy.get(key)
+            for key in (
+                "timeframePolicyVersion",
+                "timeframePolicyHash",
+                "policyKey",
+                "regimeTf",
+                "biasTf",
+                "structureTf",
+                "setupTf",
+                "triggerTf",
+                "executionTf",
+                "executionMode",
+                "m5Role",
+                "m5Policy",
+            )
+        },
         "entryTimeframe": entry_timeframe,
         "entryTfOverride": fd.get("entryTfOverride"),
         "entryUsesActiveCandle": fd.get("entryUsesActiveCandle"),
         "activeEntryGate": fd.get("activeEntryGate"),
+        "triggerConfirmation": fd.get("triggerConfirmation"),
         "componentScores": components,
         "riskGeometry": risk_geometry,
         "conviction": _to_float(fd.get("conviction") or fd.get("combinedConviction")),

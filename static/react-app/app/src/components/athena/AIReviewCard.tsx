@@ -316,7 +316,14 @@ function AIReviewCardImpl({ response }: AIReviewCardProps) {
           </div>
 
           <div className="space-y-0.5">
-            <KeyValue label="Chart captured" value={showReviewValue(ts.chart_captured_at)} />
+            <KeyValue
+              label={`Structure chart (${response.reviewInputMeta?.structureChartTimeframe || 'n/a'})`}
+              value={showReviewValue(ts.structure_chart_captured_at || ts.chart_captured_at)}
+            />
+            <KeyValue
+              label={`Entry chart (${response.reviewInputMeta?.entryChartTimeframe || 'n/a'})`}
+              value={showReviewValue(ts.entry_chart_captured_at)}
+            />
             <KeyValue
               label="Scan timestamp"
               value={showReviewValue(ts.scan_timestamp)}

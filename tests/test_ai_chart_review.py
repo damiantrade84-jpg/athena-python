@@ -77,6 +77,17 @@ def _base_request(**overrides):
             # 7s after the scan, matching the original fixture offset.
             "captured_at": _fresh_iso(7),
             "chart_timeframe": "H4",
+            "review_role": "structure",
+            "overlays": ["candles"],
+        },
+        "entry_screenshot_base64": _png_data_url(),
+        "entry_screenshot_meta": {
+            "width": 1280,
+            "height": 720,
+            "native_chart": True,
+            "captured_at": _fresh_iso(8),
+            "chart_timeframe": "M15",
+            "review_role": "entry",
             "overlays": ["candles"],
         },
     }
@@ -316,6 +327,26 @@ def test_route_rejects_missing_screenshot(tmp_audit_db):
         mock_call.assert_not_called()
 
 
+def test_route_rejects_missing_entry_screenshot(tmp_audit_db):
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body = _base_request()
+    del body["entry_screenshot_base64"]
+    resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "entry_screenshot_base64 is required"
+
+
+def test_route_rejects_swapped_review_image_roles(tmp_audit_db):
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body = _base_request()
+    body["entry_screenshot_meta"]["review_role"] = "structure"
+    resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "entry_screenshot_meta.review_role must be entry"
+
+
 def test_server_candidate_lookup_keeps_a_primary_with_nested_b_context():
     row = {
         "signalId": "a-17",
@@ -389,6 +420,21 @@ def test_route_rejects_non_png_data_url(tmp_audit_db):
     assert resp.status_code == 415
 
 
+def test_route_rejects_entry_image_that_does_not_match_policy_trigger(tmp_audit_db):
+    app = _make_app(tmp_audit_db)
+    client = app.test_client()
+    body = _base_request()
+    body["entry_screenshot_meta"]["chart_timeframe"] = "H4"
+    with patch("ai_review.providers.anthropic_provider.call_anthropic_chart_review") as mock_call:
+        resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 409
+    assert resp.get_json()["error"] == "review_image_timeframe_mismatch"
+    assert resp.get_json()["mismatches"] == [
+        {"role": "entry", "expected": "M15", "actual": "H4"}
+    ]
+    mock_call.assert_not_called()
+
+
 def test_route_rejects_openai_when_disabled(tmp_audit_db):
     app = _make_app(tmp_audit_db, openai_enabled=False)
     client = app.test_client()
@@ -400,6 +446,9 @@ def test_route_rejects_openai_when_disabled(tmp_audit_db):
 def test_anthropic_strips_data_url_prefix():
     payload = MagicMock()
     payload.screenshot_base64 = _png_data_url()
+    payload.entry_screenshot_base64 = "data:image/png;base64,QUFBQQ=="
+    payload.screenshot_meta = {"chart_timeframe": "H4"}
+    payload.entry_screenshot_meta = {"chart_timeframe": "M15"}
     payload.prompt = "review"
 
     mock_client = MagicMock()
@@ -417,16 +466,23 @@ def test_anthropic_strips_data_url_prefix():
             call_anthropic_chart_review(payload)
 
     content = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
-    image_data = content[0]["source"]["data"]
+    image_data = content[1]["source"]["data"]
     assert not str(image_data).startswith("data:")
-    assert content[0]["source"]["media_type"] == "image/png"
-    assert content[0]["type"] == "image"
-    assert content[1]["type"] == "text"
+    assert content[1]["source"]["media_type"] == "image/png"
+    assert content[1]["type"] == "image"
+    assert content[3]["type"] == "image"
+    assert content[3]["source"]["data"] == "QUFBQQ=="
+    assert content[0]["text"].startswith("IMAGE 1 — STRUCTURE")
+    assert content[2]["text"].startswith("IMAGE 2 — ENTRY/TRIGGER")
+    assert content[4]["type"] == "text"
 
 
 def test_anthropic_uses_max_tokens_from_config():
     payload = MagicMock()
     payload.screenshot_base64 = _png_data_url()
+    payload.entry_screenshot_base64 = "data:image/png;base64,QUFBQQ=="
+    payload.screenshot_meta = {"chart_timeframe": "H4"}
+    payload.entry_screenshot_meta = {"chart_timeframe": "M15"}
     payload.prompt = "review"
     mock_client = MagicMock()
     mock_resp = MagicMock()
@@ -452,6 +508,44 @@ def test_prompt_includes_engine_a_score():
 def test_prompt_includes_chart_review_timeframe():
     prompt = build_chart_review_prompt(_engine_a_ctx(timeframe="M30"))
     assert "BTCUSDT M30 asset_group: crypto" in prompt
+
+
+def test_engine_a_prompt_labels_structure_and_entry_images():
+    ctx = _engine_a_ctx(
+        review_images={
+            "structure": {"timeframe": "H4", "capturedAt": _fresh_iso(7)},
+            "entry": {"timeframe": "M15", "capturedAt": _fresh_iso(8)},
+        }
+    )
+    prompt = build_chart_review_prompt(ctx)
+    assert "IMAGE 1 role=STRUCTURE timeframe=H4" in prompt
+    assert "IMAGE 2 role=ENTRY_TRIGGER timeframe=M15" in prompt
+    assert "absence is not contradiction" in prompt
+
+
+def test_engine_b_prompt_requires_concrete_entry_image_contradiction():
+    ctx = _engine_a_ctx(
+        primary_engine="B",
+        structure_context={
+            "structural_verdict": "CLEAR",
+            "structure_timeframe": "H4",
+            "zone_tf": "H4",
+            "entry_tf": "M30",
+            "atr_tf": "H4",
+        },
+        engine_b_confidence={
+            "trigger_timeframe_expected": "M30",
+            "trigger_timeframe_actual": "M30",
+            "trigger_timeframe_gate_ok": True,
+        },
+        review_images={
+            "structure": {"timeframe": "H4", "capturedAt": _fresh_iso(7)},
+            "entry": {"timeframe": "M30", "capturedAt": _fresh_iso(8)},
+        },
+    )
+    prompt = build_chart_review_prompt(ctx)
+    assert "IMAGE 2 role=ENTRY_TRIGGER timeframe=M30" in prompt
+    assert "A downgrade must cite concrete contradictory price action visible on IMAGE 2" in prompt
 
 
 def test_default_resolve_pair_accepts_slashless_forex_alias(monkeypatch):
@@ -977,6 +1071,9 @@ def test_xai_provider_posts_png_data_url_as_image_url(monkeypatch):
 
     payload = MagicMock()
     payload.screenshot_base64 = _png_data_url()
+    payload.entry_screenshot_base64 = "data:image/png;base64,QUFBQQ=="
+    payload.screenshot_meta = {"chart_timeframe": "H4"}
+    payload.entry_screenshot_meta = {"chart_timeframe": "M15"}
     payload.prompt = "review this chart"
     monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
 
@@ -997,7 +1094,10 @@ def test_xai_provider_posts_png_data_url_as_image_url(monkeypatch):
     kwargs = mock_client.chat.completions.create.call_args.kwargs
     content = kwargs["messages"][0]["content"]
     assert content[0] == {"type": "text", "text": "review this chart"}
-    assert content[1] == {"type": "image_url", "image_url": {"url": payload.screenshot_base64}}
+    assert content[1]["text"].startswith("IMAGE 1 — STRUCTURE")
+    assert content[2] == {"type": "image_url", "image_url": {"url": payload.screenshot_base64}}
+    assert content[3]["text"].startswith("IMAGE 2 — ENTRY/TRIGGER")
+    assert content[4] == {"type": "image_url", "image_url": {"url": payload.entry_screenshot_base64}}
     assert kwargs["model"] == get_ai_model(
         CONFIG,
         preferred_key="AI_CHART_REVIEW_XAI_MODEL",
@@ -1016,6 +1116,9 @@ def test_xai_provider_extracts_list_block_content(monkeypatch):
 
     payload = MagicMock()
     payload.screenshot_base64 = _png_data_url()
+    payload.entry_screenshot_base64 = "data:image/png;base64,QUFBQQ=="
+    payload.screenshot_meta = {"chart_timeframe": "H4"}
+    payload.entry_screenshot_meta = {"chart_timeframe": "M15"}
     payload.prompt = "review this chart"
     monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
 
@@ -1044,6 +1147,9 @@ def test_xai_provider_empty_content_raises(monkeypatch):
 
     payload = MagicMock()
     payload.screenshot_base64 = _png_data_url()
+    payload.entry_screenshot_base64 = _png_data_url()
+    payload.screenshot_meta = {"chart_timeframe": "H4"}
+    payload.entry_screenshot_meta = {"chart_timeframe": "M15"}
     payload.prompt = "review this chart"
     monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
 
@@ -1071,6 +1177,9 @@ def test_xai_provider_fenced_json_parses_through_normalizer(monkeypatch):
 
     payload = MagicMock()
     payload.screenshot_base64 = _png_data_url()
+    payload.entry_screenshot_base64 = _png_data_url()
+    payload.screenshot_meta = {"chart_timeframe": "H4"}
+    payload.entry_screenshot_meta = {"chart_timeframe": "M15"}
     payload.prompt = "review this chart"
     monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
 
@@ -1103,6 +1212,9 @@ def test_xai_provider_json_mode_is_config_gated(monkeypatch):
 
     payload = MagicMock()
     payload.screenshot_base64 = _png_data_url()
+    payload.entry_screenshot_base64 = _png_data_url()
+    payload.screenshot_meta = {"chart_timeframe": "H4"}
+    payload.entry_screenshot_meta = {"chart_timeframe": "M15"}
     payload.prompt = "review this chart"
     monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
 
@@ -1147,6 +1259,9 @@ def test_openai_provider_builds_responses_payload_with_reasoning_and_image():
 
     payload = MagicMock()
     payload.screenshot_base64 = _png_data_url()
+    payload.entry_screenshot_base64 = "data:image/png;base64,QUFBQQ=="
+    payload.screenshot_meta = {"chart_timeframe": "H4"}
+    payload.entry_screenshot_meta = {"chart_timeframe": "M15"}
     payload.prompt = "review this chart"
     cfg = {
         "OPENAI_REVIEW_MODEL": "gpt-5.5",
@@ -1161,7 +1276,10 @@ def test_openai_provider_builds_responses_payload_with_reasoning_and_image():
     assert out["max_output_tokens"] == 12000
     content = out["input"][0]["content"]
     assert content[0] == {"type": "input_text", "text": "review this chart"}
-    assert content[1] == {"type": "input_image", "image_url": payload.screenshot_base64}
+    assert content[1]["text"].startswith("IMAGE 1 — STRUCTURE")
+    assert content[2] == {"type": "input_image", "image_url": payload.screenshot_base64}
+    assert content[3]["text"].startswith("IMAGE 2 — ENTRY/TRIGGER")
+    assert content[4] == {"type": "input_image", "image_url": payload.entry_screenshot_base64}
 
 
 def test_openai_provider_disables_sdk_retries_for_chart_review(monkeypatch):
@@ -1169,6 +1287,9 @@ def test_openai_provider_disables_sdk_retries_for_chart_review(monkeypatch):
 
     payload = MagicMock()
     payload.screenshot_base64 = _png_data_url()
+    payload.entry_screenshot_base64 = _png_data_url()
+    payload.screenshot_meta = {"chart_timeframe": "H4"}
+    payload.entry_screenshot_meta = {"chart_timeframe": "M15"}
     payload.prompt = "review this chart"
     calls = {}
 
@@ -1300,9 +1421,13 @@ def test_summary_always_present_on_success(tmp_audit_db):
         "signalEngine": "A",
         "signalTimeframe": "H4",
         "chartTimeframe": "H4",
+        "structureChartTimeframe": "H4",
+        "entryChartTimeframe": "M15",
         "hasEngineASignal": True,
         "hasEngineBOverlay": True,
         "hasChartImage": True,
+        "hasStructureChartImage": True,
+        "hasEntryChartImage": True,
         "timeframeRouteApplied": bool(data["timeframeRoute"].get("enabled")),
     }
 
@@ -1883,6 +2008,32 @@ def test_concordance_engine_b_divergence_note_records_entry_timing_evidence():
     assert out["divergence_note"] == "AI reported chart contradicts entry timing"
 
 
+def test_summary_uses_engine_b_alignment_field_for_engine_b_review():
+    from ai_review.summary import _score_engine_alignment
+
+    score = _score_engine_alignment(
+        {"primary_engine": "B", "passed": True, "direction": "SHORT"},
+        {"concordance": "partial"},
+        {"engine_b_alignment": "aligned and supports Engine B direction"},
+    )
+    assert score == 78
+
+
+def test_entry_quality_poor_to_fair_is_not_scored_as_default_good_entry():
+    from ai_review.review_geometry import score_entry_quality
+
+    score = score_entry_quality(
+        engine_a_ctx={
+            "primary_engine": "B",
+            "geometry": {"current_price": 315.365, "candidate_entry": 315.367},
+            "risk_geometry": {"rr_live_tp1": 1.72},
+            "atr": {"atr_value": 1.1},
+        },
+        ai_review={"entry_quality": "poor_to_fair"},
+    )
+    assert score <= 45
+
+
 def test_engine_a_snapshot_passed_basis_passthrough():
     ctx = _engine_a_ctx()
     ctx["passed_basis"] = "engine_a_v3_decision"
@@ -2113,11 +2264,24 @@ def test_build_engine_a_prompt_context_includes_factor_scores():
 
 def test_build_engine_a_prompt_context_reads_live_v3_ortho_and_entry_contributions():
     ctx = _engine_a_ctx(asset_group="forex_majors", asset_class="forex")
+    ctx["timeframe_policy"] = {
+        "timeframePolicyVersion": "timeframe_policy.v4",
+        "structureTf": "H4",
+        "setupTf": "H1",
+        "triggerTf": "M30",
+        "executionTf": "M30",
+        "executionMode": "live_quote",
+    }
     ctx["factor_diagnostics"] = {
         "entryTimeframe": "M30",
         "entryTfOverride": "M30",
         "entryUsesActiveCandle": True,
         "activeEntryGate": {"required": True, "passed": True, "timeframe": "M30"},
+        "triggerConfirmation": {
+            "passed": True,
+            "timeframe": "M30",
+            "reason": "trigger_direction_aligned",
+        },
         "factorScores": {
             "trend": 0.82,
             "momentum": 0.61,
@@ -2139,6 +2303,9 @@ def test_build_engine_a_prompt_context_reads_live_v3_ortho_and_entry_contributio
 
     assert prompt_ctx["entryTimeframe"] == "M30"
     assert prompt_ctx["entryUsesActiveCandle"] is True
+    assert prompt_ctx["timeframePolicy"]["structureTf"] == "H4"
+    assert prompt_ctx["timeframePolicy"]["triggerTf"] == "M30"
+    assert prompt_ctx["triggerConfirmation"]["passed"] is True
     assert prompt_ctx["diagnostics"]["locationScore"] == pytest.approx(0.44)
     assert prompt_ctx["diagnostics"]["volumeScore"] == pytest.approx(0.22)
     assert prompt_ctx["componentScores"]["location"]["contribution"] == pytest.approx(0.11)
@@ -2797,6 +2964,12 @@ def test_route_primary_engine_b_returns_engine_b_context(tmp_audit_db):
     assert data["engine_b_context"]["primary_engine"] == "B"
     assert data.get("concordance", {}).get("engine") == "B"
     assert data["reviewInputMeta"]["signalEngine"] == "B"
+    assert data["reviewInputMeta"]["structureChartTimeframe"] == "H4"
+    assert data["reviewInputMeta"]["entryChartTimeframe"] == "M15"
+    assert data["reviewInputMeta"]["hasStructureChartImage"] is True
+    assert data["reviewInputMeta"]["hasEntryChartImage"] is True
+    assert data["timestamps"]["structure_chart_captured_at"] == body["screenshot_meta"]["captured_at"]
+    assert data["timestamps"]["entry_chart_captured_at"] == body["entry_screenshot_meta"]["captured_at"]
 
 
 def test_route_primary_engine_b_fail_closed_without_direction(tmp_audit_db):

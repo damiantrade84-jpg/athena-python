@@ -7,6 +7,8 @@ import os
 import time
 from typing import Any
 
+from ai_review.payload_schema import review_image_inputs
+
 from ai_review.provider_meta import (
     ProviderChartReviewError,
     build_provider_meta,
@@ -31,10 +33,10 @@ def call_anthropic_chart_review(payload: Any) -> dict[str, Any]:
     model = cfg["ANTHROPIC_MODEL"]
     max_tokens = int(cfg.get("MAX_TOKENS", 1500))
 
-    data_url = payload.screenshot_base64
-    if not data_url.startswith("data:image/png;base64,"):
-        raise ValueError("non-PNG data URL reached provider")
-    raw_b64 = data_url.split(",", 1)[1]
+    review_images = review_image_inputs(payload)
+    for review_image in review_images:
+        if not review_image["data_url"].startswith("data:image/png;base64,"):
+            raise ValueError(f"non-PNG {review_image['role'].lower()} image reached provider")
 
     import anthropic
 
@@ -49,11 +51,27 @@ def call_anthropic_chart_review(payload: Any) -> dict[str, Any]:
                     "role": "user",
                     "content": [
                         {
+                            "type": "text",
+                            "text": f"IMAGE 1 — STRUCTURE ({review_images[0]['timeframe']})",
+                        },
+                        {
                             "type": "image",
                             "source": {
                                 "type": "base64",
                                 "media_type": "image/png",
-                                "data": raw_b64,
+                                "data": review_images[0]["data_url"].split(",", 1)[1],
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": f"IMAGE 2 — ENTRY/TRIGGER ({review_images[1]['timeframe']})",
+                        },
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": review_images[1]["data_url"].split(",", 1)[1],
                             },
                         },
                         {"type": "text", "text": payload.prompt},
@@ -72,7 +90,7 @@ def call_anthropic_chart_review(payload: Any) -> dict[str, Any]:
         "[AI_CHART_REVIEW] anthropic model=%s latency_ms=%s b64_len=%s",
         resp.model,
         latency_ms,
-        len(raw_b64),
+        sum(len(image["data_url"].split(",", 1)[1]) for image in review_images),
     )
     meta = build_provider_meta(
         provider="claude",

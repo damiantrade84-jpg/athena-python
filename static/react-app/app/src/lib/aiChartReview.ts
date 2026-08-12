@@ -3,12 +3,13 @@
 // Responsibilities:
 //   1. Downscale a canvas to <= 1280x720 preserving aspect ratio.
 //   2. Encode a canvas to a "data:image/png;base64,..." URL.
-//   3. POST { symbol, timeframe, provider, screenshot_base64, screenshot_meta }
-//      to /api/ai/chart-review.
+//   3. POST one structure image and one entry/trigger image to
+//      /api/ai/chart-review.
 //
 // SECURITY CONTRACT (spec test F1):
-//   The request body sent by this helper contains exactly five keys —
-//   symbol, timeframe, provider, screenshot_base64, screenshot_meta.
+//   The request body sent by this helper contains exactly seven keys —
+//   symbol, timeframe, provider, screenshot_base64, screenshot_meta,
+//   entry_screenshot_base64, entry_screenshot_meta.
 //   No server-trusted scoring field of any kind may appear in the request.
 //   The backend re-runs Engine A from server state and never trusts the
 //   browser for diagnostics. See spec section 5.2 and routes_ai_chart_review.
@@ -112,6 +113,7 @@ export function buildScreenshotMeta(args: {
   primary_engine?: 'A' | 'B';
   signal_engine?: 'A' | 'B';
   renderedLayers?: Record<string, boolean>;
+  review_role?: 'structure' | 'entry';
 }): AIChartReviewScreenshotMeta {
   const provider = args.chart_provider;
   return {
@@ -137,6 +139,7 @@ export function buildScreenshotMeta(args: {
     ...(args.primary_engine ? { primary_engine: args.primary_engine } : {}),
     ...(args.signal_engine ? { signal_engine: args.signal_engine } : {}),
     ...(args.renderedLayers ? { renderedLayers: { ...args.renderedLayers } } : {}),
+    ...(args.review_role ? { review_role: args.review_role } : {}),
   };
 }
 
@@ -241,9 +244,9 @@ export function normalizeAIChartReviewResponse(
 }
 
 /**
- * POST to /api/ai/chart-review. The request body intentionally contains only
- * symbol, timeframe, provider, screenshot_base64, screenshot_meta — no Engine A
- * fields. Throws on non-2xx (apiClient surfaces backend `error` strings).
+ * POST to /api/ai/chart-review. The request carries labelled structure and
+ * entry images, with no browser-owned Engine A/B scoring fields. Throws on
+ * non-2xx (apiClient surfaces backend `error` strings).
  */
 export async function postChartReview(
   body: AIChartReviewRequest,

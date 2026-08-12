@@ -6,6 +6,8 @@ import logging
 import time
 from typing import Any
 
+from ai_review.payload_schema import review_image_inputs
+
 from ai_review.provider_meta import ProviderChartReviewError, build_provider_meta
 from config import (
     CONFIG,
@@ -93,9 +95,10 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
     reasoning_effort = str(cfg.get("XAI_REASONING_EFFORT") or "low").strip().lower()
     timeout = _chart_review_timeout_sec(cfg)
 
-    data_url = payload.screenshot_base64
-    if not data_url.startswith("data:image/png;base64,"):
-        raise ValueError("non-PNG data URL reached provider")
+    review_images = review_image_inputs(payload)
+    for review_image in review_images:
+        if not review_image["data_url"].startswith("data:image/png;base64,"):
+            raise ValueError(f"non-PNG {review_image['role'].lower()} image reached provider")
 
     client = create_ai_client(
         CONFIG,
@@ -113,7 +116,22 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": payload.prompt},
-                    {"type": "image_url", "image_url": {"url": data_url}},
+                    {
+                        "type": "text",
+                        "text": f"IMAGE 1 — STRUCTURE ({review_images[0]['timeframe']})",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": review_images[0]["data_url"]},
+                    },
+                    {
+                        "type": "text",
+                        "text": f"IMAGE 2 — ENTRY/TRIGGER ({review_images[1]['timeframe']})",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": review_images[1]["data_url"]},
+                    },
                 ],
             }
         ],
@@ -143,7 +161,7 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
         "[AI_CHART_REVIEW] xai model=%s latency_ms=%s data_url_len=%s raw_len=%s",
         model_used,
         latency_ms,
-        len(data_url),
+        sum(len(image["data_url"]) for image in review_images),
         len(raw_text),
     )
     meta = build_provider_meta(

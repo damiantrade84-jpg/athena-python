@@ -54,6 +54,26 @@ def _fmt_list(value: Any) -> str:
     return ", ".join(str(item) for item in value)
 
 
+def _review_images_block(context: dict[str, Any]) -> str:
+    images = context.get("review_images") or {}
+    if not isinstance(images, dict):
+        images = {}
+    structure = images.get("structure") or {}
+    entry = images.get("entry") or {}
+    return (
+        "== REVIEW IMAGE CONTRACT (server-validated) ==\n"
+        f"IMAGE 1 role=STRUCTURE timeframe={_fmt(structure.get('timeframe'))} "
+        f"captured_at={_fmt(structure.get('capturedAt'))}\n"
+        f"IMAGE 2 role=ENTRY_TRIGGER timeframe={_fmt(entry.get('timeframe'))} "
+        f"captured_at={_fmt(entry.get('capturedAt'))}\n"
+        "Use IMAGE 1 only for structure, directional context, and zone/location review.\n"
+        "Use IMAGE 2 for trigger and current entry-timing review. Do not infer entry "
+        "timing from IMAGE 1 when the timeframes differ.\n"
+        "If a visual role is unavailable or mismatched, report it as not visually "
+        "verified; absence is not contradiction.\n"
+    )
+
+
 def _engine_b_tf_roles_block(
     style: str,
     engine_b_context: dict[str, Any] | None = None,
@@ -121,6 +141,7 @@ def _build_engine_a_chart_review_prompt(context: dict[str, Any]) -> str:
         playbooks.append(get_engine_b_playbook())
     playbook_block = render_playbook_prompt_block(playbooks, compact=True)
     trade_skill_schema = render_trade_skill_prompt_schema("engine_a_chart")
+    review_images_block = _review_images_block(context)
 
     _ac = str(context.get("asset_class") or "").lower()
     _vol_note = ""
@@ -132,6 +153,8 @@ def _build_engine_a_chart_review_prompt(context: dict[str, Any]) -> str:
     return f"""{_CHART_REVIEW_A_PREAMBLE}
 
 {playbook_block}
+
+{review_images_block}
 
 == TRADE SKILL OUTPUT (required top-level fields) ==
 {trade_skill_schema}
@@ -172,11 +195,12 @@ Rules:
 - If required context is missing, reduce confidence; do not list not-applicable items as missing.
 - COT/carry/funding/OI/intermarket/news/microstructure are non-visual Engine A context.
 - Do not reject a trade just because a non-visual factor is not visible on the chart.
-- Use the chart image for visual direction and timing validation.
+- Use the two labelled chart images according to REVIEW IMAGE CONTRACT; never use the structure image as proof that a lower-timeframe entry trigger is absent.
 - Use non-visual context to understand why Engine A scored the setup.
 - Never change Engine A score or threshold. AI review may validate or downgrade timing only.
-- Use engineAContext.entryTimeframe and componentScores for the live entry contribution. D1/H4/H1 remain structural trend layers; never substitute H1 when a lower-TF active entry is supplied.
-- False activeEntryGate.passed, riskGeometry.maxSlPassed, or riskGeometry.rrPassed blocks ENTRY_NOW.
+- Use engineAContext.timeframePolicy for the resolved role ladder, and use entryTimeframe/componentScores for the live entry contribution. D1/H4/H1 remain structural trend layers; never substitute H1 when a lower-TF active entry is supplied.
+- activeEntryGate proves whether the active lower-timeframe candle was supplied; it is not directional trigger confirmation. False activeEntryGate.passed, triggerConfirmation.passed, riskGeometry.maxSlPassed, or riskGeometry.rrPassed blocks ENTRY_NOW when the named gate is present.
+- When triggerConfirmation.passed=true and IMAGE 2 matches triggerConfirmation.timeframe, do not request the same trigger again unless IMAGE 2 shows concrete contradictory price action after that confirmed trigger.
 - Never claim addonScore is volume. addonScore is the asset add-on only; volumeScore is separate and may be null.
 - For forex pairs, volumeScore and volumeRatio reflect tick volume, not real traded volume. Do not penalize or downgrade based on volume metrics for forex.
 - Do not mark funding/OI missing for non-crypto assets.
@@ -230,6 +254,7 @@ indicator_parity: chart_tf={_fmt(indicator_parity.get("chart_timeframe"))} engin
 (VWAP anchors differ: the chart-drawn VWAP line is UTC-day session-anchored on intraday timeframes, while engineAContext vwapDistanceAtr/vwapExtended use a multi-day anchored H4 VWAP. Do not treat the chart VWAP line as the basis of the engine's VWAP-extension diagnostics.)
 
 == CHART CAPTURE METADATA ==
+role: STRUCTURE (IMAGE 1)
 rendered_layers: {_fmt_list(rendered_layers)}
 visible_candle_count: {_fmt(chart_snapshot.get("visibleCandleCount"))}
 visible_range: {_fmt(chart_snapshot.get("visibleRange"))}
@@ -238,7 +263,7 @@ engine_b_overlay_status: {_fmt(chart_snapshot.get("engineBOverlayStatus"))}
 engine_b_overlay_count: {_fmt(chart_snapshot.get("engineBOverlayCount"))}
 indicator_layer_states: {_fmt(chart_snapshot.get("indicatorLayerStates"))}
 
-Analyse the chart image and return JSON only.
+Analyse both labelled chart images and return JSON only.
 """
 
 
@@ -259,6 +284,7 @@ def _build_engine_b_chart_review_prompt(context: dict[str, Any]) -> str:
     macro_block = render_macro_prompt_block(context.get("symbol"), context.get("asset_class"))
     analyze_style = str(context.get("analyze_style") or "intraday")
     tf_roles_block = _engine_b_tf_roles_block(analyze_style, engine_b_context)
+    review_images_block = _review_images_block(context)
 
     return f"""{_CHART_REVIEW_B_PREAMBLE}
 1. Follow Engine B playbook: structure, liquidity, zones, invalidation.
@@ -267,6 +293,8 @@ def _build_engine_b_chart_review_prompt(context: dict[str, Any]) -> str:
 4. Output structured trade-skill fields per schema below. Never grant execution permission.
 
 {playbook_block}
+
+{review_images_block}
 
 {tf_roles_block}
 == TRADE SKILL OUTPUT (required top-level fields) ==
@@ -296,11 +324,12 @@ engine_b_alignment, freshness_assessment, missing_context (string array).
 Rules:
 - Do not approve a trade only because Engine B score is high or passed=true.
 - Never change Engine B score or threshold. AI review may validate or downgrade timing only.
-- Use the chart image for visual direction and timing validation.
+- Use IMAGE 1 for structure/direction and IMAGE 2 for trigger/entry timing. Never use IMAGE 1 as evidence that a lower-timeframe trigger is absent.
 - Engine B overlays on the chart (zones, BOS, FVG) are advisory visual context — server-trusted structure fields in engineBContext are authoritative.
 - Engine B is zone-retest: when locationOk=true and entryOk=true, retest at the active zone is valid — do not reflex-reject as inside resistance/support.
 - Judge zones on zone_tf and triggers on trigger_tf (see ENGINE B TIMEFRAME ROLES); chart TF may differ from zone_tf.
 - Use the server-resolved timeframe roles and require triggerTimeframeGateOk=true when the lower-TF trigger gate is present; never replace M15/M30 with H1 evidence.
+- When triggerTimeframeGateOk=true and the confirmed trigger is stamped on the same timeframe as IMAGE 2, do not request that same trigger merely because IMAGE 1 lacks it. A downgrade must cite concrete contradictory price action visible on IMAGE 2.
 - Treat structureOk, locationOk, entryOk, spaceGateOk, rrOk, maxSlPassed, and executionLevelsValid as deterministic gates. AI cannot override a false gate.
 - Cite gateScore/gateMaxPossible and qualityScore/qualityComponents separately; normalize the deterministic headline with score/maxScore, never gatePct.
 - This is review-only. Do not issue execution instructions.

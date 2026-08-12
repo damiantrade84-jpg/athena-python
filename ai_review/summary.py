@@ -21,6 +21,9 @@ _HUMAN_ACTION_MAP = {
 }
 
 _POOR_ENTRY_PATTERNS = (
+    "poor_to_fair",
+    "poor-to-fair",
+    "poor to fair",
     "resistance cluster",
     "resistance-cluster",
     "into resistance",
@@ -157,7 +160,9 @@ def _score_engine_alignment(
     )
     if engine_a_ctx.get("passed"):
         base = max(base, 68)
-    align_text = str(ai_review.get("engine_a_alignment") or "").lower()
+    primary_engine = str(engine_a_ctx.get("primary_engine") or "A").upper()
+    alignment_key = "engine_b_alignment" if primary_engine == "B" else "engine_a_alignment"
+    align_text = str(ai_review.get(alignment_key) or "").lower()
     if any(w in align_text for w in ("aligned", "agree", "confirm", "supports")):
         base = max(base, 78)
     if any(w in align_text for w in ("contradict", "conflict", "disagree", "against")):

@@ -56,7 +56,7 @@ from ai_review.watch_log import log_watch_transition, resolve_watch_transition
 from ai_review.timestamp_contract import evaluate_review_freshness
 from ai_review.providers.router import run_chart_review
 from ai_review.summary import build_ai_review_summary
-from ai_review.timeframe_routing import resolve_timeframe_route
+from ai_review.timeframe_routing import normalize_timeframe, resolve_timeframe_route
 from ai_review.validation import decode_screenshot_bytes, validate_request
 
 log = logging.getLogger("sentinel.ai_chart_review")
@@ -73,7 +73,15 @@ _TF_SECONDS = {
 }
 
 _ALLOWED_REQUEST_KEYS = frozenset(
-    {"symbol", "timeframe", "provider", "screenshot_base64", "screenshot_meta"}
+    {
+        "symbol",
+        "timeframe",
+        "provider",
+        "screenshot_base64",
+        "screenshot_meta",
+        "entry_screenshot_base64",
+        "entry_screenshot_meta",
+    }
 )
 
 
@@ -113,6 +121,81 @@ def _resolve_primary_engine(
         if raw not in (None, ""):
             return normalize_chart_review_primary_engine(raw)
     return normalize_chart_review_primary_engine(cfg.get("PRIMARY_ENGINE"))
+
+
+def _review_image_timeframe_error(
+    engine_ctx: dict[str, Any],
+    *,
+    structure_timeframe: Any,
+    entry_timeframe: Any,
+) -> dict[str, Any] | None:
+    """Fail closed when browser image roles diverge from policy-v4 roles."""
+    policy = engine_ctx.get("timeframe_policy") or {}
+    if not isinstance(policy, dict):
+        policy = {}
+    raw_expected_structure = policy.get("structureTf") or policy.get("structure_tf")
+    raw_expected_entry = policy.get("triggerTf") or policy.get("trigger_tf")
+    if raw_expected_structure in (None, "") or raw_expected_entry in (None, ""):
+        return {
+            "error": "review_image_policy_unavailable",
+            "detail": "Server-resolved structure/trigger timeframe roles are required",
+            "execution_permitted": False,
+        }
+    expected_structure = normalize_timeframe(raw_expected_structure)
+    expected_entry = normalize_timeframe(raw_expected_entry)
+    actual_structure = normalize_timeframe(structure_timeframe)
+    actual_entry = normalize_timeframe(entry_timeframe)
+    mismatches: list[dict[str, str]] = []
+    if actual_structure != expected_structure:
+        mismatches.append(
+            {
+                "role": "structure",
+                "expected": expected_structure,
+                "actual": actual_structure,
+            }
+        )
+    if actual_entry != expected_entry:
+        mismatches.append(
+            {"role": "entry", "expected": expected_entry, "actual": actual_entry}
+        )
+    if not mismatches:
+        return None
+    return {
+        "error": "review_image_timeframe_mismatch",
+        "detail": "Structure and entry chart images must match server-resolved policy roles",
+        "mismatches": mismatches,
+        "execution_permitted": False,
+    }
+
+
+def _stamp_review_images(
+    engine_ctx: dict[str, Any],
+    *,
+    structure_meta: dict[str, Any],
+    entry_meta: dict[str, Any],
+) -> dict[str, Any]:
+    images = {
+        "structure": {
+            "role": "structure",
+            "timeframe": normalize_timeframe(structure_meta.get("chart_timeframe")),
+            "capturedAt": structure_meta.get("captured_at"),
+            "chartSnapshot": structure_meta.get("chart_snapshot") or {},
+            "overlays": list(structure_meta.get("overlays") or []),
+        },
+        "entry": {
+            "role": "entry",
+            "timeframe": normalize_timeframe(entry_meta.get("chart_timeframe")),
+            "capturedAt": entry_meta.get("captured_at"),
+            "chartSnapshot": entry_meta.get("chart_snapshot") or {},
+            "overlays": list(entry_meta.get("overlays") or []),
+        },
+    }
+    engine_ctx["review_images"] = images
+    engine_ctx["structure_chart_timeframe"] = images["structure"]["timeframe"]
+    engine_ctx["entry_chart_timeframe"] = images["entry"]["timeframe"]
+    engine_ctx["entry_chart_snapshot"] = images["entry"]["chartSnapshot"]
+    engine_ctx["entry_chart_captured_at"] = images["entry"]["capturedAt"]
+    return images
 
 
 def _symbol_key(value: Any) -> str:
@@ -272,14 +355,27 @@ def _attach_review_input_meta(
     has_engine_b = is_b or (
         isinstance(structure_context, dict) and bool(structure_context)
     )
+    review_images = engine_ctx.get("review_images") or {}
+    if not isinstance(review_images, dict):
+        review_images = {}
+    structure_image = review_images.get("structure") or {}
+    entry_image = review_images.get("entry") or {}
+    timestamps = response.setdefault("timestamps", {})
+    if isinstance(timestamps, dict):
+        timestamps["structure_chart_captured_at"] = structure_image.get("capturedAt")
+        timestamps["entry_chart_captured_at"] = entry_image.get("capturedAt")
     response["reviewInputMeta"] = {
         "symbol": engine_ctx.get("symbol"),
         "signalEngine": "B" if is_b else ("A" if has_engine_a else "B" if has_engine_b else "unknown"),
         "signalTimeframe": engine_ctx.get("timeframe"),
         "chartTimeframe": engine_ctx.get("chart_timeframe") or engine_ctx.get("timeframe"),
+        "structureChartTimeframe": structure_image.get("timeframe"),
+        "entryChartTimeframe": entry_image.get("timeframe"),
         "hasEngineASignal": has_engine_a,
         "hasEngineBOverlay": has_engine_b,
-        "hasChartImage": True,
+        "hasChartImage": bool(structure_image),
+        "hasStructureChartImage": bool(structure_image),
+        "hasEntryChartImage": bool(entry_image),
         "timeframeRouteApplied": bool(isinstance(route, dict) and route.get("enabled")),
     }
 
@@ -510,6 +606,7 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         symbol = str(data["symbol"]).strip()
         timeframe = str(data["timeframe"]).strip()
         screenshot_meta = dict(data.get("screenshot_meta") or {})
+        entry_screenshot_meta = dict(data.get("entry_screenshot_meta") or {})
         provider = _resolve_provider_name(data, cfg, runtime.CONFIG)
 
         primary_engine, origin_signal, candidate_error = _resolve_server_candidate(
@@ -588,6 +685,19 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             if engine_ctx is None:
                 return jsonify({"error": "Engine A returned no result"}), 422
 
+        timeframe_error = _review_image_timeframe_error(
+            engine_ctx,
+            structure_timeframe=screenshot_meta.get("chart_timeframe") or timeframe,
+            entry_timeframe=entry_screenshot_meta.get("chart_timeframe"),
+        )
+        if timeframe_error:
+            return jsonify(timeframe_error), 409
+        review_images = _stamp_review_images(
+            engine_ctx,
+            structure_meta=screenshot_meta,
+            entry_meta=entry_screenshot_meta,
+        )
+
         if symbol_alias_applied:
             engine_ctx["symbol_alias_applied"] = symbol_alias_applied
 
@@ -650,22 +760,45 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
         # alone is always small on a normal submit; the candidate age is what
         # catches stale levels joined to freshly rebuilt factors.
         freshness = evaluate_review_freshness(engine_ctx, screenshot_meta, cfg)
-        mismatch_warnings = freshness["warnings"]
+        entry_freshness = evaluate_review_freshness(
+            engine_ctx, entry_screenshot_meta, cfg
+        )
+        mismatch_warnings = list(freshness["warnings"])
+        for warning in entry_freshness["warnings"]:
+            if warning not in mismatch_warnings:
+                mismatch_warnings.append(warning)
+        blocking = list(freshness["blocking"])
+        for item in entry_freshness["blocking"]:
+            if item not in blocking:
+                blocking.append(item)
         max_delta = freshness["maxSeconds"]
         engine_ctx["levels_provenance"] = freshness["levelsProvenance"]
-        if freshness["blocking"] and bool(
+        if blocking and bool(
             cfg.get("ENFORCE_CAPTURE_SKEW_PRE_PROVIDER", True)
         ):
-            primary_block = freshness["blocking"][0]
+            primary_block = blocking[0]
             return (
                 jsonify(
                     {
                         "error": primary_block["reason"],
                         "detail": primary_block["detail"],
-                        "blocking": freshness["blocking"],
+                        "blocking": blocking,
                         "mismatch_warnings": mismatch_warnings,
                         "max_seconds": max_delta,
-                        "capture_skew_seconds": freshness["captureSkewSeconds"],
+                        "capture_skew_seconds": max(
+                            value
+                            for value in (
+                                freshness["captureSkewSeconds"],
+                                entry_freshness["captureSkewSeconds"],
+                            )
+                            if value is not None
+                        ) if any(
+                            value is not None
+                            for value in (
+                                freshness["captureSkewSeconds"],
+                                entry_freshness["captureSkewSeconds"],
+                            )
+                        ) else None,
                         "candidate_age_seconds": freshness["candidateAgeSeconds"],
                         "levels_provenance": freshness["levelsProvenance"],
                         "diagnostics": "UNAVAILABLE",
@@ -679,27 +812,53 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
             mismatch_warnings.append(
                 "engine_b_latest_trigger_candle_stale_or_unavailable"
             )
-        overlays = screenshot_meta.get("overlays") or []
-        if isinstance(overlays, list) and "engine_b" in overlays:
-            chart_snapshot = screenshot_meta.get("chart_snapshot") or {}
-            overlay_status = (
-                chart_snapshot.get("engineBOverlayStatus")
-                if isinstance(chart_snapshot, dict)
-                else None
-            )
-            if overlay_status != "ready":
-                return jsonify({"error": "engine_b_overlay_not_fresh"}), 409
-            # P1-5: use the shared contract, not a third private key list.
-            struct = engine_ctx.get("structure_context") or {}
-            if not has_engine_b_structure_evidence(struct):
-                mismatch_warnings.append(
-                    "engine_b_overlays_enabled_but_server_structure_context_empty"
+        for role, meta in (
+            ("structure", screenshot_meta),
+            ("entry", entry_screenshot_meta),
+        ):
+            overlays = meta.get("overlays") or []
+            if isinstance(overlays, list) and "engine_b" in overlays:
+                chart_snapshot = meta.get("chart_snapshot") or {}
+                overlay_status = (
+                    chart_snapshot.get("engineBOverlayStatus")
+                    if isinstance(chart_snapshot, dict)
+                    else None
                 )
+                if overlay_status != "ready":
+                    return (
+                        jsonify(
+                            {
+                                "error": "engine_b_overlay_not_fresh",
+                                "image_role": role,
+                            }
+                        ),
+                        409,
+                    )
+                # P1-5: use the shared contract, not a third private key list.
+                struct = engine_ctx.get("structure_context") or {}
+                if not has_engine_b_structure_evidence(struct):
+                    warning = (
+                        f"{role}_engine_b_overlays_enabled_but_"
+                        "server_structure_context_empty"
+                    )
+                    if warning not in mismatch_warnings:
+                        mismatch_warnings.append(warning)
         engine_ctx["mismatch_warnings"] = mismatch_warnings
         engine_ctx["chart_captured_at"] = screenshot_meta.get("captured_at")
+        engine_ctx["entry_chart_captured_at"] = entry_screenshot_meta.get(
+            "captured_at"
+        )
 
         screenshot_bytes = decode_screenshot_bytes(str(data["screenshot_base64"]))
-        screenshot_hash = hashlib.sha256(screenshot_bytes).hexdigest()[:16]
+        entry_screenshot_bytes = decode_screenshot_bytes(
+            str(data["entry_screenshot_base64"])
+        )
+        screenshot_hash = hashlib.sha256(
+            b"structure\0"
+            + screenshot_bytes
+            + b"\0entry\0"
+            + entry_screenshot_bytes
+        ).hexdigest()[:16]
 
         dedup = find_recent_review_by_hash(
             symbol,
@@ -856,8 +1015,11 @@ def register_ai_chart_review_routes(app, runtime: SimpleNamespace) -> None:
                 "model": str(provider_meta.get("model") or cfg.get("ANTHROPIC_MODEL") or ""),
                 "latency_ms": raw.get("latency_ms"),
                 "screenshot_hash": screenshot_hash,
-                "screenshot_bytes": len(screenshot_bytes),
-                "screenshot_meta": screenshot_meta,
+                "screenshot_bytes": len(screenshot_bytes) + len(entry_screenshot_bytes),
+                "screenshot_meta": {
+                    **screenshot_meta,
+                    "review_images": review_images,
+                },
                 "ai_review": normalized,
                 "concordance": concordance,
                 "mismatch_warnings": mismatch_warnings,

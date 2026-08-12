@@ -23,6 +23,11 @@ type VisionSignalLike = {
   engine_b?: unknown;
 };
 
+export type VisionReviewImageTimeframes = {
+  structureTf: string;
+  entryTf: string;
+};
+
 async function fetchCandles(symbol: string, tf: string, limit = 300): Promise<unknown[]> {
   const res = await fetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}&limit=${limit}`);
   const json = await res.json();
@@ -61,6 +66,30 @@ export function preferredVisionReviewTf(signal: VisionSignalLike): string {
   if (style === 'scalp') return 'M15';
   if (style === 'intraday') return 'M30';
   return 'H4';
+}
+
+export function visionReviewImageTimeframes(signal: VisionSignalLike): VisionReviewImageTimeframes {
+  const nestedEngineB = signal.naked_data || signal.engine_b;
+  const engineB = nestedEngineB && typeof nestedEngineB === 'object'
+    ? nestedEngineB as Record<string, unknown>
+    : {};
+  const structure = signal.structureTf
+    || (engineB.structure_timeframe as string | undefined)
+    || (engineB.zone_tf as string | undefined)
+    || signal.setupTf
+    || (engineB.setup_tf as string | undefined)
+    || signal.timeframe;
+  const entry = signal.triggerTf
+    || (engineB.trigger_timeframe_actual as string | undefined)
+    || (engineB.trigger_timeframe as string | undefined)
+    || (engineB.entry_tf as string | undefined)
+    || signal.entryTimeframe
+    || signal.executionTf;
+
+  return {
+    structureTf: String(structure || '').toUpperCase(),
+    entryTf: String(entry || '').toUpperCase(),
+  };
 }
 
 export async function fetchVisionCandlePayload(

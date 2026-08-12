@@ -189,8 +189,8 @@ def resolve_timeframe_route(
         )
     elif needs_entry_wait:
         reason = (
-            f"{context} direction remains valid but entry timing is not confirmed; "
-            f"monitor the policy trigger timeframe {trigger}."
+            f"{context} direction remains valid but the advisory AI review withheld "
+            f"immediate entry; showing the policy trigger timeframe {trigger}."
         )
     else:
         reason = f"No deterministic entry-wait condition; keeping {context} context chart selected."

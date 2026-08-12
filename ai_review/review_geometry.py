@@ -209,6 +209,11 @@ def score_entry_quality(
             (ai_review or {}).get("chartReadSummary"),
         )
     ).lower()
+    normalized_entry_quality = str((ai_review or {}).get("entry_quality") or "").strip().lower()
+    if normalized_entry_quality in {"poor", "poor_to_fair", "poor-to-fair", "poor to fair"}:
+        score = min(score, 45.0)
+    elif normalized_entry_quality in {"fair", "fair_to_good", "fair-to-good", "fair to good"}:
+        score = min(score, 62.0)
     for marker in ("extended", "chasing", "late entry", "poor location", "out of zone"):
         if marker in text:
             score -= 8.0

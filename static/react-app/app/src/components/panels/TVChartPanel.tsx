@@ -60,6 +60,7 @@ import {
   downscaleToCap,
   streamChartReview,
 } from '@/lib/aiChartReview';
+import { visionReviewImageTimeframes } from '@/lib/visionReview';
 import VolumeModeField from '@/components/execution/VolumeModeField';
 import ExitModeField from '@/components/execution/ExitModeField';
 import { useExitModeState } from '@/hooks/useExitModeState';
@@ -95,6 +96,7 @@ import {
 import type {
   AIChartReviewChartSnapshot,
   AIChartReviewResponse,
+  AIChartReviewScreenshotMeta,
   EngineASignal,
   SuggestedTradePlan,
   SuggestedTradeWatch,
@@ -889,6 +891,21 @@ function timeframeRouteKey(symbol: string | null, route: TimeframeRoute): string
 }
 
 const CHART_CAPTURE_BACKGROUND = { r: 11, g: 15, b: 20 };
+const REVIEW_TIMEFRAME_READY_TIMEOUT_MS = 20_000;
+
+type ReviewImageRole = 'structure' | 'entry';
+
+type CapturedReviewImage = {
+  timeframe: string;
+  screenshot_base64: string;
+  screenshot_meta: AIChartReviewScreenshotMeta;
+};
+
+type ReviewCaptureState = {
+  timeframe: string | null;
+  pending: boolean;
+  blockReason: string | null;
+};
 
 function waitForChartPaint(): Promise<void> {
   return new Promise((resolve) => {
@@ -2375,6 +2392,12 @@ export default function TVChartPanel() {
   const autoReviewEarliestRunAtRef = useRef<number | null>(null);
   const chartRenderGenerationRef = useRef('');
   const chartPaintReadyGenerationRef = useRef<string | null>(null);
+  const reviewCaptureStateRef = useRef<ReviewCaptureState>({
+    timeframe: null,
+    pending: true,
+    blockReason: 'Chart is preparing',
+  });
+  const captureReviewImageRef = useRef<((role: ReviewImageRole) => Promise<CapturedReviewImage>) | null>(null);
   const [chartPaintReadyTick, setChartPaintReadyTick] = useState(0);
   const [autoReviewDelayTick, setAutoReviewDelayTick] = useState(0);
   const [reviewRefreshNonce, setReviewRefreshNonce] = useState(0);
@@ -2642,6 +2665,11 @@ export default function TVChartPanel() {
         chartIndicatorsReady: chartIndicatorsReadyForReview,
       })
     : null;
+  reviewCaptureStateRef.current = {
+    timeframe: backendTf || null,
+    pending: chartReviewPendingForReview,
+    blockReason: chartReviewBlockReason,
+  };
   const pricePanelLegendItems = useMemo<IndicatorLegendValue[]>(() => {
     const latest = studySnapshot.latest;
     const items: IndicatorLegendValue[] = [];
@@ -3314,18 +3342,10 @@ export default function TVChartPanel() {
     return captured;
   }
 
-  async function runAIReview() {
-    if (aiReviewLoading) return;
-    if (chartReviewPendingForReview) {
-      setChartError(chartReviewBlockReason || 'Chart is still preparing indicators for review');
-      return;
-    }
-    setAiReviewError(null);
-    setAiReview(null);
+  async function captureCurrentReviewImage(role: ReviewImageRole): Promise<CapturedReviewImage> {
     const captured = await captureReviewCanvas(true);
     if (!captured.canvas) {
-      setAiReviewError(captured.error || 'Chart screenshot capture failed');
-      return;
+      throw new Error(captured.error || 'Chart screenshot capture failed');
     }
     const sourceCanvas = captured.canvas;
     const downscaled = downscaleToCap(
@@ -3333,9 +3353,7 @@ export default function TVChartPanel() {
       AI_CHART_REVIEW_DEFAULTS.MAX_WIDTH,
       AI_CHART_REVIEW_DEFAULTS.MAX_HEIGHT,
     );
-    setAiReviewLoading(true);
-    try {
-      const dataUrl = await canvasToDataUrl(downscaled);
+    const dataUrl = await canvasToDataUrl(downscaled);
       const tfForBackend = TF_BACKEND_MAP[timeframe] || timeframe;
       const logicalRange = chartRef.current?.timeScale().getVisibleLogicalRange() ?? null;
       const visibleFromIndex = logicalRange
@@ -3505,6 +3523,7 @@ export default function TVChartPanel() {
         ) ?? undefined,
         primary_engine: effectivePrimaryEngine,
         signal_engine: effectivePrimaryEngine,
+        review_role: role,
         overlays,
         visible_range_start: visibleRows.length ? String(visibleRows[0].time) : undefined,
         visible_range_end: visibleRows.length ? String(visibleRows[visibleRows.length - 1].time) : undefined,
@@ -3512,22 +3531,86 @@ export default function TVChartPanel() {
         chart_snapshot: chartSnapshot,
         renderedLayers: renderedLayerState,
       });
-      const symbol = (pair || '').toUpperCase();
-      if (!symbol) {
-        throw new Error('No symbol selected');
+    return {
+      timeframe: tfForBackend,
+      screenshot_base64: dataUrl,
+      screenshot_meta: {
+        ...meta,
+        // Stamp capture time immediately after the pixels are encoded. Each
+        // image has its own timestamp because the chart changes timeframe
+        // between the structure and entry captures.
+        captured_at: new Date().toISOString(),
+      },
+    };
+  }
+
+  captureReviewImageRef.current = captureCurrentReviewImage;
+
+  async function captureReviewRole(
+    role: ReviewImageRole,
+    targetTf: string,
+  ): Promise<CapturedReviewImage> {
+    const normalizedTarget = normalizeBackendTf(targetTf);
+    const targetCode = tfCodeForBackend(normalizedTarget);
+    if (!normalizedTarget || !targetCode) {
+      throw new Error(`Server-resolved ${role} timeframe is unavailable`);
+    }
+    if (reviewCaptureStateRef.current.timeframe !== normalizedTarget) {
+      setTimeframeAutoMode(true);
+      lastAppliedRouteKeyRef.current = null;
+      setTimeframe(targetCode);
+    }
+
+    const deadline = Date.now() + REVIEW_TIMEFRAME_READY_TIMEOUT_MS;
+    let lastBlockReason: string | null = null;
+    while (Date.now() < deadline) {
+      const state = reviewCaptureStateRef.current;
+      lastBlockReason = state.blockReason;
+      if (state.timeframe === normalizedTarget && !state.pending && captureReviewImageRef.current) {
+        return captureReviewImageRef.current(role);
       }
-      // Stamp capture time as late as possible (immediately before POST) so the
-      // server compares a fresh chart_captured_at to review_timestamp and does
-      // not inherit multi-second delay from canvas encode / meta assembly.
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
+    throw new Error(
+      `${normalizedTarget} ${role} chart did not become ready: ${lastBlockReason || 'timed out'}`,
+    );
+  }
+
+  async function runAIReview() {
+    if (aiReviewLoading) return;
+    if (chartReviewPendingForReview) {
+      setChartError(chartReviewBlockReason || 'Chart is still preparing indicators for review');
+      return;
+    }
+    const symbol = (pair || '').toUpperCase();
+    if (!symbol) {
+      setAiReviewError('No symbol selected');
+      return;
+    }
+    // Never borrow timeframe roles from defaultCandidate: it may belong to a
+    // different symbol when a manual/bulk intent is not in the current cache.
+    const reviewSignal = chartCandidate || intentSignal;
+    const imageTimeframes = visionReviewImageTimeframes(reviewSignal || {});
+    if (!imageTimeframes.structureTf || !imageTimeframes.entryTf) {
+      setAiReviewError('Server-resolved structure and trigger timeframes are required for AI review');
+      return;
+    }
+
+    const originalTimeframe = timeframe;
+    setAiReviewLoading(true);
+    setAiReviewError(null);
+    setAiReview(null);
+    try {
+      const structureImage = await captureReviewRole('structure', imageTimeframes.structureTf);
+      const entryImage = await captureReviewRole('entry', imageTimeframes.entryTf);
       const reviewRequest = {
         symbol,
-        timeframe: tfForBackend,
+        timeframe: structureImage.timeframe,
         provider: aiReviewProvider,
-        screenshot_base64: dataUrl,
-        screenshot_meta: {
-          ...meta,
-          captured_at: new Date().toISOString(),
-        },
+        screenshot_base64: structureImage.screenshot_base64,
+        screenshot_meta: structureImage.screenshot_meta,
+        entry_screenshot_base64: entryImage.screenshot_base64,
+        entry_screenshot_meta: entryImage.screenshot_meta,
       };
 
       const applyReviewResponse = (response: AIChartReviewResponse) => {
@@ -3571,6 +3654,9 @@ export default function TVChartPanel() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'AI review failed';
       setAiReviewError(msg);
+      if (reviewCaptureStateRef.current.timeframe !== normalizeBackendTf(originalTimeframe)) {
+        setTimeframe(originalTimeframe);
+      }
     } finally {
       setAiReviewLoading(false);
       setStreamingNarrative('');

@@ -291,7 +291,8 @@ def test_tv_chart_panel_review_block_reason_helper_exists():
 def test_tv_chart_panel_capture_failure_surfaces_ai_review_error():
     source = _read(TV_PANEL)
 
-    assert "setAiReviewError(captured.error" in source
+    assert "throw new Error(captured.error || 'Chart screenshot capture failed')" in source
+    assert "setAiReviewError(msg)" in source
     assert "captureReviewCanvas" in source
 
 
@@ -455,6 +456,15 @@ def test_tv_chart_panel_applies_server_timeframe_route_once():
     assert "lastAppliedRouteKeyRef" in source
     assert "routeKey === lastAppliedRouteKeyRef.current" in source
     assert "setTimeframe(recommendedCode)" in source
+
+
+def test_tv_chart_panel_captures_structure_and_entry_review_images():
+    source = _read(TV_PANEL)
+
+    assert "captureReviewRole('structure', imageTimeframes.structureTf)" in source
+    assert "captureReviewRole('entry', imageTimeframes.entryTf)" in source
+    assert "entry_screenshot_base64: entryImage.screenshot_base64" in source
+    assert "entry_screenshot_meta: entryImage.screenshot_meta" in source
 
 
 def test_tv_chart_panel_applies_intent_timeframe_policy():
