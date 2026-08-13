@@ -25,7 +25,7 @@ export function labelPriorityForText(text: string): number {
   const key = text.toUpperCase();
   if (key === 'PRICE' || key === 'LAST') return RIGHT_EDGE_LABEL_PRIORITY.currentPrice;
   if (key === 'BOS' || key === 'CHOCH' || key === 'BREAKER') return RIGHT_EDGE_LABEL_PRIORITY.bosChoch;
-  if (key === 'ENTRY' || key === 'SL' || key === 'TP1' || key === 'TP2' || key === 'CONTRA') {
+  if (key === 'ENTRY' || key === 'SL' || key === 'TP1' || key === 'TP2' || key === 'TP3' || key === 'CONTRA') {
     return RIGHT_EDGE_LABEL_PRIORITY.entryContra;
   }
   if (key === 'SUP' || key === 'RES' || key.includes('SUPPORT') || key.includes('RESISTANCE')) {

@@ -90,7 +90,6 @@ import {
 } from '@/lib/engineBPrimitives';
 import {
   labelPriorityForText,
-  RIGHT_EDGE_LABEL_PRIORITY,
   type RightEdgeLabel,
 } from '@/lib/chartRightEdgeLabels';
 import type {
@@ -1456,7 +1455,6 @@ function buildEngineBRightEdgeLabelInputs(
 function resolveRightEdgeLabels(
   series: ISeriesApi<'Candlestick', Time> | null,
   inputs: RightEdgeLabelInput[],
-  currentPrice: number | null | undefined,
   paneHeightPx: number,
 ): RightEdgeLabel[] {
   if (!series) return [];
@@ -1472,19 +1470,6 @@ function resolveRightEdgeLabels(
       color: input.color,
       side: 'right',
     });
-  }
-  if (currentPrice != null && Number.isFinite(currentPrice)) {
-    const y = series.priceToCoordinate(currentPrice);
-    if (y != null && Number.isFinite(y)) {
-      labels.push({
-        id: 'current-price',
-        text: 'PRICE',
-        y,
-        priority: RIGHT_EDGE_LABEL_PRIORITY.currentPrice,
-        color: 'rgba(245, 240, 232, 0.92)',
-        side: 'right',
-      });
-    }
   }
   return labels;
 }
@@ -3819,7 +3804,9 @@ export default function TVChartPanel() {
     candleSeries.attachPrimitive(labelPrimitive);
     rightEdgeLabelPrimitiveRef.current = labelPrimitive;
 
-    const overlayLineOpts = { lineWidth: 1 as const, lastValueVisible: true, priceLineVisible: false };
+    // Axis stays clean: values live in the quant-debug strip, not in stacked
+    // axis boxes that crowd the price scale.
+    const overlayLineOpts = { lineWidth: 1 as const, lastValueVisible: false, priceLineVisible: false };
     ema20SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema20.color }, 0);
     ema21SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema21.color }, 0);
     ema50SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema50.color }, 0);
@@ -3965,8 +3952,8 @@ export default function TVChartPanel() {
             color: level.color,
             lineWidth: 1,
             lineStyle: level.style ?? LineStyle.Solid,
-            axisLabelVisible: true,
-            title: level.label,
+            axisLabelVisible: false,
+            title: '',
           }),
         );
       }
@@ -4010,10 +3997,24 @@ export default function TVChartPanel() {
     }
 
     const paneHeightPx = containerRef.current?.clientHeight ?? chartHeightPx;
-    const currentPrice = firstNumber(liveTick?.price, studySnapshot.latest.close);
     const labelInputs = buildEngineBRightEdgeLabelInputs(engineBOverlay, engineBOverlayRenderable, chartMode === 'clean');
+    if (effectivePrimaryEngine === 'A') {
+      // Engine A entry/SL/TP levels join the same compact chip row instead of
+      // native price-line axis boxes, which overflowed into the plot and
+      // covered the most recent candles.
+      for (const [index, level] of engineAPriceLevels(chartCandidate).entries()) {
+        const text = level.label.replace(/^A\s+/, '');
+        labelInputs.push({
+          id: `engine-a-${index}-${text}-${level.price}`,
+          text,
+          price: level.price,
+          color: level.color,
+          priority: labelPriorityForText(text),
+        });
+      }
+    }
     rightEdgeLabelPrimitiveRef.current?.setLabels(
-      resolveRightEdgeLabels(candleSeries, labelInputs, currentPrice, paneHeightPx),
+      resolveRightEdgeLabels(candleSeries, labelInputs, paneHeightPx),
       paneHeightPx,
     );
 
