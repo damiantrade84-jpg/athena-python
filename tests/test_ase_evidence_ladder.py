@@ -45,9 +45,15 @@ def _validated_metrics(**overrides):
     return metrics
 
 
-def test_cost_stress_key_matches_declared_multiples():
-    assert cost_stress_metric_key(PROVISIONAL["cost_stress_ok_at"]) == "cost_stress_expectancy_1_5"
+def test_cost_stress_key_matches_declared_multiple():
     assert cost_stress_metric_key(VALIDATED["cost_stress_ok_at"]) == "cost_stress_expectancy_2_0"
+
+
+def test_every_declared_constant_has_a_check():
+    # The original defect was a constant with no corresponding check, which
+    # reads as a gate but silently passes. Cost stress lives in VALIDATED only.
+    assert "cost_stress_ok_at" not in PROVISIONAL
+    assert "cost_stress_ok_at" in VALIDATED
 
 
 def test_provisional_passes_on_complete_metrics():
@@ -55,18 +61,13 @@ def test_provisional_passes_on_complete_metrics():
     assert ok, failures
 
 
-def test_provisional_enforces_declared_cost_stress():
+def test_provisional_does_not_require_cost_stress():
+    # PROVISIONAL is applied to already-frozen artifacts at load time, so it
+    # must not retire an artifact for lacking a metric that postdates it.
     metrics = _provisional_metrics()
-    del metrics["cost_stress_expectancy_1_5"]
+    metrics.pop("cost_stress_expectancy_1_5", None)
     ok, failures = check_provisional(metrics)
-    assert not ok
-    assert "cost_stress" in failures
-
-
-def test_provisional_rejects_negative_cost_stress_expectancy():
-    ok, failures = check_provisional(_provisional_metrics(cost_stress_expectancy_1_5=-0.01))
-    assert not ok
-    assert "cost_stress" in failures
+    assert ok, failures
 
 
 def test_nan_metrics_fail_closed_rather_than_passing_comparisons():

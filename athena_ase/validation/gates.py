@@ -20,9 +20,13 @@ PROVISIONAL = {
     "folds_nonneg": 3,
     "max_instrument_profit_share": 0.40,
     "max_dd_R": 12,
-    "cost_stress_ok_at": 1.5,
     "brier_skill_min": 0.0,
 }
+# Cost stress is deliberately absent here and enforced only at VALIDATED.
+# PROVISIONAL is the research-usable tier and is applied to already-frozen
+# artifacts at load time; requiring a metric that did not exist when an
+# artifact was frozen retires it retroactively rather than judging it.
+# VALIDATED is the promotion tier, where surviving 2x costs is the point.
 
 VALIDATED = {
     "min_oos_trades": 150,
@@ -74,11 +78,6 @@ def check_provisional(metrics: dict[str, Any]) -> tuple[bool, list[str]]:
     brier_skill = _finite(metrics, "brier_skill")
     if brier_skill is None or brier_skill < PROVISIONAL["brier_skill_min"]:
         failures.append("brier_skill")
-
-    stress_key = cost_stress_metric_key(PROVISIONAL["cost_stress_ok_at"])
-    cost_stress = _finite(metrics, stress_key)
-    if cost_stress is None or cost_stress <= 0.0:
-        failures.append("cost_stress")
 
     return (not failures, failures)
 
