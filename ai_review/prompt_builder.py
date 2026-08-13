@@ -196,6 +196,8 @@ Return strict JSON only with these top-level keys:
     action: WAIT_FOR_LEVEL|WAIT_FOR_ZONE|NO_TRADE, triggerType: ACCEPTANCE_ABOVE|ACCEPTANCE_BELOW|PULLBACK_TO_ZONE|REJECTION_FROM_ZONE|SWEEP_RECLAIM,
     level?, zoneLow?, zoneHigh?, contextTf?, entryTf?, executionTf?, invalidateAbove?, invalidateBelow?, expiresInSeconds?, reason?
   }}
+  Every WAIT_FOR_LEVEL/WAIT_FOR_ZONE plan must include a direction-coherent numeric invalidation anchor:
+  invalidateBelow for LONG or invalidateAbove for SHORT. The anchor must sit beyond the watched level/zone.
   Omit suggestedTradePlan if no valid numeric level/zone. Never use ENTRY_NOW. This is alert-only — not execution permission.
 
 Also include legacy flat fields for compatibility:

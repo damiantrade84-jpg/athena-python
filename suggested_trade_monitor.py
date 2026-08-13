@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from ai_review.suggested_trade_plan import (
     allocate_watch_expiry_seconds,
+    backfill_suggested_trade_invalidation,
     is_watchable_plan,
     plan_playbook_warnings,
     resolve_watch_reason,
@@ -122,7 +123,9 @@ def validate_flag_payload(payload: dict[str, Any], cfg: dict[str, Any] | None = 
         return None, "suggestedTradePlan required"
 
     source = str(payload.get("source") or plan_raw.get("source") or "ai_chart_review")
+    signal = payload.get("signal") if isinstance(payload.get("signal"), dict) else {}
     plan = sanitize_suggested_trade_plan(plan_raw, source=source, symbol=symbol)
+    plan = backfill_suggested_trade_invalidation(plan, signal)
     if not plan:
         return None, "invalid suggestedTradePlan"
 
@@ -133,7 +136,6 @@ def validate_flag_payload(payload: dict[str, Any], cfg: dict[str, Any] | None = 
         return None, "plan is not watchable (malformed or not armable)"
 
     mcfg = monitor_config(cfg)
-    signal = payload.get("signal") if isinstance(payload.get("signal"), dict) else {}
     summary = payload.get("aiReviewSummary") or payload.get("ai_review_summary") or {}
     if not isinstance(summary, dict):
         summary = {}
@@ -450,6 +452,16 @@ def evaluate_watches(
     evaluated = 0
 
     for watch in watches:
+        plan = watch.get("suggested_trade_plan")
+        repaired_plan = backfill_suggested_trade_invalidation(
+            plan if isinstance(plan, dict) else None,
+            watch.get("signal") if isinstance(watch.get("signal"), dict) else None,
+        )
+        if isinstance(repaired_plan, dict) and repaired_plan != plan:
+            watch["suggested_trade_plan"] = repaired_plan
+            watch["playbook_warnings"] = plan_playbook_warnings(repaired_plan)
+            updated += 1
+
         status = str(watch.get("status") or "")
         if status in ("CANCELLED", "EXPIRED", "INVALIDATED"):
             continue

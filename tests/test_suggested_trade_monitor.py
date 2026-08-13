@@ -90,6 +90,46 @@ def test_validate_flag_allocates_expiry_and_stamps_final_reason():
     assert validated["ai_review_summary"]["finalReason"].startswith("Wait for acceptance below")
 
 
+def test_validate_flag_backfills_directional_invalidation_from_signal():
+    payload = {
+        "symbol": "ESP35",
+        "signal": {"invalidation": 20240.3586, "sl": 20240.3586},
+        "suggestedTradePlan": _valid_plan(
+            symbol="ESP35",
+            direction="LONG",
+            action="WAIT_FOR_ZONE",
+            triggerType="PULLBACK_TO_ZONE",
+            level=None,
+            zoneLow=20334.3586,
+            zoneHigh=20340.8414,
+        ),
+    }
+
+    validated, err = validate_flag_payload(payload)
+
+    assert err is None
+    assert validated is not None
+    plan = validated["suggested_trade_plan"]
+    assert plan["invalidateBelow"] == pytest.approx(20240.3586)
+    assert plan_playbook_warnings(plan) == []
+
+
+def test_validate_flag_does_not_backfill_invalidation_on_wrong_side():
+    payload = {
+        "symbol": "EURUSD",
+        "signal": {"invalidation": 1.08},
+        "suggestedTradePlan": _valid_plan(),
+    }
+
+    validated, err = validate_flag_payload(payload)
+
+    assert err is None
+    assert validated is not None
+    plan = validated["suggested_trade_plan"]
+    assert "invalidateAbove" not in plan
+    assert any("no invalidateAbove" in warning for warning in plan_playbook_warnings(plan))
+
+
 def test_sanitize_accepts_valid_level_plan():
     raw = {"suggestedTradePlan": _valid_plan()}
     out = sanitize_suggested_trade_plan(raw, source="ai_chart_review", symbol="EURUSD")
@@ -404,3 +444,32 @@ def test_add_watch_stores_playbook_warnings():
     assert watch is not None
     stored = watch.to_dict()
     assert any("M1" in w for w in stored["playbook_warnings"])
+
+
+def test_evaluate_watches_repairs_legacy_invalidation_and_warning():
+    tmp_dir = Path(tempfile.mkdtemp(prefix="athena_suggested_repair_"))
+    active = tmp_dir / "active.json"
+    events = tmp_dir / "events.jsonl"
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    watch = {
+        "watch_id": "legacy-watch",
+        "symbol": "EURUSD",
+        "direction": "SHORT",
+        "action": "WAIT_FOR_LEVEL",
+        "trigger_type": "ACCEPTANCE_BELOW",
+        "status": "WATCHING",
+        "suggested_trade_plan": _valid_plan(),
+        "signal": {"invalidation": 1.09},
+        "expires_at": future,
+        "playbook_warnings": [
+            "no invalidateAbove/invalidateBelow — setup has no playbook invalidation anchor"
+        ],
+    }
+    save_active_watches([watch], active)
+
+    result = evaluate_watches(active_path=active, events_path=events)
+
+    assert result["updated"] == 1
+    stored = json.loads(active.read_text(encoding="utf-8"))["watches"][0]
+    assert stored["suggested_trade_plan"]["invalidateAbove"] == pytest.approx(1.09)
+    assert stored["playbook_warnings"] == []

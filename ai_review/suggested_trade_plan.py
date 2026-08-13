@@ -230,6 +230,55 @@ def sanitize_suggested_trade_plan(
     return out
 
 
+def backfill_suggested_trade_invalidation(
+    plan: dict[str, Any] | None,
+    signal: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Backfill a missing watch invalidation from stamped signal geometry.
+
+    Only an explicit signal ``invalidation``/``sl`` is accepted, and only when it
+    is beyond the watched level or full watched zone in the safe direction.
+    Explicit plan anchors are never replaced.
+    """
+    if not isinstance(plan, dict):
+        return plan
+    out = dict(plan)
+    if (
+        _coerce_float(out.get("invalidateAbove")) is not None
+        or _coerce_float(out.get("invalidateBelow")) is not None
+    ):
+        return out
+
+    action = str(out.get("action") or "").upper()
+    if action not in _VALID_WATCH_ACTIONS or action == "WATCH_ONLY":
+        return out
+    if not isinstance(signal, dict):
+        return out
+
+    invalidation = None
+    for key in ("invalidation", "sl", "stopLoss", "stop_loss"):
+        candidate = _coerce_float(signal.get(key))
+        if candidate is not None and candidate > 0:
+            invalidation = candidate
+            break
+    if invalidation is None:
+        return out
+
+    direction = str(out.get("direction") or "").upper()
+    level = _coerce_float(out.get("level"))
+    zone_low = _coerce_float(out.get("zoneLow"))
+    zone_high = _coerce_float(out.get("zoneHigh"))
+    if direction == "LONG":
+        reference = zone_low if zone_low is not None else level
+        if reference is not None and invalidation < reference:
+            out["invalidateBelow"] = invalidation
+    elif direction == "SHORT":
+        reference = zone_high if zone_high is not None else level
+        if reference is not None and invalidation > reference:
+            out["invalidateAbove"] = invalidation
+    return out
+
+
 def _clean_reason(value: Any) -> str:
     text = str(value or "").strip()
     if not text or text.lower() in _GENERIC_WATCH_REASONS:
