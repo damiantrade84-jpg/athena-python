@@ -506,3 +506,94 @@ def test_conviction_norm_falls_back_to_total_for_legacy_payloads():
 
     assert engine_b_conviction_norm({"score": 3.0, "max_possible": 6.0}) == pytest.approx(0.5)
     assert engine_b_conviction_norm(None) == 0.0
+
+
+def test_clean_bos_zone_setup_can_reach_half_quality(monkeypatch):
+    """A typical BOS + zone-retest must be able to print >= 50% quality.
+
+    The previous weight table put ~60% of the denominator on rare OB/FVG/BAG/
+    follow-through/profile terms, so live scans never approached half of max.
+    """
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_WEIGHTED_SCORING",
+        {**config.CONFIG.get("ENGINE_B_WEIGHTED_SCORING", {}), "ENABLED": True},
+    )
+    res = _base_res_long()
+    res.update(
+        {
+            "bos_mtf_confirmed": False,
+            "liquidity_sweep": False,
+            "ob_at_zone": False,
+            "fvg_overlap": False,
+            "order_blocks": [],
+            "active_zone_distance": 0.0,
+            "phase2_quality": {
+                "pullback_quality": {"score": 0.55},
+                "sweep_quality": {"score": 0.0},
+                "volume_confirmation": {"score": 0.0},
+            },
+        }
+    )
+    out = NakedEngine().calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        style_profile={
+            "style": "intraday",
+            "min_score": 0.0,
+            "min_room_atr": 0.35,
+            "min_rr": 1.3,
+            "require_macro_align": False,
+        },
+    )
+    assert out["weighted_scoring_enabled"] is True
+    assert out["quality_pct"] is not None
+    assert out["quality_pct"] >= 50.0
+    assert out["quality_pct"] < 90.0
+
+
+def test_d1_conflict_does_not_zero_quality_pct(monkeypatch):
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_WEIGHTED_SCORING",
+        {**config.CONFIG.get("ENGINE_B_WEIGHTED_SCORING", {}), "ENABLED": True},
+    )
+    res = _base_res_long()
+    res["d1_pd_array_conflict"] = True
+    out = NakedEngine().calculate_confidence(
+        res,
+        current_price=100.0,
+        direction="LONG",
+        style_profile={
+            "style": "intraday",
+            "min_score": 0.0,
+            "min_room_atr": 0.35,
+            "min_rr": 1.3,
+            "require_macro_align": False,
+        },
+    )
+    assert out["quality_pct"] > 25.0
+    assert out["quality_penalty_applied"] > 0.0
+    assert out["quality_pct"] == pytest.approx(
+        out["quality_points_gross"] / out["quality_denominator"] * 100, abs=0.1
+    )
+    assert out["quality_pct_net"] == pytest.approx(
+        out["quality_points_net"] / out["quality_denominator"] * 100, abs=0.1
+    )
+    assert out["quality_pct_net"] < out["quality_pct"]
+
+
+def test_crypto_structure_quality_uses_scanned_direction():
+    from market_structure import _crypto_structure_quality_score
+
+    bos = {"bos_bull": False, "bos_bear": True, "bos_volume_confirmed": True}
+    choch = {"choch_bull": False, "choch_bear": True}
+    sweep = {"bull_sweep": False, "bear_sweep": True}
+    long_score = _crypto_structure_quality_score(
+        bos, choch, sweep, "LH_LL", "LONG", 0.4
+    )
+    short_score = _crypto_structure_quality_score(
+        bos, choch, sweep, "LH_LL", "SHORT", 0.4
+    )
+    assert short_score > long_score

@@ -892,10 +892,23 @@ ENGINE_B_SPACE_RR_SUBSTITUTE_MIN_ATR_FLOOR: 0.5
 # Synthetic TPs created because no opposing wall existed still qualify, so the
 # 2026-06-24 "no opposing zone" over-block does not recur. Set false to revert.
 ENGINE_B_SPACE_RR_SUBSTITUTE_BLOCK_CAPPED_STRUCTURAL_TP: true
+# When structure TF is faster than this floor (equity/index H1 overrides),
+# size Engine B SL/TP on the floor series. STYLE_ATR_MULTS are H4-calibrated.
+# Empty string restores "ATR always equals structure TF".
+ENGINE_B_LEVELS_ATR_FLOOR_TF: H4
 ENGINE_B_ATR_SL_CLAMPS_ENABLED: true
 ENGINE_B_MIN_SL_ATR_DEFAULT: 0.75
 ENGINE_B_MAX_SL_ATR_DEFAULT: 3.0
-ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES: {}
+ENGINE_B_ATR_SL_CLAMP_SCORE_GROUP_OVERRIDES:
+  # Wider max only — does not reject names. Tight-vol bond/ETF mins sit
+  # under STYLE_ATR_MULTS so the 0.75 default cannot widen a 0.60 stop.
+  nat_gas: {min_sl_atr: 0.75, max_sl_atr: 4.0, absolute_min_sl_atr: 0.35}
+  softs: {min_sl_atr: 0.75, max_sl_atr: 4.0, absolute_min_sl_atr: 0.35}
+  precious_trackers: {min_sl_atr: 0.75, max_sl_atr: 3.5, absolute_min_sl_atr: 0.35}
+  crypto_other: {min_sl_atr: 0.75, max_sl_atr: 3.5, absolute_min_sl_atr: 0.35}
+  crypto_doge: {min_sl_atr: 0.75, max_sl_atr: 3.5, absolute_min_sl_atr: 0.35}
+  bond_tlt: {min_sl_atr: 0.50, max_sl_atr: 2.5, absolute_min_sl_atr: 0.30}
+  smallcap_em_etf: {min_sl_atr: 0.60, max_sl_atr: 2.5, absolute_min_sl_atr: 0.35}
 
 # ── Engine B SL/TP geometry (2026-07-25 audit) ──────────────────────────────
 # Measured before these flags, on EUR/USD intraday (H1 ATR 11p, min_rr 1.3):
@@ -3417,27 +3430,26 @@ ENGINE_B_WEIGHTED_SCORING:
     pullback_quality: 1.0
     sweep_quality: 1.0
   COMPONENT_WEIGHTS:
-    # 2026-08-05 Phase 2: add explicit pullback/sweep quality while retaining a
-    # normalized 1.0 table. Each contribution is independently observable.
-    structure_alignment: 0.18
-    ob_confluence: 0.11
-    fvg_confluence: 0.09
-    bag_continuation: 0.06
-    liquidity_proximity: 0.06
-    bos_followthrough: 0.11
-    volume_confirmation: 0.08
-    profile_reaction: 0.07
-    session_context: 0.06
-    orderflow: 0.04
-    pullback_quality: 0.08
+    # Earnable-first table (2026-08-13). The previous 0.18/0.11/0.09/... mix
+    # put ~60% of the denominator on rare confluence (OB+FVG+BAG+FT+profile).
+    # A clean BOS + zone-retest could not reach half of max. Core structure,
+    # location, pullback, and session now carry the grade; rare confluence
+    # is upside toward 70-90. Table sums to 1.0.
+    structure_alignment: 0.30
+    liquidity_proximity: 0.16
+    pullback_quality: 0.10
+    session_context: 0.08
+    bos_followthrough: 0.07
     sweep_quality: 0.06
-    # Declared at 0.0 so its inert state is explicit. compute_confluence_subscores
-    # emits this component, but it had no entry here at all, so
-    # aggregate_quality_score silently dropped it (weight <= 0 -> skipped) and it
-    # never appeared in quality_components either — computed-and-discarded with
-    # nothing in config to explain why. Raising it above 0 activates the term and
-    # re-enables the oscillator series computation for that group; the weight
-    # table must still sum to 1.0, so rebalance the others if you do.
+    ob_confluence: 0.07
+    fvg_confluence: 0.05
+    volume_confirmation: 0.04
+    orderflow: 0.04
+    profile_reaction: 0.02
+    bag_continuation: 0.01
+    # Declared at 0.0 so its inert state is explicit. Raising it above 0
+    # activates the oscillator term; rebalance the others so the table
+    # still sums to 1.0.
     momentum_oscillator_confluence: 0.0
   REGIME_COMPONENT_MULT:
     RANGING:
@@ -4487,9 +4499,9 @@ NAKED_ENGINE:
 
     precious_trackers:
 
-      intraday: {min_rr: 1.3}
+      intraday: {min_rr: 1.3, min_room_atr: 0.50}
 
-      swing: {min_rr: 1.8}
+      swing: {min_rr: 1.8, min_room_atr: 0.80}
 
     # energy_oil is defined once above (with min_room_atr rows). A duplicate
     # plain-min_rr block here silently shadowed it via YAML last-wins — removed

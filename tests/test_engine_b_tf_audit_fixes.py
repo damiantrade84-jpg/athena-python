@@ -115,6 +115,18 @@ def test_resolve_engine_b_tfs_exposes_m5_policy_and_prerequisite(monkeypatch):
     assert standard["execution_prerequisite"] is None
 
 
+def test_levels_atr_floor_keeps_slower_structure_and_lifts_faster(monkeypatch):
+    """H1 structure sizes stops on H4; swing D1 is left alone."""
+    from market_structure import _engine_b_levels_atr_tf
+
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_LEVELS_ATR_FLOOR_TF", "H4")
+    assert _engine_b_levels_atr_tf("H1") == "H4"
+    assert _engine_b_levels_atr_tf("H4") == "H4"
+    assert _engine_b_levels_atr_tf("D1") == "D1"
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_LEVELS_ATR_FLOOR_TF", "")
+    assert _engine_b_levels_atr_tf("H1") == "H1"
+
+
 def test_snapshot_profile_uses_d1_for_structural_scoring_zone_and_atr():
     """The pure snapshot scorer must consume the same D1 swing roles as live scans."""
     style, profile = resolve_engine_b_style_profile(

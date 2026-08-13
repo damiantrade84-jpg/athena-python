@@ -1474,6 +1474,7 @@ CONFIG: dict = {
     # substitute for the room gate — the wall is still in front of price.
     # Synthetic TPs created because no structural target existed still qualify.
     "ENGINE_B_SPACE_RR_SUBSTITUTE_BLOCK_CAPPED_STRUCTURAL_TP": True,
+    "ENGINE_B_LEVELS_ATR_FLOOR_TF": "H4",
     "ENGINE_B_ATR_SL_CLAMPS_ENABLED": True,
     "ENGINE_B_MIN_SL_ATR_DEFAULT": 0.75,
     "ENGINE_B_MAX_SL_ATR_DEFAULT": 3.0,
@@ -2996,20 +2997,20 @@ CONFIG: dict = {
             "sweep_quality": 1.0,
         },
         "COMPONENT_WEIGHTS": {
-            # 2026-08-05 Phase 2: normalized 1.0 quality table with explicit
-            # pullback/sweep evidence; mirrors config.yaml.
-            "structure_alignment": 0.18,
-            "ob_confluence": 0.11,
-            "fvg_confluence": 0.09,
-            "bag_continuation": 0.06,
-            "liquidity_proximity": 0.06,
-            "bos_followthrough": 0.11,
-            "volume_confirmation": 0.08,
-            "profile_reaction": 0.07,
-            "session_context": 0.06,
-            "orderflow": 0.04,
-            "pullback_quality": 0.08,
+            # Earnable-first table; mirrors config.yaml.
+            "structure_alignment": 0.30,
+            "liquidity_proximity": 0.16,
+            "pullback_quality": 0.10,
+            "session_context": 0.08,
+            "bos_followthrough": 0.07,
             "sweep_quality": 0.06,
+            "ob_confluence": 0.07,
+            "fvg_confluence": 0.05,
+            "volume_confirmation": 0.04,
+            "orderflow": 0.04,
+            "profile_reaction": 0.02,
+            "bag_continuation": 0.01,
+            "momentum_oscillator_confluence": 0.0,
         },
         "REGIME_COMPONENT_MULT": {
             "RANGING": {

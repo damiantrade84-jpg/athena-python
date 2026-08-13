@@ -26,24 +26,23 @@ _DEFAULT_COMPONENT_MAX: dict[str, float] = {
 }
 
 _DEFAULT_COMPONENT_WEIGHTS: dict[str, float] = {
-    "structure_alignment": 0.18,
-    "ob_confluence": 0.11,
-    "fvg_confluence": 0.09,
-    "bag_continuation": 0.06,
-    "liquidity_proximity": 0.06,
-    "bos_followthrough": 0.11,
-    "volume_confirmation": 0.08,
-    "profile_reaction": 0.07,
-    "session_context": 0.06,
-    "orderflow": 0.04,
-    # Default 0.0 — inert. ENGINE_B_WEIGHTED_SCORING itself defaults disabled
-    # (weighted_scoring_enabled()), and even when a group enables it, this
-    # component contributes nothing until a config.local.yaml override (via the
-    # Tuning Lab "push to default" action) gives it a non-zero weight. The ten
-    # active weights above, including BAG continuation, sum to 1.0.
-    "momentum_oscillator_confluence": 0.0,
-    "pullback_quality": 0.08,
+    # Earnable-first table. A clean BOS + zone-retest + session + pullback
+    # must be able to clear ~50% after class pruning. Rare confluence
+    # (OB/FVG/BAG/profile) is upside toward 70-90, not a requirement for
+    # "half of max". Sums to 1.0 with the inert oscillator at 0.0.
+    "structure_alignment": 0.30,
+    "liquidity_proximity": 0.16,
+    "pullback_quality": 0.10,
+    "session_context": 0.08,
+    "bos_followthrough": 0.07,
     "sweep_quality": 0.06,
+    "ob_confluence": 0.07,
+    "fvg_confluence": 0.05,
+    "volume_confirmation": 0.04,
+    "orderflow": 0.04,
+    "profile_reaction": 0.02,
+    "bag_continuation": 0.01,
+    "momentum_oscillator_confluence": 0.0,
 }
 
 
@@ -720,7 +719,7 @@ def engine_b_conviction_norm(conf: dict[str, Any] | None) -> float:
     if engine_b_conviction_basis() == "total":
         return round(_total_norm(), 4)
 
-    quality_pct = _num("quality_pct")
+    quality_pct = _num("quality_pct_net", "quality_pct")
     if quality_pct is not None:
         return round(_clamp01(quality_pct / 100.0), 4)
     points = _num("quality_points_net", "quality_score", "bonus_points")

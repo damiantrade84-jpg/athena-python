@@ -1694,3 +1694,26 @@ def test_rr_tighten_row_is_not_lost_from_cohort_aggregation():
     agg = aggregate_engine_b_level_cohorts([out])
     assert "unknown_level_mode" not in agg
     assert agg["structural_sl_structural_tp"]["count"] == 1
+
+
+def test_tp_exchange_bounds_exception_fails_closed(monkeypatch):
+    """A raised bounds helper must not bless an unvalidated TP."""
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("bounds helper exploded")
+
+    monkeypatch.setattr(risk_engine, "validate_tp_exchange_bounds", _boom)
+    out = resolve_engine_b_execution_levels(
+        direction="LONG",
+        entry=100.0,
+        structural_sl=98.0,
+        structural_tp=103.0,
+        atr=1.0,
+        style="intraday",
+        asset_class="forex",
+        min_rr=1.3,
+        fallback_rr=1.8,
+    )
+    assert out["execution_levels_valid"] is False
+    assert out["execution_level_reject_reason"] == "tp_exchange_bounds"
+    assert out["execution_tp"] is None

@@ -556,6 +556,35 @@ def engine_b_trigger_atr_period(
     return period if period > 0 else 14
 
 
+_ENGINE_B_ATR_TF_RANK = {
+    "D1": 0,
+    "H4": 1,
+    "H1": 2,
+    "M30": 3,
+    "M15": 4,
+    "M5": 5,
+    "M1": 6,
+}
+
+
+def _engine_b_levels_atr_tf(structure_tf: str) -> str:
+    """ATR series used to size Engine B stops/targets.
+
+    Structure detection stays on ``structure_tf``. When that rung is faster
+    than ``ENGINE_B_LEVELS_ATR_FLOOR_TF`` (default H4), levels are sized on
+    the floor so H1-structure equity/index names are not multiplied by
+    H4-calibrated ``STYLE_ATR_MULTS``. Empty floor keeps structure TF.
+    """
+    struct = str(structure_tf or "").strip().upper()
+    raw_floor = config.CONFIG.get("ENGINE_B_LEVELS_ATR_FLOOR_TF", "H4")
+    floor = str(raw_floor or "").strip().upper()
+    if not floor or floor not in _ENGINE_B_ATR_TF_RANK or struct not in _ENGINE_B_ATR_TF_RANK:
+        return struct or "H4"
+    if _ENGINE_B_ATR_TF_RANK[struct] > _ENGINE_B_ATR_TF_RANK[floor]:
+        return floor
+    return struct
+
+
 _ENGINE_B_LEGACY_TF_MATRIX = {
     asset: {
         # (struct, zone, trigger, atr) — zone tracks structure (intraday H1 / swing H4)
@@ -630,21 +659,25 @@ def resolve_engine_b_tfs(
             "legacy_matrix_used": True,
             "proposed": policy.payload(),
         }
-    # Engine B's structural ATR remains tied to its principal H4 structure
+    # Engine B's structural ATR remains tied to its principal structure
     # horizon; M5/M15 trigger noise must never size the structural trade.
+    # ENGINE_TF_ROLE_OVERRIDES can move equity/index structure to H1 while
+    # STYLE_ATR_MULTS stay H4-calibrated. Floor ATR at H4 so those names are
+    # not sized on a half-width series. Slower structure (swing D1) is kept.
+    _struct_tf = policy.structure_tf.value
     return {
         "regime": policy.regime_tf.value,
         "bias": policy.bias_tf.value,
-        "struct": policy.structure_tf.value,
-        # Room/space-gate walls and structural TP/location zones track the H4
+        "struct": _struct_tf,
+        # Room/space-gate walls and structural TP/location zones track the
         # primary structure TF. Bias remains context only. Pair with
         # ENGINE_B_SPACE_GATE_ENABLED when dense zone walls would otherwise
         # over-block; set zone back to bias_tf to restore D1 swing walls.
-        "zone": policy.structure_tf.value,
+        "zone": _struct_tf,
         "setup": policy.setup_tf.value,
         "trigger": policy.trigger_tf.value,
         "execution": policy.execution_tf.value,
-        "atr": policy.structure_tf.value,
+        "atr": _engine_b_levels_atr_tf(_struct_tf),
         # Conditional M5 is not an unconditional trigger promotion: the setup
         # rung must arm before M5 may fire. Both fields are carried so the
         # scoring layer can enforce that without re-resolving the policy.
@@ -1638,7 +1671,7 @@ def _engine_b_clamp_tp1_to_opposing_zone(
 
             _bounds_ok, _ = validate_tp_exchange_bounds(_entry, _clamp_tp, _ac, config.CONFIG)
         except Exception:
-            _bounds_ok = True
+            _bounds_ok = False
         if not _bounds_ok:
             diag["tp1_clamp_reject_reason"] = "clamp_tp_exchange_bounds"
             return diag
@@ -3771,8 +3804,9 @@ def resolve_engine_b_execution_levels(
                 _entry, _exec_tp, _asset_class_lower, config.CONFIG
             )
         except Exception:
-            _bounds_ok = True
-            _bounds_err = None
+            # Fail closed: a broken bounds helper must not bless an unvalidated TP.
+            _bounds_ok = False
+            _bounds_err = "validate_tp_exchange_bounds_error"
         if not _bounds_ok:
             _synth_attempted = False
             if (
@@ -3793,9 +3827,13 @@ def resolve_engine_b_execution_levels(
                     _exec_rr, _exec_valid, _exec_reject, _exec_tp_side_ok = _compute_exec_rr(
                         _exec_sl, _exec_tp
                     )
-                    _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
-                        _entry, _exec_tp, _asset_class_lower, config.CONFIG
-                    )
+                    try:
+                        _bounds_ok, _bounds_err = validate_tp_exchange_bounds(
+                            _entry, _exec_tp, _asset_class_lower, config.CONFIG
+                        )
+                    except Exception:
+                        _bounds_ok = False
+                        _bounds_err = "validate_tp_exchange_bounds_error"
             if not _bounds_ok:
                 _exec_valid = False
                 _exec_reject = "tp_exchange_bounds"
@@ -3849,7 +3887,7 @@ def resolve_engine_b_execution_levels(
                             _entry, _runner_tp2, _asset_class_lower, config.CONFIG
                         )
                     except Exception:
-                        _runner_bounds_ok = True
+                        _runner_bounds_ok = False
                 if _runner_bounds_ok:
                     _plan_tp2 = _runner_tp2
 
@@ -3941,7 +3979,7 @@ def resolve_engine_b_execution_levels(
                                         _entry, _floor_tp2, _asset_class_lower, config.CONFIG
                                     )
                                 except Exception:
-                                    _floor_ok = True
+                                    _floor_ok = False
                             if _floor_ok:
                                 _plan_tp2 = _floor_tp2
                             else:
@@ -6097,7 +6135,7 @@ class NakedEngine:
 
         choch_data = self._detect_choch(struct_highs, struct_lows, struct_atr, closes=struct_closes, swings=struct_swings, bos_data=bos_data, min_break_atr=structure_min_break_atr)
         if str(asset_type or "").lower() == "crypto":
-            crypto_struct_diag["structure_quality_score"] = _crypto_structure_quality_score(bos_data, choch_data, sweep_data, macro_seq_data["state"], "LONG", crypto_struct_diag.get("wick_dominance"))
+            # Direction-specific score is applied in analyze_structure_direction.
             crypto_struct_diag["d1"] = {"volatility_regime": d1_crypto_diag.get("volatility_regime"), "applied": d1_crypto_diag.get("applied"), "structure_mult": d1_crypto_diag.get("structure_mult"), "bos_min_break_atr": d1_crypto_diag.get("bos_min_break_atr")}
         if asset_struct_diag.get("asset_class") in {"stock", "index", "commodity", "etf", "etf_bond"}:
             asset_struct_diag["d1_structure"] = {"volatility_regime": d1_asset_diag.get("volatility_regime"), "applied": d1_asset_diag.get("applied"), "structure_mult": d1_asset_diag.get("structure_mult"), "bos_min_break_atr": d1_asset_diag.get("bos_min_break_atr")}
@@ -6515,6 +6553,16 @@ class NakedEngine:
 
         bos_confirmed = (direction == "LONG" and bos_data["bos_bull"]) or (direction == "SHORT" and bos_data["bos_bear"])
         choch_confirmed = (direction == "LONG" and choch_data["choch_bull"]) or (direction == "SHORT" and choch_data["choch_bear"])
+        if str(asset_type or "").lower() == "crypto":
+            crypto_struct_diag = dict(crypto_struct_diag or {})
+            crypto_struct_diag["structure_quality_score"] = _crypto_structure_quality_score(
+                bos_data,
+                choch_data,
+                sweep_data,
+                macro_seq_data["state"],
+                direction,
+                crypto_struct_diag.get("wick_dominance"),
+            )
 
         active_zone = nearest_sup if direction == "LONG" else nearest_res
         _fvg_context = directional_fvg_context(
@@ -6928,7 +6976,7 @@ class NakedEngine:
                 res=_result,
                 candles=trigger_candles,
                 direction=direction,
-                atr=float(trigger_atr or atr),
+                atr=float(struct_atr or atr),
                 active_zone=active_zone,
                 session_quality=str(_session_payload.get("session_quality") or "unknown"),
                 asset_type=asset_type,
@@ -8255,7 +8303,6 @@ class NakedEngine:
             if (_aggtrade_required and not _aggtrade_available and _aggtrade_mode == "degraded")
             else 0.0
         )
-        total_score = max(0.0, total_score - _aggtrade_missing_penalty_applied)
 
         # D1 PD-array conflict penalty (B-1).
         # FIX 1: Apply penalty ONLY to total_score, never to gate_score
@@ -8264,7 +8311,6 @@ class NakedEngine:
             config.CONFIG.get("NAKED_ENGINE", {}).get("d1_pd_array_penalty", 0.25)
         )
         _d1_penalty = _d1_penalty if _d1_conflict else 0.0
-        total_score = max(0.0, total_score - _d1_penalty)
 
         # hard_counter soft penalty in "penalty" mode. In "veto" mode structure_ok
         # is already False and the signal won't pass, so the penalty has no effect.
@@ -8283,7 +8329,31 @@ class NakedEngine:
             )
             else 0.0
         )
-        total_score = max(0.0, total_score - _hard_counter_penalty)
+        # Weighted quality lives on a 0-1 scale. The legacy penalties (0.25 /
+        # 0.5 / 1.0) were sized for 1-point bonus units and zeroed typical
+        # earned quality (~0.25) so the headline never reached half of max.
+        # Haircut the quality add-on instead; quality_pct reports gross earned
+        # confluence so the UI can rank setups.
+        _quality_penalty_applied = 0.0
+        if _use_weighted_scoring:
+            _quality_penalty_applied = (
+                (0.15 * _quality_score if _d1_penalty > 0 else 0.0)
+                + (0.20 * _quality_score if _hard_counter_penalty > 0 else 0.0)
+                + (
+                    0.15 * _quality_max_possible
+                    if _aggtrade_missing_penalty_applied > 0
+                    else 0.0
+                )
+            )
+            total_score = max(0.0, gate_score + _quality_score - _quality_penalty_applied)
+        else:
+            total_score = max(
+                0.0,
+                total_score
+                - _aggtrade_missing_penalty_applied
+                - _d1_penalty
+                - _hard_counter_penalty,
+            )
         # gate_score stays integer — never modified by penalty
 
         pct = min(100, max(0, round((total_score / max_possible) * 100)))
@@ -8305,15 +8375,25 @@ class NakedEngine:
         # it made `pct` near-useless for ranking, saturated the A/B conviction
         # blend (B nominally carries 0.60 weight but ~0.50 of it was constant),
         # and left the style min_score floors below the guaranteed gate floor.
-        # quality_pct measures only the earned quality layer, net of penalties,
-        # so it spans 0-100 for passing signals and can actually rank them.
+        # quality_pct is the earned confluence ratio (not after legacy-scale
+        # penalties), so a clean BOS+zone setup can actually occupy 50-70.
         _quality_denominator = (
             _quality_max_possible
             if _use_weighted_scoring
             else max(0.0, max_possible - gate_max_possible)
         )
-        _quality_points_net = max(0.0, total_score - gate_score)
+        if _use_weighted_scoring:
+            _quality_points_gross = max(0.0, _quality_score)
+            _quality_points_net = max(0.0, _quality_score - _quality_penalty_applied)
+        else:
+            _quality_points_gross = max(0.0, total_score - gate_score)
+            _quality_points_net = _quality_points_gross
         quality_pct = (
+            min(100.0, max(0.0, round((_quality_points_gross / _quality_denominator) * 100.0, 1)))
+            if _quality_denominator > 0
+            else None
+        )
+        quality_pct_net = (
             min(100.0, max(0.0, round((_quality_points_net / _quality_denominator) * 100.0, 1)))
             if _quality_denominator > 0
             else None
@@ -8564,7 +8644,10 @@ class NakedEngine:
             # Ranking / conviction basis — see quality_pct above. gate_pct is 100
             # for every pass and pct floors near 83%; only this field varies.
             "quality_pct": quality_pct,
+            "quality_pct_net": quality_pct_net,
+            "quality_points_gross": round(_quality_points_gross, 4),
             "quality_points_net": round(_quality_points_net, 4),
+            "quality_penalty_applied": round(_quality_penalty_applied, 4),
             "quality_components_pruned": list(_quality_pruned),
             "trigger_at_location": bool(_trigger_at_location),
             "trigger_location_blocked": bool(_trigger_location_blocked),
