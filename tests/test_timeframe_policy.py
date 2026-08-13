@@ -150,6 +150,22 @@ def test_every_source_enabled_registered_symbol_resolves_once() -> None:
     assert all(row["policy_source"] != PolicySource.SAFE_FALLBACK.value for row in result["rows"])
 
 
+def test_asx_200_aliases_share_canonical_engine_b_policy() -> None:
+    assert canonical_symbol("ASX 200") == "AUS200"
+    assert canonical_symbol("^AXJO") == "AUS200"
+    assert canonical_symbol("ASX200") == "AUS200"
+    assert canonical_symbol("AUS200.s") == "AUS200"
+    left = resolve_timeframe_policy(
+        "ASX 200", "index", "asian_indices", "intraday", engine_id="engine_b"
+    )
+    right = resolve_timeframe_policy(
+        "^AXJO", "index", "asian_indices", "intraday", engine_id="engine_b"
+    )
+    assert left.structure_tf == right.structure_tf
+    assert left.trigger_tf == right.trigger_tf
+    assert left.payload()["timeframePolicyHash"] == right.payload()["timeframePolicyHash"]
+
+
 def test_aliases_resolve_to_same_canonical_policy() -> None:
     left = resolve_timeframe_policy("EUR/USD", "forex", "forex_majors", "intraday")
     right = resolve_timeframe_policy("EURUSD=X", "forex", "forex_majors", "intraday")

@@ -8,7 +8,7 @@ from typing import Any, Callable
 from market_structure import sanitize_engine_b_structure_profile_fields
 from scoring import get_pair_score_group
 from style_resolver import resolve_auto_style
-from timeframe_policy import resolve_timeframe_policy
+from timeframe_policy import resolve_timeframe_policy, speed_state_from_policy_payload
 
 from ai_review.engine_a_context import (
     build_engine_b_prompt_context,
@@ -235,11 +235,13 @@ def assemble_engine_b_context(
         "m5Role": res.get("m5Role") or res.get("m5_role"),
         "m5Policy": res.get("m5Policy") or res.get("m5_policy"),
     }
+    speed_host = origin_payload if origin_payload.get("liveSpeedClass") or origin_payload.get("currentSpeedClass") else seed_row
     resolved_policy_context = resolve_timeframe_policy(
-        str(pair.get("symbol") or symbol),
+        str(pair.get("display") or symbol or pair.get("symbol") or ""),
         asset_type,
         asset_group,
         style,
+        speed_state_from_policy_payload(speed_host) if speed_host else None,
         engine_id="engine_b",
     ).payload()
     policy_context = {

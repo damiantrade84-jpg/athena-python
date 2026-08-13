@@ -3661,7 +3661,11 @@ export default function TVChartPanel() {
     // Never borrow timeframe roles from defaultCandidate: it may belong to a
     // different symbol when a manual/bulk intent is not in the current cache.
     const reviewSignal = chartCandidate || intentSignal;
-    const imageTimeframes = visionReviewImageTimeframes(reviewSignal || {});
+    const overlaySourceTimeframes = engineBOverlay?.source_timeframes;
+    const imageTimeframes = visionReviewImageTimeframes({
+      ...(reviewSignal || {}),
+      ...(overlaySourceTimeframes ? { sourceTimeframes: overlaySourceTimeframes } : {}),
+    });
     if (!imageTimeframes.structureTf || !imageTimeframes.entryTf) {
       setAiReviewError('Server-resolved structure and trigger timeframes are required for AI review');
       return;

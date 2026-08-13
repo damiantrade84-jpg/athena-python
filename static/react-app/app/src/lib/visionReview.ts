@@ -7,6 +7,13 @@ type CandlePayload = {
   latest_candle_ts?: string | number;
 };
 
+type SourceTimeframes = {
+  zone_tf?: string | null;
+  entry_tf?: string | null;
+  trigger_tf?: string | null;
+  structure_tf?: string | null;
+};
+
 type VisionSignalLike = {
   setupTf?: string;
   triggerTf?: string;
@@ -19,6 +26,8 @@ type VisionSignalLike = {
   requestedStyle?: string;
   requested_style?: string;
   timeframe_route?: { autoSelectTf?: string };
+  sourceTimeframes?: SourceTimeframes | null;
+  source_timeframes?: SourceTimeframes | null;
   naked_data?: unknown;
   engine_b?: unknown;
 };
@@ -40,6 +49,19 @@ function candleTimestamp(candle: unknown): string | number | undefined {
   const row = candle as Record<string, unknown>;
   const ts = row.t ?? row.time ?? row.ts;
   return typeof ts === 'string' || typeof ts === 'number' ? ts : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function firstTf(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim().toUpperCase();
+  }
+  return '';
 }
 
 export function preferredVisionReviewTf(signal: VisionSignalLike): string {
@@ -69,26 +91,40 @@ export function preferredVisionReviewTf(signal: VisionSignalLike): string {
 }
 
 export function visionReviewImageTimeframes(signal: VisionSignalLike): VisionReviewImageTimeframes {
-  const nestedEngineB = signal.naked_data || signal.engine_b;
-  const engineB = nestedEngineB && typeof nestedEngineB === 'object'
-    ? nestedEngineB as Record<string, unknown>
-    : {};
-  const structure = signal.structureTf
-    || (engineB.structure_timeframe as string | undefined)
-    || (engineB.zone_tf as string | undefined)
-    || signal.setupTf
-    || (engineB.setup_tf as string | undefined)
-    || signal.timeframe;
-  const entry = signal.triggerTf
-    || (engineB.trigger_timeframe_actual as string | undefined)
-    || (engineB.trigger_timeframe as string | undefined)
-    || (engineB.entry_tf as string | undefined)
-    || signal.entryTimeframe
-    || signal.executionTf;
+  const engineB = asRecord(signal.naked_data || signal.engine_b);
+  const sourceTfs = {
+    ...asRecord(signal.sourceTimeframes || signal.source_timeframes),
+    ...asRecord(engineB.sourceTimeframes || engineB.source_timeframes),
+  };
+  // Role images must follow server structure/trigger stamps. setupTf and the
+  // visible chart timeframe are not structure authority — using them sends H4
+  // or M30 screenshots for index rows whose policy structure is H1.
+  const structure = firstTf(
+    signal.structureTf,
+    engineB.structureTf,
+    engineB.structure_tf,
+    engineB.structure_timeframe,
+    engineB.zoneTf,
+    engineB.zone_tf,
+    sourceTfs.zone_tf,
+    sourceTfs.structure_tf,
+  );
+  const entry = firstTf(
+    signal.triggerTf,
+    engineB.triggerTf,
+    engineB.trigger_tf,
+    engineB.trigger_timeframe_actual,
+    engineB.trigger_timeframe,
+    engineB.entryTf,
+    engineB.entry_tf,
+    sourceTfs.trigger_tf,
+    sourceTfs.entry_tf,
+    signal.entryTimeframe,
+  );
 
   return {
-    structureTf: String(structure || '').toUpperCase(),
-    entryTf: String(entry || '').toUpperCase(),
+    structureTf: structure,
+    entryTf: entry,
   };
 }
 

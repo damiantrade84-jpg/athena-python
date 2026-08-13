@@ -282,9 +282,16 @@ def _review_image_timeframe_error(
         )
     if not mismatches:
         return None
+    rendered = ", ".join(
+        f"{item['role']} expected={item['expected']} actual={item['actual']}"
+        for item in mismatches
+    )
     return {
         "error": "review_image_timeframe_mismatch",
-        "detail": "Structure and entry chart images must match server-resolved policy roles",
+        "detail": (
+            "Structure and entry chart images must match server-resolved "
+            f"policy roles ({rendered})"
+        ),
         "mismatches": mismatches,
         "policy_source": (
             (engine_ctx.get("review_image_policy_diagnostic") or {}).get("source")

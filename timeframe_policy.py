@@ -782,6 +782,7 @@ for _canonical, _values in {
     "GER40": ("DAX", "DAX 40", "^GDAXI"),
     "UK100": ("FTSE 100", "^FTSE"),
     "JPN225": ("Nikkei 225", "JP225", "^N225"),
+    "AUS200": ("ASX 200", "^AXJO", "AXJO", "ASX200"),
     "BTCUSDT": ("BTC/USDT",),
     "ETHUSDT": ("ETH/USDT",),
     "BNBUSDT": ("BNB/USDT",),
@@ -861,6 +862,7 @@ _SYMBOL_OVERRIDES: dict[str, dict[str, Any]] = {
     "US500": {"m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
     "UK100": {"m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
     "JPN225": {"m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
+    "AUS200": {"m5_policy": M5Policy.DISABLED, "profile": "EQUITY_INDEX_STANDARD"},
     # Single stocks / bond & small-cap & EM ETFs.
     "AAPL": {"m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},
     "SPY": {"m5_policy": M5Policy.CONDITIONAL, "profile": "US_STOCK_SINGLE"},

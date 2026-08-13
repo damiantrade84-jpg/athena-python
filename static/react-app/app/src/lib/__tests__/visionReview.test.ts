@@ -23,9 +23,32 @@ describe('visionReviewImageTimeframes', () => {
     })).toEqual({ structureTf: 'H4', entryTf: 'M30' });
   });
 
-  it('does not invent a trigger timeframe when policy provenance is missing', () => {
-    expect(visionReviewImageTimeframes({ timeframe: 'H4' })).toEqual({
-      structureTf: 'H4',
+  it('reads Engine B snake_case structure_tf and nested triggerTf', () => {
+    expect(visionReviewImageTimeframes({
+      timeframe: 'H4',
+      setupTf: 'M30',
+      naked_data: {
+        structure_tf: 'H1',
+        triggerTf: 'M15',
+        setup_tf: 'M30',
+      },
+    })).toEqual({ structureTf: 'H1', entryTf: 'M15' });
+  });
+
+  it('reads Engine B sourceTimeframes when top-level policy stamps are absent', () => {
+    expect(visionReviewImageTimeframes({
+      timeframe: 'H4',
+      setupTf: 'M30',
+      sourceTimeframes: { zone_tf: 'H1', trigger_tf: 'M15', entry_tf: 'M15' },
+    })).toEqual({ structureTf: 'H1', entryTf: 'M15' });
+  });
+
+  it('does not invent structure or trigger roles from setupTf or chart timeframe', () => {
+    expect(visionReviewImageTimeframes({
+      timeframe: 'H4',
+      setupTf: 'M30',
+    })).toEqual({
+      structureTf: '',
       entryTf: '',
     });
   });

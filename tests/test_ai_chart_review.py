@@ -34,7 +34,9 @@ from ai_review.context_diagnostics import build_context_diagnostics, sanitize_ai
 from ai_review.timestamp_contract import evaluate_timestamp_mismatch
 from ai_review.validation import validate_request
 from athena_app.api.routes_ai_chart_review import (
+    _resolve_review_image_policy,
     _resolve_server_candidate,
+    _review_image_timeframe_error,
     register_ai_chart_review_routes,
 )
 from config import CONFIG, get_ai_model
@@ -188,6 +190,7 @@ def _make_app(
     openai_enabled: bool = True,
     primary_engine: str = "A",
     engine_a_rows: list[dict] | None = None,
+    engine_b_rows: list[dict] | None = None,
 ):
     app = Flask(__name__)
     cfg = dict(CONFIG)
@@ -205,7 +208,16 @@ def _make_app(
         # it, so "BTCUSDT" falls through to crypto_other (swing-only since
         # 766d0135) while the real "BTC/USDT" is crypto_btc (intraday). The bare
         # form made the timeframe-route assertions unreachable.
-        display = "BTC/USDT" if symbol.upper() == "BTCUSDT" else symbol
+        raw = str(symbol or "").strip().upper()
+        compact = "".join(ch for ch in raw if ch.isalnum())
+        if compact in {"ASX200", "AUS200", "AXJO"}:
+            return {
+                "symbol": "^AXJO",
+                "display": "ASX 200",
+                "type": "index",
+                "source": "mt5",
+            }
+        display = "BTC/USDT" if raw == "BTCUSDT" else symbol
         return {"symbol": symbol, "display": display, "type": "crypto", "source": "binance"}
 
     def _analyze(pair, btc_bias, style="swing"):
@@ -306,7 +318,7 @@ def _make_app(
         btc_bias_fn=lambda: "neutral",
         naked_analysis_fn=_naked_analysis,
         last_engine_a_rows_fn=lambda: list(engine_a_rows or []),
-        last_engine_b_rows_fn=lambda: [],
+        last_engine_b_rows_fn=lambda: list(engine_b_rows or []),
     )
     register_ai_chart_review_routes(app, runtime)
     return app
@@ -440,6 +452,108 @@ def test_route_rejects_entry_image_that_does_not_match_policy_trigger(tmp_audit_
     assert resp.get_json()["mismatches"] == [
         {"role": "entry", "expected": "M15", "actual": "H4"}
     ]
+    assert "entry expected=M15 actual=H4" in resp.get_json()["detail"]
+    mock_call.assert_not_called()
+
+
+def test_review_image_policy_reads_engine_b_zone_and_trigger_stamps():
+    origin = {
+        "signalId": "nkd-asx",
+        "display": "ASX 200",
+        "symbol": "^AXJO",
+        "direction": "LONG",
+        "naked_data": {
+            "structure_tf": "H1",
+            "zone_tf": "H1",
+            "setup_tf": "M30",
+            "entry_tf": "M15",
+            "trigger_timeframe_actual": "M15",
+        },
+    }
+    live_ctx = {
+        "timeframe_policy": {
+            "structureTf": "H4",
+            "triggerTf": "M15",
+        }
+    }
+    selected, diagnostic = _resolve_review_image_policy(live_ctx, origin)
+    assert diagnostic["source"] == "selected_candidate"
+    assert selected["structureTf"] == "H1"
+    assert selected["triggerTf"] == "M15"
+    live_ctx["review_image_policy"] = selected
+    live_ctx["review_image_policy_diagnostic"] = diagnostic
+    assert (
+        _review_image_timeframe_error(
+            live_ctx, structure_timeframe="H1", entry_timeframe="M15"
+        )
+        is None
+    )
+    mismatch = _review_image_timeframe_error(
+        live_ctx, structure_timeframe="H4", entry_timeframe="M15"
+    )
+    assert mismatch is not None
+    assert mismatch["error"] == "review_image_timeframe_mismatch"
+    assert mismatch["mismatches"] == [
+        {"role": "structure", "expected": "H1", "actual": "H4"}
+    ]
+
+
+def test_route_engine_b_asx200_rejects_universal_h4_when_policy_structure_differs(
+    tmp_audit_db,
+):
+    policy = resolve_timeframe_policy(
+        "ASX 200",
+        "index",
+        "asian_indices",
+        "intraday",
+        engine_id="engine_b",
+    )
+    expected_structure = policy.structure_tf.value
+    expected_trigger = policy.trigger_tf.value
+    wrong_structure = "D1" if expected_structure != "D1" else "W1"
+
+    candidate = {
+        "id": "NKD_ASX 200_LONG_1",
+        "timestamp": _fresh_iso(0),
+        "symbol": "^AXJO",
+        "display": "ASX 200",
+        "direction": "LONG",
+        "engine": "engine_b",
+        "style": "intraday",
+        "naked_data": {
+            "structure_tf": expected_structure,
+            "zone_tf": expected_structure,
+            "entry_tf": expected_trigger,
+            "trigger_timeframe_actual": expected_trigger,
+        },
+    }
+    app = _make_app(tmp_audit_db, primary_engine="B", engine_b_rows=[candidate])
+    client = app.test_client()
+    body = _base_request_engine_b()
+    body["symbol"] = "ASX 200"
+    body["timeframe"] = wrong_structure
+    body["screenshot_meta"]["chart_timeframe"] = wrong_structure
+    body["entry_screenshot_meta"]["chart_timeframe"] = expected_trigger
+    body["screenshot_meta"].update(
+        {
+            "candidate_id": candidate["id"],
+            "candidate_revision": candidate["timestamp"],
+            "candidate_direction": "LONG",
+            "signal_style": "intraday",
+            "primary_engine": "B",
+            "signal_engine": "B",
+        }
+    )
+    with patch("ai_review.providers.anthropic_provider.call_anthropic_chart_review") as mock_call:
+        resp = client.post("/api/ai/chart-review", json=body)
+    assert resp.status_code == 409
+    payload = resp.get_json()
+    assert payload["error"] == "review_image_timeframe_mismatch"
+    assert {
+        "role": "structure",
+        "expected": expected_structure,
+        "actual": wrong_structure,
+    } in payload["mismatches"]
     mock_call.assert_not_called()
 
 

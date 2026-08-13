@@ -35,6 +35,40 @@ def _naked_result():
     }
 
 
+def test_assemble_engine_b_context_asx200_uses_display_policy_identity():
+    pair = {
+        "symbol": "^AXJO",
+        "display": "ASX 200",
+        "type": "index",
+        "source": "mt5",
+    }
+
+    def naked_analysis_fn(sig, overlay_only=False):
+        assert sig["style"] == "intraday"
+        return {
+            **_naked_result(),
+            "structure_tf": "H1",
+            "zone_tf": "H1",
+            "entry_tf": "M15",
+            "current_price": 8800.0,
+            "recommended_stop_loss": 8700.0,
+            "recommended_take_profit": 9000.0,
+        }, pair, None
+
+    ctx = assemble_engine_b_context(
+        "ASX 200",
+        "H4",
+        screenshot_meta={"candidate_direction": "LONG", "analyze_style": "intraday"},
+        resolve_pair_fn=lambda _s: pair,
+        naked_analysis_fn=naked_analysis_fn,
+    )
+    assert ctx is not None
+    assert ctx["symbol"] == "ASX 200"
+    assert ctx["asset_class"] == "index"
+    assert ctx["timeframe_policy"]["structureTf"]
+    assert ctx["timeframe_policy"]["triggerTf"]
+
+
 def test_assemble_engine_b_context_uses_direction_from_meta():
     def resolve_pair(_symbol: str):
         return _pair()

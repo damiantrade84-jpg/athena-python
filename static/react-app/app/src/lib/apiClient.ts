@@ -34,7 +34,11 @@ async function requestJson(url: string, options?: RequestInit): Promise<unknown>
   const data = (await safeJson(resp)) as ApiResponse;
 
   if (!resp.ok) {
-    const msg = (data && (data.error || data.reason)) || `HTTP ${resp.status}`;
+    const error = data && (data.error || data.reason);
+    const detail = typeof data?.detail === 'string' ? data.detail.trim() : '';
+    const msg = error
+      ? (detail && !detail.startsWith(String(error)) ? `${error}: ${detail}` : String(error))
+      : `HTTP ${resp.status}`;
     throw new Error(msg);
   }
   return data;
