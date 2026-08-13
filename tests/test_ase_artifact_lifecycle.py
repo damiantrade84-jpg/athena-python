@@ -21,6 +21,7 @@ PASSING_METRICS = {
     "max_instrument_profit_share": 0.30,
     "max_dd_R": 4.0,
     "brier_skill": 0.1,
+    "cost_stress_expectancy_1_5": 0.06,
 }
 
 

@@ -14,6 +14,7 @@ def _metrics():
         "max_instrument_profit_share": 0.25,
         "max_dd_R": 8.0,
         "brier_skill": 0.05,
+        "cost_stress_expectancy_1_5": 0.04,
     }
 
 

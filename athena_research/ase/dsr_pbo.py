@@ -81,6 +81,18 @@ def deflated_sharpe_ratio(
     return DSRResult(sr, dsr, n_trials, n, skew, kurt)
 
 
+def dsr_probability(deflated_sharpe: float) -> float:
+    """Confidence form of the deflated Sharpe z-score.
+
+    ``deflated_sharpe_ratio`` returns a standardised statistic; the §11
+    ``dsr_min`` threshold (0.95) is a confidence level, so callers gating on
+    it must compare against this CDF, not the raw z.
+    """
+    if not math.isfinite(deflated_sharpe):
+        return float("nan")
+    return 0.5 * (1.0 + math.erf(deflated_sharpe / math.sqrt(2.0)))
+
+
 def _norm_ppf(p: float) -> float:
     p = min(max(p, 1e-12), 1.0 - 1e-12)
     return float(math.sqrt(2.0) * _erfinv(2.0 * p - 1.0))

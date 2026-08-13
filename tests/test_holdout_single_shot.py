@@ -21,6 +21,7 @@ def test_holdout_single_shot_guard():
             "max_instrument_profit_share": 0.2,
             "max_dd_R": 5,
             "brier_skill": 0.01,
+            "cost_stress_expectancy_1_5": 0.03,
         },
         registry=reg,
         save=False,
@@ -37,6 +38,7 @@ def test_passing_legacy_holdout_can_bind_identity_once_when_metrics_match():
         "max_instrument_profit_share": 0.2,
         "max_dd_R": 5,
         "brier_skill": 0.01,
+        "cost_stress_expectancy_1_5": 0.03,
     }
     reg = HoldoutRegistry()
     run_holdout_eval(

@@ -28,6 +28,7 @@ from athena_ase.models.calibrate import (
     brier_skill,
     chronological_calibration_split,
     fit_isotonic,
+    reliability_table,
 )
 from athena_ase.models.meta import BASE_HGB_PARAMS, _prepare_matrix, train_meta_classifier
 from athena_ase.models.quantile_heads import (
@@ -37,10 +38,11 @@ from athena_ase.models.quantile_heads import (
     train_quantile_heads,
 )
 from athena_ase.registry.artifacts import freeze_artifact_bundle
+from athena_ase.validation.gates import cost_stress_metric_key
 from athena_ase.artifacts.monitor_ref import build_monitor_reference
 from athena_ase.signals.arbitrate import Candidate
 from athena_research.ase.bootstrap import block_bootstrap_expectancy
-from athena_research.ase.dsr_pbo import deflated_sharpe_ratio
+from athena_research.ase.dsr_pbo import deflated_sharpe_ratio, dsr_probability
 from athena_research.ase.event_backtest import EVENTS_PATH
 from athena_research.ase.training_report import write_training_report
 from athena_research.ase.walkforward import expanding_folds, purge_embargo_mask
@@ -435,6 +437,42 @@ def train_family_horizon(
         boot_source,
         n_trials=ASE_TOTAL_FAMILY_HORIZON_TRIALS,
     )
+    # §11 cost stress: hold the 1x-cost selection fixed and re-price it at a
+    # higher cost multiple. Re-selecting under stressed costs would need a
+    # retrain, so keeping the book fixed is the conservative reading — it asks
+    # whether the trades actually taken survive, not whether a cheaper book exists.
+    def _cost_column(name: str) -> np.ndarray:
+        if name not in eval_frame.columns:
+            return np.zeros(len(eval_frame), dtype=float)
+        return np.nan_to_num(eval_frame[name].to_numpy(dtype=float))
+
+    if "total_cost_R" in eval_frame.columns:
+        round_trip_cost_r = _cost_column("total_cost_R")
+    else:
+        round_trip_cost_r = _cost_column("cost_R") + _cost_column("swap_R")
+    stressed_costs = round_trip_cost_r[selected]
+    cost_stress_expectancy = {
+        multiple: (
+            float((selected_net_r - (multiple - 1.0) * stressed_costs).mean())
+            if len(selected_net_r)
+            else float("nan")
+        )
+        for multiple in (1.5, 2.0)
+    }
+
+    # §11 reliability: largest drop in observed win rate between consecutive
+    # probability bins. Pairs with models.calibrate.reliability_monotone, which
+    # flags a bin when obs[i] + tol < obs[i-1].
+    reliability_rows = reliability_table(eval_probability, eval_y)
+    observed_rates = [row["obs_rate"] for row in reliability_rows]
+    reliability_max_drop = max(
+        (
+            observed_rates[i - 1] - observed_rates[i]
+            for i in range(1, len(observed_rates))
+        ),
+        default=0.0,
+    )
+    reliability_max_drop = max(0.0, float(reliability_max_drop))
     eval_summary = {
         "expectancy": float(selected_net_r.mean()) if len(selected_net_r) else 0.0,
         "win_rate": float((selected_net_r > 0).mean()) if len(selected_net_r) else 0.0,
@@ -592,6 +630,13 @@ def train_family_horizon(
         "brier_skill": eval_summary["brier_skill"],
         "bootstrap_lb_expectancy": boot.lb_expectancy,
         "dsr": dsr.deflated_sharpe,
+        "dsr_prob": dsr_probability(dsr.deflated_sharpe),
+        cost_stress_metric_key(1.5): cost_stress_expectancy[1.5],
+        cost_stress_metric_key(2.0): cost_stress_expectancy[2.0],
+        "reliability_max_drop": reliability_max_drop,
+        # cscv_pbo needs a multi-configuration performance matrix that the
+        # trials registry does not retain, so no honest value can be emitted
+        # yet. check_validated fails closed on the absent key by design.
     }
 
     models: dict[str, Any] = {
