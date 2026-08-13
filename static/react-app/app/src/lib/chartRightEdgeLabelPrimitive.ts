@@ -44,6 +44,20 @@ class ChartRightEdgeLabelRenderer implements IPrimitivePaneRenderer {
         const x = isCurrentPrice ? 6 : mediaSize.width - 6 - boxWidth;
         const yTop = y - boxHeight / 2;
 
+        // Collision stacking can lift a chip off its own level. Draw a leader
+        // back to the true price so a displaced chip never reads as if the level
+        // were where the chip sits.
+        if (!isCurrentPrice && Math.abs(label.y - y) > 1) {
+          context.globalAlpha = 0.5;
+          context.strokeStyle = label.color;
+          context.lineWidth = 1;
+          context.beginPath();
+          context.moveTo(x - 9, label.y);
+          context.lineTo(x - 1, y);
+          context.stroke();
+          context.globalAlpha = 1;
+        }
+
         context.fillStyle = 'rgba(13, 18, 26, 0.72)';
         context.strokeStyle = label.color;
         context.lineWidth = 1;

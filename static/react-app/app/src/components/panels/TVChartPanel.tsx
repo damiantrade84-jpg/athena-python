@@ -11,6 +11,7 @@ import {
   type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
+  type AutoscaleInfo,
   type CandlestickData,
   type HistogramData,
   type LineData,
@@ -83,6 +84,7 @@ import { AIReviewProviderToggle } from '@/components/athena/AIReviewProviderTogg
 import ChartFeedHeaderChips, { type ChartFeedHeaderChipSpec } from '@/components/athena/ChartFeedHeaderChips';
 import CompactSuggestedWatchStatus from '@/components/athena/CompactSuggestedWatchStatus';
 import { ChartRightEdgeLabelPrimitive } from '@/lib/chartRightEdgeLabelPrimitive';
+import { EngineATradePrimitive, type TradeLevelRole } from '@/lib/engineATradePrimitive';
 import {
   buildEngineBZones,
   ENGINE_B_ZONE_STYLE,
@@ -213,6 +215,12 @@ type PresetValue = (typeof PRESET_OPTIONS)[number]['value'];
 
 const CHART_HISTORY_LIMIT = 1000;
 const VISIBLE_BAR_COUNT = 180;
+// Whitespace kept to the right of the last bar, in bar widths (TradingView
+// behaviour). Engine B swing markers are centred on the last bar, so this also
+// has to cover half the widest marker text or it gets clipped by the pane edge.
+const CHART_RIGHT_PAD_BARS = 14;
+// Half of the longest swing label must fit inside CHART_RIGHT_PAD_BARS.
+const SWING_MARKER_MAX_CHARS = 16;
 const PRICE_CHART_HEIGHT_PX = 340;
 const STUDY_PANE_HEIGHT_PX = 110;
 const LIVE_TICK_MAX_AGE_SEC = 20;
@@ -1332,12 +1340,24 @@ interface EngineBSingleLevel {
   style?: LineStyle;
 }
 
+// A trade renders as TradingView's position tool: thin boundary lines at each
+// level, translucent risk/reward bands between them, and one `NAME price` tag per
+// level at the left of the plot (see EngineATradePrimitive). Nothing is drawn on
+// the price axis or at the right edge — entry/stop/targets cluster within a few
+// ATR of live price, so tagging them there buried the most recent candles.
 interface EngineAPriceLevel {
   label: string;
   price: number;
   color: string;
+  role: TradeLevelRole;
   style?: LineStyle;
 }
+
+// Direction semantics match every other P&L surface: blue entry, red stop,
+// green target.
+const TRADE_LEVEL_ENTRY_COLOR = '#38bdf8';
+const TRADE_LEVEL_STOP_COLOR = '#f43f5e';
+const TRADE_LEVEL_TARGET_COLOR = '#10b981';
 
 function engineAPriceLevels(signal: EngineASignal | null): EngineAPriceLevel[] {
   if (!signal || isEngineBPrimarySignal(signal)) return [];
@@ -1350,19 +1370,21 @@ function engineAPriceLevels(signal: EngineASignal | null): EngineAPriceLevel[] {
     entryZone.length ? entryZone.reduce((sum, value) => sum + value, 0) / entryZone.length : null,
   );
   const levels: EngineAPriceLevel[] = [];
-  if (entry != null) levels.push({ label: 'A Entry', price: entry, color: 'rgba(56, 189, 248, 0.95)' });
+  if (entry != null) {
+    levels.push({ label: 'Entry', price: entry, color: TRADE_LEVEL_ENTRY_COLOR, role: 'entry' });
+  }
   const stop = firstNumber(signal.sl, signal.invalidation);
   if (stop != null) {
-    levels.push({ label: 'A SL', price: stop, color: 'rgba(244, 63, 94, 0.95)', style: LineStyle.Dashed });
+    levels.push({ label: 'SL', price: stop, color: TRADE_LEVEL_STOP_COLOR, role: 'stop', style: LineStyle.Dashed });
   }
   const targetCandidates = [
-    ['A TP1', firstNumber(signal.tp1, signal.tp, signal.targets?.[0]?.price)],
-    ['A TP2', firstNumber(signal.tp2, signal.targets?.[1]?.price)],
-    ['A TP3', firstNumber(signal.tp3, signal.targets?.[2]?.price)],
+    ['TP1', firstNumber(signal.tp1, signal.tp, signal.targets?.[0]?.price)],
+    ['TP2', firstNumber(signal.tp2, signal.targets?.[1]?.price)],
+    ['TP3', firstNumber(signal.tp3, signal.targets?.[2]?.price)],
   ] as const;
   for (const [label, price] of targetCandidates) {
     if (price == null || levels.some((level) => level.price === price)) continue;
-    levels.push({ label, price, color: 'rgba(16, 185, 129, 0.90)', style: LineStyle.Dotted });
+    levels.push({ label, price, color: TRADE_LEVEL_TARGET_COLOR, role: 'target', style: LineStyle.Dashed });
   }
   return levels;
 }
@@ -1480,7 +1502,10 @@ function resolveRightEdgeLabels(
 function normalizeSwingText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const text = value.replace(/_/g, ' ').trim();
-  return text ? text.slice(0, 28) : null;
+  if (!text) return null;
+  // Truncate rather than let the pane edge cut the glyphs in half — the marker is
+  // centred on the last bar, so a long sequence ran past the right of the plot.
+  return text.length > SWING_MARKER_MAX_CHARS ? `${text.slice(0, SWING_MARKER_MAX_CHARS - 1)}…` : text;
 }
 
 function engineBMarkers(
@@ -3268,6 +3293,11 @@ export default function TVChartPanel() {
   const engineAPriceLinesRef = useRef<IPriceLine[]>([]);
   const engineBZonePrimitiveRef = useRef<EngineBZonePrimitive | null>(null);
   const rightEdgeLabelPrimitiveRef = useRef<ChartRightEdgeLabelPrimitive | null>(null);
+  const engineATradePrimitiveRef = useRef<EngineATradePrimitive | null>(null);
+  // Active Engine A entry/SL/TP prices, read by the candle series autoscale
+  // provider. Price lines are excluded from lightweight-charts autoscale, so a
+  // stop or target outside the visible bar range would otherwise render off-pane.
+  const tradeLevelPricesRef = useRef<number[]>([]);
   const chartCaptureRef = useRef<HTMLDivElement | null>(null);
   const ema20SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const ema21SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
@@ -3289,6 +3319,12 @@ export default function TVChartPanel() {
     const minMove = typeof _pp?.min_move === 'number' ? _pp.min_move : 10 ** -precision;
     return { type: 'price' as const, precision, minMove };
   }, [chartPayload?.price_precision, engineBOverlay?.price_precision]);
+  // Position-tool tags carry the price themselves, so they must use the same
+  // precision the price axis does.
+  const formatLevelPrice = useMemo(
+    () => (price: number) => price.toFixed(candlePriceFormat.precision),
+    [candlePriceFormat.precision],
+  );
 
   function captureChartCanvas(): { canvas: HTMLCanvasElement | null; error: string | null } {
     const captureEl = chartCaptureRef.current;
@@ -3789,6 +3825,21 @@ export default function TVChartPanel() {
       priceLineVisible: true,
       priceLineColor: 'rgba(148, 163, 184, 0.35)',
       priceFormat: candlePriceFormat,
+      // TradingView keeps the whole position inside the visible price range;
+      // merge the trade levels back into the bar range so entry/SL/TP are always
+      // on the pane rather than clipped at an edge.
+      autoscaleInfoProvider: (original: () => AutoscaleInfo | null) => {
+        const base = original();
+        const prices = tradeLevelPricesRef.current.filter((price) => Number.isFinite(price));
+        if (!base?.priceRange || prices.length === 0) return base;
+        return {
+          ...base,
+          priceRange: {
+            minValue: Math.min(base.priceRange.minValue, ...prices),
+            maxValue: Math.max(base.priceRange.maxValue, ...prices),
+          },
+        };
+      },
     }, 0);
     candleSeriesRef.current = candleSeries;
     engineBMarkersRef.current = createSeriesMarkers(candleSeries, [], { zOrder: 'top' });
@@ -3803,6 +3854,11 @@ export default function TVChartPanel() {
     const labelPrimitive = new ChartRightEdgeLabelPrimitive();
     candleSeries.attachPrimitive(labelPrimitive);
     rightEdgeLabelPrimitiveRef.current = labelPrimitive;
+    // Engine A position tool: risk/reward bands under the candles, level tags on
+    // top. Data pushed via setLevels() from the data-push effect below.
+    const tradePrimitive = new EngineATradePrimitive();
+    candleSeries.attachPrimitive(tradePrimitive);
+    engineATradePrimitiveRef.current = tradePrimitive;
 
     // Axis stays clean: values live in the quant-debug strip, not in stacked
     // axis boxes that crowd the price scale.
@@ -3888,6 +3944,7 @@ export default function TVChartPanel() {
       engineAPriceLinesRef.current = [];
       engineBZonePrimitiveRef.current = null;
       rightEdgeLabelPrimitiveRef.current = null;
+      engineATradePrimitiveRef.current = null;
       ema20SeriesRef.current = null;
       ema21SeriesRef.current = null;
       ema50SeriesRef.current = null;
@@ -3924,6 +3981,8 @@ export default function TVChartPanel() {
     if (!candles || candles.length === 0) {
       candleSeries.setData([]);
       engineBMarkersRef.current?.setMarkers([]);
+      engineATradePrimitiveRef.current?.setLevels([], formatLevelPrice);
+      tradeLevelPricesRef.current = [];
       ema20SeriesRef.current?.setData([]);
       ema21SeriesRef.current?.setData([]);
       ema50SeriesRef.current?.setData([]);
@@ -3943,21 +4002,30 @@ export default function TVChartPanel() {
     const times = rows.map((row) => row.time);
     const volumes = studySnapshot.volumes;
     const values = studySnapshot.seriesValues;
+    // Seed the autoscale provider before setData so the first scale pass already
+    // contains the whole position, exactly as TradingView frames a position tool.
+    const tradeLevels = effectivePrimaryEngine === 'A' ? engineAPriceLevels(chartCandidate) : [];
+    tradeLevelPricesRef.current = tradeLevels.map((level) => level.price);
     candleSeries.setData(rows);
-    if (effectivePrimaryEngine === 'A') {
-      for (const level of engineAPriceLevels(chartCandidate)) {
-        engineAPriceLinesRef.current.push(
-          candleSeries.createPriceLine({
-            price: level.price,
-            color: level.color,
-            lineWidth: 1,
-            lineStyle: level.style ?? LineStyle.Solid,
-            axisLabelVisible: false,
-            title: '',
-          }),
-        );
-      }
+    for (const level of tradeLevels) {
+      engineAPriceLinesRef.current.push(
+        candleSeries.createPriceLine({
+          price: level.price,
+          color: level.color,
+          lineWidth: 1,
+          lineStyle: level.style ?? LineStyle.Solid,
+          // Boundary lines only. Identity and price ride the position-tool tags at
+          // the left of the plot; a native axis label here would stack four solid
+          // boxes over the price scale and hide its tick values.
+          axisLabelVisible: false,
+          title: '',
+        }),
+      );
     }
+    engineATradePrimitiveRef.current?.setLevels(
+      tradeLevels.map((level) => ({ role: level.role, label: level.label, price: level.price })),
+      formatLevelPrice,
+    );
     engineBMarkersRef.current?.setMarkers(engineBMarkers(engineBOverlay, rows, engineBOverlayRenderable));
     if (chartMode === 'clean') {
       // Do not replace filled support/resistance/FVG zones with line-only overlays;
@@ -3997,22 +4065,11 @@ export default function TVChartPanel() {
     }
 
     const paneHeightPx = containerRef.current?.clientHeight ?? chartHeightPx;
+    // Engine A entry/SL/TP no longer join this chip row: the collision stacker
+    // slides a chip away from its own price, which made TP1/TP2 point at the
+    // wrong line. Trade levels now carry native tags at their exact level; only
+    // Engine B structural context still uses compact chips.
     const labelInputs = buildEngineBRightEdgeLabelInputs(engineBOverlay, engineBOverlayRenderable, chartMode === 'clean');
-    if (effectivePrimaryEngine === 'A') {
-      // Engine A entry/SL/TP levels join the same compact chip row instead of
-      // native price-line axis boxes, which overflowed into the plot and
-      // covered the most recent candles.
-      for (const [index, level] of engineAPriceLevels(chartCandidate).entries()) {
-        const text = level.label.replace(/^A\s+/, '');
-        labelInputs.push({
-          id: `engine-a-${index}-${text}-${level.price}`,
-          text,
-          price: level.price,
-          color: level.color,
-          priority: labelPriorityForText(text),
-        });
-      }
-    }
     rightEdgeLabelPrimitiveRef.current?.setLabels(
       resolveRightEdgeLabels(candleSeries, labelInputs, paneHeightPx),
       paneHeightPx,
@@ -4059,14 +4116,13 @@ export default function TVChartPanel() {
     }
     pushLine(volumeMaSeriesRef.current, isCryptoChart && quantVolumeBars && quantVolumeMa, values.volumeMa || []);
 
-    if (rows.length > VISIBLE_BAR_COUNT) {
-      chart.timeScale().setVisibleLogicalRange({
-        from: rows.length - VISIBLE_BAR_COUNT,
-        to: rows.length - 1,
-      });
-    } else {
-      chart.timeScale().fitContent();
-    }
+    // TradingView always leaves air to the right of the last bar so the level
+    // tags and the last-price label sit in whitespace instead of on the most
+    // recent candles. Pinning `to` at the last bar removed that margin.
+    chart.timeScale().setVisibleLogicalRange({
+      from: rows.length > VISIBLE_BAR_COUNT ? rows.length - VISIBLE_BAR_COUNT : 0,
+      to: rows.length - 1 + CHART_RIGHT_PAD_BARS,
+    });
 
     const generation = chartRenderGenerationKey(pair, backendTf, rows.length);
     chartRenderGenerationRef.current = generation;
@@ -4080,7 +4136,7 @@ export default function TVChartPanel() {
     return () => {
       cancelled = true;
     };
-  }, [pair, candles, liveTick, backendTf, isCryptoChart, showVwapOnChart, studySnapshot, chartPayload, candlePriceFormat, engineBOverlay, engineBOverlayRenderable, chartMode, chartCandidate, effectivePrimaryEngine, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
+  }, [pair, candles, liveTick, backendTf, isCryptoChart, showVwapOnChart, studySnapshot, chartPayload, candlePriceFormat, formatLevelPrice, engineBOverlay, engineBOverlayRenderable, chartMode, chartCandidate, effectivePrimaryEngine, quantEma20, quantEma21, quantEma50, quantEma200, quantDema200, quantVwap, quantRsi14, quantAdx14, quantAtr14, quantVolumeBars, quantVolumeMa]);
 
   return (
     <>

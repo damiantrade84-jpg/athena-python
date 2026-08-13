@@ -1035,6 +1035,49 @@ def test_tv_chart_right_edge_label_layout_helper_wired():
     assert "ChartRightEdgeLabelPrimitive" in primitive
     assert "axisLabelVisible: false" in source
 
+    # A stacked chip can sit off its own price; it must draw a leader back to the
+    # true level so it never reads as if the level were where the chip landed.
+    assert "Math.abs(label.y - y) > 1" in primitive
+
+
+def test_tv_chart_trade_levels_use_tradingview_position_tool():
+    """Entry/SL/TP render as TradingView's position tool: risk/reward bands under
+    the candles and one `NAME price` tag per level at the LEFT of the plot.
+
+    Entry, stop and targets cluster within a few ATR of live price, which sits at
+    the right edge. Tagging them there -- first via the right-edge chip stacker,
+    which slid a chip off its own price, then via native axis labels, which stacked
+    four solid boxes over the price scale -- buried the most recent candles.
+    """
+    source = _read(TV_PANEL)
+    primitive = _read(ROOT / "static/react-app/app/src/lib/engineATradePrimitive.ts")
+
+    assert "EngineATradePrimitive" in source
+    assert "engineATradePrimitiveRef.current?.setLevels" in source
+    assert "tradeBands" in primitive
+    assert "layoutTradeLabelRows" in primitive
+    assert "LABEL_LEFT_PX" in primitive
+    # Bands paint under the candles, tags over them.
+    assert "zOrder(): 'bottom'" in primitive
+    assert "zOrder(): 'top'" in primitive
+
+    # Nothing from a trade level is painted on the price axis or the right edge.
+    assert "axisLabelColor" not in source
+    assert "title: level.label" not in source
+    assert "engine-a-" not in source
+
+    # Price lines are excluded from lightweight-charts autoscale, so a stop or
+    # target outside the bar range would render off-pane without this.
+    assert "autoscaleInfoProvider" in source
+    assert "tradeLevelPricesRef" in source
+
+    # Right-hand whitespace also has to cover half the widest Engine B swing
+    # marker, which is centred on the last bar and was being clipped by the edge.
+    assert "const CHART_RIGHT_PAD_BARS = 14" in source
+    assert "to: rows.length - 1 + CHART_RIGHT_PAD_BARS" in source
+    assert "const SWING_MARKER_MAX_CHARS = 16" in source
+    assert "SWING_MARKER_MAX_CHARS - 1" in source
+
 
 def test_tv_chart_compact_header_chips():
     source = _read(TV_PANEL)
