@@ -72,7 +72,7 @@ for (const marker of requiredCssMarkers) {
 const requiredJsMarkers = [
   'EquityAreaChart',
   'eqFill',
-  'Engine B quality',
+  'engine_b_quality_pct_net',
   // AI chart review must ship the two-image browser contract. These property
   // names survive minification and catch a stale five-field production bundle.
   'review_role',
