@@ -65,32 +65,32 @@ type ChatMessage =
 function decisionClass(decision?: string): string {
   switch (decision) {
     case 'VALID_SETUP':
-      return 'bg-emerald-950 text-emerald-200 border-emerald-500/70';
+      return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40';
     case 'BLOCKED_BY_RISK':
     case 'NO_TRADE':
-      return 'bg-rose-950 text-rose-200 border-rose-500/70';
+      return 'bg-rose-500/10 text-rose-300 border-rose-500/40';
     case 'WAIT_FOR_CONFIRMATION':
     case 'WATCHLIST':
-      return 'bg-blue-950 text-blue-200 border-blue-500/70';
+      return 'bg-blue-500/10 text-blue-300 border-blue-500/40';
     case 'DATA_INSUFFICIENT':
-      return 'bg-amber-900/80 text-amber-200 border-amber-500/60';
+      return 'bg-warning/10 text-warning border-warning/40';
     default:
-      return 'bg-slate-800 text-slate-200 border-slate-600';
+      return 'bg-muted/50 text-muted-foreground border-border/60';
   }
 }
 
 function leeVerdictClass(verdict?: string): string {
   switch (verdict) {
     case 'CONTEXT_SUPPORTS':
-      return 'bg-blue-950 text-blue-200 border-blue-500/70';
+      return 'bg-blue-500/10 text-blue-300 border-blue-500/40';
     case 'CONTEXT_BLOCKS':
-      return 'bg-rose-950 text-rose-200 border-rose-500/70';
+      return 'bg-rose-500/10 text-rose-300 border-rose-500/40';
     case 'WAIT':
-      return 'bg-amber-900/80 text-amber-200 border-amber-500/60';
+      return 'bg-warning/10 text-warning border-warning/40';
     case 'NEED_MORE_DATA':
-      return 'bg-slate-800 text-slate-200 border-slate-600';
+      return 'bg-muted/50 text-muted-foreground border-border/60';
     default:
-      return 'bg-slate-800 text-slate-200 border-slate-600';
+      return 'bg-muted/50 text-muted-foreground border-border/60';
   }
 }
 
@@ -98,13 +98,13 @@ function ListBlock({ title, items }: { title: string; items?: string[] }) {
   if (!items || items.length === 0) return null;
   return (
     <div className="space-y-1">
-      <p className="text-[10px] uppercase text-amber-400 font-semibold">{title}</p>
+      <p className="text-[10px] uppercase text-primary font-semibold">{title}</p>
       <div className="flex flex-wrap gap-1">
         {items.slice(0, 12).map((item, index) => (
           <Badge
             key={`${item}-${index}`}
             variant="outline"
-            className="text-[10px] max-w-full break-words whitespace-normal bg-slate-900 text-slate-100 border-slate-600"
+            className="text-[10px] max-w-full break-words whitespace-normal bg-muted/30 text-foreground border-border/60"
           >
             {item}
           </Badge>
@@ -160,9 +160,9 @@ function KeyValueRows({ data }: { data?: Record<string, unknown> | null }) {
   return (
     <div className="space-y-1">
       {Object.entries(data).map(([key, value]) => (
-        <div key={key} className="flex items-start justify-between gap-2 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px]">
-          <span className="text-slate-400 capitalize">{key.replace(/_/g, ' ')}</span>
-          <span className="font-mono text-right break-words text-slate-100">
+        <div key={key} className="flex items-start justify-between gap-2 rounded border border-border/50 bg-background/60 px-2 py-1 text-[11px]">
+          <span className="text-muted-foreground capitalize">{key.replace(/_/g, ' ')}</span>
+          <span className="font-mono text-right break-words text-foreground">
             {isScalar(value) || value == null ? formatScalar(value) : safeJson(value).slice(0, 120)}
           </span>
         </div>
@@ -176,8 +176,8 @@ function RawDetailsBlock({ title, value }: { title: string; value: unknown }) {
   if (Array.isArray(value) && value.length === 0) return null;
   if (isPlainObject(value) && Object.keys(value).length === 0) return null;
   return (
-    <ExpandableSection title={title} icon={<Info className="w-3.5 h-3.5 text-slate-400" />}>
-      <pre className="text-[10px] leading-snug text-slate-200 bg-slate-950 border border-slate-700 rounded p-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">
+    <ExpandableSection title={title} icon={<Info className="w-3.5 h-3.5 text-muted-foreground" />}>
+      <pre className="text-[10px] leading-snug text-foreground/90 bg-background/60 border border-border/50 rounded p-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">
         {safeJson(value)}
       </pre>
     </ExpandableSection>
@@ -185,10 +185,10 @@ function RawDetailsBlock({ title, value }: { title: string; value: unknown }) {
 }
 
 function statusClass(status?: string): string {
-  if (status === 'ok' || status === 'fresh' || status === 'allowed') return 'bg-emerald-950 text-emerald-200 border-emerald-500/70';
-  if (status === 'error' || status === 'stale' || status === 'blocked') return 'bg-rose-950 text-rose-200 border-rose-500/70';
-  if (status === 'skipped' || status === 'partial' || status === 'unavailable') return 'bg-amber-900/80 text-amber-200 border-amber-500/60';
-  return 'bg-slate-800 text-slate-200 border-slate-600';
+  if (status === 'ok' || status === 'fresh' || status === 'allowed') return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40';
+  if (status === 'error' || status === 'stale' || status === 'blocked') return 'bg-rose-500/10 text-rose-300 border-rose-500/40';
+  if (status === 'skipped' || status === 'partial' || status === 'unavailable') return 'bg-warning/10 text-warning border-warning/40';
+  return 'bg-muted/50 text-foreground/90 border-border/60';
 }
 
 function SectionCard({
@@ -203,16 +203,16 @@ function SectionCard({
   if (!children) return null;
   const toneClass =
     tone === 'warning'
-      ? 'border-amber-500/60 bg-amber-950/70'
+      ? 'border-warning/30 bg-warning/5'
       : tone === 'short'
-        ? 'border-rose-500/60 bg-rose-950/70'
+        ? 'border-rose-500/30 bg-rose-500/5'
         : tone === 'long'
-          ? 'border-emerald-500/60 bg-emerald-950/70'
-          : 'border-slate-700 bg-slate-900';
+          ? 'border-emerald-500/30 bg-emerald-500/5'
+          : 'border-border/50 bg-muted/20';
   return (
     <div className={cn('rounded-md border p-3 space-y-1', toneClass)}>
-      <p className="text-[10px] uppercase text-amber-400 font-semibold tracking-wide">{title}</p>
-      <p className="text-xs leading-relaxed whitespace-pre-wrap break-words text-slate-100">{children}</p>
+      <p className="text-[10px] uppercase text-primary font-semibold tracking-wide">{title}</p>
+      <p className="text-xs leading-relaxed whitespace-pre-wrap break-words text-foreground">{children}</p>
     </div>
   );
 }
@@ -228,9 +228,9 @@ function DetailGrid({ rows }: { rows: Array<[string, unknown]> }) {
   return (
     <div className="grid grid-cols-2 gap-2 text-xs">
       {visibleRows.map(([label, value]) => (
-        <div key={label} className="flex items-center justify-between gap-2 rounded border border-slate-700 bg-slate-900 px-2 py-1">
-          <span className="text-[10px] text-slate-400 capitalize">{label.replace(/_/g, ' ')}</span>
-          <span className="font-mono text-right break-words text-slate-100">{formatScalar(value)}</span>
+        <div key={label} className="flex items-center justify-between gap-2 rounded border border-border/50 bg-muted/20 px-2 py-1">
+          <span className="text-[10px] text-muted-foreground capitalize">{label.replace(/_/g, ' ')}</span>
+          <span className="font-mono text-right break-words text-foreground">{formatScalar(value)}</span>
         </div>
       ))}
     </div>
@@ -250,21 +250,21 @@ function ExpandableSection({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="rounded-md border border-slate-700 bg-slate-900">
+    <Collapsible open={open} onOpenChange={setOpen} className="rounded-md border border-border/50 bg-muted/20">
       <CollapsibleTrigger asChild>
         <Button
           type="button"
           variant="ghost"
-          className="h-8 w-full justify-between px-2 text-xs text-slate-100 hover:bg-slate-800"
+          className="h-8 w-full justify-between px-2 text-xs text-foreground hover:bg-muted/40"
         >
-          <span className="inline-flex items-center gap-1 text-amber-400 font-semibold uppercase tracking-wide">
+          <span className="inline-flex items-center gap-1 text-primary font-semibold uppercase tracking-wide">
             {icon}
             {title}
           </span>
-          {open ? <ChevronUp className="w-3.5 h-3.5 text-slate-300" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-300" />}
+          {open ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
         </Button>
       </CollapsibleTrigger>
-      <CollapsibleContent className="px-2 pb-2 text-slate-100">
+      <CollapsibleContent className="px-2 pb-2 text-foreground">
         {children}
       </CollapsibleContent>
     </Collapsible>
@@ -278,10 +278,10 @@ function MarketIntelligenceCard({ data }: { data?: AiMarketIntelligenceSummary }
   const warnings = asList(data.warnings);
   const sourceStatus = data.source_status && Object.keys(data.source_status).length > 0 ? data.source_status : null;
   return (
-    <Card className="border-slate-700 bg-slate-900 shadow-sm">
+    <Card className="border-border/50 bg-muted/20 shadow-sm">
       <CardContent className="p-3 space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold flex items-center gap-1 text-amber-400 uppercase tracking-wide">
+          <span className="text-xs font-semibold flex items-center gap-1 text-primary uppercase tracking-wide">
             <ShieldAlert className="w-3.5 h-3.5 text-warning" /> Market Intelligence
           </span>
         </div>
@@ -294,7 +294,7 @@ function MarketIntelligenceCard({ data }: { data?: AiMarketIntelligenceSummary }
         {calendar.length > 0 && <ListBlock title="Calendar (72h)" items={calendar} />}
         {sourceStatus && (
           <div>
-            <p className="text-[10px] uppercase text-amber-400 font-semibold mb-1">Source status</p>
+            <p className="text-[10px] uppercase text-primary font-semibold mb-1">Source status</p>
             <KeyValueRows data={sourceStatus as Record<string, unknown>} />
           </div>
         )}
@@ -310,10 +310,10 @@ function VisionSummaryCard({ data }: { data?: AiVisionSummary }) {
   const obstacles = asList(data.visible_obstacles);
   const styleRatings = data.style_ratings && Object.keys(data.style_ratings).length > 0 ? data.style_ratings : null;
   return (
-    <Card className="border-slate-700 bg-slate-900 shadow-sm">
+    <Card className="border-border/50 bg-muted/20 shadow-sm">
       <CardContent className="p-3 space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold flex items-center gap-1 text-amber-400 uppercase tracking-wide">
+          <span className="text-xs font-semibold flex items-center gap-1 text-primary uppercase tracking-wide">
             <Eye className="w-3.5 h-3.5 text-primary" /> Vision Summary
           </span>
         </div>
@@ -327,7 +327,7 @@ function VisionSummaryCard({ data }: { data?: AiVisionSummary }) {
         />
         {styleRatings && (
           <div>
-            <p className="text-[10px] uppercase text-amber-400 font-semibold mb-1">Style ratings</p>
+            <p className="text-[10px] uppercase text-primary font-semibold mb-1">Style ratings</p>
             <KeyValueRows data={styleRatings as Record<string, unknown>} />
           </div>
         )}
@@ -353,7 +353,7 @@ function SelectedSignalSummary({
   const hasSignal = !!(resolvedSymbol || resolvedTraceId);
   if (!hasSignal) {
     return (
-      <div className="rounded-md border border-amber-500/60 bg-amber-900/80 p-3 text-[11px] text-amber-100 space-y-1">
+      <div className="rounded-md border border-warning/30 bg-warning/5 p-3 text-[11px] text-foreground/85 space-y-1">
         <div className="flex items-center gap-2 font-medium">
           <AlertTriangle className="w-3.5 h-3.5" />
           Symbol-only chat — no signal linked
@@ -365,10 +365,10 @@ function SelectedSignalSummary({
     );
   }
   return (
-    <div className="rounded-md border border-slate-700 bg-slate-900 p-3 space-y-2">
+    <div className="rounded-md border border-border/50 bg-muted/20 p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-semibold text-amber-400 uppercase tracking-wide">Selected Signal</p>
-        <Badge variant="outline" className="text-[10px] max-w-[220px] truncate bg-slate-800 text-slate-100 border-amber-600/40">{resolvedSymbol || 'linked trace'}</Badge>
+        <p className="text-xs font-semibold text-primary uppercase tracking-wide">Selected Signal</p>
+        <Badge variant="outline" className="text-[10px] max-w-[220px] truncate bg-primary/10 text-primary border-primary/30">{resolvedSymbol || 'linked trace'}</Badge>
       </div>
       <DetailGrid
         rows={[
@@ -413,7 +413,7 @@ function DataCheckedCard({
       <div className="space-y-2">
         <DetailGrid rows={checkRows} />
         {!data && (
-          <p className="text-[11px] text-slate-400">
+          <p className="text-[11px] text-muted-foreground">
             Backend did not return a structured data_checked block; showing facts and missing fields from the chat summary.
           </p>
         )}
@@ -431,7 +431,7 @@ function ToolCallsCard({ toolCalls }: { toolCalls?: AiToolCallSummary[] }) {
   return (
     <ExpandableSection title="Tool transparency" icon={<Wrench className="w-3.5 h-3.5 text-primary" />}>
       {calls.length === 0 ? (
-        <p className="text-[11px] text-slate-400">
+        <p className="text-[11px] text-muted-foreground">
           No structured tool_calls were returned by the backend for this turn.
         </p>
       ) : (
@@ -442,16 +442,16 @@ function ToolCallsCard({ toolCalls }: { toolCalls?: AiToolCallSummary[] }) {
             const args = (call.args || call.input) as unknown;
             const hasArgs = args != null && (isPlainObject(args) ? Object.keys(args).length > 0 : true);
             return (
-              <div key={`${name}-${index}`} className="rounded border border-slate-700 bg-slate-950 p-2 space-y-1">
+              <div key={`${name}-${index}`} className="rounded border border-border/50 bg-background/60 p-2 space-y-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-slate-100">{name}</span>
+                  <span className="text-xs font-medium text-foreground">{name}</span>
                   <Badge className={cn('text-[10px] border font-semibold', statusClass(call.status))}>{call.status || 'unknown'}</Badge>
                 </div>
                 <DetailGrid rows={[['duration_ms', call.duration_ms]]} />
-                {summary && <p className="text-[11px] text-slate-200 whitespace-pre-wrap break-words">{summary}</p>}
+                {summary && <p className="text-[11px] text-foreground/90 whitespace-pre-wrap break-words">{summary}</p>}
                 {hasArgs && isPlainObject(args) && (
                   <div>
-                    <p className="text-[10px] uppercase text-amber-400 font-semibold mb-1">Arguments</p>
+                    <p className="text-[10px] uppercase text-primary font-semibold mb-1">Arguments</p>
                     <KeyValueRows data={args as Record<string, unknown>} />
                   </div>
                 )}
@@ -470,12 +470,12 @@ function SafetyCard({ safety, riskWarning }: { safety?: AiTradeChatResponse['saf
   const blockedReasons = asList(safety?.blocked_reasons);
   const advisoryOnly = safety?.advisory_only !== false;
   return (
-    <div className="rounded-md border border-amber-500/60 bg-amber-900/80 p-3 text-[11px] text-amber-100 space-y-2">
-      <div className="flex items-center gap-2 font-medium text-amber-200">
+    <div className="rounded-md border border-warning/30 bg-warning/5 p-3 text-[11px] text-foreground/85 space-y-2">
+      <div className="flex items-center gap-2 font-medium text-warning">
         <ShieldAlert className="w-3.5 h-3.5" />
         Safety note
       </div>
-      <p className="leading-relaxed text-amber-100">
+      <p className="leading-relaxed text-foreground/85">
         {safety?.note || 'AI is advisory/read-only. Execution still requires ATHENA risk, freshness, guardian, and trade gates.'}
       </p>
       <DetailGrid
@@ -565,23 +565,23 @@ function AssistantResponse({
           {response.decision || 'NO_DECISION'}
         </Badge>
         {contradictionFlags.length > 0 || contradictions.length > 0 ? (
-          <Badge className="bg-rose-950 text-rose-200 border-rose-500/70 text-[10px]">
+          <Badge className="bg-rose-500/10 text-rose-300 border-rose-500/40 text-[10px]">
             <AlertTriangle className="w-3 h-3 mr-1" />
             {Math.max(contradictionFlags.length, contradictions.length)} flags
           </Badge>
         ) : (
-          <Badge className="bg-emerald-950 text-emerald-200 border-emerald-500/70 text-[10px]">
+          <Badge className="bg-emerald-500/10 text-emerald-300 border-emerald-500/40 text-[10px]">
             <CheckCircle2 className="w-3 h-3 mr-1" />
             No contradictions
           </Badge>
         )}
         {response.final_action && (
-          <Badge variant="outline" className="text-[10px] bg-slate-800 text-slate-100 border-slate-600">
+          <Badge variant="outline" className="text-[10px] bg-muted/50 text-foreground/80 border-border/60">
             Action: {response.final_action}
           </Badge>
         )}
         {response.compared_symbol && (
-          <Badge variant="outline" className="text-[10px] bg-slate-800 text-slate-100 border-slate-600">
+          <Badge variant="outline" className="text-[10px] bg-muted/50 text-foreground/80 border-border/60">
             Compared: {response.compared_symbol}
           </Badge>
         )}
@@ -591,12 +591,12 @@ function AssistantResponse({
       <SelectedSignalSummary signal={response.selected_signal} symbol={response.symbol || symbol} traceId={response.trace_id || traceId} />
 
       {/* 3. Assistant Answer / Trading Desk Read — visible by default, top priority */}
-      <div className="rounded-md border border-amber-600/40 bg-slate-900 p-3 space-y-2 shadow-sm">
+      <div className="rounded-md border border-primary/25 bg-muted/20 p-3 space-y-2">
         <div className="flex items-center gap-2">
-          <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
-          <p className="text-[10px] uppercase tracking-wide text-amber-400 font-semibold">Trading desk read</p>
+          <MessageSquare className="w-3.5 h-3.5 text-primary" />
+          <p className="text-[10px] uppercase tracking-wide text-primary font-semibold">Trading desk read</p>
         </div>
-        <div className="text-xs leading-relaxed whitespace-pre-wrap break-words text-slate-100">
+        <div className="text-xs leading-relaxed whitespace-pre-wrap break-words text-foreground">
           {answerText}
         </div>
       </div>
@@ -673,11 +673,11 @@ function LeeConfirmationCard({
       {error && <ErrorBanner message={error} />}
       <div className="flex items-center justify-between gap-2">
         <div>
-          <p className="text-xs font-semibold flex items-center gap-1 text-amber-400 uppercase tracking-wide">
-            <Bot className="w-3.5 h-3.5 text-amber-400" />
+          <p className="text-xs font-semibold flex items-center gap-1 text-primary uppercase tracking-wide">
+            <Bot className="w-3.5 h-3.5 text-primary" />
             Lee advisory confirmation
           </p>
-          <p className="text-[10px] text-slate-400">
+          <p className="text-[10px] text-muted-foreground">
             Read-only Hermes/Lee context. Athena deterministic gates stay authoritative.
           </p>
         </div>
@@ -685,7 +685,7 @@ function LeeConfirmationCard({
           type="button"
           size="sm"
           variant="outline"
-          className="h-7 text-[10px] gap-1 bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
+          className="h-7 text-[10px] gap-1"
           disabled={loading || !hasSelectedSignal}
           onClick={onRefresh}
         >
@@ -695,7 +695,7 @@ function LeeConfirmationCard({
       </div>
 
       {!hasSelectedSignal && (
-        <div className="rounded-md border border-amber-500/60 bg-amber-900/80 p-3 text-[11px] text-amber-100 space-y-1">
+        <div className="rounded-md border border-warning/30 bg-warning/5 p-3 text-[11px] text-foreground/85 space-y-1">
           <div className="flex items-center gap-2 font-medium">
             <AlertTriangle className="w-3.5 h-3.5" />
             Select a signal before asking Lee
@@ -707,8 +707,8 @@ function LeeConfirmationCard({
       )}
 
       {loading && !response && (
-        <div className="rounded-md border border-slate-700 bg-slate-900 p-3 text-xs text-slate-200 flex items-center gap-2">
-          <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+        <div className="rounded-md border border-border/50 bg-muted/20 p-3 text-xs text-foreground/90 flex items-center gap-2">
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
           Re-resolving server-side signal context and safety clamps...
         </div>
       )}
@@ -719,32 +719,32 @@ function LeeConfirmationCard({
             <Badge className={cn('text-[10px] border font-semibold', leeVerdictClass(response.lee_verdict))}>
               {label}
             </Badge>
-            <Badge variant="outline" className="text-[10px] bg-slate-800 text-slate-100 border-slate-600">
+            <Badge variant="outline" className="text-[10px] bg-muted/50 text-foreground/80 border-border/60">
               {response.schema_version || 'lee_confirmation.v1'}
             </Badge>
-            <Badge className="bg-amber-900/80 text-amber-200 border-amber-500/60 text-[10px]">
+            <Badge className="bg-warning/10 text-warning border-warning/40 text-[10px]">
               Advisory only
             </Badge>
             {response.trade_specific_confirmation_allowed ? (
-              <Badge className="bg-blue-950 text-blue-200 border-blue-500/70 text-[10px]">
+              <Badge className="bg-blue-500/10 text-blue-300 border-blue-500/40 text-[10px]">
                 Context support allowed
               </Badge>
             ) : (
-              <Badge className="bg-slate-800 text-slate-200 border-slate-600 text-[10px]">
+              <Badge className="bg-muted/50 text-muted-foreground border-border/60 text-[10px]">
                 No trade-specific approval
               </Badge>
             )}
           </div>
 
-          <div className="rounded-md border border-amber-600/40 bg-slate-900 p-3 space-y-2 shadow-sm">
+          <div className="rounded-md border border-primary/25 bg-muted/20 p-3 space-y-2">
             <div className="flex items-center gap-2">
-              <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
-              <p className="text-[10px] uppercase tracking-wide text-amber-400 font-semibold">Lee read</p>
+              <MessageSquare className="w-3.5 h-3.5 text-primary" />
+              <p className="text-[10px] uppercase tracking-wide text-primary font-semibold">Lee read</p>
             </div>
-            <p className="text-xs leading-relaxed whitespace-pre-wrap break-words text-slate-100">
+            <p className="text-xs leading-relaxed whitespace-pre-wrap break-words text-foreground">
               {response.narrative || 'Lee returned no narrative. See structured fields below.'}
             </p>
-            <p className="text-[10px] text-amber-200 leading-relaxed">
+            <p className="text-[10px] text-warning leading-relaxed">
               This is not execution permission or an order-approval signal. Athena gates, guardian, freshness, risk, and broker controls remain authoritative.
             </p>
           </div>
@@ -761,12 +761,12 @@ function LeeConfirmationCard({
             ]}
           />
 
-          <div className="rounded-md border border-amber-500/60 bg-amber-900/80 p-3 text-[11px] text-amber-100 space-y-2">
-            <div className="flex items-center gap-2 font-medium text-amber-200">
+          <div className="rounded-md border border-warning/30 bg-warning/5 p-3 text-[11px] text-foreground/85 space-y-2">
+            <div className="flex items-center gap-2 font-medium text-warning">
               <ShieldAlert className="w-3.5 h-3.5" />
               Lee safety envelope
             </div>
-            <p className="leading-relaxed text-amber-100">
+            <p className="leading-relaxed text-foreground/85">
               {safety?.note || 'Lee is advisory/read-only. She cannot execute, modify thresholds, guardian, kill-switch, or risk state.'}
             </p>
             <DetailGrid
@@ -1157,14 +1157,14 @@ export default function AITradingAgentPanel({
   }, [compareSymbol, send]);
 
   return (
-    <Card className={cn('relative isolate border border-amber-700/40 bg-slate-950 shadow-lg text-slate-100 rounded-xl', className)}>
+    <Card className={cn('relative isolate rounded-xl border border-border/60 bg-card text-card-foreground shadow-lg', className)}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-xs font-semibold flex items-center justify-between gap-2 uppercase tracking-wider text-amber-400">
+        <CardTitle className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           <span className="inline-flex items-center gap-2">
-            <Bot className="w-4 h-4 text-amber-400" />
+            <Bot className="w-3.5 h-3.5 text-primary" />
             AI Trading Agent
           </span>
-          <Badge variant="outline" className="text-[10px] max-w-[240px] truncate bg-slate-900 text-slate-100 border-amber-600/40">
+          <Badge variant="outline" className="text-[10px] max-w-[240px] truncate bg-muted/40 font-mono text-muted-foreground border-border/60">
             {contextLabel}
           </Badge>
         </CardTitle>
@@ -1181,28 +1181,28 @@ export default function AITradingAgentPanel({
             <SelectedSignalSummary signal={signal as AiSelectedSignalSummary | null | undefined} symbol={resolvedSymbol} traceId={resolvedTraceId} />
             {error && <ErrorBanner message={error} />}
 
-            <div className="rounded-md border border-slate-700 bg-slate-900 p-2 space-y-2">
+            <div className="rounded-md border border-border/50 bg-muted/20 p-2 space-y-2">
               <div className="flex items-center gap-2">
-                <GitCompare className="w-3.5 h-3.5 text-amber-400" />
+                <GitCompare className="w-3.5 h-3.5 text-primary" />
                 <Input
                   value={compareSymbol}
                   onChange={(event) => setCompareSymbol(event.target.value)}
                   placeholder="Compare symbol, e.g. BTCUSDT"
-                  className="h-8 text-xs bg-slate-950 text-slate-100 placeholder:text-slate-500 border-slate-700"
+                  className="h-7 text-[11px] bg-background text-foreground placeholder:text-muted-foreground/60 border-input"
                   disabled={loading}
                 />
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-8 text-[10px] bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
+                  className="h-8 text-[10px]"
                   disabled={loading || !hasSelectedSignal || !compareSymbol.trim()}
                   onClick={sendCompare}
                 >
                   Compare
                 </Button>
               </div>
-              <p className="text-[10px] text-slate-400">
+              <p className="text-[10px] text-muted-foreground">
                 Compare flow stays inside advisory chat; it does not call execution or threshold-changing routes.
               </p>
             </div>
@@ -1214,7 +1214,7 @@ export default function AITradingAgentPanel({
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-7 text-[10px] bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
+                  className="h-7 text-[10px]"
                   disabled={loading}
                   onClick={() => send(prompt)}
                 >
@@ -1227,17 +1227,17 @@ export default function AITradingAgentPanel({
               <Textarea
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
-                className="min-h-[96px] text-xs resize-none bg-slate-950 text-slate-100 placeholder:text-slate-500 border-slate-700 focus-visible:ring-amber-500/40"
+                className="min-h-[80px] text-xs resize-none bg-background text-foreground placeholder:text-muted-foreground/60 border-input focus-visible:ring-primary/40"
                 disabled={loading}
               />
               <div className="flex items-center justify-between gap-2">
-                <p className="text-[10px] text-slate-400">
+                <p className="text-[10px] text-muted-foreground">
                   Advisory only. API failures leave this draft intact.
                 </p>
                 <Button
                   type="button"
                   size="sm"
-                  className="h-8 gap-1 text-xs bg-amber-600 text-slate-950 hover:bg-amber-500 disabled:bg-slate-700 disabled:text-slate-400"
+                  className="h-7 gap-1.5 text-[11px] bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
                   disabled={!canSend}
                   onClick={() => send()}
                 >
@@ -1250,8 +1250,8 @@ export default function AITradingAgentPanel({
             <ScrollArea className="max-h-[620px] pr-2">
               <div className="space-y-3">
                 {messages.length === 0 && !loading && !error && (
-                  <div className="flex items-center gap-2 text-[11px] text-slate-300 rounded-md border border-slate-700 bg-slate-900 p-3">
-                    <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
+                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground rounded-md border border-border/50 bg-muted/20 p-3">
+                    <MessageSquare className="w-3.5 h-3.5 text-primary" />
                     <span>{hasSelectedSignal ? 'Ready for a read-only tool-chat review.' : 'Symbol-only chat. Select a signal for trade-specific analysis.'}</span>
                   </div>
                 )}
@@ -1262,8 +1262,8 @@ export default function AITradingAgentPanel({
                     className={cn(
                       'rounded-md border p-3 space-y-2',
                       message.role === 'user'
-                        ? 'border-amber-600/40 bg-slate-900 text-slate-100'
-                        : 'border-slate-700 bg-slate-950 text-slate-100',
+                        ? 'border-primary/30 bg-primary/5 text-foreground'
+                        : 'border-border/50 bg-muted/20 text-foreground',
                     )}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -1272,16 +1272,16 @@ export default function AITradingAgentPanel({
                         className={cn(
                           'text-[10px] font-semibold',
                           message.role === 'user'
-                            ? 'bg-amber-900/80 text-amber-200 border-amber-500/60'
-                            : 'bg-slate-800 text-slate-100 border-slate-600',
+                            ? 'bg-primary/10 text-primary border-primary/40'
+                            : 'bg-muted/50 text-foreground/80 border-border/60',
                         )}
                       >
                         {message.role === 'user' ? 'You' : 'Assistant'}
                       </Badge>
-                      <span className="text-[10px] text-slate-400">{new Date(message.createdAt).toLocaleTimeString()}</span>
+                      <span className="text-[10px] text-muted-foreground">{new Date(message.createdAt).toLocaleTimeString()}</span>
                     </div>
                     {message.role === 'user' ? (
-                      <p className="text-xs whitespace-pre-wrap break-words text-slate-100 leading-relaxed">{message.content}</p>
+                      <p className="text-xs whitespace-pre-wrap break-words text-foreground leading-relaxed">{message.content}</p>
                     ) : (
                       <AssistantResponse response={message.response} symbol={resolvedSymbol} traceId={resolvedTraceId} />
                     )}
@@ -1289,8 +1289,8 @@ export default function AITradingAgentPanel({
                 ))}
 
                 {loading && (
-                  <div className="rounded-md border border-slate-700 bg-slate-900 p-3 text-xs text-slate-200 flex items-center gap-2">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                  <div className="rounded-md border border-border/50 bg-muted/20 p-3 text-xs text-foreground/90 flex items-center gap-2">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
                     Checking signal context, market intelligence, Vision, similar setups, and safety notes...
                   </div>
                 )}

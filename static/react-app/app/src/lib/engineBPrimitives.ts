@@ -32,12 +32,12 @@ export interface EngineBZoneFill {
 }
 
 export const ENGINE_B_ZONE_STYLE: Record<EngineBZoneCategory, { fill: string; stroke: string }> = {
-  support: { fill: 'rgba(16, 185, 129, 0.18)', stroke: 'rgba(16, 185, 129, 0.55)' },
-  resistance: { fill: 'rgba(244, 63, 94, 0.18)', stroke: 'rgba(244, 63, 94, 0.55)' },
-  fvg_bull: { fill: 'rgba(34, 197, 94, 0.16)', stroke: 'rgba(34, 197, 94, 0.50)' },
-  fvg_bear: { fill: 'rgba(248, 113, 113, 0.16)', stroke: 'rgba(248, 113, 113, 0.50)' },
-  ob_bull: { fill: 'rgba(20, 184, 166, 0.14)', stroke: 'rgba(20, 184, 166, 0.50)' },
-  ob_bear: { fill: 'rgba(251, 113, 133, 0.14)', stroke: 'rgba(251, 113, 133, 0.50)' },
+  support: { fill: 'rgba(16, 185, 129, 0.10)', stroke: 'rgba(16, 185, 129, 0.45)' },
+  resistance: { fill: 'rgba(244, 63, 94, 0.10)', stroke: 'rgba(244, 63, 94, 0.45)' },
+  fvg_bull: { fill: 'rgba(34, 197, 94, 0.08)', stroke: 'rgba(34, 197, 94, 0.40)' },
+  fvg_bear: { fill: 'rgba(248, 113, 113, 0.08)', stroke: 'rgba(248, 113, 113, 0.40)' },
+  ob_bull: { fill: 'rgba(20, 184, 166, 0.08)', stroke: 'rgba(20, 184, 166, 0.40)' },
+  ob_bear: { fill: 'rgba(251, 113, 133, 0.08)', stroke: 'rgba(251, 113, 133, 0.40)' },
 };
 
 export function pushZoneFromPair(

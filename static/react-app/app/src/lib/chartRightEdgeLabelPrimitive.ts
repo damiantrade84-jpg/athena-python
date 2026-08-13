@@ -15,8 +15,8 @@ import {
   type RightEdgeLabel,
 } from '@/lib/chartRightEdgeLabels';
 
-const LABEL_FONT = '600 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
-const LABEL_PAD_X = 4;
+const LABEL_FONT = '500 9px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+const LABEL_PAD_X = 3;
 const RIGHT_MARGIN_PX = 68;
 
 class ChartRightEdgeLabelRenderer implements IPrimitivePaneRenderer {
@@ -44,11 +44,11 @@ class ChartRightEdgeLabelRenderer implements IPrimitivePaneRenderer {
         const x = isCurrentPrice ? 6 : mediaSize.width - 6 - boxWidth;
         const yTop = y - boxHeight / 2;
 
-        context.fillStyle = 'rgba(8, 12, 16, 0.82)';
+        context.fillStyle = 'rgba(13, 18, 26, 0.72)';
         context.strokeStyle = label.color;
         context.lineWidth = 1;
         context.beginPath();
-        context.roundRect(x, yTop, boxWidth, boxHeight, 3);
+        context.roundRect(x, yTop, boxWidth, boxHeight, 4);
         context.fill();
         context.stroke();
 

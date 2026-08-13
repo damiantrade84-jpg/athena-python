@@ -2128,7 +2128,7 @@ function IndicatorSwitch({
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 text-xs">
+    <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
       <Switch checked={checked} onCheckedChange={onCheckedChange} />
       {label}
     </label>
@@ -2143,18 +2143,18 @@ function ProviderBadge({ payload }: { payload: CandleApiResponse | null }) {
   const execLabel = payload.execution_provider ? titleCaseProvider(payload.execution_provider) : null;
   return (
     <div className="flex flex-wrap items-center gap-1">
-      <Badge variant={payload.provider_mismatch ? 'destructive' : 'secondary'} className="h-7 gap-1 text-[10px]">
+      <Badge variant={payload.provider_mismatch ? 'destructive' : 'secondary'} className="h-6 gap-1 text-[9px]">
         candles {candleLabel}
         <span className="text-muted-foreground">/ {status}</span>
       </Badge>
       {liveLabel && (
-        <Badge variant="outline" className="h-7 text-[10px]">
+        <Badge variant="outline" className="h-6 text-[9px]">
           live {liveLabel}
           {payload.fallback_used && payload.fallback_reason ? ` | ${payload.fallback_reason}` : ''}
         </Badge>
       )}
       {execLabel && (
-        <Badge variant="outline" className="h-7 text-[10px]">
+        <Badge variant="outline" className="h-6 text-[9px]">
           exec {execLabel}
         </Badge>
       )}
@@ -2201,7 +2201,7 @@ function CaptureLabel({
   return (
     <span
       data-chart-capture-label
-      className={`inline-flex items-center gap-1 rounded border border-border/50 bg-muted/80 px-1.5 py-0.5 text-[10px] font-mono leading-none text-foreground ${className}`}
+      className={`inline-flex items-center gap-1 rounded border border-border/40 bg-muted/50 px-1 py-0.5 text-[9px] font-mono leading-none text-foreground/80 ${className}`}
       style={style}
     >
       {children}
@@ -2212,8 +2212,8 @@ function CaptureLabel({
 /** Metadata strip above the candle canvas — never absolutely positioned over price. */
 function ChartMetadataStrip({ children }: { children: ReactNode }) {
   return (
-    <div className="shrink-0 border-b border-border/50 bg-card/95 px-2.5 py-2">
-      <div className="flex min-w-0 flex-col gap-2">{children}</div>
+    <div className="shrink-0 border-b border-border/40 bg-card/80 px-2 py-1.5">
+      <div className="flex min-w-0 flex-col gap-1.5">{children}</div>
     </div>
   );
 }
@@ -3750,25 +3750,40 @@ export default function TVChartPanel() {
     const chart = createChart(container, {
       width: container.clientWidth,
       height: container.clientHeight || chartHeightPx,
-      // Neutral chart chrome: grid and scale borders are recessive hairlines in
-      // the panel border tone, not tinted washes. Axis text is the muted ink.
+      // Sleek chart chrome: near-invisible grid hairlines, no heavy axis rules,
+      // small muted axis text. Depth comes from the candles, not the chrome.
       layout: {
         background: { color: 'transparent' },
-        textColor: 'rgba(139, 144, 153, 1)',
+        textColor: 'rgba(148, 163, 184, 0.72)',
         fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        fontSize: 11,
       },
       grid: {
-        vertLines: { color: 'rgba(35, 38, 44, 0.9)' },
-        horzLines: { color: 'rgba(35, 38, 44, 0.9)' },
+        vertLines: { color: 'rgba(148, 163, 184, 0.05)' },
+        horzLines: { color: 'rgba(148, 163, 184, 0.05)' },
       },
-      rightPriceScale: { borderColor: 'rgba(35, 38, 44, 1)', minimumWidth: 80 },
+      rightPriceScale: { borderColor: 'rgba(148, 163, 184, 0.10)', minimumWidth: 72 },
       timeScale: {
-        borderColor: 'rgba(35, 38, 44, 1)',
+        borderColor: 'rgba(148, 163, 184, 0.10)',
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: 3,
+        rightOffset: 4,
       },
-      crosshair: { mode: 1 },
+      crosshair: {
+        mode: 1,
+        vertLine: {
+          color: 'rgba(148, 163, 184, 0.30)',
+          width: 1,
+          style: LineStyle.Dashed,
+          labelBackgroundColor: 'rgba(30, 41, 59, 0.95)',
+        },
+        horzLine: {
+          color: 'rgba(148, 163, 184, 0.30)',
+          width: 1,
+          style: LineStyle.Dashed,
+          labelBackgroundColor: 'rgba(30, 41, 59, 0.95)',
+        },
+      },
     });
     chartRef.current = chart;
 
@@ -3778,15 +3793,16 @@ export default function TVChartPanel() {
 
     // Candles use the same semantic long/short tokens as every direction chip
     // and P&L figure in the app, so up/down reads identically everywhere.
+    // Flat borderless bodies keep the price action sleek instead of bulky.
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: 'hsl(148, 60%, 47%)',
-      downColor: 'hsl(358, 75%, 59%)',
-      borderUpColor: 'hsl(148, 60%, 47%)',
-      borderDownColor: 'hsl(358, 75%, 59%)',
-      wickUpColor: 'hsl(148, 60%, 47%)',
-      wickDownColor: 'hsl(358, 75%, 59%)',
+      upColor: 'hsl(152, 64%, 46%)',
+      downColor: 'hsl(358, 78%, 61%)',
+      borderVisible: false,
+      wickUpColor: 'hsl(152, 55%, 52%)',
+      wickDownColor: 'hsl(358, 70%, 66%)',
       lastValueVisible: true,
       priceLineVisible: true,
+      priceLineColor: 'rgba(148, 163, 184, 0.35)',
       priceFormat: candlePriceFormat,
     }, 0);
     candleSeriesRef.current = candleSeries;
@@ -3803,7 +3819,7 @@ export default function TVChartPanel() {
     candleSeries.attachPrimitive(labelPrimitive);
     rightEdgeLabelPrimitiveRef.current = labelPrimitive;
 
-    const overlayLineOpts = { lineWidth: 2 as const, lastValueVisible: true, priceLineVisible: false };
+    const overlayLineOpts = { lineWidth: 1 as const, lastValueVisible: true, priceLineVisible: false };
     ema20SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema20.color }, 0);
     ema21SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema21.color }, 0);
     ema50SeriesRef.current = chart.addSeries(LineSeries, { ...overlayLineOpts, color: PRICE_PANEL_INDICATORS.ema50.color }, 0);
@@ -3818,12 +3834,12 @@ export default function TVChartPanel() {
       const paneIdx = pane.paneIndex();
       const series = chart.addSeries(LineSeries, {
         color: STUDY_PANEL_INDICATORS.rsi14.color,
-        lineWidth: 2,
+        lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: true,
       }, paneIdx);
-      series.createPriceLine({ price: 70, color: 'rgba(245,240,232,0.25)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: '70' });
-      series.createPriceLine({ price: 30, color: 'rgba(245,240,232,0.25)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: '30' });
+      series.createPriceLine({ price: 70, color: 'rgba(148, 163, 184, 0.22)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false, title: '' });
+      series.createPriceLine({ price: 30, color: 'rgba(148, 163, 184, 0.22)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false, title: '' });
       rsiSeriesRef.current = series;
     }
     if (quantAdx14) {
@@ -3832,11 +3848,11 @@ export default function TVChartPanel() {
       const paneIdx = pane.paneIndex();
       const series = chart.addSeries(LineSeries, {
         color: STUDY_PANEL_INDICATORS.adx14.color,
-        lineWidth: 2,
+        lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: true,
       }, paneIdx);
-      series.createPriceLine({ price: 25, color: 'rgba(245,240,232,0.25)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: '25' });
+      series.createPriceLine({ price: 25, color: 'rgba(148, 163, 184, 0.22)', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false, title: '' });
       adxSeriesRef.current = series;
     }
     if (quantAtr14) {
@@ -3845,7 +3861,7 @@ export default function TVChartPanel() {
       const atrPaneIdx = atrPane.paneIndex();
       atrSeriesRef.current = chart.addSeries(LineSeries, {
         color: STUDY_PANEL_INDICATORS.atr14.color,
-        lineWidth: 2,
+        lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: true,
       }, atrPaneIdx);
@@ -3862,7 +3878,7 @@ export default function TVChartPanel() {
       }, paneIdx);
       volumeMaSeriesRef.current = chart.addSeries(LineSeries, {
         color: STUDY_PANEL_INDICATORS.volumeMa.color,
-        lineWidth: 2,
+        lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: true,
       }, paneIdx);
@@ -3947,7 +3963,7 @@ export default function TVChartPanel() {
           candleSeries.createPriceLine({
             price: level.price,
             color: level.color,
-            lineWidth: 2,
+            lineWidth: 1,
             lineStyle: level.style ?? LineStyle.Solid,
             axisLabelVisible: true,
             title: level.label,
@@ -4033,7 +4049,7 @@ export default function TVChartPanel() {
         const volumeData: HistogramData[] = rows.map((row, idx) => ({
           time: row.time,
           value: volumes[idx] ?? 0,
-          color: row.close >= row.open ? 'rgba(16, 185, 129, 0.45)' : 'rgba(244, 63, 94, 0.45)',
+          color: row.close >= row.open ? 'rgba(52, 199, 123, 0.32)' : 'rgba(244, 63, 94, 0.32)',
         }));
         volumeSeriesRef.current.setData(volumeData);
       } else {
@@ -4069,21 +4085,21 @@ export default function TVChartPanel() {
     <>
     <Card className="h-full">
       <CardHeader className="pb-2">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <BarChart3 className="h-5 w-5" />
+        <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+          <CardTitle className="flex items-center gap-1.5 text-sm font-semibold">
+            <BarChart3 className="h-4 w-4 text-muted-foreground" />
             TV Chart
           </CardTitle>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <Input
               value={pair}
               onChange={(event) => setPair(event.target.value)}
-              className="h-8 w-32 text-xs"
+              className="h-7 w-28 text-[11px]"
               aria-label="Chart symbol"
             />
             <ProviderBadge payload={chartPayload} />
             {isCryptoChart && lastCandleConfirmed != null && (
-              <Badge variant="outline" className="h-7 text-[10px]">
+              <Badge variant="outline" className="h-6 text-[9px]">
                 {lastCandleConfirmed ? 'Confirmed candle' : 'Forming candle'}
               </Badge>
             )}
@@ -4092,7 +4108,7 @@ export default function TVChartPanel() {
               onChange={(event) => {
                 if (event.target.value) setPair(event.target.value);
               }}
-              className="h-8 w-40 rounded-md border border-input bg-background px-2 text-xs"
+              className="h-7 w-36 rounded-md border border-input bg-background px-2 text-[11px]"
               aria-label="Engine A candidate"
             >
               <option value="">No candidate selected</option>
@@ -4106,13 +4122,13 @@ export default function TVChartPanel() {
                 );
               })}
             </select>
-            <div className="flex flex-wrap gap-1">
+            <div className="flex flex-wrap gap-0.5">
               {TIMEFRAMES.map((tf) => (
                 <Button
                   key={tf}
                   size="sm"
                   variant={timeframe === tf ? 'default' : 'outline'}
-                  className="h-8 px-2 text-xs"
+                  className="h-7 px-1.5 text-[10px] font-mono"
                   onClick={() => handleManualTimeframeSelect(tf)}
                 >
                   {tf}
@@ -4144,7 +4160,7 @@ export default function TVChartPanel() {
             <IndicatorSwitch label="Show Quant Debug" checked={showQuantDebug} onCheckedChange={setShowQuantDebug} />
             {showQuantDebug && (
               <Select value={activePreset} onValueChange={(v) => applyPreset(v as PresetValue)}>
-                <SelectTrigger className="h-8 w-40 text-xs" aria-label="Indicator preset">
+                <SelectTrigger className="h-7 w-36 text-[11px]" aria-label="Indicator preset">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -4156,15 +4172,15 @@ export default function TVChartPanel() {
                 </SelectContent>
               </Select>
             )}
-            <Button size="sm" variant="secondary" className="h-8 gap-2 text-xs" onClick={applyEngineAReviewLayout}>
-              <SlidersHorizontal className="h-3.5 w-3.5" />
+            <Button size="sm" variant="secondary" className="h-7 gap-1.5 text-[11px]" onClick={applyEngineAReviewLayout}>
+              <SlidersHorizontal className="h-3 w-3" />
               Engine A Review Layout
             </Button>
             <AIReviewProviderToggle value={aiReviewProvider} onChange={setAiReviewProvider} />
             <Button
               size="sm"
               variant={engineAParityVisible ? 'default' : 'outline'}
-              className="h-8 text-xs"
+              className="h-7 text-[11px]"
               onClick={() => setEngineAParityVisible((visible) => !visible)}
               aria-pressed={engineAParityVisible}
             >
@@ -4173,50 +4189,50 @@ export default function TVChartPanel() {
             <Button
               size="sm"
               variant="outline"
-              className="h-8 gap-2 text-xs"
+              className="h-7 gap-1.5 text-[11px]"
               onClick={downloadChartScreenshot}
               disabled={loading || !candles?.length}
               aria-label="Download full chart screenshot"
             >
-              <Camera className="h-3.5 w-3.5" />
+              <Camera className="h-3 w-3" />
               Screenshot
             </Button>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2 pt-2">
+        <div className="flex flex-wrap items-center gap-1.5 pt-1">
           {timeframeRouteLabel && (
-            <Badge variant="outline" className="h-7 text-[10px]" title={timeframeRoute?.reason || undefined}>
+            <Badge variant="outline" className="h-6 text-[9px]" title={timeframeRoute?.reason || undefined}>
               {timeframeRouteLabel}
             </Badge>
           )}
           {timeframeRoute?.autoSelectTf && (
-            <Badge variant="outline" className="h-7 text-[10px]" title={timeframeRoute?.reason || undefined}>
+            <Badge variant="outline" className="h-6 text-[9px]" title={timeframeRoute?.reason || undefined}>
               {timeframeAutoMode ? `Auto TF: ${timeframeRoute.autoSelectTf}` : 'Manual TF override'}
             </Badge>
           )}
           {timeframeRoute && !timeframeAutoMode && (
-            <Button size="sm" variant="secondary" className="h-7 px-2 text-[10px]" onClick={applyRecommendedTimeframe}>
+            <Button size="sm" variant="secondary" className="h-6 px-1.5 text-[9px]" onClick={applyRecommendedTimeframe}>
               Reset to recommended
             </Button>
           )}
           {intentSourceBadge && (
-            <Badge variant="outline" className="h-7 text-[10px] border-primary/40 text-primary">
+            <Badge variant="outline" className="h-6 text-[9px] border-primary/40 text-primary">
               {intentSourceBadge}
             </Badge>
           )}
           {autoReviewStatus !== 'idle' && (
-            <Badge variant="outline" className="h-7 text-[10px]">
+            <Badge variant="outline" className="h-6 text-[9px]">
               Auto Review: {autoReviewStatus}
             </Badge>
           )}
           {suggestedTradeRunner && (
-            <Badge variant="outline" className={`h-7 text-[10px] ${runnerBadgeClass(suggestedTradeRunner)}`}>
+            <Badge variant="outline" className={`h-6 text-[9px] ${runnerBadgeClass(suggestedTradeRunner)}`}>
               Runner: {runnerBadgeLabel(suggestedTradeRunner)}
             </Badge>
           )}
         </div>
         {showQuantDebug && (
-          <div className="flex flex-wrap items-center gap-3 border-t border-border/40 pt-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border/40 pt-1.5">
             {isCryptoChart ? (
               <IndicatorSwitch label={emaLabels.trend} checked={ema21} onCheckedChange={setEma21} />
             ) : (
@@ -4248,7 +4264,7 @@ export default function TVChartPanel() {
               {(cleanLegendChips.length > 0
                 || (engineBOverlayEnabled && engineBOverlay?.overlay_source === 'engine_b')
                 || (engineBOverlayEnabled && (engineBOverlayLoading || engineBOverlayError || engineBOverlayStale))) && (
-                <div className="flex flex-wrap items-center gap-1 border-t border-border/30 pt-2">
+                <div className="flex flex-wrap items-center gap-1 border-t border-border/30 pt-1.5">
                   {cleanLegendChips.map((chip) => (
                     <LegendChip key={`legend-${chip.key}`} spec={chip} />
                   ))}
@@ -4267,7 +4283,7 @@ export default function TVChartPanel() {
                 </div>
               )}
               {showQuantDebug && (pricePanelLegendItems.length > 0 || studyPanelLegendItems.length > 0) && (
-                <div className="flex max-h-14 flex-wrap items-center gap-1 overflow-y-auto border-t border-border/30 pt-2">
+                <div className="flex max-h-14 flex-wrap items-center gap-1 overflow-y-auto border-t border-border/30 pt-1.5">
                   {pricePanelLegendItems.map((item) => (
                     <IndicatorLegendItem key={`meta-${item.definition.key}`} item={item} />
                   ))}
@@ -4277,7 +4293,7 @@ export default function TVChartPanel() {
                 </div>
               )}
               {engineAParityVisible && engineAParityRows.length > 0 && (
-                <div className="flex max-h-16 flex-wrap items-center gap-1 overflow-y-auto border-t border-border/30 pt-2">
+                <div className="flex max-h-16 flex-wrap items-center gap-1 overflow-y-auto border-t border-border/30 pt-1.5">
                   <CaptureLabel>Engine A Parity</CaptureLabel>
                   {engineAParityRows.map((row) => (
                     <CaptureLabel key={row.label}>{`${row.label} ${row.value}`}</CaptureLabel>
@@ -4307,25 +4323,25 @@ export default function TVChartPanel() {
             style={{ maxHeight: `${chartHeightPx}px` }}
             data-review-rail
           >
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
               <CompactSuggestedWatchStatus watches={symbolWatches} />
               {suggestedTradeRunner && (
-                <Badge variant="outline" className={`h-7 text-[10px] ${runnerBadgeClass(suggestedTradeRunner)}`}>
+                <Badge variant="outline" className={`h-6 text-[9px] ${runnerBadgeClass(suggestedTradeRunner)}`}>
                   Runner: {runnerBadgeLabel(suggestedTradeRunner)}
                 </Badge>
               )}
             </div>
-            <div className="flex flex-wrap items-center gap-2" data-review-action-strip>
+            <div className="flex flex-wrap items-center gap-1.5" data-review-action-strip>
               <Button
                 size="sm"
                 variant="outline"
-                className="h-8 gap-2 text-xs"
+                className="h-7 gap-1.5 text-[11px]"
                 onClick={runManualAIReview}
                 disabled={aiReviewLoading || chartReviewActionPending || Boolean(engineBIdentityBlockReason)}
                 aria-label="Run AI chart review"
                 aria-busy={aiReviewLoading || chartReviewActionPending}
               >
-                <Sparkles className="h-3.5 w-3.5" />
+                <Sparkles className="h-3 w-3" />
                 {aiReviewLoading
                   ? 'Reviewing...'
                   : chartReviewActionPending
@@ -4340,11 +4356,11 @@ export default function TVChartPanel() {
                 <Button
                   size="sm"
                   variant="default"
-                  className="h-8 gap-1 text-xs"
+                  className="h-7 gap-1 text-[11px]"
                   disabled={Boolean(executeBlockReason) || executing}
                   onClick={() => setConfirmExecuteOpen(true)}
                 >
-                  <Play className="h-3.5 w-3.5" />
+                  <Play className="h-3 w-3" />
                   Execute Now
                 </Button>
               )}
@@ -4352,7 +4368,7 @@ export default function TVChartPanel() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-8 text-xs"
+                  className="h-7 text-[11px]"
                   disabled={!canFlagWatch || flagLoading}
                   onClick={() => void flagWatchSetup()}
                   title={flagWatchDisabledReason}
@@ -4365,7 +4381,7 @@ export default function TVChartPanel() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-8 text-xs"
+                  className="h-7 text-[11px]"
                   onClick={() => setActivePanel('suggestedTrades')}
                 >
                   View Suggested Trades
@@ -4388,8 +4404,8 @@ export default function TVChartPanel() {
               </div>
             )}
             {aiReviewLoading && deferredStreamingNarrative ? (
-              <div className="rounded-md border border-amber-500/40 bg-amber-950/30 p-2 text-[11px] text-amber-100 whitespace-pre-wrap break-words">
-                <span className="text-amber-400 font-semibold">Live read: </span>
+              <div className="rounded-md border border-primary/30 bg-primary/5 p-2 text-[11px] text-foreground/90 whitespace-pre-wrap break-words">
+                <span className="text-primary font-semibold">Live read: </span>
                 {deferredStreamingNarrative}
               </div>
             ) : null}
