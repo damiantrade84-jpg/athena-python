@@ -236,8 +236,37 @@ class TestTask3_ExecutionConvictionPerEngine:
         }
         assert _execution_conviction(sig, "engine_b") == pytest.approx(0.85)
 
+    def test_engine_b_scanner_norm_beats_gross_quality_fallback(self):
+        """Scanner's penalty-adjusted norm must win over gross quality_pct."""
+        sig = {
+            "engine": "B",
+            "engine_b_scoreNorm": 0.40,
+            "engine_b_quality_pct": 80.0,
+            "engine_b_score": 5.4,
+            "engine_b_max": 6.0,
+        }
+        assert _execution_conviction(sig, "engine_b") == pytest.approx(0.40)
+
+    def test_engine_b_net_quality_beats_gross_quality_for_legacy_row(self):
+        """A row without norm aliases still preserves net score penalties."""
+        sig = {
+            "engine": "B",
+            "engine_b_quality_pct_net": 40.0,
+            "engine_b_quality_pct": 80.0,
+            "engine_b_score": 5.4,
+            "engine_b_max": 6.0,
+        }
+        assert _execution_conviction(sig, "engine_b") == pytest.approx(0.40)
+
     def test_engine_a_unmissing_data_returns_zero(self):
         assert _execution_conviction({"engine": "A"}, "engine_a") == 0.0
+
+    @pytest.mark.parametrize("malformed", [float("nan"), float("inf"), float("-inf"), "bad"])
+    def test_nonfinite_or_malformed_conviction_fails_closed(self, malformed):
+        assert _execution_conviction({"scoreNorm": malformed}, "engine_a") == 0.0
+        assert _execution_conviction(
+            {"engine_b_conviction": malformed}, "engine_b"
+        ) == 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

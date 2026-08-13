@@ -239,6 +239,17 @@ def test_scanner_aligned_engine_b_uses_regime_weights_for_conviction():
     assert combined == pytest.approx(0.80)
 
 
+@pytest.mark.parametrize("malformed", [float("nan"), float("inf"), float("-inf"), "bad"])
+def test_scanner_nonfinite_or_malformed_norm_fails_closed(malformed):
+    combined = scanner._engine_b_scan_combined_conviction(
+        a_norm=malformed,
+        b_norm=malformed,
+        weights={"A": 0.40, "B": 0.60},
+        direction_aligned=True,
+    )
+    assert combined == 0.0
+
+
 def test_execution_prefers_nested_engine_b_execution_levels():
     # The MAX_SL_EXCEEDED guard (added 2026-06-06) resolves the SL cap via
     # rt().CONFIG; bind a minimal runtime so the unit test exercises the real path.

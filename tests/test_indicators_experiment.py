@@ -251,3 +251,72 @@ def test_roc_term_falls_back_to_fixed_divisor_without_atr(monkeypatch):
     snap = {"adx": 25.0, "roc": 2.5}
     _comp, diag = _momentum_component(snap, "forex", "forex_majors")
     assert diag["rocTerm"] == pytest.approx(0.5)
+
+
+def test_momentum_zero_weight_terms_do_not_change_component_quality(monkeypatch):
+    """A term excluded from the blend must not retain an equal quality vote."""
+    from config import CONFIG
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_V3_MOMENTUM_BLEND",
+        {
+            "ENABLED": True,
+            "RSI_WEIGHT": 1.0,
+            "DI_WEIGHT": 0.0,
+            "MACD_SLOPE_WEIGHT": 0.0,
+            "BY_GROUP": {"crypto_btc": {"ROC_WEIGHT": 0.0}},
+        },
+    )
+    rsi_only = {"adx": 25.0, "rsi": 60.0, "atr": 1.0, "close": 100.0}
+    zero_weight_terms = {
+        **rsi_only,
+        "plusDI": 90.0,
+        "minusDI": 10.0,
+        "macdHist": 0.5,
+        "macdHistPrev": 0.4,
+    }
+
+    expected, _ = _momentum_component(rsi_only, "crypto", "crypto_btc")
+    actual, _ = _momentum_component(zero_weight_terms, "crypto", "crypto_btc")
+
+    assert actual.signal == pytest.approx(expected.signal)
+    assert actual.quality == pytest.approx(expected.quality)
+
+
+def test_momentum_quality_uses_same_declared_weights_as_signal(monkeypatch):
+    """A tiny ROC weight must have a tiny, not an equal, effect on quality."""
+    from config import CONFIG
+
+    snap = {
+        "adx": 25.0,
+        "rsi": 60.0,
+        "roc": 3.0,
+        "atr": 1.0,
+        "close": 100.0,
+    }
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_V3_MOMENTUM_BLEND",
+        {
+            "ENABLED": True,
+            "RSI_WEIGHT": 1.0,
+            "DI_WEIGHT": 0.0,
+            "MACD_SLOPE_WEIGHT": 0.0,
+            "BY_GROUP": {"crypto_btc": {"ROC_WEIGHT": 0.0}},
+        },
+    )
+    baseline, _ = _momentum_component(snap, "crypto", "crypto_btc")
+
+    CONFIG["ENGINE_A_V3_MOMENTUM_BLEND"]["BY_GROUP"]["crypto_btc"]["ROC_WEIGHT"] = 1e-6
+    tiny_roc, _ = _momentum_component(snap, "crypto", "crypto_btc")
+
+    assert tiny_roc.quality == pytest.approx(baseline.quality, abs=1e-5)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_quant_numeric_parser_rejects_nonfinite_values(value):
+    from engine_a_v3.quant_scorer import _f
+
+    assert _f(value) is None
+    assert _f(value, 0.25) == pytest.approx(0.25)

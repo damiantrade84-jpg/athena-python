@@ -15323,7 +15323,10 @@ def _attach_v3_intermarket_confirmation(
             if _key:
                 signal[f"{_key.lower()}Candles"] = _format_engine_a_chart_candles(_rows)
     from athena_app.services.engine_a_direction import apply_direction_conflict_to_result
-    from athena_app.services.engine_a_v3_classify import retier_v3_after_score_adjust
+    from athena_app.services.engine_a_v3_classify import (
+        demote_v3_trade_to_watch,
+        retier_v3_after_score_adjust,
+    )
 
     if not intermarket_snapshot or not isinstance(intermarket_snapshot, dict):
         apply_direction_conflict_to_result(signal)
@@ -15402,13 +15405,7 @@ def _attach_v3_intermarket_confirmation(
         btc_mult=signal.get("btc_bias_applied") or signal.get("btcBiasApplied"),
     )
     if signal.get("directionConflicted") is True and str(signal.get("decision") or "").upper() == "TRADE":
-        signal["decision"] = "WATCH"
-        signal["qualified"] = False
-        signal["trade"] = False
-        signal["executable"] = False
-        reasons = list(signal.get("rejectionReasons") or [])
-        reasons.append("direction_conflicted")
-        signal["rejectionReasons"] = list(dict.fromkeys(reasons))
+        demote_v3_trade_to_watch(signal, reason="direction_conflicted")
     return signal
 
 

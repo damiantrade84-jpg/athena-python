@@ -6,11 +6,13 @@ import {
   engineAScoreBreakdown,
   engineAThreshold,
   engineBScoreBreakdown,
+  signalConviction,
+  unifiedListSortKey,
 } from '../athenaFormat';
 import type { EngineASignal } from '@/types/athena';
 
 describe('engineAScoreBreakdown', () => {
-  it('derives decision score before intermarket blend for V3 payloads', () => {
+  it('uses backend-canonical post-intermarket score for V3 decisions', () => {
     const sig = {
       engine: 'ENGINE_A_V3',
       contractVersion: '3.1.0',
@@ -21,18 +23,19 @@ describe('engineAScoreBreakdown', () => {
     } as EngineASignal;
 
     const breakdown = engineAScoreBreakdown(sig);
-    expect(breakdown?.decisionScore).toBeCloseTo(2.0861, 4);
+    expect(breakdown?.decisionScore).toBeCloseTo(2.2661, 4);
     expect(breakdown?.displayScore).toBeCloseTo(2.2661, 4);
-    expect(breakdown?.decisionPasses).toBe(false);
+    expect(breakdown?.decisionPasses).toBe(true);
     expect(breakdown?.displayPasses).toBe(true);
     expect(breakdown?.hasAdjustments).toBe(true);
   });
 
-  it('uses pre_news_score minus intermarket for V3 decision score when present', () => {
+  it('keeps news display adjustment separate from canonical V3 decision score', () => {
     const sig = {
       engine: 'ENGINE_A_V3',
       contractVersion: '3.1.0',
-      confluenceScore: 2.4,
+      confluenceScore: 2.3,
+      score: 2.4,
       confluenceThreshold: 2.2,
       pre_news_score: 2.3,
       intermarketEngineADelta: 0.1,
@@ -40,7 +43,8 @@ describe('engineAScoreBreakdown', () => {
     } as EngineASignal;
 
     const breakdown = engineAScoreBreakdown(sig);
-    expect(breakdown?.decisionScore).toBeCloseTo(2.2, 4);
+    expect(breakdown?.decisionScore).toBeCloseTo(2.3, 4);
+    expect(breakdown?.displayScore).toBeCloseTo(2.4, 4);
   });
 
   it('legacy rows use post-blend display score for pass checks', () => {
@@ -69,7 +73,7 @@ describe('engineAThreshold', () => {
 });
 
 describe('confluencePct', () => {
-  it('anchors V3 bar to decision score not adjusted display score', () => {
+  it('anchors V3 bar to backend-canonical decision score', () => {
     const sig = {
       engine: 'ENGINE_A_V3',
       contractVersion: '3.1.0',
@@ -80,7 +84,7 @@ describe('confluencePct', () => {
       confluencePct: 69,
     } as EngineASignal;
 
-    expect(confluencePct(sig)).toBe(Math.round((2.0861 / 3) * 100));
+    expect(confluencePct(sig)).toBe(Math.round((2.2661 / 3) * 100));
   });
 
   it('is comparable across score groups with different thresholds', () => {
@@ -106,6 +110,19 @@ describe('confluencePct', () => {
 });
 
 describe('engineBScoreBreakdown', () => {
+  it('prefers penalty-adjusted net quality over gross quality', () => {
+    const breakdown = engineBScoreBreakdown({
+      confidence: {
+        score: 5.4,
+        max_possible: 6,
+        quality_pct: 80,
+        quality_pct_net: 40,
+      },
+    });
+
+    expect(breakdown?.qualityPct).toBe(40);
+  });
+
   it('applies the score floor to total score and keeps final confidence separate', () => {
     const breakdown = engineBScoreBreakdown({
       confidence: {
@@ -143,6 +160,25 @@ describe('engineBScoreBreakdown', () => {
   });
 });
 
+describe('Engine B conviction consumers', () => {
+  const row = {
+    engine_source: 'ENGINE_B',
+    engine: 'B',
+    combinedConviction: 0,
+    engine_b_conviction: 0.4,
+    engine_b_quality_pct_net: 40,
+    engine_b_quality_pct: 80,
+  } as unknown as EngineASignal;
+
+  it('sorts on the same net conviction used by execution', () => {
+    expect(unifiedListSortKey(row)).toBeCloseTo(0.4, 6);
+  });
+
+  it('does not let the B-only combined placeholder hide net conviction', () => {
+    expect(signalConviction(row)).toBeCloseTo(0.4, 6);
+  });
+});
+
 describe('engineAListScore', () => {
   it('uses decision score for V3 list sort', () => {
     const sig = {
@@ -151,6 +187,6 @@ describe('engineAListScore', () => {
       confluenceScore: 2.2661,
       intermarketEngineADelta: 0.18,
     } as EngineASignal;
-    expect(engineAListScore(sig)).toBeCloseTo(2.0861, 4);
+    expect(engineAListScore(sig)).toBeCloseTo(2.2661, 4);
   });
 });

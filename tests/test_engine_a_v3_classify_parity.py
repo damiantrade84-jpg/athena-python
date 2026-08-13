@@ -9,6 +9,7 @@ import pytest
 
 from athena_app.services.engine_a_v3_classify import (
     classify_engine_a_v3_signal,
+    demote_v3_trade_to_watch,
     retier_v3_after_score_adjust,
 )
 from config import CONFIG
@@ -26,6 +27,11 @@ def _v3_trade_signal(**overrides):
         "decision": "TRADE",
         "qualified": True,
         "engineATradeEnabled": True,
+        "trade": True,
+        "executable": True,
+        "execution_permitted": True,
+        "signalTier": "trade",
+        "executionScope": "DEMO_ONLY",
         "direction": "LONG",
         "confluenceScore": 2.2,
         "confluenceThreshold": 2.1,
@@ -44,6 +50,12 @@ def test_intermarket_negative_delta_demotes_v3_trade():
     retier_v3_after_score_adjust(signal)
     assert signal["decision"] == "WATCH"
     assert signal["qualified"] is False
+    assert signal["engineATradeEnabled"] is False
+    assert signal["trade"] is False
+    assert signal["executable"] is False
+    assert signal["execution_permitted"] is False
+    assert signal["signalTier"] == "watchlist"
+    assert signal["executionScope"] == "NONE"
     assert "intermarket_score_below_trade_threshold" in signal["rejectionReasons"]
 
 
@@ -51,6 +63,45 @@ def test_intermarket_retier_never_upgrades_watch():
     signal = _v3_trade_signal(decision="WATCH", qualified=False, confluenceScore=2.5)
     retier_v3_after_score_adjust(signal)
     assert signal["decision"] == "WATCH"
+
+
+@pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), float("-inf"), "bad"])
+def test_v3_trade_classification_fails_closed_without_finite_score(bad):
+    signal = _v3_trade_signal(scoreNorm=bad, conviction=bad)
+    signal.pop("confluenceScore", None)
+    signal.pop("maxScore", None)
+
+    tier, reason = classify_engine_a_v3_signal(
+        signal,
+        {"display": "EUR/USD", "type": "forex", "enabled": True},
+    )
+
+    assert tier == "watchlist"
+    assert "score" in reason.lower()
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_intermarket_retier_demotes_nonfinite_adjusted_score(bad):
+    signal = _v3_trade_signal(confluenceScore=bad)
+    retier_v3_after_score_adjust(signal)
+
+    assert signal["decision"] == "WATCH"
+    assert signal["engineATradeEnabled"] is False
+    assert "invalid_adjusted_score" in signal["rejectionReasons"]
+
+
+def test_direction_conflict_demotion_clears_execution_aliases():
+    signal = _v3_trade_signal()
+    demote_v3_trade_to_watch(signal, reason="direction_conflicted")
+    assert signal["decision"] == "WATCH"
+    assert signal["qualified"] is False
+    assert signal["engineATradeEnabled"] is False
+    assert signal["trade"] is False
+    assert signal["executable"] is False
+    assert signal["execution_permitted"] is False
+    assert signal["signalTier"] == "watchlist"
+    assert signal["executionScope"] == "NONE"
+    assert "direction_conflicted" in signal["rejectionReasons"]
 
 
 def test_direction_conflict_demotes_via_classify(monkeypatch):

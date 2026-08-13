@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import logging
+import math
 
 from factor_scoring import _adx_multiplier_from_value, _resolve_adx_thresholds
 from engine_a_scoring_profile import (
@@ -347,7 +348,7 @@ def _f(value: Any, default: float | None = None) -> float | None:
         out = float(value)
     except (TypeError, ValueError):
         return default
-    if out != out:  # NaN
+    if not math.isfinite(out):
         return default
     return out
 
@@ -824,7 +825,11 @@ def _momentum_component(
 
     weighted_signal = 0.0
     weight_total = 0.0
-    quality_terms: list[float] = []
+    # Keep confidence on the same declared indicator-weight basis as direction.
+    # A zero-weight term must be absent from both halves of the component; the
+    # previous unweighted mean let zero-weight RSI/DI/MACD readings change the
+    # headline score and gave any positive ROC weight an equal quality vote.
+    quality_terms: list[tuple[float, float]] = []
 
     rsi = _f(snap.get("rsi"))
     if rsi is not None:
@@ -847,7 +852,8 @@ def _momentum_component(
                 diag["rsiExhaustionExcess"] = round(excess, 4)
         weighted_signal += rsi_w * rsi_term
         weight_total += rsi_w
-        quality_terms.append(_clamp01(rsi_quality))
+        if rsi_w > 0:
+            quality_terms.append((rsi_w, _clamp01(rsi_quality)))
         diag["rsiTerm"] = round(rsi_term, 4)
         diag["rsiQuality"] = round(_clamp01(rsi_quality), 4)
 
@@ -857,7 +863,8 @@ def _momentum_component(
         di_term = _clamp((di_p - di_m) / (di_p + di_m), -1.0, 1.0)
         weighted_signal += di_w * di_term
         weight_total += di_w
-        quality_terms.append(abs(di_term))
+        if di_w > 0:
+            quality_terms.append((di_w, abs(di_term)))
         diag["diAlignMult"] = round(1.0 + 0.3 * di_term, 4)
         diag["diTerm"] = round(di_term, 4)
 
@@ -906,7 +913,8 @@ def _momentum_component(
             magnitude = _clamp01(abs(hist) / (macd_atr * mag_scale))
             macd_quality = _clamp01(macd_quality * magnitude)
             diag["macdMagnitude"] = round(magnitude, 4)
-        quality_terms.append(macd_quality)
+        if macd_w > 0:
+            quality_terms.append((macd_w, macd_quality))
         diag["macdSlopeTerm"] = round(macd_term, 4)
         diag["macdQuality"] = round(macd_quality, 4)
 
@@ -932,7 +940,7 @@ def _momentum_component(
             roc_term = _clamp(roc / roc_scale, -1.0, 1.0)
             weighted_signal += roc_w * roc_term
             weight_total += roc_w
-            quality_terms.append(_clamp01(abs(roc) / roc_scale))
+            quality_terms.append((roc_w, _clamp01(abs(roc) / roc_scale)))
             diag["rocTerm"] = round(roc_term, 4)
 
     signal = weighted_signal / weight_total if weight_total > 0 else 0.0
@@ -976,7 +984,14 @@ def _momentum_component(
     diag["adxMultiplier"] = round(adx_mult, 4)
     if adx_mult <= 0.0:
         diag["adxHardFail"] = True
-    base_quality = sum(quality_terms) / len(quality_terms) if quality_terms else 0.0
+    quality_weight_total = sum(weight for weight, _quality in quality_terms)
+    base_quality = (
+        sum(weight * term_quality for weight, term_quality in quality_terms)
+        / quality_weight_total
+        if quality_weight_total > 0
+        else 0.0
+    )
+    diag["qualityWeightTotal"] = round(quality_weight_total, 4)
     quality = _clamp01(base_quality * adx_mult)
     return Component(_clamp(signal, -1.0, 1.0), quality), diag
 

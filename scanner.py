@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -845,11 +846,13 @@ def _engine_b_scan_combined_conviction(
 ) -> float:
     """Blend Engine B only when its independent direction agrees with Engine A."""
     try:
-        a_val = max(0.0, min(1.0, float(a_norm)))
+        a_raw = float(a_norm)
+        a_val = max(0.0, min(1.0, a_raw)) if math.isfinite(a_raw) else 0.0
     except (TypeError, ValueError):
         a_val = 0.0
     try:
-        b_val = max(0.0, min(1.0, float(b_norm)))
+        b_raw = float(b_norm)
+        b_val = max(0.0, min(1.0, b_raw)) if math.isfinite(b_raw) else 0.0
     except (TypeError, ValueError):
         b_val = 0.0
 
@@ -857,6 +860,8 @@ def _engine_b_scan_combined_conviction(
         try:
             factor = float(CONFIG.get("ENGINE_AB_MISALIGNED_CONVICTION_FACTOR", 0.60))
         except (TypeError, ValueError):
+            factor = 0.60
+        if not math.isfinite(factor):
             factor = 0.60
         return round(a_val * max(0.0, min(1.0, factor)), 4)
 
@@ -868,6 +873,10 @@ def _engine_b_scan_combined_conviction(
     try:
         w_b = float(w.get("B", 0.60))
     except (TypeError, ValueError, AttributeError):
+        w_b = 0.60
+    if not math.isfinite(w_a):
+        w_a = 0.40
+    if not math.isfinite(w_b):
         w_b = 0.60
     return round((a_val * w_a) + (b_val * w_b), 4)
 
@@ -1665,7 +1674,8 @@ def _scan_signal_rank(signal: dict) -> float:
     try:
         conviction = signal.get("combinedConviction")
         if conviction is not None:
-            return float(conviction)
+            conviction_f = float(conviction)
+            return conviction_f if math.isfinite(conviction_f) else 0.0
     except (TypeError, ValueError):
         pass
 
@@ -1674,9 +1684,10 @@ def _scan_signal_rank(signal: dict) -> float:
         max_score = float(signal.get("maxScore", 0) or 0)
     except (TypeError, ValueError):
         return 0.0
-    if max_score <= 0:
+    if not math.isfinite(score) or not math.isfinite(max_score) or max_score <= 0:
         return 0.0
-    return score / max_score
+    rank = score / max_score
+    return rank if math.isfinite(rank) else 0.0
 
 
 def _split_pairs_on_session_phase(
@@ -3630,6 +3641,7 @@ def run_full_scan(
                                     sig_a["engine_b_pct"] = round(b_score / b_max * 100, 1) if b_max else 0.0
                                     sig_a["engine_b_gate_pct"] = round(b_gate_pct_f, 1)
                                     sig_a["engine_b_quality_pct"] = conf_b.get("quality_pct")
+                                    sig_a["engine_b_quality_pct_net"] = conf_b.get("quality_pct_net")
                                     sig_a["engine_b_direction"] = _engine_b_direction_used
                                     annotate_signal_direction_metadata(
                                         sig_a,
@@ -3672,6 +3684,12 @@ def run_full_scan(
                                         direction_aligned=_engine_b_direction_aligned,
                                     )
                                     sig_a["combinedConviction"] = combined_conviction
+                                    # Canonical penalty-adjusted conviction for ranking and
+                                    # execution. Keep the existing camel alias for clients,
+                                    # but do not force the autotrader to reconstruct it from
+                                    # gross quality_pct (which excludes score penalties).
+                                    sig_a["engine_b_conviction"] = round(b_norm, 4)
+                                    sig_a["engine_b_score_norm"] = round(b_norm, 4)
                                     sig_a["engine_b_scoreNorm"] = round(b_norm, 4)
                                     _apply_engine_b_scan_confidence_gate(
                                         sig_a,

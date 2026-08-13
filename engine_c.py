@@ -20,6 +20,7 @@ Sources:
 """
 
 import logging
+import math
 from typing import Optional
 
 from calibration import predict_calibrated_prob
@@ -33,10 +34,13 @@ log = logging.getLogger("sentinel")
 
 def _engine_a_reliability(engine_a: dict, a_quality: float) -> float:
     """Blend Engine A confidence-detail score with meta quality; missing confidence → quality only."""
-    c = engine_a.get("confidence")
-    if c is None:
-        return float(a_quality)
-    return float(c) * 0.5 + float(a_quality) * 0.5
+    quality = _finite_float(a_quality, 0.0) or 0.0
+    quality = max(0.0, min(1.0, quality))
+    confidence = _finite_float(engine_a.get("confidence"))
+    if confidence is None:
+        return quality
+    confidence = max(0.0, min(1.0, confidence))
+    return confidence * 0.5 + quality * 0.5
 
 
 # ── Regime-conditional engine weights ─────────────────────────────────────────
@@ -55,6 +59,14 @@ ENGINE_C_AB_WEIGHTS = {
 ENGINE_C_META_BLEND = 0.20  # Default; override with CONFIG["ENGINE_C_META_BLEND"] (0..1)
 
 
+def _finite_float(value, default: float | None = None) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if math.isfinite(parsed) else default
+
+
 def _default_engine_a_max_score(signal_a: dict) -> float:
     """Fallback maxScore when Engine A omits or zeroes it; optional per-type overrides in CONFIG."""
     by_type = CONFIG.get("ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE")
@@ -70,14 +82,14 @@ def _default_engine_a_max_score(signal_a: dict) -> float:
             if raw is None:
                 continue
             try:
-                v = float(raw)
-                if v > 0:
+                v = _finite_float(raw)
+                if v is not None and v > 0:
                     return v
             except (TypeError, ValueError):
                 continue
     try:
-        v = float(CONFIG.get("ENGINE_C_A_DEFAULT_MAX_SCORE", 3.0))
-        return v if v > 0 else 3.0
+        v = _finite_float(CONFIG.get("ENGINE_C_A_DEFAULT_MAX_SCORE", 3.0))
+        return v if v is not None and v > 0 else 3.0
     except (TypeError, ValueError):
         return 3.0
 
@@ -373,38 +385,47 @@ def normalise_engine_a(signal_a: dict) -> dict:
             if _v3_raw is None:
                 continue
             try:
-                _v3_norm = max(0.0, min(1.0, float(_v3_raw)))
-                break
+                _v3_candidate = float(_v3_raw)
             except (TypeError, ValueError):
                 continue
+            if math.isfinite(_v3_candidate):
+                _v3_norm = max(0.0, min(1.0, _v3_candidate))
+                break
         if _v3_norm is None:
             _v3_cs_raw = signal_a.get("confluenceScore")
             _v3_ms_raw = signal_a.get("maxScore")
-            if _v3_cs_raw is not None or _v3_ms_raw is not None:
+            if _v3_cs_raw is not None:
                 try:
-                    _v3_cs = float(_v3_cs_raw or 0)
+                    _v3_cs = float(_v3_cs_raw)
                     _v3_ms = float(_v3_ms_raw or 0) or 3.0
-                    _v3_norm = min(1.0, _v3_cs / _v3_ms) if _v3_ms > 0 else None
+                    if math.isfinite(_v3_cs) and math.isfinite(_v3_ms) and _v3_ms > 0:
+                        _v3_norm = max(0.0, min(1.0, _v3_cs / _v3_ms))
                 except (TypeError, ValueError):
                     _v3_norm = None
-        if _v3_norm is None:
-            # Last-resort fallback for stub/malformed V3 payloads that carry
-            # no score data at all — preserve the decision-tier binary mapping.
-            _v3_norm = 1.0 if is_full else 0.5 if is_partial else 0.0
+        _v3_score_missing = _v3_norm is None
+        if _v3_score_missing:
+            # A malformed/cached V3 payload must not turn a binary TRADE label
+            # into maximum continuous conviction. The scorer contract requires
+            # scoreNorm/conviction or confluenceScore/maxScore; fail closed when
+            # every score path is absent so Engine C cannot execute on a stub.
+            _v3_norm = 0.0
+            is_full = False
+            is_partial = False
 
         # Confidence: prefer confidenceDetail.confidence, then V3 conviction.
         _v3_conf = None
         _v3_cdetail = signal_a.get("confidenceDetail")
         if isinstance(_v3_cdetail, dict) and _v3_cdetail.get("confidence") is not None:
-            try:
-                _v3_conf = float(_v3_cdetail["confidence"])
-            except (TypeError, ValueError):
-                _v3_conf = None
+            _v3_conf_candidate = _finite_float(_v3_cdetail["confidence"])
+            if _v3_conf_candidate is not None:
+                _v3_conf = max(0.0, min(1.0, _v3_conf_candidate))
         if _v3_conf is None:
             _v3_conv_raw = signal_a.get("conviction")
             if _v3_conv_raw is not None:
                 try:
-                    _v3_conf = max(0.0, min(1.0, float(_v3_conv_raw)))
+                    _v3_conf_candidate = float(_v3_conv_raw)
+                    if math.isfinite(_v3_conf_candidate):
+                        _v3_conf = max(0.0, min(1.0, _v3_conf_candidate))
                 except (TypeError, ValueError):
                     _v3_conf = None
 
@@ -429,25 +450,22 @@ def normalise_engine_a(signal_a: dict) -> dict:
             "setup_id": signal_a.get("setupId"),
             "horizon": signal_a.get("horizon"),
             "decision": decision,
+            "signal_diagnostic": (
+                "engine_a_v3_score_missing" if _v3_score_missing else ""
+            ),
             "rejection_reasons": list(signal_a.get("rejectionReasons") or []),
         }
 
-    score = float(signal_a.get("confluenceScore", 0))
+    score = _finite_float(signal_a.get("confluenceScore"), 0.0) or 0.0
     _ms_raw = signal_a.get("maxScore")
     if _ms_raw is None:
         max_score = _default_engine_a_max_score(signal_a)
     else:
-        try:
-            max_score = float(_ms_raw)
-        except (TypeError, ValueError):
-            max_score = _default_engine_a_max_score(signal_a)
-        if max_score <= 0:
+        max_score = _finite_float(_ms_raw)
+        if max_score is None or max_score <= 0:
             max_score = _default_engine_a_max_score(signal_a)
     score_norm = signal_a.get("scoreNorm")
-    try:
-        norm = float(score_norm) if score_norm is not None else None
-    except (TypeError, ValueError):
-        norm = None
+    norm = _finite_float(score_norm) if score_norm is not None else None
     if norm is None:
         norm = min(1.0, score / max_score) if max_score > 0 else 0.0
     norm = max(0.0, min(1.0, norm))
@@ -504,7 +522,7 @@ def normalise_engine_a(signal_a: dict) -> dict:
     _cdetail = signal_a.get("confidenceDetail")
     if isinstance(_cdetail, dict) and _cdetail.get("confidence") is not None:
         try:
-            _cf = float(_cdetail["confidence"])
+            _cf = _finite_float(_cdetail["confidence"])
         except (TypeError, ValueError):
             _cf = None
     return {
@@ -539,8 +557,8 @@ def normalise_engine_b(signal_b: dict, confidence_b: dict = None) -> dict:
       - bos_confirmed, choch_confirmed, ob_at_zone, etc.
     """
     conf = confidence_b or {}
-    score = float(conf.get("score", 0))
-    max_possible = float(conf.get("max_possible", 5.0)) or 5.0
+    score = _finite_float(conf.get("score"), 0.0) or 0.0
+    max_possible = _finite_float(conf.get("max_possible"), 5.0) or 5.0
 
     # Conviction basis: the earned quality layer, not the total ratio. Engine B
     # only sets `passed` when every mandatory gate is true, so gate_score always

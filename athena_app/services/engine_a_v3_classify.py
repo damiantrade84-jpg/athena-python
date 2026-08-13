@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -30,6 +31,23 @@ def classify_engine_a_v3_signal(signal: dict[str, Any], pair: dict[str, Any]) ->
         return "skip", reason or "V3 signal is not trade-qualified"
     if signal.get("engineATradeEnabled") is not True:
         return "watchlist", reason or "V3 execution eligibility is disabled"
+    # Decision aliases are not sufficient proof of a usable score. Cached or
+    # malformed V3 rows must not remain trade-tier when every canonical score
+    # path is missing or non-finite.
+    score_norm = signal.get("scoreNorm")
+    if score_norm is None:
+        score_norm = signal.get("conviction")
+    try:
+        if score_norm is not None:
+            canonical_norm = float(score_norm)
+        else:
+            canonical_score = float(signal.get("confluenceScore"))
+            canonical_max = float(signal.get("maxScore"))
+            canonical_norm = canonical_score / canonical_max if canonical_max > 0 else float("nan")
+    except (TypeError, ValueError, ZeroDivisionError):
+        canonical_norm = float("nan")
+    if not math.isfinite(canonical_norm):
+        return "watchlist", reason or "V3 canonical score missing or invalid"
     readiness_value = signal.get("entryReadiness")
     if readiness_value is not None:
         readiness = str(readiness_value).strip().upper() or "UNAVAILABLE"
@@ -113,6 +131,29 @@ def classify_engine_a_v3_signal(signal: dict[str, Any], pair: dict[str, Any]) ->
     return "trade", "V3 specialist trade-qualified"
 
 
+def demote_v3_trade_to_watch(
+    signal: dict[str, Any],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Demote a V3 trade and clear every execution-facing alias."""
+    if str(signal.get("decision") or "").upper() != "TRADE":
+        return signal
+
+    signal["decision"] = "WATCH"
+    signal["qualified"] = False
+    signal["engineATradeEnabled"] = False
+    signal["trade"] = False
+    signal["executable"] = False
+    signal["execution_permitted"] = False
+    signal["signalTier"] = "watchlist"
+    signal["executionScope"] = "NONE"
+    reasons = list(signal.get("rejectionReasons") or [])
+    reasons.append(reason)
+    signal["rejectionReasons"] = list(dict.fromkeys(reasons))
+    return signal
+
+
 def retier_v3_after_score_adjust(signal: dict[str, Any]) -> dict[str, Any]:
     """Demote TRADE→WATCH when adjusted confluence falls below threshold.
 
@@ -133,16 +174,14 @@ def retier_v3_after_score_adjust(signal: dict[str, Any]) -> dict[str, Any]:
         )
     except (TypeError, ValueError):
         threshold = 0.0
+    if not math.isfinite(score) or not math.isfinite(threshold):
+        return demote_v3_trade_to_watch(signal, reason="invalid_adjusted_score")
     if threshold <= 0:
         return signal
     if score + 1e-12 >= threshold:
         return signal
 
-    signal["decision"] = "WATCH"
-    signal["qualified"] = False
-    signal["trade"] = False
-    signal["executable"] = False
-    reasons = list(signal.get("rejectionReasons") or [])
-    reasons.append("intermarket_score_below_trade_threshold")
-    signal["rejectionReasons"] = list(dict.fromkeys(reasons))
-    return signal
+    return demote_v3_trade_to_watch(
+        signal,
+        reason="intermarket_score_below_trade_threshold",
+    )

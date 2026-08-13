@@ -13,8 +13,14 @@ from engine_b_quality import (
     apply_regime_component_weights,
     compute_confluence_subscores,
     compute_structure_alignment_score,
+    engine_b_conviction_norm,
     weighted_scoring_enabled,
 )
+
+
+@pytest.mark.parametrize("malformed", [float("nan"), float("inf"), float("-inf"), "bad"])
+def test_engine_b_conviction_nonfinite_or_malformed_fails_closed(malformed):
+    assert engine_b_conviction_norm({"quality_pct_net": malformed}) == 0.0
 from engine_b_subsystems import compute_subsystem_orderflow_score
 from market_structure import NakedEngine, engine_b_confidence_passes
 

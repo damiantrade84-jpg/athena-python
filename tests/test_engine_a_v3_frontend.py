@@ -71,6 +71,15 @@ def test_v3_manual_execute_uses_decision_and_ai_cannot_veto():
     assert "if (isV3) return null;" in source
 
 
+def test_v3_headline_score_uses_canonical_decision_score():
+    card = _read("components/athena/EngineASignalCard.tsx")
+    helper = _read("lib/athenaFormat.ts")
+
+    assert "scoreBreakdown?.decisionScore ??" in card
+    assert "const decisionScore = canonicalScore;" in helper
+    assert "label=\"Adjusted display\"" in card
+
+
 def test_signals_panel_does_not_offer_style_override_for_v3():
     source = _read("components/panels/SignalsPanel.tsx")
     assert "V3 execution re-validates the fixed" in source

@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from scanner import (
     ENGINE_B_SOURCE,
     _classify_engine_b_only_signal,
@@ -159,6 +161,19 @@ def test_scan_rank_handles_b_only_zero_max_score():
 
     assert stub["maxScore"] == 0.0
     assert _scan_signal_rank(stub) == 0.0
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [
+        {"combinedConviction": float("nan")},
+        {"combinedConviction": float("inf")},
+        {"confluenceScore": float("nan"), "maxScore": 3.0},
+        {"confluenceScore": 1.0, "maxScore": float("inf")},
+    ],
+)
+def test_scan_rank_rejects_nonfinite_scores(signal):
+    assert _scan_signal_rank(signal) == 0.0
 
 
 # ---------------------------------------------------------------------------

@@ -143,11 +143,17 @@ export default function EngineASignalCard({
   // are both near-constant for anything Engine B passes: gate_pct is 100 by
   // definition (every mandatory gate must pass to emit) and the total ratio
   // score/max_possible floors near 83% because gate_score == gate_max on pass.
-  // Only quality_pct spans a usable range, so it leads and the others are
+  // Only quality_pct spans a usable range. Prefer its penalty-adjusted net
+  // form because that is the conviction consumed by ranking and execution;
+  // gross quality remains a compatibility fallback for cached legacy rows.
+  // The others are
   // ordered strictly as fallbacks for older payloads.
   const nakedQualityPct = isEngineBOnly
     ? toNum(
-        raw.engine_b_quality_pct
+        raw.engine_b_quality_pct_net
+          ?? engineBStatus.quality_pct_net
+          ?? engineBResult.quality_pct_net
+          ?? raw.engine_b_quality_pct
           ?? engineBStatus.quality_pct
           ?? engineBResult.quality_pct
           ?? raw.quality_pct,
@@ -172,7 +178,7 @@ export default function EngineASignalCard({
   const engineBHeadline = (() => {
     const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
     if (Number.isFinite(nakedQualityPct)) {
-      return { pct: clamp(nakedQualityPct), caption: 'Engine B quality', isQuality: true };
+      return { pct: clamp(nakedQualityPct), caption: 'Engine B conviction', isQuality: true };
     }
     if (Number.isFinite(nakedTotalPct)) {
       return { pct: clamp(nakedTotalPct), caption: 'Engine B total', isQuality: false };
@@ -187,13 +193,16 @@ export default function EngineASignalCard({
     if (Number.isFinite(nakedGatePct)) {
       return { pct: clamp(nakedGatePct), caption: 'Engine B gates', isQuality: false };
     }
-    return { pct: null as number | null, caption: 'Engine B quality', isQuality: true };
+    return { pct: null as number | null, caption: 'Engine B conviction', isQuality: true };
   })();
   const conf = isEngineBOnly ? engineBHeadline.pct : confluencePct(signal);
   const thresholdPct = isEngineBOnly ? null : confluenceThresholdPct(signal);
   const conv = toNum(signal.conviction, NaN);
   const convT = convictionTier(Number.isFinite(conv) ? conv : null);
-  const score = scoreBreakdown?.displayScore ?? toNum(signal.confluenceScore ?? signal.score, NaN);
+  // Headline/list score must be the same canonical value used by backend
+  // retiering and execution. Display-only news context is shown separately in
+  // EngineAScoreAdjustmentRows instead of replacing the decision score.
+  const score = scoreBreakdown?.decisionScore ?? toNum(signal.confluenceScore ?? signal.score, NaN);
   const max = toNum(
     isEngineBOnlyStub ? raw.engine_a_maxScore ?? signal.maxScore : signal.maxScore,
     NaN,

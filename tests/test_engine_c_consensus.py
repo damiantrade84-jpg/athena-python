@@ -406,6 +406,18 @@ class TestNormaliseEngineA:
         out = normalise_engine_a(sig)
         assert out["has_signal"] is False
 
+    @pytest.mark.parametrize("malformed", [float("nan"), float("inf"), float("-inf"), "bad"])
+    def test_legacy_nonfinite_or_malformed_score_fails_closed(self, malformed):
+        sig = {
+            "confluenceScore": malformed,
+            "maxScore": 3.0,
+            "direction": "LONG",
+            "engineATradeEnabled": True,
+        }
+        out = normalise_engine_a(sig)
+        assert out["score_norm"] == 0.0
+        assert out["has_signal"] is False
+
 
 # ── normalise_engine_b edge cases ────────────────────────────────────────────
 

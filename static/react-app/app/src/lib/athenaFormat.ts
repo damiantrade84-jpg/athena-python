@@ -125,21 +125,21 @@ function readSignalNumber(sig: Record<string, unknown>, ...keys: string[]): numb
   return NaN;
 }
 
-/** Split display confluence from the pre-blend score used for V3 decision (not legacy tier). */
+/** Split the backend-canonical V3 decision score from optional display-only adjustments. */
 export function engineAScoreBreakdown(sig: EngineASignal | null | undefined): EngineAScoreBreakdown | null {
   if (!sig) return null;
   const raw = sig as Record<string, unknown>;
   const isV3 = isEngineAV3Signal(sig);
   const isBOnlyStub = String(raw.engine_source ?? raw.engine ?? '').toUpperCase() === 'ENGINE_B'
     || (String(raw.engine_source ?? raw.engine ?? '').toUpperCase() === 'B' && raw.engine_a_present === false);
-  const displayScore = readSignalNumber(
+  const canonicalScore = readSignalNumber(
     raw,
     ...(isBOnlyStub ? ['engine_a_confluenceScore'] as const : []),
     'confluenceScore',
     'score',
     ...(isBOnlyStub ? [] as const : ['engine_a_confluenceScore'] as const),
   );
-  if (!Number.isFinite(displayScore)) return null;
+  if (!Number.isFinite(canonicalScore)) return null;
 
   const intermarket = (raw.intermarketConfirmation && typeof raw.intermarketConfirmation === 'object'
     ? raw.intermarketConfirmation
@@ -161,21 +161,20 @@ export function engineAScoreBreakdown(sig: EngineASignal | null | undefined): En
   );
   const newsAdjustmentResolved = Number.isFinite(newsAdjustment) ? newsAdjustment : 0;
 
-  const preNews = readSignalNumber(raw, 'pre_news_score', 'engine_a_pre_news_score');
-  let decisionScore = displayScore;
-  if (isV3 && Number.isFinite(preNews)) {
-    decisionScore = preNews - (Number.isFinite(intermarketDeltaResolved) ? intermarketDeltaResolved : 0);
-  } else if (
-    isV3
-    && (
-      (Number.isFinite(intermarketDeltaResolved) && intermarketDeltaResolved !== 0)
-      || newsAdjustmentResolved !== 0
-    )
-  ) {
-    decisionScore = displayScore
-      - (Number.isFinite(intermarketDeltaResolved) ? intermarketDeltaResolved : 0)
-      - newsAdjustmentResolved;
-  }
+  // Backend V3 retiering and execution consume confluenceScore/scoreNorm after
+  // intermarket adjustment. News remains a display-only `score` adjustment.
+  // Reconstructing a pre-intermarket value here made the UI disagree with the
+  // authoritative decision and execution score whenever intermarket was on.
+  const decisionScore = canonicalScore;
+  const adjustedDisplayScore = isV3
+    ? readSignalNumber(
+        raw,
+        ...(isBOnlyStub ? ['engine_a_score'] as const : ['score', 'final_score'] as const),
+      )
+    : NaN;
+  const displayScore = Number.isFinite(adjustedDisplayScore)
+    ? adjustedDisplayScore
+    : canonicalScore;
 
   const threshold = engineAThreshold(sig);
   const maxScore = readSignalNumber(raw, 'maxScore', 'engine_a_maxScore');
@@ -185,8 +184,6 @@ export function engineAScoreBreakdown(sig: EngineASignal | null | undefined): En
     || Math.abs(newsAdjustmentResolved) > 0.0001
   );
 
-  const passScore = isV3 && hasAdjustments ? decisionScore : displayScore;
-
   return {
     displayScore,
     decisionScore: Number.isFinite(decisionScore) ? decisionScore : null,
@@ -195,7 +192,7 @@ export function engineAScoreBreakdown(sig: EngineASignal | null | undefined): En
     intermarketDelta: Number.isFinite(intermarketDeltaResolved) ? intermarketDeltaResolved : 0,
     newsAdjustment: newsAdjustmentResolved,
     hasAdjustments,
-    decisionPasses: threshold != null && threshold > 0 && Number.isFinite(passScore) && passScore >= threshold,
+    decisionPasses: threshold != null && threshold > 0 && Number.isFinite(decisionScore) && decisionScore >= threshold,
     displayPasses: threshold != null && threshold > 0 && displayScore >= threshold,
   };
 }
@@ -219,7 +216,7 @@ export interface EngineBScoreBreakdown {
    */
   qualityPointsNet: number | null;
   qualityDenominator: number | null;
-  /** Quality-layer percent (0-100). The only Engine B score that varies on pass. */
+  /** Net quality-layer percent (0-100), falling back to gross on legacy rows. */
   qualityPct: number | null;
   /**
    * False when the style/regime floor cannot reject anything for this signal —
@@ -309,8 +306,20 @@ export function engineBScoreBreakdown(
   const qualityPointsNet = readSignalNumber(conf, 'quality_points_net', 'qualityPointsNet');
   const qualityDenominator = readSignalNumber(conf, 'quality_denominator', 'qualityDenominator');
 
-  const qualityPct = readSignalNumber(conf, 'quality_pct', 'qualityPct');
-  const qualityPctFromTop = readSignalNumber(row, 'engine_b_quality_pct', 'quality_pct');
+  const qualityPct = readSignalNumber(
+    conf,
+    'quality_pct_net',
+    'qualityPctNet',
+    'quality_pct',
+    'qualityPct',
+  );
+  const qualityPctFromTop = readSignalNumber(
+    row,
+    'engine_b_quality_pct_net',
+    'quality_pct_net',
+    'engine_b_quality_pct',
+    'quality_pct',
+  );
   const resolvedQualityPct = Number.isFinite(qualityPct) ? qualityPct : qualityPctFromTop;
 
   const floorBindingRaw = conf.min_score_floor_binding ?? row.engine_b_min_score_floor_binding;
@@ -428,7 +437,17 @@ export function unifiedListSortKey(sig: EngineASignal | null | undefined): numbe
     || raw.is_naked === true;
 
   if (isBRow) {
-    const qualityPct = toNum(raw.engine_b_quality_pct ?? raw.quality_pct, NaN);
+    for (const key of ['engine_b_conviction', 'engine_b_score_norm', 'engine_b_scoreNorm'] as const) {
+      const norm = toNum(raw[key], NaN);
+      if (Number.isFinite(norm)) return Math.max(0, Math.min(1, norm));
+    }
+    const qualityPct = toNum(
+      raw.engine_b_quality_pct_net
+        ?? raw.quality_pct_net
+        ?? raw.engine_b_quality_pct
+        ?? raw.quality_pct,
+      NaN,
+    );
     if (Number.isFinite(qualityPct)) {
       return Math.max(0, Math.min(1, qualityPct / 100));
     }
@@ -452,11 +471,36 @@ export function unifiedListSortKey(sig: EngineASignal | null | undefined): numbe
 export function signalConviction(sig: EngineASignal | null | undefined): number | null {
   if (!sig) return null;
   const raw = sig as Record<string, unknown>;
+  const engine = String(raw.engine_source ?? raw.engine ?? '').toUpperCase();
+  const isBRow = engine === 'ENGINE_B' || engine === 'B' || engine === 'NAKED'
+    || raw.is_naked === true;
+  if (isBRow) {
+    for (const key of ['engine_b_conviction', 'engine_b_score_norm', 'engine_b_scoreNorm'] as const) {
+      const n = toNum(raw[key], NaN);
+      if (Number.isFinite(n)) return Math.max(0, Math.min(1, n));
+    }
+    const netQualityPct = toNum(
+      raw.engine_b_quality_pct_net
+        ?? raw.quality_pct_net
+        ?? raw.engine_b_quality_pct
+        ?? raw.quality_pct,
+      NaN,
+    );
+    if (Number.isFinite(netQualityPct)) {
+      return Math.max(0, Math.min(1, netQualityPct / 100));
+    }
+  }
   for (const key of ['conviction', 'combinedConviction', 'scoreNorm'] as const) {
     const n = toNum(raw[key], NaN);
     if (Number.isFinite(n)) return Math.max(0, Math.min(1, n));
   }
-  const qualityPct = toNum(raw.engine_b_quality_pct ?? raw.quality_pct, NaN);
+  const qualityPct = toNum(
+    raw.engine_b_quality_pct_net
+      ?? raw.quality_pct_net
+      ?? raw.engine_b_quality_pct
+      ?? raw.quality_pct,
+    NaN,
+  );
   if (Number.isFinite(qualityPct)) return Math.max(0, Math.min(1, qualityPct / 100));
   return null;
 }

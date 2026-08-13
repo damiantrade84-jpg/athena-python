@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from engine_b_subsystems import compute_subsystem_orderflow_score
@@ -47,14 +48,17 @@ _DEFAULT_COMPONENT_WEIGHTS: dict[str, float] = {
 
 
 def _clamp01(value: float) -> float:
+    if not math.isfinite(value):
+        return 0.0
     return max(0.0, min(1.0, value))
 
 
 def _float_mapping(value: Any, default: float = 0.0) -> float:
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return default
+    return parsed if math.isfinite(parsed) else default
 
 
 def weighted_scoring_config() -> dict[str, Any]:
@@ -703,7 +707,7 @@ def engine_b_conviction_norm(conf: dict[str, Any] | None) -> float:
                 value = float(raw)
             except (TypeError, ValueError):
                 continue
-            if value != value:  # NaN
+            if not math.isfinite(value):
                 continue
             return value
         return None

@@ -4703,7 +4703,8 @@ ENGINE_B_SWING_SEQUENCE_FRESH_BARS: 10
 ENGINE_B_SWING_SEQUENCE_CONFLUENCE_BONUS: 0.10
 
 # Ranking / conviction basis for Engine B (blends, sorting, execution gates).
-#   quality — confidence.quality_pct (0-100, full range for passing signals)
+#   quality — confidence.quality_pct_net (0-100, penalty-adjusted), falling
+#             back to gross quality_pct only for legacy payloads
 #   total   — legacy confidence.score / max_possible, whose lower ~83% is
 #             constant for every passing signal and saturated the A/B blend.
 # Gate decisions still come from `passed` / `checklist_passed`, never from this.

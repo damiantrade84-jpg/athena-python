@@ -19,7 +19,12 @@ from athena_ase.execution.bridge import (
     enforce_time_stops,
     execute_trade_signal,
 )
-from athena_ase.inference.decision import MIN_TRADE_EXPECTED_R, apply_decision_rule
+from athena_ase.inference.decision import (
+    MIN_TRADE_EXPECTED_R,
+    apply_decision_rule,
+    legacy_expected_r_strength,
+    signal_strength,
+)
 from athena_ase.levels.brackets import compute_brackets
 from athena_ase.registry.promotion import promote_family
 from athena_ase.signals.common import (
@@ -71,6 +76,16 @@ def test_trade_requires_floor_even_when_thr_below_it():
 def test_higher_family_threshold_still_respected():
     assert apply_decision_rule(p_cal=0.70, expected_net_r=0.2, thr_family=0.3) == "WATCH"
     assert apply_decision_rule(p_cal=0.70, expected_net_r=0.35, thr_family=0.3) == "TRADE"
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_ase_scores_fail_closed(bad):
+    assert apply_decision_rule(p_cal=0.70, expected_net_r=bad, thr_family=0.1) == "FLAT"
+    assert apply_decision_rule(p_cal=bad, expected_net_r=0.3, thr_family=0.1) == "FLAT"
+    assert apply_decision_rule(p_cal=0.70, expected_net_r=0.3, thr_family=bad) == "FLAT"
+    assert signal_strength(bad, 0.70) == 0
+    assert signal_strength(0.3, bad) == 0
+    assert legacy_expected_r_strength(bad) == 0
 
 
 # ── stale-bar fail-close ──────────────────────────────────────────────────────
@@ -402,7 +417,7 @@ def test_evaluate_monitor_one_scan_is_one_time_sample():
     assert result.watch_max is True
 
 
-def test_predict_one_appends_live_feature_buffer(monkeypatch):
+def _predict_one_with_probability(monkeypatch, probability: float):
     import numpy as np
     from unittest.mock import MagicMock
 
@@ -438,7 +453,9 @@ def test_predict_one_appends_live_feature_buffer(monkeypatch):
         feature_names=("ret_z_1",),
         monitor_reference={"ret_z_1": np.linspace(-1, 1, 20)},
     )
-    bundle.model_core.predict_proba.return_value = np.array([[0.4, 0.6]])
+    bundle.model_core.predict_proba.return_value = np.array(
+        [[1.0 - probability, probability]]
+    )
 
     inst = MagicMock()
     inst.family = "forex"
@@ -475,15 +492,41 @@ def test_predict_one_appends_live_feature_buffer(monkeypatch):
     monkeypatch.setattr(pred_mod, "set_watch_max", lambda *_a, **_k: None)
 
     live_buf: list[dict[str, float]] = []
-    predict_one(
+    result = predict_one(
         cand,
         MagicMock(),
         inst,
         bundle=bundle,
         live_feature_rows=live_buf,
     )
+    return result, live_buf
+
+
+def test_predict_one_appends_live_feature_buffer(monkeypatch):
+    _result, live_buf = _predict_one_with_probability(monkeypatch, 0.6)
     assert len(live_buf) == 1
     assert "ret_z_1" in live_buf[0]
+
+
+@pytest.mark.parametrize(
+    "bad_probability",
+    [float("nan"), float("inf"), float("-inf"), -0.1, 1.1],
+)
+def test_predict_one_rejects_invalid_model_probability(monkeypatch, bad_probability):
+    result, _live_buf = _predict_one_with_probability(monkeypatch, bad_probability)
+
+    assert result.decisionStatus == "ERROR"
+    assert result.modelHealth["errorReason"] == "model_probability_invalid"
+
+
+def test_predict_one_rejects_nonfinite_modeled_expectancy(monkeypatch):
+    import athena_ase.inference.predict as pred_mod
+
+    monkeypatch.setattr(pred_mod, "_expected_net_r", lambda *_a, **_k: float("nan"))
+    result, _live_buf = _predict_one_with_probability(monkeypatch, 0.6)
+
+    assert result.decisionStatus == "ERROR"
+    assert result.modelHealth["errorReason"] == "model_expectancy_nonfinite"
 
 
 # ── demo execution deps gate (F5) ─────────────────────────────────────────────

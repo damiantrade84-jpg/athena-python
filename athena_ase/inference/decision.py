@@ -26,8 +26,16 @@ def apply_decision_rule(
     dq = data_quality or {}
     if not dq.get("coreOk", True):
         return "FLAT"
+    try:
+        p_cal = float(p_cal)
+        expected_net_r = float(expected_net_r)
+        thr_family = float(thr_family)
+    except (TypeError, ValueError):
+        return "FLAT"
+    if not all(math.isfinite(value) for value in (p_cal, expected_net_r, thr_family)):
+        return "FLAT"
     margin = abs(p_cal - 0.5)
-    thr_effective = max(float(thr_family), MIN_TRADE_EXPECTED_R)
+    thr_effective = max(thr_family, MIN_TRADE_EXPECTED_R)
     if expected_net_r >= thr_effective and p_cal >= 0.55 and margin >= 0.05:
         return "TRADE"
     if expected_net_r > 0:
@@ -47,6 +55,13 @@ def signal_strength(expected_net_r: float, p_cal: float = 0.5) -> int:
     trades. Mirrors Engine A's normalized-conviction (score_norm) convention,
     scaled to 0-100.
     """
+    try:
+        p_cal = float(p_cal)
+        expected_net_r = float(expected_net_r)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(p_cal) or not math.isfinite(expected_net_r):
+        return 0
     prob_edge = max(0.0, min(1.0, 2.0 * (p_cal - 0.5)))
     payoff = max(0.0, min(1.0, expected_net_r))  # 1R reference (K_TP)
     conviction = math.sqrt(prob_edge * payoff)
@@ -59,4 +74,10 @@ def legacy_expected_r_strength(expected_net_r: float) -> int:
     Retained as an additional, transparent scoring option (surfaced under
     predictionDiagnostics) so the raw expected-R magnitude is not lost.
     """
+    try:
+        expected_net_r = float(expected_net_r)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(expected_net_r):
+        return 0
     return int(round(max(0.0, min(1.0, expected_net_r / 0.5)) * 100))

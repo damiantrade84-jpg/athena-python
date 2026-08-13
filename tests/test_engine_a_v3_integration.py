@@ -193,15 +193,39 @@ def test_engine_c_v3_consensus_still_high_when_score_norm_genuinely_high():
     assert result["components"]["a_norm"] == 0.95
 
 
-def test_engine_c_v3_falls_back_to_decision_tier_when_scores_missing():
-    """Stub V3 payloads without score fields still normalize safely."""
+def test_engine_c_v3_fails_closed_when_scores_missing():
+    """A stub V3 TRADE must not become maximum Engine C conviction."""
     stub = _v3_signal("TRADE", qualified=True)
     for _key in ("scoreNorm", "conviction", "confluenceScore", "maxScore"):
         stub.pop(_key, None)
     normalized = normalise_engine_a(stub)
-    assert normalized["has_signal"] is True
-    # Fallback: decision-tier binary mapping.
-    assert normalized["score_norm"] == 1.0
+    assert normalized["has_signal"] is False
+    assert normalized["trade_enabled"] is False
+    assert normalized["score_norm"] == 0.0
+    assert normalized["signal_diagnostic"] == "engine_a_v3_score_missing"
+
+
+def test_engine_c_v3_fails_closed_for_malformed_nonfinite_score():
+    for malformed in (float("nan"), float("inf"), float("-inf"), "bad"):
+        stub = _v3_signal("TRADE", qualified=True)
+        stub["scoreNorm"] = malformed
+        for key in ("conviction", "confluenceScore", "maxScore"):
+            stub.pop(key, None)
+
+        normalized = normalise_engine_a(stub)
+
+        assert normalized["has_signal"] is False
+        assert normalized["score_norm"] == 0.0
+        assert normalized["signal_diagnostic"] == "engine_a_v3_score_missing"
+
+
+def test_engine_c_v3_nonfinite_confidence_falls_back_to_finite_conviction():
+    stub = _v3_signal("TRADE", qualified=True, score_norm=0.72)
+    stub["confidenceDetail"] = {"confidence": float("nan")}
+
+    normalized = normalise_engine_a(stub)
+
+    assert normalized["confidence"] == 0.72
 
 
 def test_scanner_classifies_v3_trade_watch_and_no_signal_without_scores():

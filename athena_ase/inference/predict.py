@@ -355,6 +355,20 @@ def predict_one(
 
     raw_p = _predict_proba(model, features)
     p_cal = _calibrate(calibrator, raw_p)
+    if (
+        not math.isfinite(raw_p)
+        or not math.isfinite(p_cal)
+        or not 0.0 <= raw_p <= 1.0
+        or not 0.0 <= p_cal <= 1.0
+    ):
+        return error_signal(
+            instrument=candidate.instrument,
+            family=family,
+            horizon=horizon,
+            reason="model_probability_invalid",
+            gate_result=gate.to_dict(),
+            model_version=bundle.version,
+        )
     return_q = _predict_quantiles(quantile_bundle, features, "net_R")
     mae_q = _predict_quantiles(quantile_bundle, features, "MAE_R")
     mfe_q = _predict_quantiles(quantile_bundle, features, "MFE_R")
@@ -368,6 +382,15 @@ def predict_one(
         horizon=horizon,
         realized_expectancy=(bundle.manifest.eval_summary or {}).get("expectancy"),
     )
+    if not math.isfinite(expected_r):
+        return error_signal(
+            instrument=candidate.instrument,
+            family=family,
+            horizon=horizon,
+            reason="model_expectancy_nonfinite",
+            gate_result=gate.to_dict(),
+            model_version=bundle.version,
+        )
     status = _decision_status(
         expected_net_r=expected_r,
         p_cal=p_cal,
