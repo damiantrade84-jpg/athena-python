@@ -127,7 +127,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [cascadeScanReviewStatus, setCascadeScanReviewStatusState] = useState<Record<string, 'OPENED'>>({});
   const [tvChartIntent, setTvChartIntentState] = useState<TvChartIntent | null>(null);
   const [scalpWorkbenchIntent, setScalpWorkbenchIntentState] = useState<ScalpWorkbenchIntent | null>(null);
-  const [aiReviewProvider, setAiReviewProviderState] = useState<AIReviewProvider>('openai');
+  const [aiReviewProvider, setAiReviewProviderState] = useState<AIReviewProvider>('grok');
   const [chartReviewOutcomes, setChartReviewOutcomes] = useState<Record<string, {
     symbol: string;
     primaryEngine: 'A' | 'B';
@@ -209,7 +209,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setAiReviewProvider = useCallback((provider: AIReviewProvider) => {
-    const normalized = normalizeAiReviewProvider(provider) ?? 'openai';
+    const normalized = normalizeAiReviewProvider(provider) ?? 'grok';
     setAiReviewProviderState(normalized);
     void apiClient
       .postJson('/api/ai-review/provider', { provider: normalized })

@@ -159,7 +159,7 @@ def test_ohlcv_window_is_bounded_to_limit() -> None:
 
 def test_vision_routing_todo_marker_is_present() -> None:
     layer = build_strategy_layer(engine_a_ctx=_engine_a_ctx())
-    assert "vision_routing_pending" in layer["vision_routing_todo"]
+    assert "vision_primary" in layer["vision_routing_todo"]
 
 
 def test_ohlcv_window_empty_when_no_bars_supplied() -> None:
@@ -241,7 +241,7 @@ def test_prompt_rendering_includes_classifier_agreement_enum() -> None:
 def test_prompt_rendering_marks_vision_routing_todo() -> None:
     layer = build_strategy_layer(engine_a_ctx=_engine_a_ctx())
     text = render_strategy_block_for_prompt(layer)
-    assert "vision_routing_pending" in text
+    assert "vision_primary" in text
 
 
 # ----- isolation --------------------------------------------------------------

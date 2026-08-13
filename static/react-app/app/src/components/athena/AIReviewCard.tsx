@@ -325,6 +325,10 @@ function AIReviewCardImpl({ response }: AIReviewCardProps) {
               value={showReviewValue(ts.entry_chart_captured_at)}
             />
             <KeyValue
+              label="Image policy"
+              value={showReviewValue(response.reviewInputMeta?.reviewImagePolicySource)}
+            />
+            <KeyValue
               label="Scan timestamp"
               value={showReviewValue(ts.scan_timestamp)}
               meta={scanDelta == null ? undefined : `delta ${scanDelta}s`}

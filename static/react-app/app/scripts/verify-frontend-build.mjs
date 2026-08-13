@@ -69,7 +69,16 @@ for (const marker of requiredCssMarkers) {
 
 // eqFill is the shared equity chart's gradient id prefix; the Engine B string
 // proves the rebuilt signal card is in the bundle.
-const requiredJsMarkers = ['EquityAreaChart', 'eqFill', 'Engine B quality'];
+const requiredJsMarkers = [
+  'EquityAreaChart',
+  'eqFill',
+  'Engine B quality',
+  // AI chart review must ship the two-image browser contract. These property
+  // names survive minification and catch a stale five-field production bundle.
+  'review_role',
+  'entry_screenshot_base64',
+  'entry_screenshot_meta',
+];
 for (const marker of requiredJsMarkers) {
   if (!jsText.includes(marker)) {
     fail(`production JS missing redesign marker: ${marker}`);

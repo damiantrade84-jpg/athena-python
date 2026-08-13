@@ -115,7 +115,6 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": payload.prompt},
                     {
                         "type": "text",
                         "text": f"IMAGE 1 — STRUCTURE ({review_images[0]['timeframe']})",
@@ -132,6 +131,7 @@ def call_xai_chart_review(payload: Any) -> dict[str, Any]:
                         "type": "image_url",
                         "image_url": {"url": review_images[1]["data_url"]},
                     },
+                    {"type": "text", "text": payload.prompt},
                 ],
             }
         ],

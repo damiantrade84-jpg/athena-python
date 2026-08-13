@@ -361,6 +361,7 @@ def assemble_engine_b_context(
             "note": None,
         },
         "signal": res,
+        "engine_b_confidence": res,
     }
     # Prefer candles attached on the live naked-analysis result (AI-review path
     # stamps limited *Candles series). Fall back to seed_row only if present —

@@ -949,23 +949,21 @@ def select_ohlcv_bars_for_chart(
 ) -> list[dict[str, Any]]:
     """Pick candle series aligned to the chart timeframe for strategy facts."""
     tf = str((screenshot_meta or {}).get("chart_timeframe") or timeframe or "H4").upper()
-    if tf in ("M1", "M2", "M3", "M5", "M15"):
-        raw = (
-            signal.get("m1Candles")
-            or signal.get("m5Candles")
-            or signal.get("m15Candles")
-            or signal.get("h1Candles")
-        )
-    elif tf in ("M30", "H1", "H2", "H3"):
-        raw = (
-            signal.get("m30Candles")
-            or signal.get("h1Candles")
-            or signal.get("h4Candles")
-        )
-    elif tf == "H4":
-        raw = signal.get("h4Candles") or signal.get("h1Candles")
-    else:
-        raw = signal.get("d1Candles") or signal.get("h4Candles")
+    series_key = {
+        "M1": "m1Candles",
+        "M2": "m1Candles",
+        "M3": "m1Candles",
+        "M5": "m5Candles",
+        "M15": "m15Candles",
+        "M30": "m30Candles",
+        "H1": "h1Candles",
+        "H2": "h1Candles",
+        "H3": "h1Candles",
+        "H4": "h4Candles",
+        "D1": "d1Candles",
+        "W1": "d1Candles",
+    }.get(tf)
+    raw = signal.get(series_key) if series_key else None
     if not isinstance(raw, list):
         return []
     return [c for c in raw if isinstance(c, dict)]
@@ -1117,22 +1115,17 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         struct.get("trigger_timeframe"),
         struct.get("entry_tf"),
     )
-    role_defaults: dict[str, Any] = {}
-    try:
-        from market_structure import resolve_engine_b_tfs
-
-        role_defaults = resolve_engine_b_tfs(
-            str(engine_a_ctx.get("asset_class") or ""),
-            str(engine_a_ctx.get("analyze_style") or "intraday"),
-        )
-    except Exception:
-        role_defaults = {}
+    signal = engine_a_ctx.get("signal") if isinstance(engine_a_ctx.get("signal"), dict) else {}
 
     return {
         "available": available,
         "reviewMode": engine_a_ctx.get("review_mode"),
         "candidateOrigin": engine_a_ctx.get("candidate_origin"),
         "reviewDelta": engine_a_ctx.get("review_delta"),
+        "reviewImagePolicy": engine_a_ctx.get("review_image_policy"),
+        "reviewImagePolicyDiagnostic": engine_a_ctx.get(
+            "review_image_policy_diagnostic"
+        ),
         "score": eb.get("score"),
         "maxScore": eb.get("maxScore"),
         "threshold": eb.get("threshold"),
@@ -1143,15 +1136,10 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             conf.get("struct_tf"),
             struct.get("struct_tf"),
             struct.get("structure_timeframe"),
-            role_defaults.get("struct"),
         ),
-        "zoneTf": _first_present(
-            conf.get("zone_tf"), struct.get("zone_tf"), role_defaults.get("zone")
-        ),
-        "triggerTf": trigger_actual or role_defaults.get("trigger"),
-        "atrTf": _first_present(
-            conf.get("atr_tf"), struct.get("atr_tf"), role_defaults.get("atr")
-        ),
+        "zoneTf": _first_present(conf.get("zone_tf"), struct.get("zone_tf")),
+        "triggerTf": trigger_actual,
+        "atrTf": _first_present(conf.get("atr_tf"), struct.get("atr_tf")),
         "biasTf": _first_present(
             conf.get("bias_tf"),
             struct.get("bias_tf"),
@@ -1219,6 +1207,17 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "qualityScore": _first_float(conf.get("quality_score"), struct.get("quality_score")),
         "qualityMaxPossible": _first_float(
             conf.get("quality_max_possible"), struct.get("quality_max_possible")
+        ),
+        "qualityPct": _first_float(
+            conf.get("quality_pct"),
+            struct.get("quality_pct"),
+            signal.get("quality_pct"),
+            signal.get("engine_b_quality_pct"),
+        ),
+        "qualityPctNet": _first_float(
+            conf.get("quality_pct_net"),
+            struct.get("quality_pct_net"),
+            signal.get("quality_pct_net"),
         ),
         "qualityComponents": conf.get("quality_components")
         or struct.get("quality_components")
@@ -2014,6 +2013,10 @@ def build_engine_a_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
         "normalizedScore": ea.get("normalizedScore"),
         "passed": ea.get("passed") if ea.get("passed") is not None else engine_a_ctx.get("passed"),
         "activeFactors": ea.get("activeFactors"),
+        "reviewImagePolicy": engine_a_ctx.get("review_image_policy"),
+        "reviewImagePolicyDiagnostic": engine_a_ctx.get(
+            "review_image_policy_diagnostic"
+        ),
         "timeframePolicy": {
             key: timeframe_policy.get(key)
             for key in (

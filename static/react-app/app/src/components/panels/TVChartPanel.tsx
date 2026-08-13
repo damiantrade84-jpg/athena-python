@@ -58,7 +58,7 @@ import {
   buildScreenshotMeta,
   canvasToDataUrl,
   downscaleToCap,
-  streamChartReview,
+  postChartReview,
 } from '@/lib/aiChartReview';
 import { visionReviewImageTimeframes } from '@/lib/visionReview';
 import VolumeModeField from '@/components/execution/VolumeModeField';
@@ -1772,6 +1772,15 @@ function EngineAV3SidePanel({
 
       <section className="space-y-2 rounded-md border border-border/60 p-2">
         <TextRow label="Direction" value={normalizeDirection(signal.direction) || 'UNAVAILABLE'} />
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">Score</span>
+          <span className="font-mono">
+            {firstNumber(signal.confluenceScore, signal.score) == null
+              ? 'Unavailable'
+              : `${fmtNum(firstNumber(signal.confluenceScore, signal.score), 2)} / ${fmtNum(firstNumber(signal.maxScore, signal.max_score) ?? 3, 1)}`}
+          </span>
+        </div>
+        <NumberRow label="Threshold" value={firstNumber(signal.confluenceThreshold, signal.threshold)} />
         <TextRow label="Family" value={`${signal.family || '-'} / ${signal.subclass || '-'}`} />
         <TextRow label="Trigger zone" value={entryZone.length >= 2 ? `${fmtNum(entryZone[0], 6)} - ${fmtNum(entryZone[1], 6)}` : null} />
         <NumberRow label="Entry" value={firstNumber(signal.entry, signal.price)} />
@@ -2062,6 +2071,14 @@ function EngineBSidePanel({
       </div>
 
       <section className="space-y-2 rounded-md border border-border/60 p-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">Quality</span>
+          <span className="font-mono">
+            {bBreakdown?.qualityPct != null
+              ? `${fmtNum(bBreakdown.qualityPct, 1)}%`
+              : 'Unavailable'}
+          </span>
+        </div>
         <div className="flex items-center justify-between text-xs">
           <span className="text-muted-foreground">Gate</span>
           <span className="font-mono">
@@ -2778,26 +2795,38 @@ export default function TVChartPanel() {
     // 'custom' is passive — manual switch flips revert the label naturally.
   };
 
-  const applyEngineAReviewLayout = () => {
-    const candidate = chartCandidate || defaultCandidate;
-    const isCrypto = String(candidate?.type || '').toLowerCase() === 'crypto';
-    const candidateSymbol = displaySymbol(candidate);
-    if (candidateSymbol) setPair(candidateSymbol);
+  const applyReviewIndicatorLayout = (isCrypto: boolean) => {
     setShowQuantDebug(true);
-    setTimeframeAutoMode(true);
-    lastAppliedRouteKeyRef.current = null;
-    setTimeframe(reviewTimeframeFor(candidate));
     setEma20(true);
     setEma21(true);
     setEma50(true);
     setEma200(true);
     setDema200(!isCrypto);
     setVwapEnabled(isCrypto);
-    setAtr14(!isCrypto);
+    setAtr14(true);
     setRsi14(true);
-    setAdx14(false);
+    setAdx14(true);
     setVolumeBars(isCrypto);
     setVolumeMa(isCrypto);
+  };
+
+  const reviewIndicatorLayoutReady = showQuantDebug
+    && ema50
+    && ema200
+    && rsi14
+    && atr14
+    && adx14
+    && (isCryptoChart ? ema21 && volumeBars && volumeMa : ema20);
+
+  const applyEngineAReviewLayout = () => {
+    const candidate = chartCandidate || defaultCandidate;
+    const isCrypto = String(candidate?.type || '').toLowerCase() === 'crypto';
+    const candidateSymbol = displaySymbol(candidate);
+    if (candidateSymbol) setPair(candidateSymbol);
+    setTimeframeAutoMode(true);
+    lastAppliedRouteKeyRef.current = null;
+    setTimeframe(reviewTimeframeFor(candidate));
+    applyReviewIndicatorLayout(isCrypto);
   };
 
   useEffect(() => {
@@ -2830,18 +2859,7 @@ export default function TVChartPanel() {
     if (tvChartIntent.autoReview) {
       const sig = isEngineSignalLike(tvChartIntent.signal) ? tvChartIntent.signal : null;
       const isCrypto = String(sig?.type || '').toLowerCase() === 'crypto';
-      setShowQuantDebug(true);
-      setEma20(true);
-      setEma21(true);
-      setEma50(true);
-      setEma200(true);
-      setDema200(!isCrypto);
-      setRsi14(true);
-      setAtr14(!isCrypto);
-      setVwapEnabled(isCrypto);
-      setAdx14(false);
-      setVolumeBars(isCrypto);
-      setVolumeMa(isCrypto);
+      applyReviewIndicatorLayout(isCrypto);
     }
     setAiReview(null);
     setAiReviewError(null);
@@ -3442,7 +3460,11 @@ export default function TVChartPanel() {
         },
         engineBOverlayCount,
         engineBContext: engineBOverlayRendered
-            ? (engineBOverlay as Record<string, unknown>)
+            ? {
+                overlay_source: firstString(engineBOverlay?.overlay_source),
+                structural_verdict: firstString(engineBOverlay?.structural_verdict),
+                chart_timeframe: firstString(engineBOverlay?.chart_timeframe, engineBOverlay?.timeframe),
+              }
             : null,
         engineBOverlayStatus,
         engineBOverlayAgeSec,
@@ -3591,6 +3613,16 @@ export default function TVChartPanel() {
 
   async function runAIReview() {
     if (aiReviewLoading) return;
+    if (!reviewIndicatorLayoutReady) {
+      const reviewSignal = chartCandidate || intentSignal;
+      applyReviewIndicatorLayout(String(reviewSignal?.type || '').toLowerCase() === 'crypto' || isCryptoChart);
+      pendingAutoReviewRef.current = true;
+      autoReviewRanForIntentRef.current = null;
+      autoReviewEarliestRunAtRef.current = Date.now() + AUTO_REVIEW_CHART_SETTLE_MS;
+      setAutoReviewStatus('pending');
+      setReviewRefreshNonce((nonce) => nonce + 1);
+      return;
+    }
     if (chartReviewPendingForReview) {
       setChartError(chartReviewBlockReason || 'Chart is still preparing indicators for review');
       return;
@@ -3650,20 +3682,8 @@ export default function TVChartPanel() {
       };
 
       setStreamingNarrative('');
-      const controller = new AbortController();
-      streamAbortRef.current = controller;
-      await streamChartReview(
-        reviewRequest,
-        {
-          onToken: (data) => {
-            const text = typeof data?.text === 'string' ? data.text : '';
-            if (text) setStreamingNarrative((prev) => prev + text);
-          },
-          onReview: (response) => applyReviewResponse(response),
-          onError: () => setStreamingNarrative(''),
-        },
-        controller.signal,
-      );
+      const response = await postChartReview(reviewRequest);
+      applyReviewResponse(response);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'AI review failed';
       setAiReviewError(msg);
@@ -3682,18 +3702,7 @@ export default function TVChartPanel() {
     if (chartCandidate) {
       applyEngineAReviewLayout();
     } else {
-      setShowQuantDebug(true);
-      setEma20(true);
-      setEma21(true);
-      setEma50(true);
-      setEma200(true);
-      setDema200(!isCryptoChart);
-      setVwapEnabled(isCryptoChart);
-      setRsi14(true);
-      setAtr14(!isCryptoChart);
-      setAdx14(false);
-      setVolumeBars(isCryptoChart);
-      setVolumeMa(isCryptoChart);
+      applyReviewIndicatorLayout(isCryptoChart);
     }
     const manualReviewId = `manual-review-${Date.now()}`;
     appliedIntentIdRef.current = manualReviewId;

@@ -578,6 +578,37 @@ def test_engine_a_prompt_labels_structure_and_entry_images():
     assert "IMAGE 1 role=STRUCTURE timeframe=H4" in prompt
     assert "IMAGE 2 role=ENTRY_TRIGGER timeframe=M15" in prompt
     assert "absence is not contradiction" in prompt
+    assert prompt.startswith("PRIMARY EVIDENCE")
+
+
+def test_select_ohlcv_bars_does_not_fallback_to_slower_tf():
+    from ai_review.engine_a_context import select_ohlcv_bars_for_chart
+
+    bars = select_ohlcv_bars_for_chart(
+        {"h1Candles": [{"time": "2026-05-21T12:00:00+00:00", "close": 1.0}]},
+        "M15",
+        {"chart_timeframe": "M15"},
+    )
+    assert bars == []
+
+
+def test_engine_b_prompt_context_includes_quality_pct():
+    from ai_review.engine_a_context import build_engine_b_prompt_context
+
+    ctx = _engine_a_ctx()
+    ctx["structure_context"] = {
+        "structural_verdict": "CLEAR",
+        "quality_pct": 62.0,
+        "quality_pct_net": 55.0,
+        "quality_score": 0.45,
+    }
+    ctx["engine_snapshots"] = {"engineB": {"score": 4.5, "passed": True, "direction": "LONG"}}
+    eb_ctx = build_engine_b_prompt_context(ctx)
+    assert eb_ctx["qualityPct"] == 62.0
+    assert eb_ctx["qualityPctNet"] == 55.0
+    prompt = build_chart_review_prompt({**ctx, "primary_engine": "B"})
+    assert "PRIMARY EVIDENCE" in prompt
+    assert "qualityPct" in prompt
 
 
 def test_engine_b_prompt_requires_concrete_entry_image_contradiction():
@@ -1150,11 +1181,11 @@ def test_xai_provider_posts_png_data_url_as_image_url(monkeypatch):
 
     kwargs = mock_client.chat.completions.create.call_args.kwargs
     content = kwargs["messages"][0]["content"]
-    assert content[0] == {"type": "text", "text": "review this chart"}
-    assert content[1]["text"].startswith("IMAGE 1 — STRUCTURE")
-    assert content[2] == {"type": "image_url", "image_url": {"url": payload.screenshot_base64}}
-    assert content[3]["text"].startswith("IMAGE 2 — ENTRY/TRIGGER")
-    assert content[4] == {"type": "image_url", "image_url": {"url": payload.entry_screenshot_base64}}
+    assert content[0]["text"].startswith("IMAGE 1 — STRUCTURE")
+    assert content[1] == {"type": "image_url", "image_url": {"url": payload.screenshot_base64}}
+    assert content[2]["text"].startswith("IMAGE 2 — ENTRY/TRIGGER")
+    assert content[3] == {"type": "image_url", "image_url": {"url": payload.entry_screenshot_base64}}
+    assert content[4] == {"type": "text", "text": "review this chart"}
     assert kwargs["model"] == get_ai_model(
         CONFIG,
         preferred_key="AI_CHART_REVIEW_XAI_MODEL",
@@ -1332,11 +1363,11 @@ def test_openai_provider_builds_responses_payload_with_reasoning_and_image():
     assert out["reasoning"] == {"effort": "xhigh"}
     assert out["max_output_tokens"] == 12000
     content = out["input"][0]["content"]
-    assert content[0] == {"type": "input_text", "text": "review this chart"}
-    assert content[1]["text"].startswith("IMAGE 1 — STRUCTURE")
-    assert content[2] == {"type": "input_image", "image_url": payload.screenshot_base64}
-    assert content[3]["text"].startswith("IMAGE 2 — ENTRY/TRIGGER")
-    assert content[4] == {"type": "input_image", "image_url": payload.entry_screenshot_base64}
+    assert content[0]["text"].startswith("IMAGE 1 — STRUCTURE")
+    assert content[1] == {"type": "input_image", "image_url": payload.screenshot_base64}
+    assert content[2]["text"].startswith("IMAGE 2 — ENTRY/TRIGGER")
+    assert content[3] == {"type": "input_image", "image_url": payload.entry_screenshot_base64}
+    assert content[4] == {"type": "input_text", "text": "review this chart"}
 
 
 def test_openai_provider_disables_sdk_retries_for_chart_review(monkeypatch):

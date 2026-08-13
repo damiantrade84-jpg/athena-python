@@ -29,9 +29,9 @@ from style_resolver import normalize_style, resolve_auto_style
 
 _DEFAULT_OHLCV_LIMIT = 80
 _VISION_TODO = (
-    "vision_routing_pending: this payload includes a bounded OHLCV window but "
-    "does NOT yet route bars through Vision; AI must reason from the screenshot "
-    "and the OHLCV window only. Wire Vision when budget permits."
+    "vision_primary: IMAGE 1 (structure) and IMAGE 2 (entry/trigger) are the "
+    "visual evidence. Playbook and server facts support the image read; do not "
+    "ignore the screenshots."
 )
 
 

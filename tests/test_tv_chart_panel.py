@@ -83,13 +83,13 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_ai_review_provider_state_defaults_to_openai_and_types_allow_all_providers():
+def test_ai_review_provider_state_defaults_to_grok_and_types_allow_all_providers():
     store = _read(STORE)
     types = _read(ATHENA_TYPES)
 
     assert "AIReviewProvider" in store
     assert "aiReviewProvider: AIReviewProvider" in store
-    assert "useState<AIReviewProvider>('openai')" in store
+    assert "useState<AIReviewProvider>('grok')" in store
     assert "setAiReviewProvider" in store
     assert "/api/ai-review/provider" in store
     assert "export type AIChartReviewProvider" in types
@@ -107,8 +107,24 @@ def test_tv_chart_ai_review_uses_shared_provider_toggle():
     assert "setAiReviewProvider" in source
     assert "provider: aiReviewProvider" in source
     assert "Grok" in toggle
+    assert "Grok 4.6" in toggle
     assert "Claude" in toggle
     assert "ChatGPT / GPT-5.5" in toggle
+
+
+def test_tv_chart_review_posts_two_images_without_fake_stream():
+    source = _read(TV_PANEL)
+    assert "postChartReview" in source
+    assert "streamChartReview" not in source
+    assert "reviewIndicatorLayoutReady" in source
+    assert "screenshot_base64: structureImage.screenshot_base64" in source
+    assert "entry_screenshot_base64: entryImage.screenshot_base64" in source
+
+
+def test_tv_chart_engine_panels_show_usable_quality_headlines():
+    source = _read(TV_PANEL)
+    assert "bBreakdown?.qualityPct" in source
+    assert "signal.confluenceScore, signal.score" in source
 
 
 def test_tv_chart_panel_renders_with_lightweight_charts():
@@ -512,6 +528,14 @@ def test_tv_chart_panel_stale_clear_normalizes_timeframes():
     assert "normalizeBackendTf(timeframe)" in source
 
 
+def test_tv_chart_panel_keeps_review_on_structure_or_entry_image_timeframe():
+    source = _read(TV_PANEL)
+
+    assert "aiReview.reviewInputMeta?.structureChartTimeframe" in source
+    assert "aiReview.reviewInputMeta?.entryChartTimeframe" in source
+    assert "!reviewTimeframes.includes(currentTf)" in source
+
+
 def test_tv_chart_panel_stale_clear_exempts_auto_route_tf():
     source = _read(TV_PANEL)
 
@@ -553,18 +577,22 @@ def test_tv_chart_auto_review_enables_required_lean_indicators():
     source = _read(TV_PANEL)
     auto_review_idx = source.index("if (tvChartIntent.autoReview)")
     auto_review_block = source[auto_review_idx:auto_review_idx + 700]
+    layout_idx = source.index("const applyReviewIndicatorLayout")
+    layout_block = source[layout_idx:layout_idx + 600]
 
-    assert "setShowQuantDebug(true)" in auto_review_block
-    assert "setEma20(true)" in auto_review_block
-    assert "setEma21(true)" in auto_review_block
-    assert "setEma50(true)" in auto_review_block
-    assert "setEma200(true)" in auto_review_block
-    assert "setDema200(!isCrypto)" in auto_review_block
-    assert "setVwapEnabled(isCrypto)" in auto_review_block
-    assert "setAdx14(false)" in auto_review_block
-    assert "setAtr14(!isCrypto)" in auto_review_block
-    assert "setVolumeBars(isCrypto)" in auto_review_block
-    assert "setVolumeMa(isCrypto)" in auto_review_block
+    assert "applyReviewIndicatorLayout(isCrypto)" in auto_review_block
+    assert "setShowQuantDebug(true)" in layout_block
+    assert "setEma20(true)" in layout_block
+    assert "setEma21(true)" in layout_block
+    assert "setEma50(true)" in layout_block
+    assert "setEma200(true)" in layout_block
+    assert "setDema200(!isCrypto)" in layout_block
+    assert "setVwapEnabled(isCrypto)" in layout_block
+    assert "setAdx14(true)" in layout_block
+    assert "setAtr14(true)" in layout_block
+    assert "setRsi14(true)" in layout_block
+    assert "setVolumeBars(isCrypto)" in layout_block
+    assert "setVolumeMa(isCrypto)" in layout_block
 
 
 def test_crypto_chart_exposes_bybit_provider_badge_and_required_indicators():

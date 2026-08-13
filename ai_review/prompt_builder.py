@@ -13,8 +13,14 @@ from ai_review.macro_context import render_macro_prompt_block
 from prompt_store import load_prompt
 
 
+_VISION_PRIMARY_HEADER = (
+    "PRIMARY EVIDENCE: two labelled chart screenshots with indicators drawn.\n"
+    "Read IMAGE 1 (structure) and IMAGE 2 (entry/trigger) first. "
+    "Playbook and server JSON are supporting facts — do not ignore the images.\n\n"
+)
+
 _CHART_REVIEW_A_PREAMBLE_FALLBACK = (
-    "You are not only reviewing the chart image. You are validating the chart against the structured Engine A signal supplied below using Athena trade playbooks.\n\n"
+    "You are validating the two chart images against the structured Engine A signal supplied below using Athena trade playbooks.\n\n"
     "Workflow (required):\n"
     "1. Follow Engine A playbook: confluence, factor alignment, direction quality, entry timing.\n"
     "2. If Engine B context is present, follow Engine B playbook: structure, liquidity, zones, invalidation.\n"
@@ -28,7 +34,7 @@ _CHART_REVIEW_A_PREAMBLE, _CRA_SOURCE, _CRA_HASH = load_prompt(
 )
 
 _CHART_REVIEW_B_PREAMBLE_FALLBACK = (
-    "You are reviewing the chart image against the structured Engine B (NakedEngine structure/liquidity) signal supplied below using the Engine B trade playbook.\n\n"
+    "You are reviewing the two labelled chart images against the structured Engine B (NakedEngine structure/liquidity) signal supplied below using the Engine B trade playbook.\n\n"
     "Workflow (required):\n"
 )
 _CHART_REVIEW_B_PREAMBLE, _CRB_SOURCE, _CRB_HASH = load_prompt(
@@ -60,8 +66,13 @@ def _review_images_block(context: dict[str, Any]) -> str:
         images = {}
     structure = images.get("structure") or {}
     entry = images.get("entry") or {}
+    policy_diagnostic = context.get("review_image_policy_diagnostic") or {}
+    if not isinstance(policy_diagnostic, dict):
+        policy_diagnostic = {}
     return (
         "== REVIEW IMAGE CONTRACT (server-validated) ==\n"
+        f"policy_source={_fmt(policy_diagnostic.get('source'))} "
+        f"candidate_vs_reanalysis={_fmt(policy_diagnostic.get('differences'))}\n"
         f"IMAGE 1 role=STRUCTURE timeframe={_fmt(structure.get('timeframe'))} "
         f"captured_at={_fmt(structure.get('capturedAt'))}\n"
         f"IMAGE 2 role=ENTRY_TRIGGER timeframe={_fmt(entry.get('timeframe'))} "
@@ -71,6 +82,9 @@ def _review_images_block(context: dict[str, Any]) -> str:
         "timing from IMAGE 1 when the timeframes differ.\n"
         "If a visual role is unavailable or mismatched, report it as not visually "
         "verified; absence is not contradiction.\n"
+        "When policy_source=selected_candidate, judge IMAGE 2 against the selected "
+        "candidate trigger. Treat a different review-time reanalysis trigger as "
+        "provenance, not proof that the candidate image is wrong.\n"
     )
 
 
@@ -150,7 +164,7 @@ def _build_engine_a_chart_review_prompt(context: dict[str, Any]) -> str:
     elif _ac == "commodity":
         _vol_note = " volume_type: mixed (may be tick volume)"
 
-    return f"""{_CHART_REVIEW_A_PREAMBLE}
+    return f"""{_VISION_PRIMARY_HEADER}{_CHART_REVIEW_A_PREAMBLE}
 
 {playbook_block}
 
@@ -286,7 +300,7 @@ def _build_engine_b_chart_review_prompt(context: dict[str, Any]) -> str:
     tf_roles_block = _engine_b_tf_roles_block(analyze_style, engine_b_context)
     review_images_block = _review_images_block(context)
 
-    return f"""{_CHART_REVIEW_B_PREAMBLE}
+    return f"""{_VISION_PRIMARY_HEADER}{_CHART_REVIEW_B_PREAMBLE}
 1. Follow Engine B playbook: structure, liquidity, zones, invalidation.
 2. Decide whether the chart visually confirms Engine B direction.
 3. Decide whether current entry timing is acceptable at the nearest zone/structure.
@@ -331,7 +345,7 @@ Rules:
 - Use the server-resolved timeframe roles and require triggerTimeframeGateOk=true when the lower-TF trigger gate is present; never replace M15/M30 with H1 evidence.
 - When triggerTimeframeGateOk=true and the confirmed trigger is stamped on the same timeframe as IMAGE 2, do not request that same trigger merely because IMAGE 1 lacks it. A downgrade must cite concrete contradictory price action visible on IMAGE 2.
 - Treat structureOk, locationOk, entryOk, spaceGateOk, rrOk, maxSlPassed, and executionLevelsValid as deterministic gates. AI cannot override a false gate.
-- Cite gateScore/gateMaxPossible and qualityScore/qualityComponents separately; normalize the deterministic headline with score/maxScore, never gatePct.
+- Cite gateScore/gateMaxPossible separately from quality. Headline quality is qualityPct / qualityPctNet (0-100). qualityScore is earned points, not a percent. Never use gatePct as a quality blend.
 - This is review-only. Do not issue execution instructions.
 
 == SERVER-TRUSTED engineBContext (JSON) ==

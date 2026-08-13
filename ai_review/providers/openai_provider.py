@@ -96,7 +96,6 @@ def build_openai_responses_payload(
             {
                 "role": "user",
                 "content": [
-                    {"type": "input_text", "text": str(payload.prompt or "")},
                     {
                         "type": "input_text",
                         "text": f"IMAGE 1 — STRUCTURE ({review_images[0]['timeframe']})",
@@ -107,6 +106,7 @@ def build_openai_responses_payload(
                         "text": f"IMAGE 2 — ENTRY/TRIGGER ({review_images[1]['timeframe']})",
                     },
                     {"type": "input_image", "image_url": review_images[1]["data_url"]},
+                    {"type": "input_text", "text": str(payload.prompt or "")},
                 ],
             }
         ],

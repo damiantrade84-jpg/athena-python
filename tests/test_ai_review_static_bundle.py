@@ -114,7 +114,8 @@ def test_phase6_streaming_wired_into_panels():
     scalp_panel = (FRONTEND_SRC / "components/panels/ScalpWorkbenchPanel.tsx").read_text(encoding="utf-8")
     assert "streamSse" in chat_panel
     assert "streamChartReview" in chart_lib
-    assert "streamChartReview" in chart_panel
+    assert "postChartReview" in chart_panel
+    assert "streamChartReview" not in chart_panel
     assert "streamScalpChartReview" in scalp_lib
     assert "streamScalpChartReview" in scalp_panel
     assert "EvidenceRefsPanel" in (FRONTEND_SRC / "components/athena/AIReviewCard.tsx").read_text(encoding="utf-8")

@@ -11,7 +11,7 @@ type ProviderOption = {
 };
 
 const OPTIONS: ProviderOption[] = [
-  { value: 'grok', label: 'Grok', title: 'Use Grok for AI review' },
+  { value: 'grok', label: 'Grok 4.6', title: 'Use Grok 4.6 for AI chart review' },
   { value: 'claude', label: 'Claude', title: 'Use Claude for AI review' },
   { value: 'openai', label: 'ChatGPT / GPT-5.5', title: 'Use OpenAI GPT-5.5 for AI review' },
 ];
