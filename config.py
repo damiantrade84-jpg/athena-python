@@ -1016,6 +1016,14 @@ CONFIG: dict = {
         "DEFAULT_EXPIRY_SECONDS": _env_int(
             "SUGGESTED_TRADE_MONITOR_DEFAULT_EXPIRY_SECONDS", 1800
         ),
+        "EXPIRY_BARS": _env_int("SUGGESTED_TRADE_MONITOR_EXPIRY_BARS", 4),
+        "EXPIRY_MIN_SECONDS": _env_int("SUGGESTED_TRADE_MONITOR_EXPIRY_MIN_SECONDS", 900),
+        "EXPIRY_MAX_SECONDS": _env_int("SUGGESTED_TRADE_MONITOR_EXPIRY_MAX_SECONDS", 259200),
+        "EXPIRY_MAX_SECONDS_BY_STYLE": {
+            "scalp": 7200,
+            "intraday": 28800,
+            "swing": 259200,
+        },
         "MAX_ACTIVE_WATCHES": _env_int("SUGGESTED_TRADE_MONITOR_MAX_ACTIVE_WATCHES", 25),
     },
     "TIMEFRAME_ROUTING": {

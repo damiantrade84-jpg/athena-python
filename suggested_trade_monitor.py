@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ai_review.suggested_trade_plan import (
+    allocate_watch_expiry_seconds,
     is_watchable_plan,
     plan_playbook_warnings,
+    resolve_watch_reason,
     sanitize_suggested_trade_plan,
 )
 
@@ -91,6 +93,14 @@ def monitor_config(cfg: dict[str, Any] | None) -> dict[str, Any]:
         "RUNNER_ENABLED": True,
         "POLL_SECONDS": 5,
         "DEFAULT_EXPIRY_SECONDS": 1800,
+        "EXPIRY_BARS": 4,
+        "EXPIRY_MIN_SECONDS": 900,
+        "EXPIRY_MAX_SECONDS": 259200,
+        "EXPIRY_MAX_SECONDS_BY_STYLE": {
+            "scalp": 7200,
+            "intraday": 28800,
+            "swing": 259200,
+        },
         "MAX_ACTIVE_WATCHES": 25,
     }
     raw = (cfg or {}).get("SUGGESTED_TRADE_MONITOR") or {}
@@ -123,20 +133,39 @@ def validate_flag_payload(payload: dict[str, Any], cfg: dict[str, Any] | None = 
         return None, "plan is not watchable (malformed or not armable)"
 
     mcfg = monitor_config(cfg)
+    signal = payload.get("signal") if isinstance(payload.get("signal"), dict) else {}
+    summary = payload.get("aiReviewSummary") or payload.get("ai_review_summary") or {}
+    if not isinstance(summary, dict):
+        summary = {}
+    review = payload.get("aiReview") or payload.get("ai_review") or {}
+    if not isinstance(review, dict):
+        review = {}
+    reason = resolve_watch_reason(plan=plan, summary=summary, review=review)
+    if reason:
+        plan["reason"] = reason
+        summary = {**summary, "finalReason": reason}
+
     expires_sec = plan.get("expiresInSeconds")
     if not expires_sec:
-        expires_sec = mcfg["DEFAULT_EXPIRY_SECONDS"]
+        style = str(
+            signal.get("horizon")
+            or signal.get("style")
+            or plan.get("style")
+            or ""
+        )
+        expires_sec = allocate_watch_expiry_seconds(plan, style=style, cfg=mcfg)
         plan["expiresInSeconds"] = expires_sec
 
     return {
         "symbol": symbol,
         "display": str(payload.get("display") or symbol),
-        "signal": payload.get("signal") if isinstance(payload.get("signal"), dict) else {},
+        "signal": signal,
         "suggested_trade_plan": plan,
-        "ai_review_summary": payload.get("aiReviewSummary") or payload.get("ai_review_summary") or {},
+        "ai_review_summary": summary,
         "source": source,
         "created_at": str(payload.get("createdAt") or payload.get("created_at") or _utc_now_iso()),
         "expires_sec": int(expires_sec),
+        "notes": reason or None,
     }, None
 
 
@@ -172,6 +201,7 @@ def build_watch_from_flag(validated: dict[str, Any]) -> SuggestedTrade:
         context_tf=plan.get("contextTf"),
         execution_tf=plan.get("executionTf"),
         expires_at=expires_at,
+        notes=validated.get("notes") or plan.get("reason"),
         playbook_warnings=plan_playbook_warnings(plan),
     )
 

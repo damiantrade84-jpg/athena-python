@@ -53,18 +53,6 @@ function engineALine(engine: AIChartReviewEngineSummary | null | undefined): str
   return `${score} / ${max}${AI_REVIEW_SEP}threshold ${threshold}${AI_REVIEW_SEP}${pass}${AI_REVIEW_SEP}${direction}${normText}`;
 }
 
-function ScoreCell({ label, value }: { label: string; value: number | null | undefined }) {
-  const display = fmtReviewNum(value);
-  return (
-    <div className="border border-border/40 rounded-md px-2 py-1.5 min-w-0">
-      <div className="text-[10px] text-muted-foreground truncate">{label}</div>
-      <div className="text-[11px] font-mono font-semibold">
-        {display === AI_REVIEW_EMPTY ? display : `${display}/100`}
-      </div>
-    </div>
-  );
-}
-
 export interface AIReviewSummaryStripProps {
   summary?: AIChartReviewSummary | null;
 }
@@ -124,40 +112,10 @@ export default function AIReviewSummaryStrip({ summary }: AIReviewSummaryStripPr
             provider mismatch
           </Badge>
         )}
-        <Badge variant="outline" className="text-[10px]">
-          model confidence {fmtReviewNum(s.modelConfidence ?? s.confidence)} / 100
-        </Badge>
-        {s.confidenceCalibrated !== true && (
-          <Badge variant="outline" className="text-[10px] border-amber-500/50 text-amber-300">
-            uncalibrated
-          </Badge>
-        )}
         <span className="text-[10px] text-muted-foreground font-mono ml-auto truncate max-w-[50%]">
           {provider}/{model}
         </span>
       </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-1.5">
-        <ScoreCell label="Postprocessed overall" value={s.overallScore} />
-        <ScoreCell label="Postprocessed tradeability" value={s.tradeabilityScore} />
-        <ScoreCell
-          label={s.sourceQualityScore != null && s.engineAlignmentScore == null ? 'Source' : 'Engine align'}
-          value={s.sourceQualityScore ?? s.engineAlignmentScore}
-        />
-        <ScoreCell label="Visual" value={s.visualConfirmationScore} />
-        <ScoreCell label="Entry" value={s.entryQualityScore} />
-        <ScoreCell label="Risk" value={s.riskScore} />
-      </div>
-
-      {s.modelScores && Object.values(s.modelScores).some((value) => value != null) && (
-        <SummaryKV
-          label="Model-proposed scores (advisory)"
-          value={Object.entries(s.modelScores)
-            .filter(([, value]) => value != null)
-            .map(([key, value]) => `${key.replace(/Score$/, '')} ${fmtReviewNum(value)}`)
-            .join(`${AI_REVIEW_SEP}`)}
-        />
-      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5 text-[10px]">
         <SummaryKV label="Human action" value={showReviewValue(humanAction)} />

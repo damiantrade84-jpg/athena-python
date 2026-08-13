@@ -2930,33 +2930,58 @@ export default function TVChartPanel() {
   }, []);
 
   const suggestedPlan = useMemo((): SuggestedTradePlan | null => {
+    const review = aiReview?.ai_review;
+    const summary = aiReview?.aiReviewSummary ?? aiReview?.ai_review_summary;
+    const waitReason = firstString(review?.waitReason, summary?.finalReason);
+    const required = Array.isArray(review?.requiredConfirmation)
+      ? review.requiredConfirmation.filter((item): item is string => Boolean(item)).join(', ')
+      : '';
+    const composedReason = [waitReason, required ? `Need: ${required}` : '']
+      .filter(Boolean)
+      .join(' ')
+      || firstString(review?.chartReadSummary)
+      || undefined;
+
+    const decorate = (plan: SuggestedTradePlan): SuggestedTradePlan => ({
+      ...plan,
+      reason: firstString(plan.reason, composedReason) || plan.reason,
+    });
+
     const top = aiReview?.suggestedTradePlan ?? aiReview?.suggested_trade_plan;
-    if (top && typeof top === 'object') return top;
-    const nested = aiReview?.ai_review as { suggestedTradePlan?: SuggestedTradePlan } | undefined;
-    if (nested?.suggestedTradePlan) return nested.suggestedTradePlan;
+    if (top && typeof top === 'object') return decorate(top);
+    const nested = review?.suggestedTradePlan;
+    if (nested) return decorate(nested);
 
     if (!aiReview) return null;
-    const review = aiReview.ai_review;
     const reviewCtx = reviewContextFromResponse(aiReview);
     const dir = String(
       review?.direction
       || (reviewCtx.primaryEngine === 'B'
         ? aiReview.concordance?.engine_b_direction
         : aiReview.concordance?.engine_a_direction)
+      || chartCandidate?.direction
       || '',
     ).toUpperCase();
     if (dir !== 'LONG' && dir !== 'SHORT') return null;
+    const zone = Array.isArray(chartCandidate?.entryZone) ? chartCandidate.entryZone : [];
+    const zoneLow = firstNumber(zone[0]);
+    const zoneHigh = firstNumber(zone[1]);
+    const hasZone = zoneLow != null && zoneHigh != null && zoneLow > 0 && zoneHigh > 0;
     return {
       schemaVersion: 'suggested_trade_plan.v1',
       armable: true,
       source: 'ai_chart_review',
       symbol: String(reviewCtx.symbol || pair || '').toUpperCase(),
       direction: dir as 'LONG' | 'SHORT',
-      action: 'WATCH_ONLY',
-      triggerType: 'ACCEPTANCE_ABOVE',
-      reason: review?.waitReason || review?.chartReadSummary || 'AI-reviewed setup',
+      action: hasZone ? 'WAIT_FOR_ZONE' : 'WATCH_ONLY',
+      triggerType: hasZone ? 'PULLBACK_TO_ZONE' : undefined,
+      ...(hasZone ? { zoneLow, zoneHigh } : {}),
+      contextTf: firstString(chartCandidate?.regimeTimeframe, chartCandidate?.structureTf) ?? undefined,
+      entryTf: firstString(chartCandidate?.triggerTf, chartCandidate?.momentumTimeframe) ?? undefined,
+      executionTf: firstString(chartCandidate?.executionTimeframe) ?? undefined,
+      reason: composedReason || waitReason || 'Wait for the review confirmation before entry',
     };
-  }, [aiReview, pair]);
+  }, [aiReview, pair, chartCandidate]);
 
   const canFlagWatch = Boolean(
     suggestedPlan?.armable
@@ -3081,6 +3106,7 @@ export default function TVChartPanel() {
         signal: chartCandidate,
         suggestedTradePlan: suggestedPlan,
         aiReviewSummary: aiReview?.aiReviewSummary ?? aiReview?.ai_review_summary,
+        aiReview: aiReview?.ai_review,
         source: 'ai_chart_review',
         createdAt: new Date().toISOString(),
       }) as { success?: boolean; error?: string };

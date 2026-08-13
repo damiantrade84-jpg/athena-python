@@ -165,9 +165,11 @@ function AIReviewCardImpl({ response }: AIReviewCardProps) {
         <span className="panel-title mr-1">AI Chart Review</span>
         <Chip tone={verdictTone}>{ai.verdict}</Chip>
         <Chip tone={concordanceTone}>{c.concordance}</Chip>
-        <Chip title="Model self-reported confidence; not outcome-calibrated">
-          model conf {ai.confidence} (uncalibrated)
-        </Chip>
+        {summary?.overallScore != null && (
+          <Chip title="Server postprocessed review score from chart vs engine evidence. Not the model's self-grade and not execution permission.">
+            review {summary.overallScore}
+          </Chip>
+        )}
         {c.divergence_type !== 'none' && (
           <Chip tone="warning">{c.divergence_type.replace(/_/g, ' ')}</Chip>
         )}
@@ -213,11 +215,6 @@ function AIReviewCardImpl({ response }: AIReviewCardProps) {
                   classifier: {String(playbookVerdict.classifier_agreement).replace(/_/g, ' ').toLowerCase()}
                 </Chip>
               )}
-            </div>
-            <div className="grid grid-cols-1 gap-x-6 md:grid-cols-3">
-              <KeyValue label="Location quality" value={showReviewValue(playbookVerdict.location_quality)} />
-              <KeyValue label="Trigger quality" value={showReviewValue(playbookVerdict.trigger_quality)} />
-              <KeyValue label="RR quality" value={showReviewValue(playbookVerdict.rr_quality)} />
             </div>
             {playbookVerdict.plain_english_reason && (
               <p className="note mt-1">{playbookVerdict.plain_english_reason}</p>

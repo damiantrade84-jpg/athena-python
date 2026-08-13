@@ -32,6 +32,31 @@ _VALID_SCALP_ENTRY_EXEC_TF = frozenset({"M1", "M5"})
 
 _POLICY_TFS = frozenset(tf.value for tf in TIMEFRAME_LADDER)
 
+_TF_SECONDS = {
+    "M1": 60,
+    "M5": 300,
+    "M15": 900,
+    "M30": 1800,
+    "H1": 3600,
+    "H4": 14400,
+    "D1": 86400,
+    "W1": 604800,
+}
+_GENERIC_WATCH_REASONS = frozenset(
+    {
+        "awaiting clearer entry and risk context",
+        "setup needs better timing or context before trade",
+        "ai-reviewed setup",
+        "visual and engine context support trade consideration",
+        "review rejects trade under current conditions",
+    }
+)
+_STYLE_EXPIRY_MAX = {
+    "scalp": 7200,
+    "intraday": 28800,
+    "swing": 259200,
+}
+
 
 def _coerce_float(value: Any) -> float | None:
     if value is None:
@@ -145,7 +170,9 @@ def sanitize_suggested_trade_plan(
         "symbol": sym,
         "direction": direction if direction in _VALID_DIRECTIONS else "LONG",
         "action": action if action in _VALID_ACTIONS else "NO_TRADE",
-        "triggerType": trigger if trigger in _VALID_TRIGGERS else "ACCEPTANCE_ABOVE",
+        "triggerType": trigger if trigger in _VALID_TRIGGERS else (
+            "ACCEPTANCE_ABOVE" if action != "WATCH_ONLY" else ""
+        ),
     }
     if level is not None:
         out["level"] = level
@@ -201,6 +228,130 @@ def sanitize_suggested_trade_plan(
         return out
 
     return out
+
+
+def _clean_reason(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in _GENERIC_WATCH_REASONS:
+        return ""
+    return text
+
+
+def _wait_for_clause(plan: dict[str, Any]) -> str:
+    trigger = str(plan.get("triggerType") or plan.get("trigger_type") or "").upper()
+    level = _coerce_float(plan.get("level"))
+    zone_low = _coerce_float(plan.get("zoneLow") if "zoneLow" in plan else plan.get("zone_low"))
+    zone_high = _coerce_float(plan.get("zoneHigh") if "zoneHigh" in plan else plan.get("zone_high"))
+    if trigger == "ACCEPTANCE_ABOVE" and level is not None:
+        return f"Wait for acceptance above {level}."
+    if trigger == "ACCEPTANCE_BELOW" and level is not None:
+        return f"Wait for acceptance below {level}."
+    if trigger in {"PULLBACK_TO_ZONE", "REJECTION_FROM_ZONE", "SWEEP_RECLAIM"}:
+        if zone_low is not None and zone_high is not None:
+            label = {
+                "PULLBACK_TO_ZONE": "pullback into",
+                "REJECTION_FROM_ZONE": "rejection from",
+                "SWEEP_RECLAIM": "sweep-reclaim of",
+            }[trigger]
+            return f"Wait for {label} zone {zone_low}-{zone_high}."
+    return ""
+
+
+def resolve_watch_reason(
+    *,
+    plan: dict[str, Any] | None = None,
+    summary: dict[str, Any] | None = None,
+    review: dict[str, Any] | None = None,
+) -> str:
+    """Build the text the monitor and Suggested Trades panel should show.
+
+    Prefers the concrete wait condition (level/zone + waitReason) over a
+    generic supporting sentence or model self-score.
+    """
+    plan = plan if isinstance(plan, dict) else {}
+    summary = summary if isinstance(summary, dict) else {}
+    review = review if isinstance(review, dict) else {}
+
+    wait = _clean_reason(review.get("waitReason") or review.get("wait_reason"))
+    final = _clean_reason(
+        summary.get("finalReason")
+        or summary.get("final_reason")
+        or review.get("finalReason")
+        or review.get("final_reason")
+    )
+    plan_reason = _clean_reason(plan.get("reason"))
+    chart = _clean_reason(
+        review.get("chartReadSummary") or review.get("chart_read_summary")
+    )
+    required = review.get("requiredConfirmation") or review.get("required_confirmation") or []
+    confirm_text = ""
+    if isinstance(required, list):
+        confirm_text = ", ".join(str(item).strip() for item in required if str(item).strip())
+
+    parts: list[str] = []
+    wait_for = _wait_for_clause(plan)
+    if wait_for:
+        parts.append(wait_for)
+    body = wait or final or plan_reason or chart
+    if body and body.lower() not in " ".join(parts).lower():
+        parts.append(body)
+    if confirm_text and confirm_text.lower() not in " ".join(parts).lower():
+        parts.append(f"Need: {confirm_text}.")
+    return " ".join(parts).strip()[:500]
+
+
+def allocate_watch_expiry_seconds(
+    plan: dict[str, Any] | None,
+    *,
+    style: str | None = None,
+    cfg: dict[str, Any] | None = None,
+) -> int:
+    """Size the watch window from the plan's trigger/entry TF, not a flat 30 minutes."""
+    cfg = cfg if isinstance(cfg, dict) else {}
+    try:
+        bars = int(cfg.get("EXPIRY_BARS") or 4)
+    except (TypeError, ValueError):
+        bars = 4
+    try:
+        min_sec = int(cfg.get("EXPIRY_MIN_SECONDS") or 900)
+    except (TypeError, ValueError):
+        min_sec = 900
+    try:
+        max_sec = int(cfg.get("EXPIRY_MAX_SECONDS") or 259200)
+    except (TypeError, ValueError):
+        max_sec = 259200
+    try:
+        default = int(cfg.get("DEFAULT_EXPIRY_SECONDS") or 1800)
+    except (TypeError, ValueError):
+        default = 1800
+    bars = max(1, bars)
+    min_sec = max(60, min_sec)
+    max_sec = max(min_sec, max_sec)
+
+    plan = plan if isinstance(plan, dict) else {}
+    tf = str(
+        plan.get("entryTf")
+        or plan.get("entry_tf")
+        or plan.get("contextTf")
+        or plan.get("context_tf")
+        or plan.get("executionTf")
+        or plan.get("execution_tf")
+        or ""
+    ).upper()
+    bucket = _TF_SECONDS.get(tf)
+    style_key = str(style or "").strip().lower()
+    style_caps = cfg.get("EXPIRY_MAX_SECONDS_BY_STYLE")
+    if not isinstance(style_caps, dict):
+        style_caps = _STYLE_EXPIRY_MAX
+    style_max = style_caps.get(style_key)
+    try:
+        style_max_sec = int(style_max) if style_max is not None else max_sec
+    except (TypeError, ValueError):
+        style_max_sec = max_sec
+    cap = min(max_sec, max(min_sec, style_max_sec))
+    if bucket is None:
+        return max(min_sec, min(cap, default))
+    return max(min_sec, min(cap, bucket * bars))
 
 
 def is_watchable_plan(plan: dict[str, Any] | None) -> bool:

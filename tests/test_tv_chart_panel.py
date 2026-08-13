@@ -112,6 +112,14 @@ def test_tv_chart_ai_review_uses_shared_provider_toggle():
     assert "ChatGPT / GPT-5.5" in toggle
 
 
+def test_tv_chart_flag_watch_sends_review_wait_reason():
+    source = _read(TV_PANEL)
+    assert "aiReview: aiReview?.ai_review" in source
+    assert "WAIT_FOR_ZONE" in source
+    assert "PULLBACK_TO_ZONE" in source
+    assert "reason: review?.waitReason || review?.chartReadSummary || 'AI-reviewed setup'" not in source
+
+
 def test_tv_chart_review_posts_two_images_without_fake_stream():
     source = _read(TV_PANEL)
     assert "postChartReview" in source
@@ -556,6 +564,17 @@ def test_ai_review_card_handles_incomplete_payload():
 
     assert "!ai || !c" in source
     assert "AI review response is incomplete" in source
+
+
+def test_ai_review_card_headlines_postprocessed_score_not_model_conf():
+    card = _read(ROOT / "static/react-app/app/src/components/athena/AIReviewCard.tsx")
+    strip = _read(ROOT / "static/react-app/app/src/components/athena/AIReviewSummaryStrip.tsx")
+
+    assert "model conf {ai.confidence} (uncalibrated)" not in card
+    assert "review {summary.overallScore}" in card
+    assert "Postprocessed overall" not in strip
+    assert "model-proposed scores" not in strip.lower()
+    assert "uncalibrated" not in strip
 
 
 def test_engine_a_review_layout_enables_required_lean_indicators():

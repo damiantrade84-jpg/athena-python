@@ -7,6 +7,7 @@ from typing import Any
 
 from ai_review.context_diagnostics import context_tradeability_penalty
 from ai_review.engine_snapshots import extract_engine_snapshots
+from ai_review.suggested_trade_plan import resolve_watch_reason
 from ai_review.visual_text import (
     has_visual_contradiction_text,
     is_directional_visual_contradiction,
@@ -407,7 +408,11 @@ def build_ai_review_summary(
         "confidenceCalibrated": False,
         "deterministicScores": deterministic_scores,
         "modelScores": model_scores,
-        "finalReason": str(ms.get("finalReason") or "").strip()
+        "finalReason": resolve_watch_reason(
+            plan=ai_review.get("suggestedTradePlan") or ai_review.get("suggested_trade_plan"),
+            summary={"finalReason": ms.get("finalReason")},
+            review=ai_review,
+        )
         or _final_reason(ai_review, concordance, human_action),
         "engineA": snapshots.get("engineA"),
         "engineB": snapshots.get("engineB"),

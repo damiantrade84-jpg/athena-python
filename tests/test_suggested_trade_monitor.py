@@ -9,7 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from ai_review.suggested_trade_plan import plan_playbook_warnings, sanitize_suggested_trade_plan
+from ai_review.suggested_trade_plan import (
+    allocate_watch_expiry_seconds,
+    plan_playbook_warnings,
+    resolve_watch_reason,
+    sanitize_suggested_trade_plan,
+)
 from suggested_trade_monitor import (
     DEFAULT_ACTIVE_PATH,
     DEFAULT_EVENTS_PATH,
@@ -43,6 +48,46 @@ def _valid_plan(**overrides):
     }
     plan.update(overrides)
     return plan
+
+
+def test_resolve_watch_reason_prefers_wait_condition():
+    reason = resolve_watch_reason(
+        plan=_valid_plan(reason="schema leftover"),
+        summary={"finalReason": "Setup needs better timing or context before trade"},
+        review={
+            "waitReason": "Need a close back above 1.085 on M15",
+            "requiredConfirmation": ["M15 acceptance"],
+        },
+    )
+    assert "acceptance below 1.085" in reason.lower()
+    assert "Need a close back above 1.085 on M15" in reason
+    assert "Need: M15 acceptance" in reason
+
+
+def test_allocate_watch_expiry_uses_entry_tf_not_flat_default():
+    m15 = allocate_watch_expiry_seconds(_valid_plan(entryTf="M15", expiresInSeconds=None), style="intraday")
+    h4 = allocate_watch_expiry_seconds(_valid_plan(entryTf="H4", expiresInSeconds=None), style="swing")
+    assert m15 == 3600
+    assert h4 == 57600
+    scalp = allocate_watch_expiry_seconds(_valid_plan(entryTf="M1"), style="scalp")
+    assert scalp == 900
+
+
+def test_validate_flag_allocates_expiry_and_stamps_final_reason():
+    payload = {
+        "symbol": "EURUSD",
+        "signal": {"horizon": "intraday", "style": "intraday"},
+        "suggestedTradePlan": _valid_plan(expiresInSeconds=None, reason=""),
+        "aiReview": {"waitReason": "Wait for M15 rejection at the zone"},
+        "aiReviewSummary": {"finalReason": "Setup needs better timing or context before trade"},
+    }
+    payload["suggestedTradePlan"].pop("expiresInSeconds", None)
+    validated, err = validate_flag_payload(payload)
+    assert err is None
+    assert validated is not None
+    assert validated["expires_sec"] == 3600
+    assert "Wait for M15 rejection at the zone" in validated["suggested_trade_plan"]["reason"]
+    assert validated["ai_review_summary"]["finalReason"].startswith("Wait for acceptance below")
 
 
 def test_sanitize_accepts_valid_level_plan():
