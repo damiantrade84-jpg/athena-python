@@ -19,6 +19,7 @@ DIAGNOSTIC_V3_ENTRY_TIMEFRAMES = frozenset({"H1", "M15", "M30"})
 SETUP_PRIMARY_TIMEFRAMES = VALID_V3_ENTRY_TIMEFRAMES | DIAGNOSTIC_V3_ENTRY_TIMEFRAMES
 
 # Structural context rung for a given setup primary rung (one step slower).
+# Used only when the caller did not pass the policy structure role.
 _SETUP_CONTEXT_TF: dict[str, str] = {
     "M15": "H4",
     "M30": "H4",
@@ -26,6 +27,7 @@ _SETUP_CONTEXT_TF: dict[str, str] = {
     "H4": "D1",
     "D1": "D1",
 }
+_TF_SLOWER_TO_FASTER: tuple[str, ...] = ("D1", "H4", "H1", "M30", "M15", "M5", "M1")
 
 
 def resolve_setup_primary_timeframe(tf: str | None) -> str | None:
@@ -34,9 +36,23 @@ def resolve_setup_primary_timeframe(tf: str | None) -> str | None:
     return key if key in SETUP_PRIMARY_TIMEFRAMES else None
 
 
-def resolve_setup_context_timeframe(primary_tf: str | None, horizon: str) -> str:
-    """Structural context rung paired with a setup primary rung."""
+def resolve_setup_context_timeframe(
+    primary_tf: str | None,
+    horizon: str,
+    structure_tf: str | None = None,
+) -> str:
+    """Structural context rung paired with a setup primary rung.
+
+    When ``structure_tf`` is the policy structure role and is slower than or
+    equal to the setup primary, that role is used. Otherwise fall back to one
+    rung slower than the primary (swing H1 → D1).
+    """
     key = str(primary_tf or "").strip().upper()
+    struct = str(structure_tf or "").strip().upper()
+    if struct:
+        order = {tf: index for index, tf in enumerate(_TF_SLOWER_TO_FASTER)}
+        if struct in order and key in order and order[struct] <= order[key]:
+            return struct
     if key in {"H4", "D1"}:
         return _SETUP_CONTEXT_TF[key]
     return "D1" if str(horizon or "").lower() == "swing" else _SETUP_CONTEXT_TF.get(key, "H4")

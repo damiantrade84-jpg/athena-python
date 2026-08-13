@@ -508,6 +508,9 @@ def evaluate_engine_a_v3(
     policy_trigger_tf = str(
         (policy or {}).get("trigger") or (policy or {}).get("triggerTf") or ""
     ).upper()
+    policy_structure_tf = str(
+        (policy or {}).get("structure") or (policy or {}).get("structureTf") or ""
+    ).upper()
     # Entry confirmation runs on the rung policy grants authority to: the M15
     # prerequisite where M5 is conditional refinement, else the trigger rung.
     from timeframe_policy import resolve_entry_confirmation_tf
@@ -555,8 +558,11 @@ def evaluate_engine_a_v3(
         profile = promotion.profile or baseline_profile(route.score_group, normalized_horizon)
 
     role_timeframes: dict[str, str] = {}
+    if policy_structure_tf:
+        role_timeframes[policy_structure_tf] = "structure"
     if diagnostic_override is not None or policy_entry_tf:
-        role_timeframes[primary_tf] = "entry"
+        if primary_tf:
+            role_timeframes[primary_tf] = "entry"
     if policy_trigger_tf and policy_trigger_tf != primary_tf:
         role_timeframes[policy_trigger_tf] = "trigger"
     def _role_minimum_bars(role_tf: str) -> int:
@@ -733,6 +739,8 @@ def evaluate_engine_a_v3(
         }
         if policy_entry_tf or diagnostic_override:
             _setup_kwargs["entry_tf_override"] = policy_entry_tf or diagnostic_override
+        if policy_structure_tf:
+            _setup_kwargs["structure_tf"] = policy_structure_tf
         setup_cache_key = (
             route.score_group,
             normalized_horizon,

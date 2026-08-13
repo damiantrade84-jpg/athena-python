@@ -2629,8 +2629,10 @@ def run_full_scan(
                         resolve_live_v3_entry_timeframe(
                             pair.get("type", ""), _pair_style, source=pair.get("source")
                         ),
+                        _policy_a.structure_tf.value,
                         _policy_a.setup_tf.value,
                         _policy_a.trigger_tf.value,
+                        _policy_b.structure_tf.value,
                         _policy_b.setup_tf.value,
                         _policy_b.trigger_tf.value,
                     )

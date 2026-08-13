@@ -327,8 +327,14 @@ def _resolve_setup_candle_frames(
     candles: dict[str, list[dict]],
     *,
     entry_tf_override: str | None = None,
+    structure_tf: str | None = None,
 ) -> tuple[list[dict], list[dict], str, str]:
-    """Primary/context frames aligned with the selected style's quant entry TF."""
+    """Primary/context frames aligned with the selected style's quant entry TF.
+
+    ``structure_tf`` is the policy structure role. When supplied it becomes
+    the setup overlay's context series instead of the hardcoded one-rung-slower
+    fallback (so equity M30 setup reads H1 structure, not H4).
+    """
     from engine_a_v3.timeframes import (
         resolve_setup_context_timeframe,
         resolve_setup_primary_timeframe,
@@ -356,7 +362,9 @@ def _resolve_setup_candle_frames(
         # Entry timing may be lower-TF, while structural context stays one rung
         # slower: H4 for intraday/lower primaries, D1 for swing and for an H4
         # primary (which SLOW speed adaptation can produce).
-        context_tf = resolve_setup_context_timeframe(primary_tf, horizon)
+        context_tf = resolve_setup_context_timeframe(
+            primary_tf, horizon, structure_tf=structure_tf
+        )
         primary = candles.get(primary_tf) or []
         context = candles.get(context_tf) or candles.get("D1") or []
         return primary, context, primary_tf, context_tf
@@ -1199,6 +1207,7 @@ def detect_setup(
     display: str | None = None,
     indicator_periods: Mapping[str, Any] | None = None,
     entry_tf_override: str | None = None,
+    structure_tf: str | None = None,
     series_cache: "SetupSeriesCache | None" = None,
 ) -> SetupCandidate:
     if route.family == "unknown":
@@ -1216,7 +1225,11 @@ def detect_setup(
         indicator_periods = _resolved_periods(route.score_group, route.family)
     periods = SetupPeriods.from_mapping(indicator_periods)
     primary, context, primary_tf, context_tf = _resolve_setup_candle_frames(
-        route, horizon, candles, entry_tf_override=entry_tf_override
+        route,
+        horizon,
+        candles,
+        entry_tf_override=entry_tf_override,
+        structure_tf=structure_tf,
     )
     from factor_scoring import entry_tf_uses_period_overrides
 

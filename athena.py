@@ -15888,7 +15888,7 @@ def analyze_pair(
             if _v3_live_entry_tf:
                 _freshness_by_tf[_v3_live_entry_tf] = _v3_entry_candles
             if _policy_timeframes:
-                for _policy_role in ("setup", "trigger"):
+                for _policy_role in ("regime", "bias", "structure", "setup", "trigger"):
                     _policy_tf = _policy_timeframes.get(_policy_role)
                     if _policy_tf and _policy_tf not in _freshness_by_tf:
                         _freshness_by_tf[_policy_tf] = _v3_candles.get(_policy_tf, [])

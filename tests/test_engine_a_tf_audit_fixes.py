@@ -230,6 +230,42 @@ def test_setup_context_timeframe_is_one_rung_slower():
     assert resolve_setup_context_timeframe("H1", "swing") == "D1"
 
 
+def test_setup_context_uses_policy_structure_when_slower_than_setup():
+    """Equity/index policy is H1 structure + M30 setup — not H4 context."""
+    assert (
+        resolve_setup_context_timeframe("M30", "intraday", structure_tf="H1") == "H1"
+    )
+    assert (
+        resolve_setup_context_timeframe("H1", "intraday", structure_tf="H4") == "H4"
+    )
+    # Faster-than-setup structure is ignored (fail back to one-rung-slower).
+    assert (
+        resolve_setup_context_timeframe("H1", "intraday", structure_tf="M15") == "H4"
+    )
+
+
+def test_equity_setup_frames_read_policy_structure_not_h4():
+    from engine_a_v3.setups import _resolve_setup_candle_frames
+
+    rows = [{"open": 1.0, "high": 1.1, "low": 0.9, "close": 1.0, "vol": 1.0}] * 5
+    candles = {"D1": rows, "H4": rows, "H1": rows, "M30": rows, "M15": rows}
+    route = route_specialist({"display": "NASDAQ-100", "type": "index"})
+    policy = _policy("NASDAQ-100", "index", "us_indices_trackers", "intraday")
+    assert policy["structure"] == "H1"
+    assert policy["setup"] == "M30"
+    primary, context, primary_tf, context_tf = _resolve_setup_candle_frames(
+        route,
+        "intraday",
+        candles,
+        entry_tf_override=policy["setup"],
+        structure_tf=policy["structure"],
+    )
+    assert primary_tf == "M30"
+    assert context_tf == "H1"
+    assert primary is candles["M30"]
+    assert context is candles["H1"]
+
+
 def test_h4_setup_returns_frames_instead_of_silently_empty():
     from engine_a_v3.setups import _resolve_setup_candle_frames
 
