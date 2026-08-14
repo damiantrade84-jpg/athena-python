@@ -1967,8 +1967,8 @@ def test_parse_fallback_provider_status(tmp_audit_db):
     assert "opus" not in summary["model"].lower()
 
 
-def test_engine_a_verdict_wait_without_timing_contradiction_is_entry_rejected():
-    """Wait/watch must not classify as engine_a_confirmed when timing is not flagged."""
+def test_engine_a_verdict_wait_without_timing_contradiction_is_wait_not_entry_rejected():
+    """Wait without a timing contradiction is directional wait, not entry rejected."""
     ctx = _engine_a_ctx(passed=True)
     ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
     ai = normalize_chart_review_response(
@@ -1992,8 +1992,28 @@ def test_engine_a_verdict_wait_without_timing_contradiction_is_entry_rejected():
     comparison = build_engine_a_verdict_comparison(ctx, ai, engine_snapshots=ctx["engine_snapshots"])
     assert comparison["chartConfirmsEngineADirection"] is True
     assert comparison["chartContradictsEntryTiming"] is not True
-    assert comparison["comparisonVerdict"] == "engine_a_direction_confirmed_entry_rejected"
+    assert comparison["comparisonVerdict"] == "engine_a_direction_confirmed_wait"
     assert comparison["finalDecision"] == "wait"
+
+
+def test_engine_a_downtrend_does_not_confirm_long():
+    ctx = _engine_a_ctx(passed=True, direction="LONG")
+    ctx["engine_snapshots"] = extract_engine_snapshots({}, ctx)
+    ai = normalize_chart_review_response(
+        json.dumps(
+            {
+                "verdict": "CAUTION",
+                "confidence": 50,
+                "human_action": "wait",
+                "visual_confirmation": "",
+                "visual_contradiction": "",
+                "engine_a_alignment": "mixed",
+                "entry_quality": "Price is in a downtrend below the EMAs.",
+            }
+        )
+    )
+    comparison = build_engine_a_verdict_comparison(ctx, ai, engine_snapshots=ctx["engine_snapshots"])
+    assert comparison["chartConfirmsEngineADirection"] is not True
 
 
 def test_engine_a_verdict_wait_extension_downgrade():

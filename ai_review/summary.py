@@ -33,13 +33,10 @@ _POOR_ENTRY_PATTERNS = (
     "late entry",
     "chasing",
     "displaced",
-    "compression",
-    "low atr",
-    "tight range",
     "no room",
 )
 
-_BAD_RR_PATTERNS = ("poor rr", "bad rr", "low rr", "rr too", "risk reward", "risk/reward")
+_BAD_RR_PATTERNS = ("poor rr", "bad rr", "low rr", "rr too")
 
 _CONCORDANCE_ALIGNMENT = {
     "agree": 88,
@@ -184,10 +181,6 @@ def _tradeability_penalties(
         penalty += 28
     elif has_visual_contradiction_text(contradiction):
         penalty += 10
-    entry_text = _text_blob(ai_review.get("entry_quality"))
-    for pattern in _POOR_ENTRY_PATTERNS:
-        if pattern in entry_text:
-            penalty += 14
     atr_rr = _text_blob(ai_review.get("atr_rr_assessment"))
     for pattern in _BAD_RR_PATTERNS:
         if pattern in atr_rr:
@@ -210,10 +203,6 @@ def _tradeability_penalties(
     if not engine_a_ctx.get("chart_provider_hint") and not engine_a_ctx.get("engine_a_provider"):
         penalty += 8
     penalty += context_tradeability_penalty(engine_a_ctx, ai_review)
-    risks = [str(r).lower() for r in (ai_review.get("risks") or [])]
-    for risk in risks:
-        if any(p in risk for p in _POOR_ENTRY_PATTERNS + _BAD_RR_PATTERNS):
-            penalty += 6
     return penalty
 
 

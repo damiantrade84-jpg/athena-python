@@ -120,6 +120,59 @@ def parse_json_object(text: str) -> dict | None:
     return None
 
 
+_DECAY_VERDICTS = frozenset({"EXIT", "HOLD", "WATCH"})
+_DECAY_URGENCIES = frozenset({"HIGH", "MEDIUM", "LOW"})
+
+
+def parse_decay_ai_verdict(text: str) -> dict[str, Any] | None:
+    """Parse decay-AI JSON, then recover EXIT/HOLD/WATCH from loose text."""
+    parsed = parse_json_object(text) if text else None
+    if isinstance(parsed, dict):
+        verdict = str(parsed.get("verdict") or parsed.get("action") or "").strip().upper()
+        if verdict in _DECAY_VERDICTS:
+            urgency = str(parsed.get("urgency") or "MEDIUM").strip().upper()
+            if urgency not in _DECAY_URGENCIES:
+                urgency = "MEDIUM"
+            return {
+                "verdict": verdict,
+                "urgency": urgency,
+                "reasoning": str(parsed.get("reasoning") or parsed.get("reason") or "")[:400],
+            }
+    blob = str(text or "")
+    if not blob.strip():
+        return None
+    match = re.search(r"\b(EXIT|HOLD|WATCH)\b", blob, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return {
+        "verdict": match.group(1).upper(),
+        "urgency": "MEDIUM",
+        "reasoning": "Recovered from non-JSON decay response",
+    }
+
+
+def decay_ai_numeric_fallback(
+    *,
+    decay_pct: float | None,
+    direction_flip: bool,
+) -> dict[str, Any]:
+    """Deterministic advisory fallback. Never EXIT — parse failure is not a close."""
+    pct = float(decay_pct) if decay_pct is not None else 0.0
+    if direction_flip or pct >= 20.0:
+        return {
+            "verdict": "WATCH",
+            "urgency": "HIGH" if direction_flip else "MEDIUM",
+            "reasoning": "Numeric decay fallback; model parse failed",
+            "fallback": "numeric",
+        }
+    return {
+        "verdict": "HOLD",
+        "urgency": "LOW",
+        "reasoning": "Numeric decay fallback; model parse failed",
+        "fallback": "numeric",
+    }
+
+
 def build_marcus_review_incomplete_result(
     signal: dict,
     *,

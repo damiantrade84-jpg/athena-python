@@ -178,12 +178,27 @@ def score_entry_quality(
         rr_live = _f((engine_a_ctx.get("risk_geometry") or {}).get("rr_live"))
 
     score = 72.0
+    direction = str(engine_a_ctx.get("direction") or "").upper()
     if disp is not None:
-        ad = abs(disp)
-        if ad > 1.5:
-            score -= min(40.0, (ad - 1.5) * 18.0)
-        elif ad > 1.0:
-            score -= (ad - 1.0) * 12.0
+        # Asymmetric: extension in the trade direction is a chase; the opposite
+        # side is a pullback and is allowed further before quality decays.
+        signed = float(disp)
+        if direction == "SHORT":
+            signed = -signed
+        if direction in {"LONG", "SHORT"}:
+            if signed > 0:  # chase
+                free, decay = 0.25, 1.75
+            else:  # pullback toward / through the trend EMA
+                free, decay = 1.0, 2.5
+            over = max(0.0, abs(signed) - free)
+            if decay > 0 and over > 0:
+                score -= min(40.0, (over / decay) * 36.0)
+        else:
+            ad = abs(disp)
+            if ad > 1.5:
+                score -= min(40.0, (ad - 1.5) * 18.0)
+            elif ad > 1.0:
+                score -= (ad - 1.0) * 12.0
     if loc_contrib is not None:
         if loc_contrib < 0.05:
             score -= 22.0

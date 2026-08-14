@@ -183,6 +183,27 @@ def test_f4_model_text_cues_lower_entry_quality():
     assert with_text < plain
 
 
+def test_entry_quality_pullback_scores_higher_than_equal_chase():
+    from ai_review.review_geometry import score_entry_quality
+
+    atr = {"atr_value": 1.0}
+    ema = {"ema21": 100.0}
+    pullback = {
+        "direction": "LONG",
+        "ema_levels": ema,
+        "atr": atr,
+        "geometry": {"current_price": 99.2, "candidate_entry": 99.2, "stop_loss": 98.0, "take_profit": 102.0},
+        "factor_diagnostics": {"components": {"location": {"contribution": 0.2}}},
+        "zone_status": "IN_ZONE",
+        "risk_geometry": {"rr_live_tp1": 2.0},
+    }
+    chase = {
+        **pullback,
+        "geometry": {"current_price": 100.8, "candidate_entry": 100.8, "stop_loss": 98.0, "take_profit": 104.0},
+    }
+    assert score_entry_quality(engine_a_ctx=pullback) > score_entry_quality(engine_a_ctx=chase)
+
+
 def test_f4_summary_uses_text_aware_entry_score_not_the_stamped_one():
     """The stamped pre-provider score must not override the text-aware one."""
     from ai_review.summary import build_ai_review_summary
@@ -281,8 +302,8 @@ def test_scan2_demo_unvalidated_never_emits_trade(artifact_status):
     from engine_a_v3 import evaluator
 
     source = inspect.getsource(evaluator.evaluate_engine_a_v3)
-    assert 'setup_label = "SHADOW"' in source
-    assert "demo_unvalidated_artifact" in source
+    assert 'setup_label = "RESEARCH"' in source
+    assert "resolve_engine_a_trade_eligibility" in source
 
 
 # --- Scan 1 -----------------------------------------------------------------

@@ -132,6 +132,37 @@ def test_engine_b_rendered_prompt_uses_resolved_policy_roles() -> None:
     assert "zone-retest" in text.lower() or "zone-retest engine" in text.lower()
 
 
+def test_compact_render_includes_timeframe_contract() -> None:
+    """Compact injection must deliver the playbook's role contract, not drop it."""
+    a_text = render_playbook_prompt_block([get_engine_a_playbook()], compact=True)
+    b_text = render_playbook_prompt_block([get_engine_b_playbook()], compact=True)
+    assert '"timeframeContract"' in a_text
+    assert "setupTf" in a_text
+    assert '"timeframeContract"' in b_text
+    assert '"timeframeAuthority"' in b_text
+    assert "not hardcoded to H4" in b_text
+
+
+def test_compact_render_does_not_slice_engine_b_rules() -> None:
+    pb = get_engine_b_playbook()
+    text = render_playbook_prompt_block([pb], compact=True)
+    assert "never invent BOS/OB/FVG/BAG" in text
+    assert "must never mutate or override" in text
+    assert "Structure signal after invalidation must be rejected" in text
+    assert "doNotRejectIf" in text
+    assert "Do not reject solely because RR1" in text
+    assert "Do not reject solely because RR1" not in "".join(pb["mustRejectIf"])
+
+
+def test_compact_render_includes_engine_d_near_miss_blocks() -> None:
+    text = render_playbook_prompt_block([get_engine_d_scalp_playbook()], compact=True)
+    assert "sessionRegimeSwitch" in text
+    assert "effortVsResult" in text
+    assert "trappedTraderLogic" in text
+    assert "pocMagnet" in text
+    assert "casinoTimeDegradation" in text
+
+
 def test_render_playbook_prompt_block_includes_review_order() -> None:
     text = render_playbook_prompt_block([get_engine_d_scalp_playbook()])
     assert "ATHENA TRADE PLAYBOOKS" in text

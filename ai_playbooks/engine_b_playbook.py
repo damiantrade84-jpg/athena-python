@@ -119,12 +119,14 @@ def get_engine_b_playbook() -> dict:
             "locationOk=false or entryOk=false — gates failed regardless of chart appearance.",
             "spaceGateOk=false — authoritative room/TP-path blocker (includes tp1_blocked_by_opposing_zone, support_too_close, resistance_too_close).",
             "Reject or wait when tp1PathClear=false (TP1 beyond the nearest opposing zone and not clamped); a TP1 with tp1ClampedToOpposingZone=true is reachable and is not this case.",
-            "Do not reject solely because RR1 is below style min RR when scaleOutActive=true, RR1 passes tp1MinRr, and tp1PathClear=true.",
             "Taking structure signal after invalidation already occurred.",
             "Structure and liquidity context contradict proposed direction.",
             "ORDER_BLOCK_REJECTION selected without obAtZone, or FVG_FILL_CONTINUATION without aligned fvgOverlap and fvgReactionConfirmed.",
             "BAG_CONTINUATION selected when bagState is not confirmed, or used to justify chasing without a separate active-zone trigger.",
             "Chasing extended displacement with no trigger on trigger_tf and entryOk=false.",
+        ],
+        "doNotRejectIf": [
+            "Do not reject solely because RR1 is below style min RR when scaleOutActive=true, RR1 passes tp1MinRr, and tp1PathClear=true.",
         ],
         "requiredOutputFields": [
             "tradeSkillVersion",

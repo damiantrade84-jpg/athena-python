@@ -119,7 +119,7 @@ def get_engine_a_playbook() -> dict:
         ],
         "mustRejectIf": [
             "Direction valid but entry is measurably extended (far from value/structure with no pullback AND RR degraded), exhausted, or chasing — not merely continuing after a confirmed BOS with acceptance.",
-            "Score high but location is poor for the proposed direction.",
+            "Score high but location is a chase: setup-TF price is extended in the trade direction beyond about 0.25 ATR from the trend EMA with no pullback AND RR is degraded. A pullback toward that EMA within about 1.0 ATR is acceptable timing, not a reject.",
             "Factor alignment is conflicted or weak across trend/momentum/volume.",
             "Required context is missing and blocks confident tradeability.",
             "Visual chart contradicts Engine A direction or entry timing.",

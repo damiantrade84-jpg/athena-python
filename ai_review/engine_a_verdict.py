@@ -139,7 +139,10 @@ def _infer_chart_confirms_direction(ai_review: dict[str, Any], engine_a_ctx: dic
     direction = str(engine_a_ctx.get("direction") or "NONE").upper()
     if direction not in ("LONG", "SHORT"):
         return None
-    if any(w in text for w in ("confirm", "aligned", "supports", "agree", "direction ok", "uptrend", "downtrend")):
+    trend_ok = (direction == "LONG" and _has_word(text, ("uptrend",))) or (
+        direction == "SHORT" and _has_word(text, ("downtrend",))
+    )
+    if any(w in text for w in ("confirm", "aligned", "supports", "agree", "direction ok")) or trend_ok:
         return True
     align = str(ai_review.get("engine_a_alignment") or "").lower()
     if any(w in align for w in ("aligned", "agree", "confirm", "supports")):
@@ -207,7 +210,7 @@ def _comparison_verdict(
     if chart_confirms is True and chart_contradicts_timing is True:
         return "engine_a_direction_confirmed_entry_rejected"
     if chart_confirms is True and final_decision in ("wait", "watch"):
-        return "engine_a_direction_confirmed_entry_rejected"
+        return "engine_a_direction_confirmed_wait"
     if chart_confirms is True and engine_passed and final_decision in ("trade",):
         return "engine_a_confirmed"
     if chart_confirms is True and engine_passed:
@@ -313,6 +316,11 @@ def build_engine_a_verdict_comparison(
         if comparison == "engine_a_direction_confirmed_entry_rejected":
             final_reason = (
                 f"Engine A {direction} is directionally confirmed, but immediate entry is downgraded. "
+                f"Final decision: {(final_decision or 'wait').upper()}."
+            )
+        elif comparison == "engine_a_direction_confirmed_wait":
+            final_reason = (
+                f"Engine A {direction} is directionally confirmed; wait for location/timing. "
                 f"Final decision: {(final_decision or 'wait').upper()}."
             )
         elif comparison == "engine_a_confirmed":

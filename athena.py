@@ -17273,37 +17273,58 @@ def _get_decay_ai_verdict(
     )
 
     try:
-        from ai_utils import parse_json_object
+        from ai_utils import decay_ai_numeric_fallback, parse_decay_ai_verdict
 
         client = create_ai_client(CONFIG, api_key=api_key, provider=_active_provider)
         _model = get_ai_model(CONFIG, "DEBATE_MODEL", "grok-4.6", provider=_active_provider)
         _temp = float(AITemperatureConfig.get_temperature("decay"))
 
         result = None
+        raw = ""
+        _messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a concise trading risk manager. "
+                    "Give direct EXIT/HOLD/WATCH verdicts based on signal decay evidence. "
+                    "Return strict JSON only."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
         try:
             completion = client.chat.completions.create(
                 model=_model,
                 max_tokens=220,
                 temperature=_temp,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a concise trading risk manager. "
-                            "Give direct EXIT/HOLD/WATCH verdicts based on signal decay evidence. "
-                            "Return strict JSON only."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
+                messages=_messages,
                 response_format={"type": "json_object"},
             )
             raw = completion.choices[0].message.content or ""
-            result = parse_json_object(raw)
+            result = parse_decay_ai_verdict(raw)
         except Exception as _ce:
             log.debug(f"[DECAY-AI] {pair_name} chat.completions failed: {_ce}")
 
         if result is None:
+            try:
+                completion = client.chat.completions.create(
+                    model=_model,
+                    max_tokens=220,
+                    temperature=_temp,
+                    messages=_messages,
+                )
+                raw = completion.choices[0].message.content or ""
+                result = parse_decay_ai_verdict(raw)
+            except Exception as _ce2:
+                log.debug(f"[DECAY-AI] {pair_name} retry without response_format failed: {_ce2}")
+
+        if result is None:
+            result = decay_ai_numeric_fallback(
+                decay_pct=decay_pct if decay_pct is not None else decay,
+                direction_flip=direction_flip,
+            )
+
+        if result.get("fallback") == "numeric":
             try:
                 from ai_review_logger import (
                     AI_STATE_REVIEW_INCOMPLETE,
@@ -17349,7 +17370,6 @@ def _get_decay_ai_verdict(
                 )
             except Exception as _log_exc:
                 log.debug("[DECAY-AI] audit log failed for %s: %s", pair_name, _log_exc)
-            return {}
 
         verdict = str(result.get("verdict", "WATCH")).upper()
         if verdict not in ("EXIT", "HOLD", "WATCH"):
@@ -17372,50 +17392,51 @@ def _get_decay_ai_verdict(
                 log_ai_review,
             )
 
-            _state = (
-                AI_STATE_REJECT
-                if verdict == "EXIT"
-                else AI_STATE_CONFIRM
-                if verdict == "HOLD"
-                else AI_STATE_CAUTION
-            )
-            _required = {"verdict", "urgency", "reasoning"}
-            log_ai_review(
-                symbol=pair_name,
-                asset_type=str(signal_context.get("type") or "?"),
-                review_type=REVIEW_TYPE_DECAY_AI,
-                model=_model,
-                provider=_active_provider,
-                prompt_version="score_decay_ai_v1",
-                input_packet=prompt,
-                has_chart_image=False,
-                candle_freshness_status=(
-                    (signal_context.get("dataFreshness") or {}).get("reason")
-                    or "unknown"
-                ),
-                engine_a_state=cur_score if engine == "engine_a" else None,
-                engine_b_state=cur_pct if engine == "engine_b" else None,
-                engine_c_state=None,
-                engine_d_state=None,
-                risk_state={
-                    "entry_score": entry_score,
-                    "current_score": cur_score,
-                    "decay": decay,
-                    "entry_pct": entry_pct,
-                    "current_pct": cur_pct,
-                    "decay_pct": decay_pct,
-                    "direction_flip": direction_flip,
-                },
-                ai_review_state=_state,
-                ai_confidence=None,
-                contradictions_count=0,
-                missing_information_count=0,
-                parse_success=True,
-                schema_valid=_required.issubset(result.keys()),
-                execution_allowed_before_ai=True,
-                execution_allowed_after_ai=True,
-                final_action="advisory",
-            )
+            if result.get("fallback") != "numeric":
+                _state = (
+                    AI_STATE_REJECT
+                    if verdict == "EXIT"
+                    else AI_STATE_CONFIRM
+                    if verdict == "HOLD"
+                    else AI_STATE_CAUTION
+                )
+                _required = {"verdict", "urgency", "reasoning"}
+                log_ai_review(
+                    symbol=pair_name,
+                    asset_type=str(signal_context.get("type") or "?"),
+                    review_type=REVIEW_TYPE_DECAY_AI,
+                    model=_model,
+                    provider=_active_provider,
+                    prompt_version="score_decay_ai_v1",
+                    input_packet=prompt,
+                    has_chart_image=False,
+                    candle_freshness_status=(
+                        (signal_context.get("dataFreshness") or {}).get("reason")
+                        or "unknown"
+                    ),
+                    engine_a_state=cur_score if engine == "engine_a" else None,
+                    engine_b_state=cur_pct if engine == "engine_b" else None,
+                    engine_c_state=None,
+                    engine_d_state=None,
+                    risk_state={
+                        "entry_score": entry_score,
+                        "current_score": cur_score,
+                        "decay": decay,
+                        "entry_pct": entry_pct,
+                        "current_pct": cur_pct,
+                        "decay_pct": decay_pct,
+                        "direction_flip": direction_flip,
+                    },
+                    ai_review_state=_state,
+                    ai_confidence=None,
+                    contradictions_count=0,
+                    missing_information_count=0,
+                    parse_success=True,
+                    schema_valid=_required.issubset(result.keys()),
+                    execution_allowed_before_ai=True,
+                    execution_allowed_after_ai=True,
+                    final_action="advisory",
+                )
         except Exception as _log_exc:
             log.debug("[DECAY-AI] audit log failed for %s: %s", pair_name, _log_exc)
 

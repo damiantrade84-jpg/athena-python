@@ -249,11 +249,11 @@ nonVisualContext and scoreAttribution are included inside engineAContext above. 
 analyze_style: {_fmt(context.get("analyze_style"))} scoring_tfs: {_fmt(context.get("scoring_timeframes"))} momentum_tf: {_fmt(context.get("momentum_timeframe"))} regime_tf: {_fmt(context.get("regime_timeframe"))} execution_tf: {_fmt(context.get("execution_timeframe"))}
 
 == ATR ==
-atr_value: {_fmt(atr.get("atr_value"))} atr_tf: {_fmt(atr.get("atr_tf"))} atr_h4: {_fmt(atr.get("atr_h4"))} atr_d1: {_fmt(atr.get("atr_d1"))}
+atr_value: {_fmt(atr.get("atr_value"))} atr_tf: {_fmt(atr.get("atr_tf"))} atr_source: {_fmt(atr.get("atr_source"))} atr_h4: {_fmt(atr.get("atr_h4"))} atr_d1: {_fmt(atr.get("atr_d1"))}
 atr_age_seconds: {_fmt(atr.get("atr_age_seconds"))} atr_freshness: {_fmt(atr.get("atr_freshness_status"))} (max_expected={_fmt(atr.get("max_expected_age_seconds"))}s)
 
 == GEOMETRY ==
-entry: {_fmt(geometry.get("candidate_entry"))} sl: {_fmt(geometry.get("stop_loss"))} tp: {_fmt(geometry.get("take_profit"))} rr: {_fmt(geometry.get("rr"))}
+entry: {_fmt(geometry.get("candidate_entry"))} current_price: {_fmt(geometry.get("current_price") or geometry.get("live_price"))} sl: {_fmt(geometry.get("stop_loss"))} tp: {_fmt(geometry.get("take_profit"))} rr: {_fmt(geometry.get("rr"))} displacement: {_fmt(geometry.get("price_displacement_from_candidate_entry"))}
 
 == TIMESTAMPS / PROVIDERS ==
 scan_timestamp: {_fmt(context.get("scan_timestamp"))} latest_candle_ts: {_fmt(context.get("latest_candle_ts"))}
@@ -362,7 +362,7 @@ analyze_style: {_fmt(context.get("analyze_style"))}
 atr_value: {_fmt(atr.get("atr_value"))} atr_tf: {_fmt(atr.get("atr_tf"))} atr_source: {_fmt(atr.get("atr_source"))}
 
 == GEOMETRY ==
-entry: {_fmt(geometry.get("candidate_entry"))} sl: {_fmt(geometry.get("stop_loss"))} tp: {_fmt(geometry.get("take_profit"))} rr: {_fmt(geometry.get("rr"))}
+entry: {_fmt(geometry.get("candidate_entry"))} current_price: {_fmt(geometry.get("current_price") or geometry.get("live_price"))} sl: {_fmt(geometry.get("stop_loss"))} tp: {_fmt(geometry.get("take_profit"))} rr: {_fmt(geometry.get("rr"))} displacement: {_fmt(geometry.get("price_displacement_from_candidate_entry"))}
 
 == TIMESTAMPS / PROVIDERS ==
 scan_timestamp: {_fmt(context.get("scan_timestamp"))} chart_captured_at: {_fmt(context.get("chart_captured_at"))}

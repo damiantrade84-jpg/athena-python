@@ -119,8 +119,10 @@ def _direction_confirmed(comparison: dict[str, Any]) -> bool:
     if verdict in {
         "engine_a_confirmed",
         "engine_a_direction_confirmed_entry_rejected",
+        "engine_a_direction_confirmed_wait",
         "engine_b_confirmed",
         "engine_b_direction_confirmed_entry_rejected",
+        "engine_b_direction_confirmed_wait",
     }:
         return True
     if _truthy(comparison.get("chartConfirmsEngineBDirection")):

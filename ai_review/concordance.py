@@ -81,7 +81,11 @@ def _divergence_from_ai(
         return "visual_contradiction", "AI reported chart contradicts Engine A direction"
     if (
         comparison.get("chartContradictsEntryTiming") is True
-        or comparison.get("comparisonVerdict") == "engine_a_direction_confirmed_entry_rejected"
+        or comparison.get("comparisonVerdict")
+        in {
+            "engine_a_direction_confirmed_entry_rejected",
+            "engine_b_direction_confirmed_entry_rejected",
+        }
     ):
         return "entry_displacement", "AI reported chart contradicts entry timing"
 

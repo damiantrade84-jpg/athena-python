@@ -138,6 +138,14 @@ class TestOutcomeLinker:
         linked = link_samples_to_outcomes([], audit_db=":memory:", learning_db=":memory:")
         assert linked == []
 
+    def test_symbol_key_matches_chart_and_execution_symbols(self):
+        from ai_outcome_linker import _same_symbol, _symbol_key
+
+        assert _symbol_key("EURGBP=X") == "EURGBP"
+        assert _symbol_key("EUR/GBP") == "EURGBP"
+        assert _same_symbol("EURGBP=X", "EUR/GBP")
+        assert not _same_symbol("EURGBP=X", "EURUSD")
+
     def test_load_ai_review_samples_empty(self):
         from ai_outcome_linker import load_ai_review_samples
         samples = load_ai_review_samples(lookback_days=30)

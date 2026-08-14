@@ -15,11 +15,15 @@ const VERDICT_CLASS: Record<string, string> = {
   engine_a_confirmed: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
   engine_a_direction_confirmed_entry_rejected:
     'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  engine_a_direction_confirmed_wait:
+    'bg-sky-500/15 text-sky-300 border-sky-500/40',
   engine_a_contradicted: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
   engine_a_missing: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
   engine_b_confirmed: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
   engine_b_direction_confirmed_entry_rejected:
     'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  engine_b_direction_confirmed_wait:
+    'bg-sky-500/15 text-sky-300 border-sky-500/40',
   engine_b_contradicted: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
   engine_b_missing: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/40',
   mixed: 'bg-amber-500/15 text-amber-300 border-amber-500/40',

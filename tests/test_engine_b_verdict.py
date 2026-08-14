@@ -46,3 +46,42 @@ def test_ai_upgraded_engine_b_remains_advisory_when_engine_b_passed():
     assert out["engineBPassed"] is True
     assert out["aiUpgradedEngineB"] is False
     assert out["modelClaims"]["aiUpgradedEngineB"] is True
+
+
+def test_engine_b_short_does_not_treat_longer_ema_as_direction_contradiction():
+    out = build_engine_b_verdict_comparison(
+        {
+            "direction": "SHORT",
+            "passed": True,
+            "confluence_score": 6.0,
+            "engine_snapshots": {"engineB": {"passed": True, "score": 6.0, "direction": "SHORT"}},
+        },
+        {
+            "human_action": "wait",
+            "visual_confirmation": "Price accepted below the longer EMAs after the impulse.",
+            "chartReadSummary": "Along the EMA cluster, structure confirms the short.",
+        },
+    )
+    assert out["chartContradictsEngineBDirection"] is not True
+    assert out["chartConfirmsEngineBDirection"] is not False
+    assert out["comparisonVerdict"] in {
+        "engine_b_direction_confirmed_wait",
+        "mixed",
+        "engine_b_confirmed",
+    }
+
+
+def test_engine_b_short_whole_word_long_still_contradicts():
+    out = build_engine_b_verdict_comparison(
+        {
+            "direction": "SHORT",
+            "passed": True,
+            "confluence_score": 6.0,
+            "engine_snapshots": {"engineB": {"passed": True, "score": 6.0, "direction": "SHORT"}},
+        },
+        {
+            "human_action": "wait",
+            "visual_confirmation": "Chart looks long and bullish against the short.",
+        },
+    )
+    assert out["chartConfirmsEngineBDirection"] is False

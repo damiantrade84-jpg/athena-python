@@ -29,9 +29,15 @@ def _infer_chart_confirms_direction(ai_review: dict[str, Any], engine_b_ctx: dic
     ).lower()
     if not text:
         return None
-    if direction == "LONG" and any(w in text for w in ("bearish", "short", "downside", "reject long")):
+    if direction == "LONG" and (
+        any(re.search(rf"\b{w}\b", text) for w in ("bearish", "short", "downside"))
+        or "reject long" in text
+    ):
         return False
-    if direction == "SHORT" and any(w in text for w in ("bullish", "long", "upside", "reject short")):
+    if direction == "SHORT" and (
+        any(re.search(rf"\b{w}\b", text) for w in ("bullish", "long", "upside"))
+        or "reject short" in text
+    ):
         return False
     if re.search(r"\b(confirm|support|align)\b", text):
         return True
@@ -53,10 +59,10 @@ def _comparison_verdict(
         return "engine_b_contradicted"
     if chart_confirms is True and engine_passed and final_decision == "trade":
         return "engine_b_confirmed"
-    if chart_confirms is True and engine_passed and final_decision in ("wait", "watch"):
-        return "engine_b_direction_confirmed_entry_rejected"
     if chart_contradicts_timing is True and engine_passed:
         return "engine_b_direction_confirmed_entry_rejected"
+    if chart_confirms is True and engine_passed and final_decision in ("wait", "watch"):
+        return "engine_b_direction_confirmed_wait"
     if chart_confirms is False:
         return "engine_b_contradicted"
     return "mixed"
@@ -150,6 +156,11 @@ def build_engine_b_verdict_comparison(
         if comparison == "engine_b_direction_confirmed_entry_rejected":
             final_reason = (
                 f"Engine B {direction} is directionally confirmed, but immediate entry is downgraded. "
+                f"Final decision: {(final_decision or 'wait').upper()}."
+            )
+        elif comparison == "engine_b_direction_confirmed_wait":
+            final_reason = (
+                f"Engine B {direction} is directionally confirmed; wait for location/timing. "
                 f"Final decision: {(final_decision or 'wait').upper()}."
             )
         elif comparison == "engine_b_confirmed":

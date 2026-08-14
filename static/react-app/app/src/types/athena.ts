@@ -85,6 +85,9 @@ export interface SuggestedTradeWatch {
   reachedAt?: string | null;
   last_evaluated_at?: string | null;
   lastCheckedAt?: string | null;
+  current_price?: number | null;
+  current_price_source?: string | null;
+  current_price_at?: string | null;
   cancelled_at?: string | null;
   notes?: string | null;
   playbook_warnings?: string[];
@@ -1579,6 +1582,7 @@ export type AIChartReviewProviderStatus =
 export type AIChartReviewComparisonVerdict =
   | 'engine_a_confirmed'
   | 'engine_a_direction_confirmed_entry_rejected'
+  | 'engine_a_direction_confirmed_wait'
   | 'engine_a_contradicted'
   | 'engine_a_missing'
   | 'mixed'

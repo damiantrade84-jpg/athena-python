@@ -24,6 +24,19 @@ from typing import Any
 
 from ai_evaluation_contracts import AIEvaluationSample
 
+
+def _symbol_key(value: Any) -> str:
+    """Normalize chart vs execution symbols: EURGBP=X, EUR/GBP, EURGBP → EURGBP."""
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip().upper().split(":")[-1].replace("=X", "")
+    return "".join(ch for ch in raw if ch.isalnum())
+
+
+def _same_symbol(left: Any, right: Any) -> bool:
+    a, b = _symbol_key(left), _symbol_key(right)
+    return bool(a) and a == b
+
 log = logging.getLogger(__name__)
 
 REVIEW_LOG_PATH = os.path.join(
@@ -222,14 +235,23 @@ def link_samples_to_outcomes(
         )
         symbol = sample.get("symbol", norm.get("symbol", ""))
         timestamp = sample.get("timestamp") or sample.get("ts", "")
+        review_id = (
+            sample.get("review_id")
+            or sample.get("ai_review_id")
+            or norm.get("review_id")
+        )
 
-        # Try linking by trace_id
+        # Try linking by review_id, then trace_id, then normalized symbol + time.
         matched_outcome = None
         for trade in audit_trades:
+            trade_review_id = trade.get("ai_review_id") or trade.get("review_id")
+            if review_id and trade_review_id and str(trade_review_id) == str(review_id):
+                matched_outcome = trade
+                break
             if trace_id and trade.get("ticket") == trace_id:
                 matched_outcome = trade
                 break
-            if symbol and trade.get("pair", "").upper() in (symbol.upper(),) and timestamp:
+            if symbol and _same_symbol(trade.get("pair"), symbol) and timestamp:
                 # Check time proximity (±24h)
                 trade_ts = trade.get("ts", "")
                 if trade_ts and timestamp:
@@ -248,7 +270,10 @@ def link_samples_to_outcomes(
                 if trace_id and row.get("ticket") == trace_id:
                     matched_outcome = row
                     break
-                if symbol and row.get("pair", "").upper() in (symbol.upper(),):
+                if review_id and str(row.get("ai_review_id") or row.get("review_id") or "") == str(review_id):
+                    matched_outcome = row
+                    break
+                if symbol and _same_symbol(row.get("pair"), symbol):
                     row_ts = row.get("trade_ts") or row.get("ts", "")
                     if row_ts and timestamp:
                         try:
