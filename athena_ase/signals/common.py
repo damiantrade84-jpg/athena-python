@@ -19,10 +19,26 @@ PRICE_SOURCES = ("EODHD", "MT5", "BINANCE", "BYBIT")
 # feed has actually died (observed: crypto BINANCE bars 45-134 days stale
 # still produced TRADE/WATCH signals). Applies to live candidate generation
 # only — historical backfill/training paths are unaffected.
+# Tunable via config ASE_MAX_LIVE_BAR_AGE_HOURS: {intraday: 96, swing: 168}
 MAX_LIVE_BAR_AGE_MS: dict[str, int] = {
     "intraday": 96 * 3_600_000,  # 4 days
     "swing": 7 * 86_400_000,  # 7 days
 }
+
+
+def _max_live_bar_age_ms(horizon: Horizon) -> int:
+    base = MAX_LIVE_BAR_AGE_MS.get(horizon, MAX_LIVE_BAR_AGE_MS["intraday"])
+    try:
+        from config import CONFIG  # noqa: WPS433
+
+        overrides = CONFIG.get("ASE_MAX_LIVE_BAR_AGE_HOURS") or {}
+        if isinstance(overrides, dict) and horizon in overrides:
+            hrs = float(overrides[horizon])
+            if hrs > 0:
+                return int(hrs * 3_600_000)
+    except BaseException:
+        pass
+    return base
 
 
 def price_series_id(source: str, symbol: str, tf: str, field: str) -> str:
@@ -70,7 +86,7 @@ def live_bars_stale(
     """True when the newest available bar is older than the live-age bound."""
     if len(series.value_time) == 0:
         return True
-    max_age = MAX_LIVE_BAR_AGE_MS.get(horizon, MAX_LIVE_BAR_AGE_MS["intraday"])
+    max_age = _max_live_bar_age_ms(horizon)
     last_t = int(series.value_time[-1])
     return (decision_time_ms - last_t) > max_age
 
@@ -142,13 +158,24 @@ def load_bar_series(
     low_id = price_series_id(source, symbol, tf, "low")
     try:
         close_rows = store.load_window(close_id, start_ms, end_ms)
-        open_rows = store.load_window(open_id, start_ms, end_ms)
-        high_rows = store.load_window(high_id, start_ms, end_ms)
-        low_rows = store.load_window(low_id, start_ms, end_ms)
     except KeyError:
         return None
     if len(close_rows) == 0:
         return None
+    # Open/high/low are optional for backwards-compatible fixtures (tests seed
+    # only close/high/low). Missing series yields empty map, not a hard fail.
+    try:
+        open_rows = store.load_window(open_id, start_ms, end_ms)
+    except KeyError:
+        open_rows = np.empty(0, dtype=close_rows.dtype)
+    try:
+        high_rows = store.load_window(high_id, start_ms, end_ms)
+    except KeyError:
+        high_rows = np.empty(0, dtype=close_rows.dtype)
+    try:
+        low_rows = store.load_window(low_id, start_ms, end_ms)
+    except KeyError:
+        low_rows = np.empty(0, dtype=close_rows.dtype)
 
     vt = close_rows["value_time"]
     close = close_rows["value"].astype(float)

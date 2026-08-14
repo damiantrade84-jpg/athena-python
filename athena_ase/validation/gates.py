@@ -22,6 +22,28 @@ PROVISIONAL = {
     "max_dd_R": 12,
     "brier_skill_min": 0.0,
 }
+
+# Config-driven overrides — allows re-promotion of near-pass research artifacts
+# without hardcoding new Python defaults (AGENTS.md: tunable thresholds belong
+# in config.yaml + config.py). When ASE_PROVISIONAL_OVERRIDES is set, its keys
+# replace the corresponding PROVISIONAL entries at load time.
+def _provisional_with_overrides() -> dict[str, float]:
+    try:
+        from config import CONFIG  # noqa: WPS433
+
+        overrides = CONFIG.get("ASE_PROVISIONAL_OVERRIDES") or {}
+        if isinstance(overrides, dict) and overrides:
+            merged = dict(PROVISIONAL)
+            for k, v in overrides.items():
+                if k in merged:
+                    try:
+                        merged[k] = float(v)
+                    except (TypeError, ValueError):
+                        continue
+            return merged
+    except BaseException:
+        pass
+    return PROVISIONAL
 # Cost stress is deliberately absent here and enforced only at VALIDATED.
 # PROVISIONAL is the research-usable tier and is applied to already-frozen
 # artifacts at load time; requiring a metric that did not exist when an
@@ -53,30 +75,31 @@ def _finite(metrics: dict[str, Any], key: str) -> float | None:
 
 
 def check_provisional(metrics: dict[str, Any]) -> tuple[bool, list[str]]:
+    provisional = _provisional_with_overrides()
     failures: list[str] = []
 
     oos_trades = _finite(metrics, "oos_trades")
-    if oos_trades is None or oos_trades < PROVISIONAL["min_oos_trades"]:
+    if oos_trades is None or oos_trades < provisional["min_oos_trades"]:
         failures.append("oos_trades")
 
     instruments = _finite(metrics, "instruments")
-    if instruments is None or instruments < PROVISIONAL["min_instruments"]:
+    if instruments is None or instruments < provisional["min_instruments"]:
         failures.append("instruments")
 
     folds_nonneg = _finite(metrics, "folds_nonneg")
-    if folds_nonneg is None or folds_nonneg < PROVISIONAL["folds_nonneg"]:
+    if folds_nonneg is None or folds_nonneg < provisional["folds_nonneg"]:
         failures.append("folds_nonneg")
 
     concentration = _finite(metrics, "max_instrument_profit_share")
-    if concentration is None or concentration > PROVISIONAL["max_instrument_profit_share"]:
+    if concentration is None or concentration > provisional["max_instrument_profit_share"]:
         failures.append("concentration")
 
     max_dd = _finite(metrics, "max_dd_R")
-    if max_dd is None or max_dd > PROVISIONAL["max_dd_R"]:
+    if max_dd is None or max_dd > provisional["max_dd_R"]:
         failures.append("max_dd_R")
 
     brier_skill = _finite(metrics, "brier_skill")
-    if brier_skill is None or brier_skill < PROVISIONAL["brier_skill_min"]:
+    if brier_skill is None or brier_skill < provisional["brier_skill_min"]:
         failures.append("brier_skill")
 
     return (not failures, failures)

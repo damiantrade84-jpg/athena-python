@@ -391,16 +391,28 @@ def run_ase_scan(
 
     seen = {c.instrument for c in candidates}
     now_ms = int(time.time() * 1000)
+    # Intraday Layer-1 is limited to ASE_INTRADAY_FAMILIES (default forex/crypto/commodity).
+    # Equity/index_etf have no intraday training data (phase1_events empty) and their
+    # artefacts never clear PROVISIONAL; emitting 40+ FLAT no_layer1/model_not_trained
+    # rows is noise. Suppress no-candidate flats for intraday-ineligible families.
+    from athena_ase.settings import intraday_families
+
+    _intraday_allowed = intraday_families()
     for inst in instruments:
-        if inst.symbol not in seen:
-            signals.append(
-                predict_no_candidate(
-                    inst,
-                    horizon,
-                    store=store,
-                    decision_time_ms=now_ms,
-                )
+        if inst.symbol in seen:
+            continue
+        if horizon == "intraday" and inst.family not in _intraday_allowed:
+            continue
+        if inst.swing_only and horizon == "intraday":
+            continue
+        signals.append(
+            predict_no_candidate(
+                inst,
+                horizon,
+                store=store,
+                decision_time_ms=now_ms,
             )
+        )
 
     # WO Phases 1-2: diagnostic-only FX context + triangular labels on forex
     # signals. Shadow guarantee: attach happens after predict_batch and never

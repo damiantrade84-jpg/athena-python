@@ -11,7 +11,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from athena_ase.data.ptis import PTISStore, asof
+from athena_ase.data.ptis import PTISStore, PTIS_VALUE_DTYPE, asof
 from athena_ase.horizon import HORIZONS, Horizon, is_intraday
 from athena_ase.settings import features_v2_enabled, microstructure_enabled
 
@@ -191,9 +191,10 @@ def _ewma_vol(logret: np.ndarray, span: int) -> np.ndarray:
 def _read_asof(
     store: PTISStore | Any | None, series_id: str, decision_time_ms: int, n: int
 ) -> np.ndarray:
-    return store.asof(series_id, decision_time_ms, n) if store is not None else asof(
-        series_id, decision_time_ms, n
-    )
+    try:
+        return store.asof(series_id, decision_time_ms, n) if store is not None else asof(series_id, decision_time_ms, n)
+    except KeyError:
+        return np.empty(0, dtype=PTIS_VALUE_DTYPE)
 
 
 def _asof_values(
