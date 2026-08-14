@@ -167,7 +167,9 @@ def api_ase_scan():
     symbols = d.get("symbols") or d.get("pairs")
     sym_list = [str(s) for s in symbols] if isinstance(symbols, list) else None
     write_journal = bool(d.get("writeJournal", True))
-    execute_trades = bool(d.get("executeTrades", False))
+    # Scan is read-only: never execute from a scan request. Trades require the
+    # explicit per-symbol /api/ase-execute endpoint (matches other engines).
+    execute_trades = False
     ingest_sources, _ = _extract_ingest_sources(d)
     scan_kwargs = {
         "family": family,
