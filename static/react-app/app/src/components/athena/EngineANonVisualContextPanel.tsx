@@ -57,6 +57,7 @@ export default function EngineANonVisualContextPanel({
       </Section>
 
       <Section title="Intermarket">
+        <KV label="Source" value={showReviewValue(intermarket?.source)} />
         <KV label="Verdict" value={showReviewValue(intermarket?.verdict)} />
         <KV label="Score" value={fmtReviewNum(intermarket?.score, 3)} />
         <KV label="Engine A delta" value={fmtReviewNum(intermarket?.engineADelta, 3)} />
@@ -67,6 +68,7 @@ export default function EngineANonVisualContextPanel({
       </Section>
 
       <Section title="News">
+        <KV label="Source" value={showReviewValue(news?.source)} />
         <KV label="Vote" value={fmtReviewNum(news?.vote, 3)} />
         <KV label="Delta" value={fmtReviewNum(news?.delta, 3)} />
         <KV label="Fresh articles" value={fmtReviewNum(news?.freshArticleCount, 0)} />

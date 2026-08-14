@@ -1862,6 +1862,7 @@ def build_scan_snapshot(
     config: dict | None = None,
     preloaded_h4_candles: dict[str, list] | None = None,
     force: bool = False,
+    write_cache: bool = True,
 ) -> dict | None:
     cfg = intermarket_config(config)
     universe = discover_active_universe(
@@ -1908,11 +1909,62 @@ def build_scan_snapshot(
         "seriesStore": series_store,
         **matrix,
     }
-    with _SCAN_CACHE_LOCK:
-        _SCAN_CACHE["key"] = key
-        _SCAN_CACHE["built_at"] = now
-        _SCAN_CACHE["snapshot"] = snapshot
+    if write_cache:
+        with _SCAN_CACHE_LOCK:
+            _SCAN_CACHE["key"] = key
+            _SCAN_CACHE["built_at"] = now
+            _SCAN_CACHE["snapshot"] = snapshot
     return snapshot
+
+
+def get_cached_scan_snapshot(*, max_age_sec: float = 60.0) -> dict | None:
+    """Return the last full-scan intermarket snapshot if it is still fresh."""
+    now = time.time()
+    with _SCAN_CACHE_LOCK:
+        snapshot = _SCAN_CACHE.get("snapshot")
+        built_at = float(_SCAN_CACHE.get("built_at") or 0.0)
+        if snapshot and (now - built_at) <= float(max_age_sec):
+            return snapshot
+    return None
+
+
+def resolve_pair_snapshot(
+    pair: dict,
+    *,
+    all_pairs: list[dict] | None = None,
+    disabled_pairs: set | list | tuple | None = None,
+    etf_pairs: list[dict] | None = None,
+    fetch_candles=None,
+    config: dict | None = None,
+    prefer_cache: bool = True,
+) -> dict | None:
+    """Reuse a fresh full-scan snapshot, otherwise fetch this pair plus its priors.
+
+    Single-pair callers (pair-scan, chart review) must not rebuild the whole
+    universe: that sequential H4 fetch is what made XAU/USD intermarket appear
+    to "not load" while the request sat on every other symbol.
+    """
+    target = _canonical_label(pair)
+    if prefer_cache:
+        cached = get_cached_scan_snapshot()
+        if cached:
+            universe = (cached.get("universe") or {}).get("byCanonical") or {}
+            series = cached.get("seriesStore") or {}
+            if target and (target in universe or target in series):
+                return cached
+
+    if fetch_candles is None:
+        return None
+    _ = all_pairs
+    return build_scan_snapshot(
+        [pair],
+        disabled_pairs=disabled_pairs,
+        etf_pairs=etf_pairs or [],
+        fetch_candles=fetch_candles,
+        config=config,
+        force=True,
+        write_cache=False,
+    )
 
 
 def build_point_in_time_context(

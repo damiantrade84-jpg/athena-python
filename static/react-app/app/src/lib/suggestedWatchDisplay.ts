@@ -1,5 +1,32 @@
 import type { SuggestedTradeWatch } from '@/types/athena';
 
+export function suggestedWatchStatus(watch: SuggestedTradeWatch): string {
+  return String(watch.status || '').toUpperCase();
+}
+
+export function isSuggestedWatchReady(watch: SuggestedTradeWatch | string): boolean {
+  const status = typeof watch === 'string' ? watch.toUpperCase() : suggestedWatchStatus(watch);
+  return status === 'READY_FOR_REVIEW' || status === 'LEVEL_REACHED';
+}
+
+export function suggestedWatchId(watch: SuggestedTradeWatch): string {
+  return String(watch.watch_id || '').trim();
+}
+
+export function suggestedWatchLabel(watch: SuggestedTradeWatch): string {
+  return String(watch.display || watch.symbol || 'setup').trim() || 'setup';
+}
+
+export function isScalpSuggestedWatch(watch: SuggestedTradeWatch): boolean {
+  return String(watch.source || '').toLowerCase().includes('scalp');
+}
+
+export function readySuggestedWatches(watches: SuggestedTradeWatch[] | undefined): SuggestedTradeWatch[] {
+  return (Array.isArray(watches) ? watches : []).filter((watch) => (
+    isSuggestedWatchReady(watch) && suggestedWatchId(watch)
+  ));
+}
+
 export function compactWatchStatusLabel(watches: SuggestedTradeWatch[]): string | null {
   if (watches.length === 0) return null;
 

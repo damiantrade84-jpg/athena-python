@@ -13,6 +13,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -327,6 +328,43 @@ def _article_dedupe_key(article: dict[str, Any]) -> tuple[str, str, str]:
     return url, title, date
 
 
+def _fetch_source_rows(
+    source: dict[str, Any],
+    api_key: str,
+    *,
+    from_date: str,
+    to_date: str,
+    per_source: int,
+    timeout: float,
+) -> tuple[dict[str, Any], list[dict[str, Any]] | None, str | None]:
+    kind = str(source.get("kind") or "ticker").lower()
+    value = str(source.get("value") or "").strip()
+    if not value:
+        return source, [], None
+    params = {
+        "limit": per_source,
+        "from": from_date,
+        "to": to_date,
+        "api_token": api_key,
+        "fmt": "json",
+    }
+    if kind == "tag":
+        params["t"] = value
+    elif kind == "query":
+        params["q"] = value
+    else:
+        params["s"] = value
+    try:
+        r = http_requests.get("https://eodhd.com/api/news", params=params, timeout=timeout)
+        r.raise_for_status()
+        data = r.json()
+        rows = data if isinstance(data, list) else []
+        return source, [row for row in rows if isinstance(row, dict)], None
+    except Exception as exc:
+        log.error("[NewsAI] News source fetch failed [%s:%s]: %s", kind, value, exc)
+        return source, None, str(exc)
+
+
 def fetch_news_sources(
     sources: list[dict[str, Any]],
     api_key: str,
@@ -351,37 +389,16 @@ def fetch_news_sources(
     source_meta: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     stale_count = 0
-    for source in sources:
+
+    def _consume(source: dict[str, Any], rows: list[dict[str, Any]] | None, error: str | None) -> None:
+        nonlocal stale_count
+        if error is not None or rows is None:
+            source_meta.append({**source, "status": "error", "articleCount": 0})
+            return
         kind = str(source.get("kind") or "ticker").lower()
         value = str(source.get("value") or "").strip()
-        if not value:
-            continue
-        params = {
-            "limit": per_source,
-            "from": from_date,
-            "to": to_date,
-            "api_token": api_key,
-            "fmt": "json",
-        }
-        if kind == "tag":
-            params["t"] = value
-        elif kind == "query":
-            params["q"] = value
-        else:
-            params["s"] = value
-        try:
-            r = http_requests.get("https://eodhd.com/api/news", params=params, timeout=timeout)
-            r.raise_for_status()
-            data = r.json()
-        except Exception as exc:
-            log.error("[NewsAI] News source fetch failed [%s:%s]: %s", kind, value, exc)
-            source_meta.append({**source, "status": "error", "articleCount": 0})
-            continue
-        rows = data if isinstance(data, list) else []
         kept_for_source = 0
         for article in rows:
-            if not isinstance(article, dict):
-                continue
             dt = _parse_article_dt(article)
             stale = bool(dt and (now - dt).total_seconds() > max_age_hours * 3600.0)
             if stale:
@@ -404,8 +421,57 @@ def fetch_news_sources(
             if len(articles) >= max_total:
                 break
         source_meta.append({**source, "status": "ok", "articleCount": kept_for_source})
+
+    usable = [src for src in sources if str(src.get("value") or "").strip()]
+    direct = [src for src in usable if str(src.get("role") or "").lower() == "direct"]
+    rest = [src for src in usable if src not in direct]
+    if not direct and usable and str(usable[0].get("kind") or "ticker").lower() in {
+        "ticker",
+        "symbol",
+        "s",
+    }:
+        direct = [usable[0]]
+        rest = usable[1:]
+
+    fetch_kwargs = {
+        "from_date": from_date,
+        "to_date": to_date,
+        "per_source": per_source,
+        "timeout": timeout,
+    }
+    for source in direct:
+        _src, rows, error = _fetch_source_rows(source, api_key, **fetch_kwargs)
+        _consume(_src, rows, error)
         if len(articles) >= max_total:
             break
+
+    batch_size = 4
+    if rest and len(articles) < max_total:
+        for offset in range(0, len(rest), batch_size):
+            if len(articles) >= max_total:
+                break
+            batch = rest[offset:offset + batch_size]
+            fetched: dict[int, tuple[list[dict[str, Any]] | None, str | None]] = {}
+            workers = min(batch_size, len(batch))
+            with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+                futures = {
+                    pool.submit(_fetch_source_rows, source, api_key, **fetch_kwargs): idx
+                    for idx, source in enumerate(batch)
+                }
+                for fut in as_completed(futures):
+                    idx = futures[fut]
+                    try:
+                        _src, rows, error = fut.result()
+                    except Exception as exc:  # noqa: BLE001 - keep one bad tag from aborting XAU
+                        fetched[idx] = (None, str(exc))
+                        continue
+                    fetched[idx] = (rows, error)
+            for idx, source in enumerate(batch):
+                rows, error = fetched.get(idx, (None, "missing_result"))
+                _consume(source, rows, error)
+                if len(articles) >= max_total:
+                    break
+
     articles.sort(
         key=lambda art: _parse_article_dt(art) or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,

@@ -510,6 +510,18 @@ def test_scanner_run_full_scan_wires_news_sentiment_blend():
     assert "eodhd_ticker_for_pair=r.eodhd_ticker_for_pair" in source
 
 
+def test_pair_scan_and_chart_review_wire_news_and_targeted_intermarket():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "athena.py").read_text(encoding="utf-8")
+    assert "def _chart_review_analyze_pair(" in source
+    assert "def _apply_enabled_news_sentiment(" in source
+    assert "_apply_enabled_news_sentiment(signal, pair_obj)" in source
+    assert "resolve_pair_snapshot(" in source
+    assert "analyze_pair_fn=_chart_review_analyze_pair" in source
+    assert "intermarket_snapshot=snapshot" in source
+
+
 def test_get_news_sentiment_create_ai_client_uses_grok_provider(monkeypatch):
     monkeypatch.setenv("AI_REVIEW_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")

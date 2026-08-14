@@ -214,3 +214,109 @@ def test_candidate_origin_is_server_owned_and_displacement_uses_fresh_price():
     assert ctx["geometry"]["candidate_entry"] == 64000.0
     assert ctx["review_delta"]["entry_displacement"] == 1000.0
     assert ctx["review_delta"]["score_delta"] == pytest.approx(0.3)
+
+
+def test_assemble_seeds_xau_non_visual_from_origin_without_mixing_score():
+    live = _signal_with_cache_hit()
+    origin = {
+        **_signal_with_cache_hit(),
+        "signalId": "xau-scan-1",
+        "confluenceScore": 2.1,
+        "intermarketConfirmation": {
+            "verdict": "supportive",
+            "engineADelta": 0.08,
+            "explanation": "DXY inverse supports gold long",
+            "unavailablePriors": [],
+        },
+        "newsSentimentVote": 0.4,
+        "newsSentimentDelta": 0.07,
+        "newsSentimentSummary": {
+            "direction": "bullish",
+            "sentiment_score": 0.6,
+            "article_count_used": 4,
+            "reasoning_summary": "real-yields easing",
+        },
+    }
+    ctx = eac.assemble_engine_a_context(
+        "XAU/USD",
+        "H4",
+        resolve_pair_fn=lambda _s: {
+            "symbol": "GC=F",
+            "display": "XAU/USD",
+            "type": "commodity",
+            "source": "mt5",
+        },
+        analyze_pair_fn=lambda *_args, **_kwargs: live,
+        btc_bias_fn=lambda: "neutral",
+        origin_signal=origin,
+    )
+    assert ctx is not None
+    non_visual = ctx["non_visual_context"]
+    assert non_visual["intermarketContext"]["verdict"] == "supportive"
+    assert non_visual["intermarketContext"]["source"] == "candidate_origin"
+    assert non_visual["newsContext"]["vote"] == pytest.approx(0.4)
+    assert non_visual["newsContext"]["source"] == "candidate_origin"
+    assert ctx["intermarket"]["source"] == "candidate_origin"
+    assert ctx["news_sentiment"]["source"] == "candidate_origin"
+    assert ctx["score_attribution"]["newsSentimentDelta"] is None
+    assert ctx["score_attribution"]["finalEngineAScore"] == pytest.approx(2.4)
+
+
+def test_assemble_skips_engine_b_refetch_when_overlays_omit_it():
+    calls = {"n": 0}
+
+    def _naked(*_args, **_kwargs):
+        calls["n"] += 1
+        raise AssertionError("Engine B refetch must not run on Engine A-only review")
+
+    ctx = eac.assemble_engine_a_context(
+        "XAU/USD",
+        "H4",
+        screenshot_meta={"overlays": ["candles", "ema50"]},
+        resolve_pair_fn=lambda _s: {
+            "symbol": "GC=F",
+            "display": "XAU/USD",
+            "type": "commodity",
+        },
+        analyze_pair_fn=lambda *_args, **_kwargs: _signal_with_cache_hit(),
+        btc_bias_fn=lambda: "neutral",
+        naked_analysis_fn=_naked,
+    )
+    assert ctx is not None
+    assert calls["n"] == 0
+    assert ctx["structure_context"]["structure_refetch"]["attempted"] is False
+
+
+def test_assemble_refetches_engine_b_when_overlay_has_no_structure():
+    calls = {"n": 0}
+
+    def _naked(sig, overlay_only=False):
+        calls["n"] += 1
+        assert overlay_only is True
+        return (
+            {
+                "structural_verdict": "CLEAR",
+                "bos_confirmed": True,
+                "nearest_resistance_zone": {"lower": 2400.0, "upper": 2410.0},
+            },
+            {"symbol": "GC=F", "display": "XAU/USD", "type": "commodity"},
+            None,
+        )
+
+    ctx = eac.assemble_engine_a_context(
+        "XAU/USD",
+        "H4",
+        screenshot_meta={"overlays": ["candles", "engine_b"]},
+        resolve_pair_fn=lambda _s: {
+            "symbol": "GC=F",
+            "display": "XAU/USD",
+            "type": "commodity",
+        },
+        analyze_pair_fn=lambda *_args, **_kwargs: _signal_with_cache_hit(),
+        btc_bias_fn=lambda: "neutral",
+        origin_signal={"direction": "LONG"},
+        naked_analysis_fn=_naked,
+    )
+    assert ctx is not None
+    assert calls["n"] == 1
+    assert ctx["structure_context"]["structure_refetch"]["ok"] is True

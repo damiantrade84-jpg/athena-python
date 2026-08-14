@@ -388,11 +388,40 @@ def _microstructure_context(
     }
 
 
-def _intermarket_context(
+def _payload_has_news(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("newsSentimentVote") is not None:
+        return True
+    if payload.get("newsSentimentDelta") is not None:
+        return True
+    summary = payload.get("newsSentimentSummary")
+    return isinstance(summary, dict) and bool(summary)
+
+
+def _overlays_include_engine_b(screenshot_meta: dict[str, Any] | None) -> bool:
+    meta = screenshot_meta if isinstance(screenshot_meta, dict) else {}
+    overlays = meta.get("overlays") or []
+    if isinstance(overlays, list) and any(
+        str(item).strip().lower() == "engine_b" for item in overlays
+    ):
+        return True
+    rendered = meta.get("renderedLayers")
+    if isinstance(rendered, dict) and bool(rendered.get("engine_b")):
+        return True
+    if isinstance(rendered, list) and any(
+        str(item).strip().lower() == "engine_b" for item in rendered
+    ):
+        return True
+    return False
+
+
+def _intermarket_raw(
     signal: dict[str, Any],
     factor_diag: dict[str, Any],
     engine_a_ctx: dict[str, Any],
-) -> dict[str, Any]:
+    origin: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str]:
     raw = (
         signal.get("intermarketConfirmation")
         or factor_diag.get("intermarket")
@@ -400,8 +429,32 @@ def _intermarket_context(
         or engine_a_ctx.get("intermarketConfirmation")
         or {}
     )
+    source = "live_reanalysis"
+    if not isinstance(raw, dict) or not raw:
+        origin = origin if isinstance(origin, dict) else {}
+        origin_fd = origin.get("factorDiagnostics") or origin.get("factor_diagnostics") or {}
+        if not isinstance(origin_fd, dict):
+            origin_fd = {}
+        raw = (
+            origin.get("intermarketConfirmation")
+            or origin_fd.get("intermarket")
+            or origin_fd.get("intermarketConfirmation")
+            or {}
+        )
+        source = "candidate_origin" if isinstance(raw, dict) and raw else "unavailable"
     if not isinstance(raw, dict):
         raw = {}
+        source = "unavailable"
+    return raw, source
+
+
+def _intermarket_context(
+    signal: dict[str, Any],
+    factor_diag: dict[str, Any],
+    engine_a_ctx: dict[str, Any],
+    origin: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    raw, source = _intermarket_raw(signal, factor_diag, engine_a_ctx, origin)
     flags = raw.get("contradictionFlags") if isinstance(raw.get("contradictionFlags"), dict) else {}
     severe = raw.get("severeContradiction")
     if severe is None:
@@ -426,6 +479,7 @@ def _intermarket_context(
         "unavailablePriors": list(raw.get("unavailablePriors") or []),
         "severeContradiction": bool(severe),
         "explanation": raw.get("explanation"),
+        "source": source,
     }
 
 
@@ -433,22 +487,37 @@ def _news_context(
     signal: dict[str, Any],
     factor_diag: dict[str, Any],
     engine_a_ctx: dict[str, Any],
+    origin: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    summary = signal.get("newsSentimentSummary") or engine_a_ctx.get("newsSentimentSummary") or {}
+    news_src = signal if _payload_has_news(signal) else (
+        origin if _payload_has_news(origin) else signal
+    )
+    source = (
+        "live_reanalysis"
+        if _payload_has_news(signal)
+        else "candidate_origin"
+        if _payload_has_news(origin)
+        else "unavailable"
+    )
+    summary = (
+        news_src.get("newsSentimentSummary")
+        or engine_a_ctx.get("newsSentimentSummary")
+        or {}
+    )
     if not isinstance(summary, dict):
         summary = {}
-    risk = signal.get("majorEventRisk") or summary.get("majorEventRisk") or {}
+    risk = news_src.get("majorEventRisk") or summary.get("majorEventRisk") or {}
     if not isinstance(risk, dict):
         risk = {}
     return {
-        "vote": _to_float(signal.get("newsSentimentVote") or engine_a_ctx.get("newsSentimentVote")),
+        "vote": _to_float(news_src.get("newsSentimentVote") or engine_a_ctx.get("newsSentimentVote")),
         "sentimentScore": _to_float(
             _first_present(summary.get("sentiment_score"), summary.get("sentimentScore"))
         ),
         "confidence": _to_float(summary.get("confidence")),
         "direction": summary.get("direction"),
-        "delta": _to_float(signal.get("newsSentimentDelta") or engine_a_ctx.get("newsSentimentDelta")),
-        "rawDelta": _to_float(signal.get("newsSentimentRawDelta") or engine_a_ctx.get("newsSentimentRawDelta")),
+        "delta": _to_float(news_src.get("newsSentimentDelta") or engine_a_ctx.get("newsSentimentDelta")),
+        "rawDelta": _to_float(news_src.get("newsSentimentRawDelta") or engine_a_ctx.get("newsSentimentRawDelta")),
         "articleCountUsed": summary.get("article_count_used") or summary.get("articleCountUsed"),
         "freshArticleCount": summary.get("fresh_article_count") or summary.get("freshArticleCount"),
         "majorEventDetected": bool(
@@ -465,6 +534,7 @@ def _news_context(
         ),
         "keyThemes": list(summary.get("key_themes") or summary.get("keyThemes") or [])[:6],
         "reasoningSummary": summary.get("reasoning_summary") or summary.get("reasoningSummary"),
+        "source": source,
     }
 
 
@@ -472,6 +542,7 @@ def _macro_context(
     signal: dict[str, Any],
     factor_diag: dict[str, Any],
     engine_a_ctx: dict[str, Any],
+    origin: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     macro = factor_diag.get("macroContext") or factor_diag.get("macro_context") or {}
     if not isinstance(macro, dict):
@@ -479,7 +550,7 @@ def _macro_context(
     usd = signal.get("usdRelativeStrength") or engine_a_ctx.get("usdRelativeStrength")
     if not isinstance(usd, dict):
         usd = {}
-    intermarket = _intermarket_context(signal, factor_diag, engine_a_ctx)
+    intermarket = _intermarket_context(signal, factor_diag, engine_a_ctx, origin=origin)
     unavailable = intermarket.get("unavailablePriors") or []
     real_yield_unavailable = any(
         (
@@ -578,14 +649,17 @@ def _non_visual_context(
     signal: dict[str, Any],
     factor_diag: dict[str, Any],
     engine_a_ctx: dict[str, Any],
+    origin: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "addonContext": _addon_context(signal, factor_diag, engine_a_ctx),
         "derivativesContext": _derivatives_context(signal, factor_diag, engine_a_ctx),
         "microstructureContext": _microstructure_context(signal, factor_diag, engine_a_ctx),
-        "intermarketContext": _intermarket_context(signal, factor_diag, engine_a_ctx),
-        "newsContext": _news_context(signal, factor_diag, engine_a_ctx),
-        "macroContext": _macro_context(signal, factor_diag, engine_a_ctx),
+        "intermarketContext": _intermarket_context(
+            signal, factor_diag, engine_a_ctx, origin=origin
+        ),
+        "newsContext": _news_context(signal, factor_diag, engine_a_ctx, origin=origin),
+        "macroContext": _macro_context(signal, factor_diag, engine_a_ctx, origin=origin),
     }
 
 
@@ -794,30 +868,54 @@ def _rsi_from_signal(signal: dict[str, Any]) -> tuple[float | None, str | None]:
     return None, None
 
 
-def _intermarket_block(signal: dict[str, Any], factor_diag: dict[str, Any]) -> dict[str, Any]:
+def _intermarket_block(
+    signal: dict[str, Any],
+    factor_diag: dict[str, Any],
+    origin: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ic = signal.get("intermarketConfirmation")
+    source = "live_reanalysis"
+    if not (isinstance(ic, dict) and ic):
+        fd_im = factor_diag.get("intermarket")
+        if isinstance(fd_im, dict) and fd_im:
+            ic = fd_im
+        else:
+            origin = origin if isinstance(origin, dict) else {}
+            origin_fd = origin.get("factorDiagnostics") or {}
+            if not isinstance(origin_fd, dict):
+                origin_fd = {}
+            ic = origin.get("intermarketConfirmation") or origin_fd.get("intermarket") or {}
+            source = "candidate_origin" if isinstance(ic, dict) and ic else "unavailable"
     if isinstance(ic, dict) and ic:
         return {
             "verdict": ic.get("verdict"),
             "delta": _to_float(ic.get("engineADelta")),
             "correlations": ic.get("correlations"),
             "divergence": ic.get("divergence"),
-        }
-    fd_im = factor_diag.get("intermarket")
-    if isinstance(fd_im, dict) and fd_im:
-        return {
-            "verdict": fd_im.get("verdict"),
-            "delta": _to_float(fd_im.get("engineADelta")),
-            "correlations": fd_im.get("correlations"),
-            "divergence": fd_im.get("divergence"),
+            "unavailablePriors": list(ic.get("unavailablePriors") or []),
+            "explanation": ic.get("explanation"),
+            "source": source,
         }
     return {}
 
 
-def _news_sentiment_block(signal: dict[str, Any]) -> dict[str, Any]:
-    vote = signal.get("newsSentimentVote")
-    delta = _to_float(signal.get("newsSentimentDelta"))
-    summary = signal.get("newsSentimentSummary")
+def _news_sentiment_block(
+    signal: dict[str, Any],
+    origin: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    news_src = signal if _payload_has_news(signal) else (
+        origin if _payload_has_news(origin) else signal
+    )
+    source = (
+        "live_reanalysis"
+        if _payload_has_news(signal)
+        else "candidate_origin"
+        if _payload_has_news(origin)
+        else "unavailable"
+    )
+    vote = news_src.get("newsSentimentVote")
+    delta = _to_float(news_src.get("newsSentimentDelta"))
+    summary = news_src.get("newsSentimentSummary")
     if vote is None and delta is None and summary is None:
         return {}
     block: dict[str, Any] = {}
@@ -835,6 +933,7 @@ def _news_sentiment_block(signal: dict[str, Any]) -> dict[str, Any]:
             val = summary.get(key)
             if val is not None:
                 block[key] = val
+    block["source"] = source
     return block
 
 
@@ -1425,9 +1524,12 @@ def assemble_engine_a_context(
     # analysis so server structure_context matches the overlay renderer.
     structure_seed = _pick_engine_b_structure_payload(signal, origin)
     structure_refetch: dict[str, Any] = {"attempted": False, "ok": None}
-    overlays = list((screenshot_meta or {}).get("overlays") or [])
-    need_structure = not _engine_b_structure_evidence(structure_seed) and (
-        "engine_b" in overlays or True  # always try once for review completeness
+    # Only refetch Engine B when the chart actually drew B overlays and the
+    # seed has no structure. The previous `or True` forced a second MT5
+    # D1/H4/H1 analysis on every Engine A review.
+    need_structure = (
+        not _engine_b_structure_evidence(structure_seed)
+        and _overlays_include_engine_b(screenshot_meta)
     )
     if need_structure and callable(naked_analysis_fn):
         try:
@@ -1707,12 +1809,14 @@ def assemble_engine_a_context(
             if value is not None
         ],
         "indicator_snapshots": {"rsi": rsi_value, "rsi_tf": rsi_tf},
-        "intermarket": _intermarket_block(signal, factor_diag),
-        "news_sentiment": _news_sentiment_block(signal),
+        "intermarket": _intermarket_block(signal, factor_diag, origin=origin),
+        "news_sentiment": _news_sentiment_block(signal, origin=origin),
     }
     ctx["ohlcv_bars"] = select_ohlcv_bars_for_chart(signal, timeframe, screenshot_meta)
     ctx["engine_snapshots"] = extract_engine_snapshots(signal, ctx)
-    ctx["non_visual_context"] = _non_visual_context(signal, factor_diag, ctx)
+    ctx["non_visual_context"] = _non_visual_context(
+        signal, factor_diag, ctx, origin=origin
+    )
     ctx["engine_a_non_visual_context"] = ctx["non_visual_context"]
     ctx["score_attribution"] = _score_attribution(signal, factor_diag, ctx)
     ctx["review_style_diagnostic"] = _review_style_diagnostic(style, screenshot_meta, timeframe)

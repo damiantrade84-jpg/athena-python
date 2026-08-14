@@ -9,6 +9,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from intermarket import (
+    _SCAN_CACHE,
+    _SCAN_CACHE_LOCK,
     _composite_proxy_series,
     _daily_macro_aligned_return_frame,
     _macro_daily_min_overlap,
@@ -21,6 +23,7 @@ from intermarket import (
     compute_relationship_matrix,
     discover_active_universe,
     prepare_series_store,
+    resolve_pair_snapshot,
     resolve_us10y_real_yield_proxy,
     score_confirmation,
 )
@@ -701,3 +704,73 @@ def test_v3_signal_intermarket_attachment_pattern():
     assert signal["intermarketConfirmation"]["verdict"] == "supportive"
     assert signal["intermarketEngineADelta"] > 0
     assert signal["confluenceScore"] > 2.0
+
+
+def test_resolve_pair_snapshot_reuses_fresh_cache_for_xau():
+    import time
+
+    cached = {
+        "universe": {"byCanonical": {"XAU/USD": {"display": "XAU/USD"}}},
+        "seriesStore": {"XAU/USD": {"label": "XAU/USD"}},
+    }
+    with _SCAN_CACHE_LOCK:
+        _SCAN_CACHE["snapshot"] = cached
+        _SCAN_CACHE["built_at"] = time.time()
+        _SCAN_CACHE["key"] = "test-cache"
+
+    fetched = []
+
+    def _fetch(pair, _tf, _limit):
+        fetched.append(pair.get("display"))
+        return []
+
+    try:
+        out = resolve_pair_snapshot(
+            {"display": "XAU/USD", "symbol": "GC=F", "type": "commodity"},
+            fetch_candles=_fetch,
+        )
+        assert out is cached
+        assert fetched == []
+    finally:
+        with _SCAN_CACHE_LOCK:
+            _SCAN_CACHE["snapshot"] = None
+            _SCAN_CACHE["built_at"] = 0.0
+            _SCAN_CACHE["key"] = None
+
+
+def test_resolve_pair_snapshot_fetches_only_the_requested_pair_on_cache_miss():
+    with _SCAN_CACHE_LOCK:
+        _SCAN_CACHE["snapshot"] = None
+        _SCAN_CACHE["built_at"] = 0.0
+        _SCAN_CACHE["key"] = None
+
+    fetched = []
+
+    def _fetch(pair, _tf, _limit):
+        fetched.append(str(pair.get("display") or pair.get("symbol") or ""))
+        return _bars_from_returns([0.01] * 160)
+
+    snapshot = resolve_pair_snapshot(
+        {
+            "display": "XAU/USD",
+            "symbol": "GC=F",
+            "type": "commodity",
+            "enabled": True,
+        },
+        fetch_candles=_fetch,
+        config={
+            "INTERMARKET_CONFIRMATION": {
+                "enabled": True,
+                "min_overlap_bars": 20,
+                "macro_priors": [
+                    {"pair": "XAU/USD", "driver": "DXY", "relation": "inverse"},
+                ],
+            }
+        },
+    )
+    assert snapshot is not None
+    assert "XAU/USD" in (snapshot.get("seriesStore") or {})
+    assert fetched.count("XAU/USD") == 1
+    assert "EUR/USD" not in fetched
+    with _SCAN_CACHE_LOCK:
+        assert _SCAN_CACHE["snapshot"] is None

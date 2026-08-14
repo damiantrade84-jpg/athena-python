@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useStore } from '@/hooks/useStore';
 import { apiClient } from '@/lib/apiClient';
+import { fmtPrice } from '@/lib/athenaFormat';
 import { cn } from '@/lib/utils';
 import { runnerBadgeClass, runnerBadgeLabel } from '@/lib/suggestedTradeRunnerDisplay';
 import type {
@@ -86,6 +87,28 @@ function watchReachedAt(watch: SuggestedTradeWatch): string | null | undefined {
 
 function watchLastCheckedAt(watch: SuggestedTradeWatch): string | null | undefined {
   return watch.last_evaluated_at ?? watch.lastCheckedAt;
+}
+
+function watchAssetType(watch: SuggestedTradeWatch): string | undefined {
+  if (!watch.signal || typeof watch.signal !== 'object') return undefined;
+  const type = (watch.signal as { type?: unknown }).type;
+  return typeof type === 'string' ? type : undefined;
+}
+
+function watchReasonText(watch: SuggestedTradeWatch): string | undefined {
+  const action = String(watch.action || '').toUpperCase();
+  const plan = watch.suggested_trade_plan || watch.suggestedTradePlan;
+  const planReason = typeof plan?.reason === 'string' ? plan.reason.trim() : '';
+  const summary = watch.ai_review_summary
+    ?? (watch as { aiReviewSummary?: Record<string, unknown> }).aiReviewSummary;
+  const summaryReason = typeof summary?.finalReason === 'string'
+    ? summary.finalReason.trim()
+    : '';
+
+  // WATCH_ONLY plans can carry a schema-validation reason after sanitization;
+  // retain the AI review's actionable wait explanation when it is available.
+  if (action === 'WATCH_ONLY') return summaryReason || planReason || undefined;
+  return planReason || summaryReason || undefined;
 }
 
 export function watchProgressText(watch: SuggestedTradeWatch): string {
@@ -407,6 +430,7 @@ export default function SuggestedTradesPanel() {
           const ready = isReadyStatus(status);
           const terminal = isTerminalStatus(status);
           const playbookWarnings = watchPlaybookWarnings(watch);
+          const reason = watchReasonText(watch);
           return (
             <div
               key={watch.watch_id || `${watch.symbol}-${watch.created_at}`}
@@ -429,6 +453,25 @@ export default function SuggestedTradesPanel() {
                     <Badge variant="outline" className="text-[10px]">{sourceLabel(watch.source)}</Badge>
                   </div>
                   <div className="mt-1 text-[11px] text-muted-foreground">{watchProgressText(watch)}</div>
+                  {reason && (
+                    <div className="mt-1 text-[11px] text-muted-foreground" data-watch-reason>
+                      <span className="font-medium text-foreground/80">Reason:</span> {reason}
+                    </div>
+                  )}
+                  <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1" data-current-live-price>
+                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Current live price</span>
+                    <span className="font-mono text-sm font-semibold text-foreground">
+                      {watch.current_price != null
+                        ? fmtPrice(watch.current_price, watch.display || watch.symbol, watchAssetType(watch))
+                        : 'Unavailable'}
+                    </span>
+                    {(watch.current_price_source || watch.current_price_at) && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {watch.current_price_source || 'live feed'}
+                        {watch.current_price_at ? ` · ${formatTs(watch.current_price_at)}` : ''}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="text-[10px] text-muted-foreground text-right">
                   <div>{watch.direction} · {watch.action}</div>

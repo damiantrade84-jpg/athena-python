@@ -14,7 +14,7 @@ interface SuggestedTradeStatusResponse {
   alert_only?: boolean;
 }
 
-const POLL_MS = 30_000;
+const POLL_MS = 5_000;
 
 export function useSuggestedTradeRunnerStatus(enabled = true) {
   const { data, loading, error, refresh } = useApiPoll<SuggestedTradeStatusResponse>(

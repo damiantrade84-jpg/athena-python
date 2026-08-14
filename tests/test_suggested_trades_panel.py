@@ -5,6 +5,10 @@ ROOT = Path(__file__).resolve().parents[1]
 PANEL = ROOT / "static/react-app/app/src/components/panels/SuggestedTradesPanel.tsx"
 HOME = ROOT / "static/react-app/app/src/pages/Home.tsx"
 SIDEBAR = ROOT / "static/react-app/app/src/components/layout/Sidebar.tsx"
+HEADER = ROOT / "static/react-app/app/src/components/layout/Header.tsx"
+LAYOUT = ROOT / "static/react-app/app/src/components/layout/MainLayout.tsx"
+WATCHER = ROOT / "static/react-app/app/src/components/athena/SuggestedTradeAlertWatcher.tsx"
+WATCH_DISPLAY = ROOT / "static/react-app/app/src/lib/suggestedWatchDisplay.ts"
 TYPES = ROOT / "static/react-app/app/src/types/index.ts"
 
 
@@ -33,6 +37,24 @@ def test_suggested_trades_panel_runner_status_labels():
     assert "Runner:" in source
     assert "Alert-only" in source
     assert "Runner inactive" in source
+
+
+def test_suggested_trades_panel_shows_refreshed_live_price():
+    source = _read(PANEL)
+    assert "Current live price" in source
+    assert "watch.current_price" in source
+    assert "current_price_source" in source
+    assert "current_price_at" in source
+    assert "data-current-live-price" in source
+
+
+def test_suggested_trades_panel_keeps_wait_reason_with_live_price():
+    source = _read(PANEL)
+    assert "watchReasonText" in source
+    assert "summary?.finalReason" in source
+    assert "plan?.reason" in source
+    assert "Reason:" in source
+    assert "data-watch-reason" in source
 
 
 def test_suggested_trades_panel_open_actions():
@@ -116,3 +138,45 @@ def test_sidebar_shows_suggested_ready_count():
     source = _read(SIDEBAR)
     assert "readyCount" in source
     assert "ready for review" in source
+
+
+def test_sidebar_keeps_suggested_trades_in_primary_nav():
+    source = _read(SIDEBAR)
+    primary = source.split("title: 'Research'", 1)[0]
+    assert "{ id: 'suggestedTrades', label: 'Suggested Trades'" in primary
+    buried = source.split("title: 'Research'", 1)[1]
+    assert "{ id: 'suggestedTrades', label: 'Suggested Trades'" not in buried
+
+
+def test_main_layout_mounts_suggested_trade_alert_watcher():
+    source = _read(LAYOUT)
+    assert "SuggestedTradeAlertWatcher" in source
+    assert WATCHER.exists()
+
+
+def test_suggested_trade_alert_watcher_polls_and_surfaces_ready():
+    source = _read(WATCHER)
+    assert "/api/suggested-trades" in source
+    assert "/api/suggested-trades/evaluate-now" in source
+    assert 'data-suggested-trade-alert="ready"' in source
+    assert 'data-suggested-trade-alert="dialog"' in source
+    assert "Suggested trade level reached" in source
+    assert "Review now" in source
+    assert "setActivePanel('tvChart')" in source
+    assert "setActivePanel('suggestedTrades')" in source
+    assert "document.title" in source
+
+
+def test_header_shows_ready_suggested_trade_pill():
+    source = _read(HEADER)
+    assert "data-suggested-trade-header-ready" in source
+    assert "readyCount" in source
+    assert "setActivePanel('suggestedTrades')" in source
+
+
+def test_suggested_watch_ready_helpers_exist():
+    source = _read(WATCH_DISPLAY)
+    assert "export function isSuggestedWatchReady" in source
+    assert "export function readySuggestedWatches" in source
+    assert "READY_FOR_REVIEW" in source
+    assert "LEVEL_REACHED" in source

@@ -1801,6 +1801,7 @@ export interface IntermarketContext {
   unavailablePriors?: unknown[];
   severeContradiction?: boolean | null;
   explanation?: string | null;
+  source?: string | null;
 }
 
 export interface NewsContext {
@@ -1816,6 +1817,7 @@ export interface NewsContext {
   majorEventDescription?: string | null;
   keyThemes?: string[];
   reasoningSummary?: string | null;
+  source?: string | null;
 }
 
 export interface EngineANonVisualContext {

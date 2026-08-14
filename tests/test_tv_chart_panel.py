@@ -331,7 +331,7 @@ def test_tv_chart_panel_auto_review_waits_for_engine_b_overlay_state():
 def test_tv_chart_panel_auto_review_waits_for_indicator_readiness_and_settle_window():
     source = _read(TV_PANEL)
 
-    assert "AUTO_REVIEW_CHART_SETTLE_MS = 10_000" in source
+    assert "AUTO_REVIEW_CHART_SETTLE_MS = 1_200" in source
     assert "chartIndicatorsReadyForReview" in source
     assert "autoReviewEarliestRunAtRef" in source
     assert "remainingSettleMs" in source

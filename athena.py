@@ -7490,6 +7490,73 @@ def api_analyze():
         return jsonify({"error": "Analysis failed"}), 500
 
 
+def _intermarket_snapshot_for_pair(pair: dict, *, force_include: bool = False):
+    """Reuse a fresh scan snapshot, else fetch this pair plus its macro priors."""
+    ic = CONFIG.get("INTERMARKET_CONFIRMATION") or {}
+    if not force_include and not bool(ic.get("enabled", False)):
+        return None
+    try:
+        from intermarket import resolve_pair_snapshot
+
+        return resolve_pair_snapshot(
+            pair,
+            all_pairs=ALL_PAIRS,
+            disabled_pairs=_disabled_pairs,
+            etf_pairs=ETF_PAIRS,
+            fetch_candles=fetch_candles,
+            config=CONFIG,
+        )
+    except Exception as exc:
+        log.warning(
+            "[INTERMARKET] snapshot unavailable for %s: %s",
+            (pair or {}).get("display") or (pair or {}).get("symbol") or "?",
+            exc,
+        )
+        return None
+
+
+def _apply_enabled_news_sentiment(signal: dict | None, pair: dict) -> dict | None:
+    """Blend News AI into a single-pair result when the feature toggle is on."""
+    if not signal or not isinstance(signal, dict):
+        return signal
+    try:
+        from news_sentiment_feed import apply_news_sentiment_to_scan_result
+
+        apply_news_sentiment_to_scan_result(
+            signal,
+            pair,
+            config=CONFIG,
+            eodhd_ticker_for_pair=_eodhd_ticker_for_pair,
+            threshold=signal.get("threshold"),
+            max_score=signal.get("maxScore", 3.0),
+        )
+    except Exception as exc:
+        log.debug(
+            "[NEWS] %s sentiment blend skipped: %s",
+            (pair or {}).get("display") or "?",
+            exc,
+        )
+    return signal
+
+
+def _chart_review_analyze_pair(pair, btc_bias, style="swing"):
+    """Engine A reanalysis for TV chart review: include enabled overlays."""
+    snapshot = _intermarket_snapshot_for_pair(pair)
+    signal = analyze_pair(
+        pair,
+        btc_bias,
+        style=style,
+        refresh_market_data=True,
+        attach_chart_candles=True,
+        intermarket_snapshot=snapshot,
+        preloaded_fetch_meta={
+            tf: _get_candle_fetch_meta(pair, tf, scan_candle_limits()[tf])
+            for tf in ("D1", "H4", "H1")
+        },
+    )
+    return _apply_enabled_news_sentiment(signal, pair)
+
+
 @app.route("/api/pair-scan", methods=["POST"])
 def api_pair_scan():
     """Run Engine A for a single pair so the UI can inspect pairs without a prior full scan."""
@@ -7516,22 +7583,11 @@ def api_pair_scan():
         ic = CONFIG.get("INTERMARKET_CONFIRMATION") or {}
         include_intermarket = bool(ic.get("enabled", False))
 
-    intermarket_snapshot = None
-    if include_intermarket:
-        try:
-            from intermarket import build_scan_snapshot
-
-            intermarket_snapshot = build_scan_snapshot(
-                ALL_PAIRS,
-                disabled_pairs=_disabled_pairs,
-                etf_pairs=ETF_PAIRS,
-                fetch_candles=fetch_candles,
-                config=CONFIG,
-            )
-        except Exception as e:
-            log.warning(
-                f"[PAIR-SCAN] Intermarket snapshot unavailable for {pair_obj.get('display')}: {e}"
-            )
+    intermarket_snapshot = (
+        _intermarket_snapshot_for_pair(pair_obj, force_include=True)
+        if include_intermarket
+        else None
+    )
 
     try:
         btc_bias = (
@@ -7569,6 +7625,7 @@ def api_pair_scan():
             preloaded_candles=_preloaded_candles,
             preloaded_fetch_meta=_preloaded_meta,
         )
+        signal = _apply_enabled_news_sentiment(signal, pair_obj)
         if not signal:
             return (
                 jsonify({"error": "Engine A analysis unavailable for this pair"}),
@@ -18782,19 +18839,7 @@ register_ai_chart_review_routes(
         json_safe=_json_safe,
         log=log,
         resolve_pair_fn=lambda symbol: _resolve_pair_from_signal({"symbol": symbol}),
-        analyze_pair_fn=lambda pair, btc_bias, style="swing": analyze_pair(
-            pair,
-            btc_bias,
-            style=style,
-            refresh_market_data=True,
-            attach_chart_candles=True,
-            # Capture cache metadata before analyze_pair's own fetch overwrites it
-            # so AI-review payloads surface cacheHit. Diagnostics only, advisory path.
-            preloaded_fetch_meta={
-                tf: _get_candle_fetch_meta(pair, tf, scan_candle_limits()[tf])
-                for tf in ("D1", "H4", "H1")
-            },
-        ),
+        analyze_pair_fn=_chart_review_analyze_pair,
         btc_bias_fn=_current_btc_bias,
         naked_analysis_fn=_compute_naked_analysis,
         last_engine_a_rows_fn=lambda: list(_last_scan_results.get("signals") or []),

@@ -1,7 +1,8 @@
 import { useStore } from '@/hooks/useStore';
 import { useEffect, useState } from 'react';
-import { Activity, Wifi } from 'lucide-react';
+import { Activity, Bell, Wifi } from 'lucide-react';
 import { currentSegment, nextSegment, QUALITY_META, fmtCountdown } from '@/lib/primeWindows';
+import { useSuggestedTradeRunnerStatus } from '@/hooks/useSuggestedTradeRunnerStatus';
 import MacroBadge from '@/components/shared/MacroBadge';
 
 /** Status pill: a dot carries the state inside a soft glass chip. */
@@ -28,7 +29,8 @@ function StatusPill({
 }
 
 export default function Header() {
-  const { guardian } = useStore();
+  const { guardian, setActivePanel } = useStore();
+  const { readyCount } = useSuggestedTradeRunnerStatus();
   const [time, setTime] = useState(new Date());
 
   useEffect(() => {
@@ -73,6 +75,21 @@ export default function Header() {
       {/* ── Status rail ── */}
       <div className="flex items-center gap-2.5">
         <MacroBadge />
+
+        {readyCount > 0 && (
+          <button
+            type="button"
+            data-suggested-trade-header-ready=""
+            className="status-pill border-long/50 bg-long/15 text-long"
+            title={`${readyCount} suggested trade${readyCount === 1 ? '' : 's'} ready for review`}
+            onClick={() => setActivePanel('suggestedTrades')}
+          >
+            <Bell className="h-3 w-3 animate-pulse" />
+            <span className="font-semibold tracking-tight">
+              {readyCount} ready
+            </span>
+          </button>
+        )}
 
         <StatusPill
           dotColor={primeMeta.color}
