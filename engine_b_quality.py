@@ -27,10 +27,9 @@ _DEFAULT_COMPONENT_MAX: dict[str, float] = {
 }
 
 _DEFAULT_COMPONENT_WEIGHTS: dict[str, float] = {
-    # Earnable-first table. A clean BOS + zone-retest + session + pullback
-    # must be able to clear ~50% after class pruning. Rare confluence
-    # (OB/FVG/BAG/profile) is upside toward 70-90, not a requirement for
-    # "half of max". Sums to 1.0 with the inert oscillator at 0.0.
+    # Core path weights. Path-exclusive terms (followthrough vs sweep) and
+    # class-inapplicable terms are dropped from the denominator so a complete
+    # example of the setup that passed can reach 100%. OB/FVG are bonus-only.
     "structure_alignment": 0.30,
     "liquidity_proximity": 0.16,
     "pullback_quality": 0.10,
@@ -45,6 +44,19 @@ _DEFAULT_COMPONENT_WEIGHTS: dict[str, float] = {
     "bag_continuation": 0.01,
     "momentum_oscillator_confluence": 0.0,
 }
+
+_DEFAULT_STRUCTURE_ALIGNMENT: dict[str, float] = {
+    "bos": 0.90,
+    "choch": 0.85,
+    "sweep": 0.80,
+    "guarded_sequence": 0.70,
+    "bos_mtf_bonus": 0.10,
+}
+
+_DEFAULT_BONUS_COMPONENTS: tuple[str, ...] = (
+    "ob_confluence",
+    "fvg_confluence",
+)
 
 
 def _clamp01(value: float) -> float:
@@ -129,6 +141,32 @@ def _component_weight_map(cfg: dict[str, Any]) -> dict[str, float]:
     return out
 
 
+def _structure_alignment_rungs(cfg: dict[str, Any] | None = None) -> dict[str, float]:
+    scoring_cfg = cfg if isinstance(cfg, dict) else weighted_scoring_config()
+    raw = scoring_cfg.get("STRUCTURE_ALIGNMENT") or {}
+    out = dict(_DEFAULT_STRUCTURE_ALIGNMENT)
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(parsed):
+                continue
+            out[str(key)] = max(0.0, parsed)
+    return out
+
+
+def _bonus_component_set(cfg: dict[str, Any] | None = None) -> set[str]:
+    scoring_cfg = cfg if isinstance(cfg, dict) else weighted_scoring_config()
+    raw = scoring_cfg.get("BONUS_COMPONENTS")
+    if raw is None:
+        return set(_DEFAULT_BONUS_COMPONENTS)
+    if not isinstance(raw, (list, tuple, set)):
+        return set()
+    return {str(name) for name in raw if str(name).strip()}
+
+
 def macro_sequence_is_independent(res: dict[str, Any]) -> bool:
     """Whether the macro sequence is a genuinely separate timeframe read.
 
@@ -179,6 +217,7 @@ def compute_structure_alignment_score(res: dict[str, Any], direction: str) -> fl
         _seq_dir = bool(CONFIG.get("ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", False))
     except Exception:
         _seq_dir = False
+    rungs = _structure_alignment_rungs()
     if _seq_dir:
         # Legacy ladder: lagging HH_HL/LH_LL outranks break evidence.
         if micro_aligned and macro_aligned:
@@ -192,19 +231,22 @@ def compute_structure_alignment_score(res: dict[str, Any], direction: str) -> fl
         else:
             score = 0.0
     else:
-        # Break/character evidence is direction authority. The lagging swing
-        # sequence never regains direction authority or a veto here.
+        # Break/character evidence is direction authority. A path that can
+        # satisfy the structure gate scores in the high band so the quality
+        # bar is finishable. Previous rungs (bos 0.85 / choch 0.70 / sweep
+        # 0.45 / guarded_sequence 0.55) left sweep-at-zone cards at half
+        # credit on the largest weight. Reversible via STRUCTURE_ALIGNMENT.
         if bos:
-            score = 0.85
+            score = rungs.get("bos", 0.90)
         elif choch:
-            score = 0.70
+            score = rungs.get("choch", 0.85)
         elif aligned_sweep or guarded_sweep:
-            score = 0.45
+            score = rungs.get("sweep", 0.80)
         elif guarded_sequence:
             # A fresh structure-rung sequence, confirmed on every independent
             # macro rung, is weaker than CHoCH/BOS but no longer scores as zero
             # after it legitimately satisfies the guarded structure gate.
-            score = 0.55
+            score = rungs.get("guarded_sequence", 0.70)
         else:
             score = 0.0
 
@@ -222,7 +264,7 @@ def compute_structure_alignment_score(res: dict[str, Any], direction: str) -> fl
         _ = freshness
 
     if bos_mtf and score > 0:
-        score = min(1.0, score + 0.15)
+        score = min(1.0, score + rungs.get("bos_mtf_bonus", 0.10))
     return round(_clamp01(score), 4)
 
 
@@ -553,10 +595,50 @@ def _quality_applicability_pruning_enabled() -> bool:
     )
 
 
+def _path_inapplicable_pruning_enabled() -> bool:
+    cfg = weighted_scoring_config()
+    if not bool(cfg.get("PRUNE_INAPPLICABLE_COMPONENTS", True)):
+        return False
+    return bool(cfg.get("PRUNE_PATH_INAPPLICABLE_COMPONENTS", True))
+
+
+def _sweep_path_active(res: dict[str, Any]) -> bool:
+    return bool(res.get("liquidity_sweep_structure_ok") or res.get("liquidity_sweep"))
+
+
+def _bag_path_active(res: dict[str, Any]) -> bool:
+    context = res.get("fvg_context")
+    if not isinstance(context, dict):
+        return False
+    state = str(context.get("bag_state") or "none").lower()
+    if state in {"confirmed", "candidate"}:
+        return True
+    bag = context.get("bag")
+    return isinstance(bag, dict) and bool(bag)
+
+
+def _zone_path_active(res: dict[str, Any]) -> bool:
+    if bool(res.get("zone_touched") or res.get("near_active_zone") or res.get("ob_at_zone")):
+        return True
+    try:
+        dist = abs(float(res.get("active_zone_distance")))
+    except (TypeError, ValueError):
+        return False
+    try:
+        atr = float(res.get("atr") or 0.0)
+    except (TypeError, ValueError):
+        atr = 0.0
+    if not math.isfinite(dist):
+        return False
+    if atr > 0 and math.isfinite(atr):
+        return dist <= atr
+    return dist == 0.0
+
+
 def _inapplicable_quality_components(
     res: dict[str, Any], asset_lower: str
 ) -> tuple[str, ...]:
-    """Quality components that cannot be earned for this asset class at all."""
+    """Quality components that cannot be earned for this asset class / path."""
     if not _quality_applicability_pruning_enabled():
         # Legacy behaviour kept only forex volume_confirmation pruned.
         return ("volume_confirmation",) if asset_lower == "forex" else ()
@@ -608,6 +690,21 @@ def _inapplicable_quality_components(
     ):
         out.append("session_context")
 
+    # Path-exclusive terms cannot be earned on the setup that actually
+    # passed. A sweep has no BOS followthrough; a BOS without a sweep has
+    # no sweep quality; bag continuation requires a BAG state; zone
+    # proximity is not the location thesis when no zone is in play.
+    # Reversible: PRUNE_PATH_INAPPLICABLE_COMPONENTS: false.
+    if _path_inapplicable_pruning_enabled():
+        if not bool(res.get("bos_confirmed")):
+            out.append("bos_followthrough")
+        if not _sweep_path_active(res):
+            out.append("sweep_quality")
+        if not _bag_path_active(res):
+            out.append("bag_continuation")
+        if not _zone_path_active(res):
+            out.append("liquidity_proximity")
+
     return tuple(dict.fromkeys(out))
 
 
@@ -652,6 +749,7 @@ def aggregate_quality_score(
     max_map = _component_max_map(scoring_cfg)
     weight_map = _component_weight_map(scoring_cfg)
     apply_max = bool(scoring_cfg.get("APPLY_COMPONENT_MAX", False))
+    bonus_set = _bonus_component_set(scoring_cfg)
 
     component_points: dict[str, float] = {}
     quality_points = 0.0
@@ -665,7 +763,10 @@ def aggregate_quality_score(
         points = round(subscore * scale, 4)
         component_points[name] = points
         quality_points += points
-        quality_max += scale
+        # Bonus confluence adds earned points without enlarging the
+        # denominator, so a complete core path can still print 100%.
+        if name not in bonus_set:
+            quality_max += scale
 
     return round(quality_points, 4), round(quality_max, 4), component_points
 

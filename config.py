@@ -2990,6 +2990,16 @@ CONFIG: dict = {
     },
     "ENGINE_B_WEIGHTED_SCORING": {
         "ENABLED": True,
+        "PRUNE_INAPPLICABLE_COMPONENTS": True,
+        "PRUNE_PATH_INAPPLICABLE_COMPONENTS": True,
+        "BONUS_COMPONENTS": ["ob_confluence", "fvg_confluence"],
+        "STRUCTURE_ALIGNMENT": {
+            "bos": 0.90,
+            "choch": 0.85,
+            "sweep": 0.80,
+            "guarded_sequence": 0.70,
+            "bos_mtf_bonus": 0.10,
+        },
         "COMPONENT_MAX": {
             "structure_alignment": 1.0,
             "ob_confluence": 1.0,

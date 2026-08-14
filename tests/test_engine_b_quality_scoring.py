@@ -71,7 +71,7 @@ def test_structure_alignment_break_evidence_beats_swing_sequence():
         "LONG",
     )
     assert bare_bos > swing_only
-    assert bare_bos == pytest.approx(0.85)
+    assert bare_bos == pytest.approx(0.90)
     assert swing_only == pytest.approx(0.0)
 
 
@@ -105,9 +105,28 @@ def test_guarded_sequence_and_sweep_receive_bounded_structure_quality(monkeypatc
         "LONG",
     )
 
-    assert guarded_sequence == pytest.approx(0.55)
-    assert guarded_sweep == pytest.approx(0.45)
+    assert guarded_sequence == pytest.approx(0.70)
+    assert guarded_sweep == pytest.approx(0.80)
     assert directionless_sweep == pytest.approx(0.0)
+
+
+def test_structure_alignment_previous_rungs_restorable(monkeypatch):
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED", False)
+    previous = {
+        **config.CONFIG.get("ENGINE_B_WEIGHTED_SCORING", {}),
+        "STRUCTURE_ALIGNMENT": {
+            "bos": 0.85,
+            "choch": 0.70,
+            "sweep": 0.45,
+            "guarded_sequence": 0.55,
+            "bos_mtf_bonus": 0.15,
+        },
+    }
+    monkeypatch.setitem(config.CONFIG, "ENGINE_B_WEIGHTED_SCORING", previous)
+    assert compute_structure_alignment_score({"bos_confirmed": True}, "LONG") == pytest.approx(0.85)
+    assert compute_structure_alignment_score(
+        {"liquidity_sweep_structure_ok": True}, "LONG"
+    ) == pytest.approx(0.45)
 
 
 def test_structure_alignment_legacy_sequence_ladder_restorable(monkeypatch):
@@ -445,6 +464,188 @@ def test_inapplicable_components_are_pruned_not_scored_zero():
     assert "session_context" in with_session
 
 
+def test_path_inapplicable_components_leave_the_denominator():
+    """A sweep cannot be taxed for missing BOS followthrough, and vice versa."""
+    sweep_res = {
+        "atr": 1.0,
+        "asset_type": "forex",
+        "liquidity_sweep": True,
+        "sweep_direction": "SHORT",
+        "liquidity_sweep_structure_ok": True,
+        "bos_confirmed": False,
+        "zone_touched": True,
+        "active_zone_distance": 0.0,
+        "ob_at_zone": False,
+        "fvg_overlap": False,
+        "forex_session_structure": {"score_influence_enabled": True, "score_bonus": 0.0},
+    }
+    sweep = compute_confluence_subscores(sweep_res, "SHORT", 1.0, asset_type="forex")
+    assert "bos_followthrough" not in sweep
+    assert "sweep_quality" in sweep
+    assert "bag_continuation" not in sweep
+    assert "liquidity_proximity" in sweep
+
+    bos_off_zone = compute_confluence_subscores(
+        {
+            "atr": 1.0,
+            "asset_type": "forex",
+            "bos_confirmed": True,
+            "liquidity_sweep": False,
+            "zone_touched": False,
+            "near_active_zone": False,
+            "ob_at_zone": False,
+            "active_zone_distance": 3.0,
+            "forex_session_structure": {"score_influence_enabled": True, "score_bonus": 0.0},
+        },
+        "LONG",
+        1.0,
+        asset_type="forex",
+    )
+    assert "bos_followthrough" in bos_off_zone
+    assert "sweep_quality" not in bos_off_zone
+    assert "liquidity_proximity" not in bos_off_zone
+
+
+def test_bonus_components_do_not_enlarge_the_denominator():
+    from engine_b_quality import aggregate_quality_score
+
+    cfg = {
+        "COMPONENT_WEIGHTS": {
+            "structure_alignment": 0.30,
+            "ob_confluence": 0.07,
+            "fvg_confluence": 0.05,
+        },
+        "COMPONENT_MAX": {
+            "structure_alignment": 1.0,
+            "ob_confluence": 1.0,
+            "fvg_confluence": 1.0,
+        },
+        "APPLY_COMPONENT_MAX": False,
+        "BONUS_COMPONENTS": ["ob_confluence", "fvg_confluence"],
+    }
+    points, denom, parts = aggregate_quality_score(
+        {"structure_alignment": 1.0, "ob_confluence": 1.0, "fvg_confluence": 0.0},
+        cfg,
+    )
+    assert denom == pytest.approx(0.30)
+    assert parts["ob_confluence"] == pytest.approx(0.07)
+    assert points == pytest.approx(0.37)
+
+
+def test_complete_sweep_at_zone_can_reach_high_quality(monkeypatch):
+    """A finished sweep-at-zone path must be able to print in the 70-100 band."""
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_WEIGHTED_SCORING",
+        {**config.CONFIG.get("ENGINE_B_WEIGHTED_SCORING", {}), "ENABLED": True},
+    )
+    res = {
+        "atr": 1.0,
+        "asset_type": "forex",
+        "bos_confirmed": False,
+        "choch_confirmed": False,
+        "liquidity_sweep": True,
+        "sweep_direction": "SHORT",
+        "liquidity_sweep_structure_ok": True,
+        "zone_touched": True,
+        "near_active_zone": True,
+        "ob_at_zone": False,
+        "fvg_overlap": False,
+        "order_blocks": [],
+        "active_zone_distance": 0.0,
+        "current_swing_sequence": "HH_HL",
+        "macro_swing_sequence": "HH_HL",
+        "current_swing_sequence_age": 11,
+        "structure_tf": "H4",
+        "macro_sequence_tf": "H4",
+        "trigger_ok": True,
+        "structural_verdict": "CLEAR",
+        "recommended_stop_loss": 1.02,
+        "recommended_take_profit": 0.97,
+        "distance_to_res": 0.01,
+        "distance_to_sup": 0.03,
+        "forex_session_structure": {
+            "score_influence_enabled": True,
+            "score_bonus": 0.06,
+            "max_abs_score_bonus": 0.06,
+        },
+        "phase2_quality": {
+            "pullback_quality": {"score": 0.90},
+            "sweep_quality": {"score": 0.85},
+            "volume_confirmation": {"score": 0.0},
+        },
+    }
+    out = NakedEngine().calculate_confidence(
+        res,
+        current_price=1.00,
+        direction="SHORT",
+        style_profile={
+            "style": "intraday",
+            "min_score": 0.0,
+            "min_room_atr": 0.35,
+            "min_rr": 1.3,
+            "require_macro_align": False,
+        },
+    )
+    assert out["weighted_scoring_enabled"] is True
+    assert out["quality_pct"] >= 75.0
+    assert out["quality_pct"] <= 100.0
+    assert "bos_followthrough" not in out["quality_components"]
+
+
+def test_stacked_bos_zone_confluence_can_reach_full_quality(monkeypatch):
+    """BOS + zone + followthrough + full core must be able to reach 85%+."""
+    monkeypatch.setitem(
+        config.CONFIG,
+        "ENGINE_B_WEIGHTED_SCORING",
+        {**config.CONFIG.get("ENGINE_B_WEIGHTED_SCORING", {}), "ENABLED": True},
+    )
+    res = _base_res_long()
+    res.update(
+        {
+            "bos_mtf_confirmed": True,
+            "zone_touched": True,
+            "near_active_zone": True,
+            "active_zone_distance": 0.0,
+            "current_swing_sequence_age": 1,
+            "structure_tf": "H4",
+            "macro_sequence_tf": "D1",
+            "forex_session_structure": {
+                "score_influence_enabled": True,
+                "score_bonus": 0.06,
+                "max_abs_score_bonus": 0.06,
+            },
+            "phase2_quality": {
+                "pullback_quality": {"score": 1.0},
+                "sweep_quality": {"score": 0.0},
+                "volume_confirmation": {"score": 0.0},
+            },
+        }
+    )
+    from engine_b_quality import (
+        aggregate_quality_score,
+        apply_regime_component_weights,
+        compute_confluence_subscores,
+        weighted_scoring_config_for_group,
+    )
+
+    pruned: list[str] = []
+    subs = compute_confluence_subscores(
+        res,
+        "LONG",
+        1.0,
+        bos_followthrough_norm=1.0,
+        asset_type="forex",
+        pruned_out=pruned,
+    )
+    weighted = apply_regime_component_weights(subs, None, "forex")
+    points, denom, _parts = aggregate_quality_score(
+        weighted, weighted_scoring_config_for_group("forex_majors")
+    )
+    assert denom > 0
+    assert (points / denom) * 100.0 >= 85.0
+
+
 def test_profile_and_volume_components_follow_source_applicability():
     res = {
         "atr": 1.0,
@@ -515,10 +716,10 @@ def test_conviction_norm_falls_back_to_total_for_legacy_payloads():
 
 
 def test_clean_bos_zone_setup_can_reach_half_quality(monkeypatch):
-    """A typical BOS + zone-retest must be able to print >= 50% quality.
+    """A typical BOS + zone-retest must print well above half of quality.
 
-    The previous weight table put ~60% of the denominator on rare OB/FVG/BAG/
-    follow-through/profile terms, so live scans never approached half of max.
+    Path-exclusive terms and bonus-only OB/FVG must not keep a complete
+    BOS-at-zone card permanently under 60%.
     """
     monkeypatch.setitem(
         config.CONFIG,
@@ -555,8 +756,10 @@ def test_clean_bos_zone_setup_can_reach_half_quality(monkeypatch):
     )
     assert out["weighted_scoring_enabled"] is True
     assert out["quality_pct"] is not None
-    assert out["quality_pct"] >= 50.0
-    assert out["quality_pct"] < 90.0
+    assert out["quality_pct"] >= 60.0
+    assert out["quality_pct"] < 100.0
+    assert "sweep_quality" not in out["quality_components"]
+    assert "bag_continuation" not in out["quality_components"]
 
 
 def test_d1_conflict_does_not_zero_quality_pct(monkeypatch):

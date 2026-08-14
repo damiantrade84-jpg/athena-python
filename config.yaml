@@ -3418,6 +3418,28 @@ ENGINE_B_WEIGHTED_SCORING:
   # instead of scoring them 0 with their weight still in the denominator.
   # Components that are merely zero this bar are NOT pruned. Reversible: false.
   PRUNE_INAPPLICABLE_COMPONENTS: true
+  # Also drop components that cannot exist on the setup that passed (BOS
+  # followthrough without a BOS, sweep quality without a sweep, BAG without a
+  # bag state, zone proximity when no zone is in play). Four days of live
+  # naked scans (n=327) never stacked high structure with high location; the
+  # exclusive terms made 100% unreachable. Reversible: false.
+  PRUNE_PATH_INAPPLICABLE_COMPONENTS: true
+  # Rare extras add points without enlarging the denominator. A complete core
+  # path can reach 100%; OB/FVG fill a weak core rather than tax every card.
+  # Empty list restores them to the denominator. Reversible.
+  BONUS_COMPONENTS:
+    - ob_confluence
+    - fvg_confluence
+  # Structure rungs for a path that can satisfy the structure gate. Previous
+  # values (bos 0.85 / choch 0.70 / sweep 0.45 / guarded_sequence 0.55 /
+  # bos_mtf_bonus 0.15) left sweep-at-zone — the common at-zone pass — at
+  # half credit on the largest weight.
+  STRUCTURE_ALIGNMENT:
+    bos: 0.90
+    choch: 0.85
+    sweep: 0.80
+    guarded_sequence: 0.70
+    bos_mtf_bonus: 0.10
   # Retained for APPLY_COMPONENT_MAX: true only; ignored otherwise.
   COMPONENT_MAX:
     structure_alignment: 1.0
@@ -3433,11 +3455,8 @@ ENGINE_B_WEIGHTED_SCORING:
     pullback_quality: 1.0
     sweep_quality: 1.0
   COMPONENT_WEIGHTS:
-    # Earnable-first table (2026-08-13). The previous 0.18/0.11/0.09/... mix
-    # put ~60% of the denominator on rare confluence (OB+FVG+BAG+FT+profile).
-    # A clean BOS + zone-retest could not reach half of max. Core structure,
-    # location, pullback, and session now carry the grade; rare confluence
-    # is upside toward 70-90. Table sums to 1.0.
+    # Core + exclusive + bonus table. Path prune and BONUS_COMPONENTS decide
+    # which terms sit in the denominator on a given row. Table sums to 1.0.
     structure_alignment: 0.30
     liquidity_proximity: 0.16
     pullback_quality: 0.10
