@@ -19,6 +19,13 @@ FRED_CURRENCY_SERIES: dict[str, str] = {
     "AUD": "IRSTCI01AUM156N",
     "CHF": "IRSTCI01CHM156N",
     "ZAR": "IRSTCI01ZAM156N",
+    # OECD MEI interbank rates (monthly lag rule applies via _OECD_MONTHLY_RE).
+    # Not yet present in carry_cache.db — legs stay silent until the cache
+    # gains them, then activate automatically on the next FRED ingest.
+    "NZD": "IRSTCI01NZM156N",
+    "CAD": "IRSTCI01CAM156N",
+    "MXN": "IRSTCI01MXM156N",
+    "SGD": "IRSTCI01SGM156N",
 }
 
 # Forex pair → (weight, currency) legs for rate differential.

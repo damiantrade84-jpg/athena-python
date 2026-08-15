@@ -11,6 +11,7 @@ from typing import Any
 from flask import jsonify, request
 
 from athena_ase.execution.journal import load_trade_journal, trade_journal_summary
+from athena_ase.data.ptis import default_ptis_root
 from athena_ase.horizon import Horizon
 from athena_ase.instruments import instrument_by_symbol
 from athena_ase.registry.artifacts import (
@@ -39,6 +40,24 @@ def _json_safe(obj: Any) -> Any:
     if isinstance(obj, (list, tuple)):
         return [_json_safe(v) for v in obj]
     return obj
+
+
+def _allowed_ptis_root(raw: Any) -> str | None:
+    """Validate a caller-supplied ptisRoot against known data locations.
+
+    PTISStore(root) mkdirs the path, so an unguarded request body would let a
+    POST create directories anywhere on this machine. Allowed: the default
+    Athena data dir (or ATHENA_PTIS_ROOT override) and the repo tree (tests,
+    fixtures). Anything else is rejected rather than created.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    candidate = Path(text).resolve()
+    allowed = [default_ptis_root().resolve().parent, Path.cwd().resolve()]
+    if not any(candidate.is_relative_to(base) for base in allowed):
+        raise ValueError("ptisRoot_outside_allowed_roots")
+    return str(candidate)
 
 
 def _training_report_summary() -> dict[str, Any]:
@@ -171,12 +190,16 @@ def api_ase_scan():
     # explicit per-symbol /api/ase-execute endpoint (matches other engines).
     execute_trades = False
     ingest_sources, _ = _extract_ingest_sources(d)
+    try:
+        ptis_root = _allowed_ptis_root(d.get("ptisRoot"))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     scan_kwargs = {
         "family": family,
         "symbols": sym_list,
         "write_journal": write_journal,
         "execute_trades": execute_trades,
-        "ptis_root": str(d.get("ptisRoot") or "") or None,
+        "ptis_root": ptis_root,
     }
     if ingest_sources is not None:
         scan_kwargs["ingest_sources"] = ingest_sources
@@ -479,7 +502,10 @@ def api_ase_health():
     horizon: Horizon = (
         "swing" if str(request.args.get("horizon", "intraday")).lower() == "swing" else "intraday"
     )
-    ptis_root = str(request.args.get("ptisRoot") or "").strip() or None
+    try:
+        ptis_root = _allowed_ptis_root(request.args.get("ptisRoot"))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     try:
         health = ase_health(ptis_root=ptis_root, horizon=horizon)
         health["deployment"] = "OPERATIONAL"

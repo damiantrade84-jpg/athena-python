@@ -11,18 +11,6 @@ Direction = Literal["LONG", "SHORT", "NONE"]
 Horizon = Literal["intraday", "swing"]
 
 
-def _direction_label(value: int | str | None) -> Direction:
-    if isinstance(value, str):
-        up = value.strip().upper()
-        if up in ("LONG", "SHORT", "NONE"):
-            return up  # type: ignore[return-value]
-    if value in (1, "1", "+1"):
-        return "LONG"
-    if value in (-1, "-1"):
-        return "SHORT"
-    return "NONE"
-
-
 @dataclass(frozen=True)
 class ASESignal:
     engineVersion: str
@@ -32,8 +20,12 @@ class ASESignal:
     decisionStatus: DecisionStatus
     direction: Direction
     expectedNetR: float
+    # Display-only convention: expectedNetR x 1e4 (i.e. basis points of the
+    # 1R risk unit, NOT of notional). Consumers: ai_review context + UI types.
     expectedNetBps: float
     probabilityPositive: float
+    # Display-only: |p_cal - 0.5|, i.e. distance from a coin flip, not from
+    # the family's decision threshold (thr_family).
     decisionMargin: float
     signalStrength: int
     returnQ: dict[str, float]

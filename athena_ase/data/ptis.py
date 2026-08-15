@@ -251,8 +251,11 @@ class PTISStore:
         df["series_id"] = series_id
 
         ingest_default = _utc_now_ms()
-        if "ingest_time" not in rows[0] or rows[0].get("ingest_time") is None:
-            df["ingest_time"] = ingest_default
+        # Fill every missing ingest_time, not just when row 0 lacks one — and
+        # never clobber valid per-row values with the default.
+        df["ingest_time"] = pd.to_numeric(df["ingest_time"], errors="coerce").fillna(
+            ingest_default
+        )
 
         written = 0
         df["year"] = df["value_time"].map(_year_from_ms)
@@ -303,7 +306,13 @@ class PTISStore:
         return out
 
     def load_window(self, series_id: str, start_ms: int, end_ms: int) -> np.ndarray:
-        """All rows with value_time in [start_ms, end_ms], latest revision per value_time."""
+        """All rows with value_time in [start_ms, end_ms], latest revision per value_time.
+
+        Revision resolution is window-global: the newest revision in the whole
+        window wins even if it only became available after some decision time
+        inside the window. Callers mask by ``available_time`` per decision, so
+        a too-new revision degrades to a gap (fail-closed), never to lookahead.
+        """
         if end_ms < start_ms:
             return np.empty(0, dtype=PTIS_VALUE_DTYPE)
         source = self._series_source(series_id)

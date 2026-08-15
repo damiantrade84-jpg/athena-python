@@ -226,10 +226,9 @@ def ingest_microstructure_snapshot(
         sid = bybit_series_id(symbol, field)
         row = row_from_rule(
             sid,
-            now_ms,
-            now_ms,
-            value,
-            rule_id=AvailabilityRuleId.BYBIT_DERIVATIVE,
+            AvailabilityRuleId.BYBIT_EVENT,
+            value_time_ms=now_ms,
+            value=value,
         )
         counts[sid] = append_ptis_rows(store, sid, "BYBIT", [row])
     return counts

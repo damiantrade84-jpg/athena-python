@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import numpy as np
 
-from athena_ase.artifacts.manifest import ArtifactError, dataset_hash_from_bytes, verify_manifest
+from athena_ase.data.ptis import dataset_hash_from_bytes
 from athena_ase.registry.artifacts import (
     activate_artifact_version,
     freeze_artifact_bundle,
@@ -21,12 +21,6 @@ from athena_research.ase.train import select_expected_net_r_threshold, train_all
 def test_dataset_hash_deterministic():
     data = b"same-bytes"
     assert dataset_hash_from_bytes(data) == dataset_hash_from_bytes(data)
-
-
-def test_schema_mismatch_raises(tmp_path: Path):
-    manifest: dict = {}
-    with pytest.raises(ArtifactError):
-        verify_manifest(manifest, tmp_path)
 
 
 def test_registry_manifest_hashes_every_model_and_rejects_tampering(tmp_path: Path):

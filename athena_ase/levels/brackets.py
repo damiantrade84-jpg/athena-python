@@ -63,7 +63,10 @@ def compute_brackets(
     sl_dist = max(mae90, 0.6) * r_unit
     sl_dist = min(max(sl_dist, 0.5 * r_unit), 1.5 * r_unit)
     tp1_dist = max(mfe50, 0.0) * r_unit
-    tp2_dist = max(mfe75, tp1_dist) * r_unit
+    # mfe75 is in R units, tp1_dist already in price units: convert BEFORE the
+    # max, or expensive instruments (r_unit > 1 price unit) get r_unit applied
+    # twice and TP2 lands orders of magnitude too far away.
+    tp2_dist = max(mfe75 * r_unit, tp1_dist)
 
     sl = entry_reference - d * sl_dist
     tp1 = entry_reference + d * tp1_dist

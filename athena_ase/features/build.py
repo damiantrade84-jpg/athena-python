@@ -363,6 +363,10 @@ class FeatureBuildContext:
     cot_verified: bool = True
     missing_feeds: list[str] = field(default_factory=list)
     enriched_missing_feeds: list[str] = field(default_factory=list)
+    # Feeds whose absence degrades a feature to NaN without gating the
+    # decision (e.g. benchmark beta for commodity, whose training rows were
+    # likewise NaN). Surfaced in dataQuality as optionalMissingFeeds.
+    optional_missing_feeds: list[str] = field(default_factory=list)
 
 
 def _mark_missing(target: list[str], name: str) -> None:
@@ -462,7 +466,11 @@ def build_features_for_candidate(
     if len(bench_log) >= 64:
         out["beta_bench"] = _rolling_beta(close_log, bench_log)
     else:
-        _mark_missing(ctx.missing_feeds, "benchmark")
+        # Optional, not core-gating: a missing benchmark series degrades
+        # beta_bench to NaN (matching training rows built while the same
+        # series was absent, e.g. XAUUSD for the whole commodity family).
+        out["beta_bench"] = float("nan")
+        _mark_missing(ctx.optional_missing_feeds, "benchmark")
 
     out["sig_tsmom"] = float(ctx.sig_tsmom)
     out["sig_carry"] = float(ctx.sig_carry)

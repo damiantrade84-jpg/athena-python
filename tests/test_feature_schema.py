@@ -1,10 +1,15 @@
-"""Feature schema tests."""
+"""Feature schema tests (live schema in features/build.py)."""
 
 from __future__ import annotations
 
 import pandas as pd
 
-from athena_ase.features.schema import CATEGORICAL_FEATURES, CORE_FEATURES, schema_hash
+from athena_ase.features.build import (
+    CATEGORICAL_FEATURES,
+    FEATURE_SCHEMA_CORE,
+    FEATURE_SCHEMA_ENRICHED,
+    schema_hash,
+)
 from athena_research.ase.train import (
     chronological_train_eval_split,
     enriched_training_mask,
@@ -12,19 +17,39 @@ from athena_research.ase.train import (
 
 
 def test_schema_hash_stable():
-    h1 = schema_hash(horizon="intraday", enriched=False)
-    h2 = schema_hash(horizon="intraday", enriched=False)
+    h1 = schema_hash(FEATURE_SCHEMA_CORE)
+    h2 = schema_hash(FEATURE_SCHEMA_CORE)
     assert h1 == h2
     assert len(h1) == 64
 
 
-def test_swing_schema_differs_from_intraday():
-    assert schema_hash(horizon="swing") != schema_hash(horizon="intraday")
+def test_enriched_schema_extends_core():
+    assert FEATURE_SCHEMA_ENRICHED[: len(FEATURE_SCHEMA_CORE)] == FEATURE_SCHEMA_CORE
+    assert set(FEATURE_SCHEMA_ENRICHED) - set(FEATURE_SCHEMA_CORE) == {
+        "cot_pct",
+        "cot_delta_4w",
+        "funding_z",
+        "oi_delta_z",
+    }
 
 
-def test_categorical_features_subset_of_core_or_enriched():
+def test_core_schema_contains_signal_block():
+    for name in (
+        "sig_tsmom",
+        "sig_carry",
+        "sig_xsec",
+        "sig_mr",
+        "sig_aggregate",
+        "conflict_score",
+        "layer1_confluence",
+        "candidate_dir",
+    ):
+        assert name in FEATURE_SCHEMA_CORE
+
+
+def test_categorical_features_subset_of_core():
+    assert CATEGORICAL_FEATURES <= set(FEATURE_SCHEMA_CORE)
     assert "instrument_id" in CATEGORICAL_FEATURES
-    assert "instrument_id" in CORE_FEATURES
 
 
 def test_chronological_train_eval_split_is_80_20_after_sorting():

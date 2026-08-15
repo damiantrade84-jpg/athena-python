@@ -18,10 +18,11 @@ from athena_ase.execution.bridge import (
     execute_trade_signal,
 )
 from athena_ase.execution.journal import append_trade_signals, trade_journal_summary
-from athena_ase.horizon import Horizon
+from athena_ase.horizon import Horizon, is_intraday
 from athena_ase.inference.predict import predict_batch, predict_no_candidate
 from athena_ase.instruments import DEFAULT_INSTRUMENTS, Instrument, instrument_by_symbol, instruments_for_family
 from athena_ase.runtime.health import scan_diagnostics
+from athena_ase.settings import intraday_families
 from athena_ase.signals.arbitrate import Candidate, FiredSignal, arbitrate
 from athena_ase.signals.carry import compute_carry
 from athena_ase.signals.common import (
@@ -289,13 +290,16 @@ def generate_live_candidates(
     now_ms = decision_time_ms or int(time.time() * 1000)
     family_cache: dict[str, dict[str, BarSeries]] = {}
     out: list[Candidate] = []
+    # Intraday Layer-1 is limited to configured families (default
+    # forex/crypto/commodity) — same eligibility rule as iter_candidates, so
+    # live scans and backfill/backtest see the same candidate stream.
+    intraday_allowed = intraday_families()
 
     for inst in instruments:
-        if inst.swing_only and horizon == "intraday":
+        if inst.swing_only and is_intraday(horizon):
             continue
-        if horizon == "intraday" and inst.family not in ("forex", "crypto", "commodity"):
-            if inst.family == "equity" and inst.subclass == "jse":
-                continue
+        if is_intraday(horizon) and inst.family not in intraday_allowed:
+            continue
         if inst.family not in family_cache:
             family_cache[inst.family] = {}
             for peer in instruments_for_family(inst.family):
@@ -430,8 +434,6 @@ def run_ase_scan(
     # Equity/index_etf have no intraday training data (phase1_events empty) and their
     # artefacts never clear PROVISIONAL; emitting 40+ FLAT no_layer1/model_not_trained
     # rows is noise. Suppress no-candidate flats for intraday-ineligible families.
-    from athena_ase.settings import intraday_families
-
     _intraday_allowed = intraday_families()
     for inst in instruments:
         if inst.symbol in seen:

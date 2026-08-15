@@ -51,26 +51,50 @@ def _monotonic_constraints(feature_names: Sequence[str]) -> list[int]:
     return out
 
 
+def _raw_matrix(
+    X: np.ndarray | list[dict[str, Any]],
+    feature_names: Sequence[str],
+) -> np.ndarray:
+    """Feature matrix exactly as computed, with NaN left in place."""
+    if isinstance(X, np.ndarray):
+        return X.astype(float)
+    matrix = np.empty((len(X), len(feature_names)), dtype=float)
+    for i, row in enumerate(X):
+        for j, name in enumerate(feature_names):
+            value = row.get(name, np.nan)
+            matrix[i, j] = (
+                categorical_code(value)
+                if name in CATEGORICAL_FEATURES
+                else float(value)
+            )
+    return matrix
+
+
 def _prepare_matrix(
     X: np.ndarray | list[dict[str, Any]],
     feature_names: Sequence[str],
 ) -> np.ndarray:
-    if isinstance(X, np.ndarray):
-        matrix = X.astype(float)
-    else:
-        matrix = np.empty((len(X), len(feature_names)), dtype=float)
-        for i, row in enumerate(X):
-            for j, name in enumerate(feature_names):
-                value = row.get(name, np.nan)
-                matrix[i, j] = (
-                    categorical_code(value)
-                    if name in CATEGORICAL_FEATURES
-                    else float(value)
-                )
+    matrix = _raw_matrix(X, feature_names)
     if len(matrix):
         all_missing = np.all(np.isnan(matrix), axis=0)
         matrix[:, all_missing] = 0.0
     return matrix
+
+
+def all_nan_feature_columns(
+    X: np.ndarray | list[dict[str, Any]],
+    feature_names: Sequence[str],
+) -> list[str]:
+    """Columns entirely NaN in the raw matrix (the ones _prepare_matrix fills
+    with 0.0). Recorded at train time so inference can apply the identical
+    fill — HGB routes NaN and 0.0 differently, so unfilled live rows would
+    silently diverge from the trained split structure.
+    """
+    matrix = _raw_matrix(X, feature_names)
+    if not len(matrix):
+        return []
+    missing = np.all(np.isnan(matrix), axis=0)
+    return [str(name) for name, is_nan in zip(feature_names, missing) if bool(is_nan)]
 
 
 def build_classifier(

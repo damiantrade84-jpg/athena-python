@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from athena_ase.contracts import ASESignal
+from athena_ase.data.parquet_io import read_parquet_safe, write_parquet_atomic
 from athena_ase.paths import fx_context_journal_path, shadow_journal_path
 
 log = logging.getLogger("ase.shadow.journal")
@@ -37,15 +38,12 @@ def append_shadow_signals(signals: list[ASESignal], *, path: Path | None = None)
         return out_path
     df_new = pd.DataFrame(rows)
     if out_path.exists():
-        try:
-            df_old = pd.read_parquet(out_path)
-            df = pd.concat([df_old, df_new], ignore_index=True)
-        except Exception as exc:
-            log.warning("Shadow journal read failed (%s) — overwriting", exc)
-            df = df_new
+        # read_parquet_safe quarantines a corrupt file and returns empty —
+        # same "keep the new rows" recovery as before, but atomic.
+        df = pd.concat([read_parquet_safe(out_path), df_new], ignore_index=True)
     else:
         df = df_new
-    df.to_parquet(out_path, index=False)
+    write_parquet_atomic(out_path, df)
     return out_path
 
 
@@ -69,11 +67,8 @@ def append_fx_context_rows(rows: list[dict[str, Any]], *, path: Path | None = No
         flat.append(rec)
     df_new = pd.DataFrame(flat)
     if out_path.exists():
-        try:
-            df_new = pd.concat([pd.read_parquet(out_path), df_new], ignore_index=True)
-        except Exception as exc:
-            log.warning("FX-context journal read failed (%s) — overwriting", exc)
-    df_new.to_parquet(out_path, index=False)
+        df_new = pd.concat([read_parquet_safe(out_path), df_new], ignore_index=True)
+    write_parquet_atomic(out_path, df_new)
     return out_path
 
 
@@ -81,14 +76,14 @@ def load_fx_context_journal(path: Path | None = None) -> pd.DataFrame:
     out_path = path or fx_context_journal_path()
     if not out_path.exists():
         return pd.DataFrame()
-    return pd.read_parquet(out_path)
+    return read_parquet_safe(out_path)
 
 
 def load_shadow_journal(path: Path | None = None) -> pd.DataFrame:
     out_path = path or shadow_journal_path()
     if not out_path.exists():
         return pd.DataFrame()
-    return pd.read_parquet(out_path)
+    return read_parquet_safe(out_path)
 
 
 def reconcile_shadow_outcomes(
@@ -104,7 +99,7 @@ def reconcile_shadow_outcomes(
     out_path = path or shadow_journal_path()
     if not out_path.exists() or not outcome_lookup:
         return 0
-    df = pd.read_parquet(out_path)
+    df = read_parquet_safe(out_path)
     if df.empty:
         return 0
     updated = 0
@@ -120,7 +115,7 @@ def reconcile_shadow_outcomes(
         df.at[idx, "reconciledAt"] = datetime.now(timezone.utc).isoformat()
         updated += 1
     if updated:
-        df.to_parquet(out_path, index=False)
+        write_parquet_atomic(out_path, df)
     return updated
 
 

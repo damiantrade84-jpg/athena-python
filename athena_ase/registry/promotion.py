@@ -211,6 +211,7 @@ def demote_family(
 def set_watch_max(family: str, active: bool) -> None:
     data = _load_raw()
     watch = dict(data.get("watchMax") or {})
+    had = bool(watch.get(family)) if isinstance(watch, dict) else False
     if active:
         watch[family] = True
     else:
@@ -219,6 +220,8 @@ def set_watch_max(family: str, active: bool) -> None:
     _save_raw(data)
     if active:
         _append_audit("watch_max_on", family)
+    elif had:
+        _append_audit("watch_max_off", family)
 
 
 def is_watch_max(family: str) -> bool:

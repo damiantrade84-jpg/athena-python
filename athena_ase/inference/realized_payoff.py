@@ -37,13 +37,17 @@ def _reconciled_mask(df: Any, family: str, horizon: Horizon) -> Any:
 
     if df.empty:
         return pd.Series(dtype=bool)
+    if "realizedNetR" not in df.columns:
+        # A journal without the realized column has no reconciled rows by
+        # definition; an all-False mask also shields the KeyError the callers
+        # would hit selecting df["realizedNetR"].
+        return pd.Series(False, index=df.index)
     mask = pd.Series(True, index=df.index)
     if "modelFamily" in df.columns:
         mask &= df["modelFamily"].astype(str) == str(family)
     if "horizon" in df.columns:
         mask &= df["horizon"].astype(str) == str(horizon)
-    if "realizedNetR" in df.columns:
-        mask &= pd.to_numeric(df["realizedNetR"], errors="coerce").notna()
+    mask &= pd.to_numeric(df["realizedNetR"], errors="coerce").notna()
     if "reconciledAt" in df.columns:
         mask &= df["reconciledAt"].notna()
     return mask

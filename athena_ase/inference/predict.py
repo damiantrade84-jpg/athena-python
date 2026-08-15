@@ -177,7 +177,11 @@ def _q(quantiles: dict[str, float], key: str, default: float) -> float:
     return default
 
 
-def _row_to_vector(row: dict[str, Any], schema: tuple[str, ...]) -> np.ndarray:
+def _row_to_vector(
+    row: dict[str, Any],
+    schema: tuple[str, ...],
+    zero_fill: frozenset[str] = frozenset(),
+) -> np.ndarray:
     vec = np.empty(len(schema), dtype=float)
     for j, name in enumerate(schema):
         val = row.get(name)
@@ -187,6 +191,10 @@ def _row_to_vector(row: dict[str, Any], schema: tuple[str, ...]) -> np.ndarray:
             vec[j] = float(val)
         else:
             vec[j] = float("nan")
+        if vec[j] != vec[j] and name in zero_fill:
+            # Column was entirely NaN at train time and 0.0-filled there;
+            # apply the identical fill or HGB split routing diverges.
+            vec[j] = 0.0
     return vec
 
 
@@ -221,6 +229,7 @@ def predict_one(
     monitor_reference: dict[str, np.ndarray] | None = None,
     live_feature_rows: list[dict[str, float]] | None = None,
     feature_audit_rows: list[dict[str, Any]] | None = None,
+    live: bool = True,
 ) -> ASESignal:
     family = instrument.family
     horizon: Horizon = candidate.horizon
@@ -294,7 +303,8 @@ def predict_one(
         schema = tuple(route_schema)
     elif bundle.feature_names:
         schema = tuple(bundle.feature_names)
-    features = _row_to_vector(row, schema)
+    zero_fill = frozenset((bundle.zero_fill_features or {}).get(route) or ())
+    features = _row_to_vector(row, schema, zero_fill)
     if feature_audit_rows is not None:
         feature_audit_rows.append(
             {
@@ -313,6 +323,8 @@ def predict_one(
         "route": route,
         "missingFeeds": missing_feeds,
     }
+    if ctx.optional_missing_feeds:
+        data_quality["optionalMissingFeeds"] = list(ctx.optional_missing_feeds)
     if not core_ok:
         data_quality["blocker"] = "missing_core_feeds"
         return flat_signal(
@@ -438,16 +450,20 @@ def predict_one(
     if ref is None and bundle.monitor_reference:
         ref = bundle.monitor_reference
 
-    cal_snap = journal_calibration_snapshot(family, horizon)
+    # Live-only side effects: the realized-payoff snapshot reads the live trade
+    # journal and set_watch_max mutates the promotion registry. Backtest/parity
+    # callers pass live=False so historical replays neither contaminate nor get
+    # contaminated by live state.
+    cal_snap = journal_calibration_snapshot(family, horizon) if live else None
     monitor = evaluate_monitor(
         reference_features=ref,
         live_feature_rows=monitor_rows,
         realized_win_rate=cal_snap.realized_win_rate if cal_snap else None,
         mean_p_cal=cal_snap.mean_p_cal if cal_snap else None,
     )
-    if monitor.watch_max:
+    if live and monitor.watch_max:
         set_watch_max(family, True)
-    if is_watch_max(family) or monitor.watch_max:
+    if live and (is_watch_max(family) or monitor.watch_max):
         status = apply_watch_max_cap(status, True)
 
     signal_strength = compute_signal_strength(expected_r, p_cal)
@@ -510,6 +526,7 @@ def predict_batch(
     *,
     monitor_reference: dict[str, np.ndarray] | None = None,
     feature_audit_rows: list[dict[str, Any]] | None = None,
+    live: bool = True,
 ) -> list[ASESignal]:
     """Single inference path for scan, shadow, backtest parity, and chart review."""
     bundle_cache: dict[tuple[str, Horizon], ArtifactBundle | None] = {}
@@ -535,15 +552,28 @@ def predict_batch(
         bundle = bundle_cache[key]
         live_buf = live_buffers.setdefault(key, [])
         ref = monitor_reference or (bundle.monitor_reference if bundle else None)
-        sig = predict_one(
-            cand,
-            store,
-            inst,
-            bundle=bundle,
-            monitor_reference=ref,
-            live_feature_rows=live_buf,
-            feature_audit_rows=feature_audit_rows,
-        )
+        # Per-candidate isolation: one bad model/row must degrade to an ERROR
+        # signal, never kill the whole batch (and with it the scan).
+        try:
+            sig = predict_one(
+                cand,
+                store,
+                inst,
+                bundle=bundle,
+                monitor_reference=ref,
+                live_feature_rows=live_buf,
+                feature_audit_rows=feature_audit_rows,
+                live=live,
+            )
+        except Exception as exc:
+            log.warning("ASE predict failed for %s: %s", cand.instrument, exc)
+            sig = error_signal(
+                instrument=cand.instrument,
+                family=cand.family,
+                horizon=cand.horizon,
+                reason=f"predict_failed:{exc}",
+                model_version=bundle.version if bundle else "none",
+            )
         if len(live_buf) > max_live:
             del live_buf[: len(live_buf) - max_live]
         out.append(sig)

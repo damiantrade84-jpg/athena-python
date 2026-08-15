@@ -36,26 +36,39 @@ def run_ingest(
     selected = {s.strip().lower() for s in sources}
     results: dict[str, dict[str, int]] = {}
 
+    # Per-source isolation: one crashing feed must not starve the rest of the
+    # pipeline (a failing first source previously aborted the whole run).
+    def _run_source(name: str, fn) -> None:
+        try:
+            results[name] = fn()
+        except Exception as exc:
+            log.warning("ASE ingest source %s failed: %s", name, exc)
+            results[name] = {"error": str(exc)}  # type: ignore[dict-item]
+
     if "eodhd" in selected:
-        results["eodhd"] = eodhd.ingest_all(ptis, db_path=backtest_db)
+        _run_source("eodhd", lambda: eodhd.ingest_all(ptis, db_path=backtest_db))
     if "mt5" in selected:
-        results["mt5"] = mt5.ingest_all(ptis, db_path=backtest_db)
+        _run_source("mt5", lambda: mt5.ingest_all(ptis, db_path=backtest_db))
     if "mt5_live" in selected:
-        results["mt5_live"] = mt5_live.ingest_all(
-            ptis, instruments=mt5_live_instruments
+        _run_source(
+            "mt5_live",
+            lambda: mt5_live.ingest_all(ptis, instruments=mt5_live_instruments),
         )
     if "binance" in selected:
-        results["binance"] = binance.ingest_all(ptis, db_path=backtest_db)
+        _run_source("binance", lambda: binance.ingest_all(ptis, db_path=backtest_db))
     if "dukascopy" in selected:
-        results["dukascopy"] = dukascopy.ingest_all(ptis, db_path=duka_db)
+        _run_source("dukascopy", lambda: dukascopy.ingest_all(ptis, db_path=duka_db))
     if "bybit" in selected:
-        results["bybit"] = bybit.ingest_all(
-            ptis, symbols=bybit_symbols, lookback_days=bybit_lookback_days
+        _run_source(
+            "bybit",
+            lambda: bybit.ingest_all(
+                ptis, symbols=bybit_symbols, lookback_days=bybit_lookback_days
+            ),
         )
     if "cot" in selected:
-        results["cot"] = cot.ingest_all(ptis, db_path=cot_db)
+        _run_source("cot", lambda: cot.ingest_all(ptis, db_path=cot_db))
     if "fred" in selected:
-        results["fred"] = fred.ingest_all(ptis, db_path=carry_db)
+        _run_source("fred", lambda: fred.ingest_all(ptis, db_path=carry_db))
 
     if write_audit:
         path = audit_path or (

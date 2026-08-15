@@ -101,9 +101,17 @@ def ingest_pair_tf(
         open_ms = parse_iso_to_ms(bar.get("bar_time"))
         if open_ms is None:
             continue
+        # Never write 0.0 prices: a missing close would ingest as log(1e-12)
+        # downstream and poison vol/signals.
+        close_raw = bar.get("close")
+        if not close_raw:
+            continue
         close_ms = bar_close_ms(open_ms, tf)
         for field in _FIELDS:
-            value = float(bar.get(field) or 0)
+            raw = bar.get(field)
+            if raw is None:
+                raw = 0 if field == "volume" else close_raw
+            value = float(raw)
             sid = price_series_id("MT5", symbol, tf, field)
             field_rows[field].append(
                 row_from_rule(

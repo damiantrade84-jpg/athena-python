@@ -103,6 +103,30 @@ def load_trade_journal(path: Path | None = None) -> pd.DataFrame:
     return _read_journal_df(path or trade_journal_path())
 
 
+def has_filled_execution(
+    instrument: str,
+    decision_time_ms: int,
+    *,
+    path: Path | None = None,
+) -> bool:
+    """True when the journal already holds a fill for this instrument+decision.
+
+    Idempotency guard for the execution bridge: a repeated scan over an
+    unchanged bar re-emits the same TRADE signal, and without this check each
+    scan would place another order for the same decision.
+    """
+    df = _read_journal_df(path or trade_journal_path())
+    if df.empty or not {"instrument", "decisionTimeMs", "executionStatus"} <= set(df.columns):
+        return False
+    decisions = pd.to_numeric(df["decisionTimeMs"], errors="coerce")
+    mask = (
+        (df["instrument"].astype(str) == str(instrument))
+        & (decisions == int(decision_time_ms))
+        & (df["executionStatus"].astype(str) == "filled")
+    )
+    return bool(mask.any())
+
+
 def trade_journal_summary(path: Path | None = None) -> dict[str, Any]:
     df = load_trade_journal(path)
     if df.empty:

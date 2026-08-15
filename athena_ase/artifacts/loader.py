@@ -13,6 +13,7 @@ from athena_ase.horizon import Horizon
 from athena_ase.artifacts.monitor_ref import MONITOR_REFERENCE_FILE, load_monitor_reference
 from athena_ase.registry.artifacts import (
     ArtifactManifest,
+    ZERO_FILL_FILE,
     active_artifact_version,
     artifact_content_hash,
     default_artifacts_root,
@@ -42,6 +43,9 @@ class ArtifactBundle:
     thr_family: float
     feature_names: tuple[str, ...]
     monitor_reference: dict[str, np.ndarray] | None = None
+    # Per-route columns 0.0-filled at train time (all-NaN there). Applied at
+    # inference for train/serve parity; empty for pre-fix artifacts.
+    zero_fill_features: dict[str, list[str]] | None = None
 
     @property
     def artifact_hash(self) -> str:
@@ -106,6 +110,22 @@ def load_artifact_bundle(
         log.warning("ASE artifact load failed for %s/%s: %s", family, horizon, exc)
         return None
 
+    zero_fill: dict[str, list[str]] = {}
+    zf_path = root / ZERO_FILL_FILE
+    if zf_path.exists():
+        try:
+            import json as _json
+
+            raw_zf = _json.loads(zf_path.read_text(encoding="utf-8"))
+            if isinstance(raw_zf, dict):
+                zero_fill = {
+                    str(route): [str(c) for c in cols]
+                    for route, cols in raw_zf.items()
+                    if isinstance(cols, list)
+                }
+        except (OSError, ValueError) as exc:
+            log.warning("ASE zero-fill sidecar unreadable for %s/%s: %s", family, horizon, exc)
+
     return ArtifactBundle(
         family=family,
         horizon=horizon,
@@ -121,6 +141,7 @@ def load_artifact_bundle(
         thr_family=float(manifest.thr_family),
         feature_names=tuple(manifest.feature_schema),
         monitor_reference=load_monitor_reference(root / MONITOR_REFERENCE_FILE) or None,
+        zero_fill_features=zero_fill,
     )
 
 

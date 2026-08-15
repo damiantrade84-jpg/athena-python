@@ -24,8 +24,6 @@ from athena_ase.signals.xsec import compute_xsec
 
 log = logging.getLogger("ase.signals.engine")
 
-_INTRADAY_ALLOWED = intraday_families()
-
 
 def _family_bar_cache(
     store: PTISStore,
@@ -69,13 +67,16 @@ def iter_candidates(
     spacing = EventSpacingFilter()
     universe = instruments or DEFAULT_INSTRUMENTS
     family_cache: dict[str, dict[str, BarSeries]] = {}
+    # Read at call time, not import time: config changes in a long-running
+    # process must not require a module reload to take effect.
+    intraday_allowed = intraday_families()
 
     for inst in universe:
         if inst.swing_only and is_intraday(horizon):
             continue
         # Intraday Layer-1 is limited to configured families (default forex/crypto/commodity).
         # Equity and index_etf use swing path (carry + xsec).
-        if is_intraday(horizon) and inst.family not in _INTRADAY_ALLOWED:
+        if is_intraday(horizon) and inst.family not in intraday_allowed:
             continue
         series = load_bar_series(store, inst.symbol, horizon, start_ms, end_ms)
         if series is None or len(series.value_time) < max(cfg.tsmom_lookbacks) + 5:

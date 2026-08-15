@@ -9,8 +9,13 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from athena_ase.contracts import ASESignal
-from athena_ase.execution.journal import append_execution_outcome, append_trade_signals
+from athena_ase.execution.journal import (
+    append_execution_outcome,
+    append_trade_signals,
+    has_filled_execution,
+)
 from athena_ase.gates.demo_only import assert_demo
+from athena_ase.horizon import horizon_bar_ms
 from athena_ase.instruments import instrument_by_symbol
 from athena_ase.registry.promotion import execution_binding_check
 
@@ -273,6 +278,12 @@ def execute_trade_signal(
     if signal.decisionStatus != "TRADE":
         return {"executed": False, "reason": "not_trade_status"}
 
+    # Idempotency: a repeated scan over an unchanged bar re-emits the same
+    # TRADE signal; never place a second order for a decision already filled.
+    # Not journaled as an outcome — the existing fill row is the record.
+    if has_filled_execution(signal.instrument, signal.decisionTimeMs):
+        return {"executed": False, "reason": "duplicate_decision"}
+
     promoted, promotion_reason = execution_binding_check(
         family=signal.modelFamily,
         horizon=signal.horizon,
@@ -308,6 +319,11 @@ def execute_trade_signal(
         bybit_url = str(deps.get_bybit_base_url() or "")
         if not bybit_url.rstrip("/").endswith("api-testnet.bybit.com"):
             return _reject("venue", "bybit_url_not_testnet")
+    elif deps.get_mt5_trade_mode() is None:
+        # Same positive-proof rule for MT5: the demo gate skips the trade-mode
+        # check when the terminal is unreadable (None); an MT5-routed order
+        # must not proceed on an unverified account.
+        return _reject("venue", "mt5_trade_mode_unverified")
     positions, positions_raw = deps.get_positions(venue)
     account = deps.get_account(venue)
 
@@ -469,7 +485,7 @@ def enforce_time_stops(
             horizon = fill["horizon"] or horizon
         if opened_ms <= 0 or max_hold <= 0:
             continue
-        bar_ms = 3_600_000 if horizon == "intraday" else 86_400_000
+        bar_ms = horizon_bar_ms(horizon)
         if now - opened_ms < max_hold * bar_ms:
             continue
         result = deps.close_position(pos)

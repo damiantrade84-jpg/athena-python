@@ -12,6 +12,7 @@ from typing import Any
 import pandas as pd
 
 from athena_ase.execution.journal import load_trade_journal, trade_journal_path
+from athena_ase.horizon import horizon_bar_ms
 
 log = logging.getLogger("ase.execution.reconcile")
 
@@ -38,7 +39,7 @@ def _simulate_fill_outcome(
     risk_abs = abs(entry - sl)
     if not (risk_abs > 0) or not math.isfinite(risk_abs):
         return None
-    bar_ms = 3_600_000 if horizon == "intraday" else 86_400_000
+    bar_ms = horizon_bar_ms(horizon)
 
     bars_held = 0
     for j in range(len(series.value_time)):
@@ -93,7 +94,14 @@ def reconcile_filled_from_ptis(
     ptis = store or PTISStore(default_ptis_root())
     now = now_ms or int(time.time() * 1000)
 
-    pending = df[(df["executionStatus"] == "filled") & (df["reconciledAt"].isna())]
+    # Retry semantics: select on realizedNetR, not reconciledAt. Rows left
+    # "unresolved" by a dead feed keep realizedNetR empty and are retried on
+    # later runs once the feed revives, instead of being stamped reconciled
+    # with no outcome and skipped forever.
+    for col in ("realizedNetR", "realizedWin", "reconciledAt"):
+        if col not in df.columns:
+            df[col] = None
+    pending = df[(df["executionStatus"] == "filled") & (df["realizedNetR"].isna())]
     if pending.empty:
         return 0
 
@@ -114,7 +122,7 @@ def reconcile_filled_from_ptis(
 
         key = (instrument, horizon)
         if key not in series_cache:
-            bar_ms = 3_600_000 if horizon == "intraday" else 86_400_000
+            bar_ms = horizon_bar_ms(horizon)
             start = decision_ms - 5 * bar_ms
             series_cache[key] = load_bar_series(ptis, instrument, horizon, start, now)  # type: ignore[arg-type]
         series = series_cache[key]
@@ -132,7 +140,9 @@ def reconcile_filled_from_ptis(
             series=series,
             now_ms=now,
         )
-        if outcome is None:
+        if outcome is None or outcome.get("realizedNetR") is None:
+            # Still live, or unresolvable on current bars (dead feed) — leave
+            # the row untouched so a later run retries it.
             continue
         df.at[idx, "realizedNetR"] = outcome["realizedNetR"]
         df.at[idx, "realizedWin"] = outcome["realizedWin"]
@@ -175,5 +185,7 @@ def reconcile_trade_outcomes(
         df.at[idx, "reconciledAt"] = datetime.now(timezone.utc).isoformat()
         updated += 1
     if updated:
-        df.to_parquet(out_path, index=False)
+        from athena_ase.data.parquet_io import write_parquet_atomic
+
+        write_parquet_atomic(out_path, df)
     return updated

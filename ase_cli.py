@@ -22,7 +22,7 @@ from athena_ase.registry.artifacts import (
     verify_manifest,
 )
 from athena_ase.registry.holdout import HoldoutRegistry
-from athena_ase.registry.promotion import demote_family, promote_family
+from athena_ase.registry.promotion import demote_family, promote_family, set_watch_max
 from athena_ase.shadow.journal import shadow_summary
 from athena_ase.validation.holdout import run_holdout_eval
 from athena_ase.validation.promotion import promotion_requirements
@@ -275,6 +275,16 @@ def _cmd_demote(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_clear_watch_max(args: argparse.Namespace) -> int:
+    """Clear the drift watch-max latch for a family (manual reset after review)."""
+    if args.dry_run:
+        print(json.dumps({"cleared": True, "dry_run": True, "family": args.family}, indent=2))
+        return 0
+    set_watch_max(args.family, False)
+    print(json.dumps({"cleared": True, "family": args.family}, indent=2))
+    return 0
+
+
 def _cmd_shadow_report(args: argparse.Namespace) -> int:
     summary = shadow_summary(Path(args.journal) if args.journal else None)
     print(json.dumps(summary, indent=2))
@@ -385,6 +395,14 @@ def build_parser() -> argparse.ArgumentParser:
     demote.add_argument("--registry", default="")
     demote.add_argument("--dry-run", action="store_true")
     demote.set_defaults(func=_cmd_demote)
+
+    clear_wm = sub.add_parser(
+        "clear-watch-max",
+        help="Clear the drift watch-max latch for a family after manual review",
+    )
+    clear_wm.add_argument("--family", required=True)
+    clear_wm.add_argument("--dry-run", action="store_true")
+    clear_wm.set_defaults(func=_cmd_clear_watch_max)
 
     shadow = sub.add_parser("shadow-report", help="Summarize ASE shadow journal")
     shadow.add_argument("--journal", default="")

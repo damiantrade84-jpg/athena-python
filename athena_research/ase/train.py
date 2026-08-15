@@ -30,7 +30,12 @@ from athena_ase.models.calibrate import (
     fit_isotonic,
     reliability_table,
 )
-from athena_ase.models.meta import BASE_HGB_PARAMS, _prepare_matrix, train_meta_classifier
+from athena_ase.models.meta import (
+    BASE_HGB_PARAMS,
+    _prepare_matrix,
+    all_nan_feature_columns,
+    train_meta_classifier,
+)
 from athena_ase.models.quantile_heads import (
     QUANTILE_HGB_PARAMS,
     TARGETS,
@@ -395,6 +400,28 @@ def train_family_horizon(
             f"{len(labeled)} < {MIN_TRAIN_CANDIDATES}"
         )
     train_frame, eval_frame = chronological_train_eval_split(labeled)
+    # Purge+embargo the final-fit train slice against the eval holdout: train
+    # rows near the boundary have label windows that reach into the eval
+    # period, which would let the model train on the holdout's price path and
+    # inflate the metrics the promotion gate reads. The walk-forward folds
+    # already do this per fold; the final fit must too.
+    if not eval_frame.empty:
+        combined = pd.concat([train_frame, eval_frame])
+        purged_train_idx = purge_embargo_mask(
+            combined,
+            train_idx=np.arange(len(train_frame)),
+            test_idx=np.arange(len(train_frame), len(combined)),
+            max_hold_bars=HORIZONS[horizon].max_hold_bars,
+        )
+        n_purged = len(train_frame) - len(purged_train_idx)
+        if n_purged:
+            log.info(
+                "purged %d train rows overlapping eval holdout (%s/%s)",
+                n_purged,
+                family,
+                horizon,
+            )
+        train_frame = combined.iloc[purged_train_idx].copy()
 
     target_dataset_dir = dataset_dir or DATASET_DIR
     target_dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -704,6 +731,17 @@ def train_family_horizon(
         "dsr": dsr.deflated_sharpe,
         "holdout_gate_metrics": holdout_gate_metrics,
     }
+    # Train/serve parity: columns entirely NaN in the train matrix are 0.0-filled
+    # by _prepare_matrix; record them so inference applies the identical fill.
+    zero_fill_features: dict[str, list[str]] = {
+        "core": all_nan_feature_columns(
+            train_frame.to_dict(orient="records"), core_schema
+        )
+    }
+    if enriched_summary.get("usable"):
+        zero_fill_features["enriched"] = all_nan_feature_columns(
+            enriched_rows.to_dict(orient="records"), enriched_schema
+        )
     artifact_path = freeze_artifact_bundle(
         family=family,
         horizon=horizon,
@@ -724,6 +762,7 @@ def train_family_horizon(
             "enriched": enriched_summary,
         },
         monitor_reference=build_monitor_reference(eval_frame, core_schema),
+        zero_fill_features=zero_fill_features,
         root=artifact_root,
     )
     if write_train_state:

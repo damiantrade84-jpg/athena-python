@@ -164,6 +164,9 @@ def run_ase_pair_backtest(
             candidates,
             store,
             {inst.symbol: inst},
+            # Historical replay: never read live journal state or mutate the
+            # promotion registry (watch-max latch) from a backtest.
+            live=False,
         )
         for cand, sig in zip(candidates, signals):
             status = str(sig.decisionStatus or "FLAT")

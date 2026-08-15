@@ -17,6 +17,11 @@ from athena_ase.features.build import FEATURE_SCHEMA_CORE, FEATURE_SCHEMA_ENRICH
 from athena_research.ase.trials_registry import registry_hash
 
 ACTIVE_VERSION_FILE = "ACTIVE_VERSION"
+# Per-route list of feature columns that were entirely NaN at train time (and
+# therefore 0.0-filled by _prepare_matrix). Stored as a hash-covered sidecar
+# file rather than a manifest field so adding it does not change
+# artifact_content_hash for already-frozen/promoted artifacts.
+ZERO_FILL_FILE = "zero_fill_features.json"
 
 
 def default_artifacts_root() -> Path:
@@ -136,6 +141,7 @@ def freeze_artifact_bundle(
     model_params: dict[str, Any] | None = None,
     adapters: list[str] | None = None,
     monitor_reference: dict[str, Any] | None = None,
+    zero_fill_features: dict[str, list[str]] | None = None,
     root: Path | None = None,
 ) -> Path:
     """Persist model bundle + manifest with content hashes."""
@@ -169,6 +175,16 @@ def freeze_artifact_bundle(
     if monitor_reference is not None:
         ref_path = out_dir / MONITOR_REFERENCE_FILE
         file_hashes[MONITOR_REFERENCE_FILE] = save_monitor_reference(ref_path, monitor_reference)
+
+    zf_path = out_dir / ZERO_FILL_FILE
+    if zero_fill_features is not None:
+        zf_path.write_text(
+            json.dumps(zero_fill_features, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        file_hashes[ZERO_FILL_FILE] = _sha256_file(zf_path)
+    elif zf_path.exists():
+        # Re-freeze without zero-fill metadata must not leave a stale sidecar.
+        zf_path.unlink()
 
     manifest = ArtifactManifest(
         family=family,

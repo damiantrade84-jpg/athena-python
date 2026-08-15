@@ -43,16 +43,11 @@ def should_auto_demote(
     psi_warn: float = 0.25,
     psi_critical: float = 0.5,
     warn_count: int = 3,
-    critical_count: int = 5,
 ) -> bool:
     high = [v for v in psi_values.values() if v > psi_warn]
     if any(v > psi_critical for v in psi_values.values()):
         return True
-    if len(high) >= warn_count:
-        return True
-    if len(high) >= critical_count:
-        return True
-    return False
+    return len(high) >= warn_count
 
 
 def calibration_gap(realized_win_rate: float, mean_p_cal: float, *, tol: float = 0.12) -> bool:

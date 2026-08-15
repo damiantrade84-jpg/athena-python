@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Any
 
 from athena_ase.exceptions import HoldoutAlreadyEvaluated
 from athena_ase.paths import default_ase_state_root
+
+log = logging.getLogger("ase.registry.holdout")
 
 
 def default_holdout_path() -> Path:
@@ -45,8 +48,15 @@ class HoldoutRegistry:
         p = path or default_holdout_path()
         if not p.exists():
             return cls()
-        raw = json.loads(p.read_text(encoding="utf-8"))
-        holdout = {k: HoldoutRecord(**v) for k, v in (raw.get("holdout") or {}).items()}
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            holdout = {k: HoldoutRecord(**v) for k, v in (raw.get("holdout") or {}).items()}
+        except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+            # Fail closed like the promotion state: an unreadable registry is
+            # an empty one, so promotion blocks on holdout_not_evaluated
+            # instead of crashing the check.
+            log.warning("Unreadable holdout registry at %s; failing closed: %s", p, exc)
+            return cls()
         return cls(holdout=holdout)
 
     def save(self, path: Path | None = None) -> Path:

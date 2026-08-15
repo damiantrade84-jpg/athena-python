@@ -15,6 +15,7 @@ from athena_ase.data.ingest.common import (
     row_from_rule,
 )
 from athena_ase.data.ptis import PTISStore
+from athena_ase.instruments import instrument_by_symbol
 from runtime_paths import resolve_backtest_candle_cache_db_path
 
 log = logging.getLogger("ase.ingest.eodhd")
@@ -86,7 +87,15 @@ def ingest_pair_tf(
     db_path: str | None = None,
     fields: tuple[str, ...] = _EODHD_FIELDS,
 ) -> dict[str, int]:
-    symbol = pair.get("symbol") or pair.get("display") or ""
+    raw_symbol = str(pair.get("symbol") or pair.get("display") or "")
+    # Canonicalize cache symbols (EURUSD.FOREX, AAPL.US) to ASE catalog ids so
+    # the written series match the ids the signal/feature paths resolve. Keep
+    # the raw id when unmapped (e.g. benchmark series such as USDX that are
+    # read under their bare name).
+    inst = instrument_by_symbol(raw_symbol) or instrument_by_symbol(
+        str(pair.get("display") or "")
+    )
+    symbol = inst.symbol if inst is not None else raw_symbol
     bars = iter_backtest_bars(pair, tf, provider, db_path=db_path)
     counts: dict[str, int] = {}
     if not bars:
@@ -102,7 +111,12 @@ def ingest_pair_tf(
             if field == "volume":
                 val = float(bar.get("vol", bar.get("volume", 0)) or 0)
             else:
-                val = float(bar.get(field, 0) or 0)
+                price = bar.get(field)
+                if price is None and field != "close":
+                    price = bar.get("close")
+                if price is None:
+                    continue
+                val = float(price)
             sid = eodhd_series_id(str(symbol), tf, field)
             field_rows[field].append(
                 row_from_rule(
