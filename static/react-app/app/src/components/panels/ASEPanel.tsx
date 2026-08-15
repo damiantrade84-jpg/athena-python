@@ -21,6 +21,7 @@ import { ErrorBanner } from '@/components/shared';
 import { Cpu, Radar, Activity, Shield, AlertTriangle, Copy, ClipboardList, ChevronDown, ChevronRight } from 'lucide-react';
 import { fmtNum, toNum } from '@/lib/utils';
 import { aseTradePlanText, fmtAsePrice } from '@/components/athena/ASEFillWatcher';
+import { aseInstrumentLabel } from '@/lib/athenaFormat';
 import type {
   ASEExecutedTrade,
   ASEExecutedTradesResponse,
@@ -125,7 +126,7 @@ function SignalCard({
       <div className="flex items-start justify-between gap-2 relative">
         <div>
           <div className="font-bold text-sm" style={{ color: CYAN }}>
-            {row.instrument || '—'}
+            {aseInstrumentLabel(row)}
           </div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-0.5">
             {row.modelFamily} · {row.horizon}
@@ -344,11 +345,11 @@ export default function ASEPanel() {
     if (result.executed) {
       const ticket = executionTicket(result);
       showToast(
-        `ASE demo executed ${confirmSignal.direction || ''} ${confirmSignal.instrument}${ticket ? ` - ticket ${ticket}` : ''}`,
+        `ASE demo executed ${confirmSignal.direction || ''} ${aseInstrumentLabel(confirmSignal)}${ticket ? ` - ticket ${ticket}` : ''}`,
         'success',
       );
     } else {
-      showToast(`ASE blocked ${confirmSignal.instrument}: ${result.reason || result.error || 'unknown'}`, 'error');
+      showToast(`ASE blocked ${aseInstrumentLabel(confirmSignal)}: ${result.reason || result.error || 'unknown'}`, 'error');
     }
     setConfirmSignal(null);
   }, [confirmSignal, postExecute, refreshSummary, refreshExecuted, showToast]);
@@ -483,7 +484,7 @@ export default function ASEPanel() {
             </Select>
             <Input
               className="h-8 min-w-0 w-full text-xs"
-              placeholder="Optional symbols: EURUSD, BTCUSDT"
+              placeholder="Optional names: EUR/USD, XAU/USD"
               value={pairFilter}
               onChange={(e) => setPairFilter(e.target.value)}
             />
@@ -555,7 +556,7 @@ export default function ASEPanel() {
                         : '—'}
                     </span>
                     <span className="font-semibold w-20 shrink-0 truncate" style={{ color: CYAN }}>
-                      {trade.instrument || '—'}
+                      {aseInstrumentLabel(trade)}
                     </span>
                     <Badge
                       className={`text-[9px] px-1.5 py-0 h-4 shrink-0 ${trade.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}
@@ -662,7 +663,7 @@ export default function ASEPanel() {
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-xs">
                 <div>
-                  Execute <b>{confirmSignal?.direction}</b> {confirmSignal?.instrument} on{' '}
+                  Execute <b>{confirmSignal?.direction}</b> {aseInstrumentLabel(confirmSignal)} on{' '}
                   <b>{confirmSignal?.horizon}</b>?
                 </div>
                 <div className="font-mono">

@@ -13,6 +13,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Copy } from 'lucide-react';
+import { aseInstrumentLabel } from '@/lib/athenaFormat';
 import { fmtNum } from '@/lib/utils';
 import type { ASEExecutedTrade, ASEExecutedTradesResponse } from '@/types/athena';
 
@@ -25,9 +26,11 @@ export function fmtAsePrice(value?: number | null): string {
   return fmtNum(value, digits);
 }
 
+export { aseInstrumentLabel };
+
 export function aseTradePlanText(trade: ASEExecutedTrade): string {
   const parts = [
-    `${trade.direction || ''} ${trade.instrument || ''} @ ${fmtAsePrice(trade.entryReference)}`,
+    `${trade.direction || ''} ${aseInstrumentLabel(trade)} @ ${fmtAsePrice(trade.entryReference)}`,
     `SL ${fmtAsePrice(trade.sl)}`,
     `TP1 ${fmtAsePrice(trade.tp1)}`,
   ];
@@ -76,7 +79,7 @@ export default function ASEFillWatcher() {
       return [...current, ...fresh.filter((t) => !known.has(tradeKey(t)))];
     });
     for (const t of fresh) {
-      showToast(`ASE demo fill: ${t.direction || ''} ${t.instrument || ''}`, 'info');
+      showToast(`ASE demo fill: ${t.direction || ''} ${aseInstrumentLabel(t)}`, 'info');
     }
   }, [data, showToast]);
 
@@ -108,7 +111,7 @@ export default function ASEFillWatcher() {
           <AlertDialogDescription asChild>
             <div className="space-y-2 text-xs font-mono">
               <div className="text-sm font-bold text-foreground">
-                {active?.instrument} · {active?.horizon} · {active?.modelFamily}
+                {aseInstrumentLabel(active)} · {active?.horizon} · {active?.modelFamily}
               </div>
               <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                 <span>Entry: {fmtAsePrice(active?.entryReference)}</span>

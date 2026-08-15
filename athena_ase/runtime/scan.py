@@ -7,6 +7,7 @@ import threading
 import time
 from typing import Any, Callable, Iterable
 
+from athena_ase.broker_availability import broker_excluded, filter_broker_tradable
 from athena_ase.contracts import ASESignal
 from athena_ase.data.ingest.runner import run_ingest
 from athena_ase.data.ptis import PTISStore, default_ptis_root
@@ -163,7 +164,7 @@ def _maybe_ingest(
     return {"result": outcome.get("result")}
 
 
-def _resolve_instruments(
+def _select_instruments(
     *,
     family: str | None = None,
     symbols: list[str] | None = None,
@@ -173,6 +174,38 @@ def _resolve_instruments(
     if family:
         return tuple(instruments_for_family(family))  # type: ignore[arg-type]
     return DEFAULT_INSTRUMENTS
+
+
+def _resolve_instruments(
+    *,
+    family: str | None = None,
+    symbols: list[str] | None = None,
+) -> tuple[Instrument, ...]:
+    return filter_broker_tradable(
+        _select_instruments(family=family, symbols=symbols)
+    )
+
+
+def _broker_filter_payload(
+    selected: tuple[Instrument, ...],
+    tradable: tuple[Instrument, ...],
+    *,
+    log_exclusions: bool = True,
+) -> dict[str, Any]:
+    excluded = broker_excluded(selected)
+    excluded_symbols = [inst.symbol for inst in excluded]
+    if log_exclusions and excluded_symbols:
+        log.info(
+            "ASE broker filter excluded %d instrument(s): %s",
+            len(excluded_symbols),
+            ", ".join(excluded_symbols),
+        )
+    return {
+        "excludedCount": len(excluded_symbols),
+        "excluded": excluded_symbols,
+        "selectedCount": len(selected),
+        "tradableCount": len(tradable),
+    }
 
 
 def _scan_ingest_sources_for_instruments(
@@ -368,7 +401,9 @@ def run_ase_scan(
     lower_tf_fetch: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     store = PTISStore(ptis_root or default_ptis_root())
-    instruments = _resolve_instruments(family=family, symbols=symbols)
+    selected = _select_instruments(family=family, symbols=symbols)
+    instruments = filter_broker_tradable(selected)
+    broker_filter = _broker_filter_payload(selected, instruments)
     ingest_sources_selected = _scan_ingest_sources_for_instruments(ingest_sources, instruments)
     ingest_result = _maybe_ingest(
         store,
@@ -463,6 +498,7 @@ def run_ase_scan(
         "candidateCount": len(candidates),
         "signalCount": len(signals),
         "instrumentCount": len(instruments),
+        "brokerFilter": broker_filter,
         "statusCounts": status_counts,
         "deployment": "OPERATIONAL",
         "diagnostics": scan_diagnostics(store, horizon=horizon),
@@ -490,7 +526,9 @@ def run_ase_dual_horizon_scan(
     """Scan all instruments on intraday and swing horizons."""
     horizons: tuple[Horizon, ...] = ("intraday", "swing")
     store = PTISStore(ptis_root or default_ptis_root())
-    instruments = _resolve_instruments(family=family, symbols=symbols)
+    selected = _select_instruments(family=family, symbols=symbols)
+    instruments = filter_broker_tradable(selected)
+    broker_filter = _broker_filter_payload(selected, instruments)
     ingest_sources_selected = _scan_ingest_sources_for_instruments(ingest_sources, instruments)
     ingest_result = _maybe_ingest(
         store,
@@ -535,6 +573,8 @@ def run_ase_dual_horizon_scan(
         "family": family or "all",
         "horizons": list(horizons),
         "signalCount": len(all_signals),
+        "instrumentCount": len(instruments),
+        "brokerFilter": broker_filter,
         "statusCounts": status_counts,
         "deployment": "OPERATIONAL",
         "byHorizon": by_horizon,

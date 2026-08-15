@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  aseInstrumentLabel,
   confluencePct,
   confluenceThresholdPct,
   engineAListScore,
@@ -10,6 +11,17 @@ import {
   unifiedListSortKey,
 } from '../athenaFormat';
 import type { EngineASignal } from '@/types/athena';
+
+describe('aseInstrumentLabel', () => {
+  it('prefers Athena display names over Yahoo commodity ids', () => {
+    expect(aseInstrumentLabel({ instrument: 'GC=F', display: 'XAU/USD' })).toBe('XAU/USD');
+    expect(aseInstrumentLabel({ instrument: 'BZ=F', display: 'Brent Oil' })).toBe('Brent Oil');
+    expect(aseInstrumentLabel({ instrument: 'GC=F' })).toBe('XAU/USD');
+    expect(aseInstrumentLabel({ instrument: 'BZ=F' })).toBe('Brent Oil');
+    expect(aseInstrumentLabel({ instrument: 'EURUSD' })).toBe('EURUSD');
+    expect(aseInstrumentLabel(null)).toBe('—');
+  });
+});
 
 describe('engineAScoreBreakdown', () => {
   it('uses backend-canonical post-intermarket score for V3 decisions', () => {

@@ -51,6 +51,7 @@ class ASESignal:
     dataQuality: dict[str, Any]
     modelHealth: dict[str, Any]
     instrument: str = ""
+    display: str = ""
     decisionTimeMs: int = 0
     # WO Phases 1-2: diagnostic-only shadow context. Optional so old journal
     # rows still parse; must never influence decisionStatus/direction/sizing.
@@ -75,6 +76,7 @@ class ASESignal:
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        payload["display"] = self.display or resolve_instrument_display(self.instrument)
         payload["confluenceScore"] = self.confluenceScore
         payload["maxScore"] = self.maxScore
         payload["scoreNorm"] = self.scoreNorm
@@ -100,6 +102,24 @@ class ASESignal:
         return payload
 
 
+def resolve_instrument_display(instrument: str, display: str | None = None) -> str:
+    """Human/broker name (XAU/USD) for an ASE catalog id (GC=F)."""
+    text = str(display or "").strip()
+    if text:
+        return text
+    key = str(instrument or "").strip()
+    if not key:
+        return ""
+    try:
+        from athena_ase.instruments import instrument_by_symbol
+    except Exception:
+        return key
+    inst = instrument_by_symbol(key)
+    if inst is None:
+        return key
+    return str(inst.display or inst.symbol or key)
+
+
 def error_signal(
     *,
     instrument: str,
@@ -108,6 +128,7 @@ def error_signal(
     reason: str,
     gate_result: dict[str, Any] | None = None,
     model_version: str = "none",
+    display: str | None = None,
 ) -> ASESignal:
     health: dict[str, Any] = {
         "artifactHash": "",
@@ -144,6 +165,7 @@ def error_signal(
         dataQuality={"coreOk": False, "route": "none", "missingFeeds": []},
         modelHealth=health,
         instrument=instrument,
+        display=resolve_instrument_display(instrument, display),
     )
 
 
@@ -157,6 +179,7 @@ def flat_signal(
     data_quality: dict[str, Any] | None = None,
     model_health: dict[str, Any] | None = None,
     primary_signals: list[dict[str, Any]] | None = None,
+    display: str | None = None,
 ) -> ASESignal:
     return ASESignal(
         engineVersion="2.1.0",
@@ -186,4 +209,5 @@ def flat_signal(
         modelHealth=model_health
         or {"artifactHash": "", "trainedAt": "", "brier": None, "driftScore": 0.0, "gateResult": gate_result},
         instrument=instrument,
+        display=resolve_instrument_display(instrument, display),
     )

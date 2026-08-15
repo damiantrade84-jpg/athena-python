@@ -1361,6 +1361,7 @@ export interface ASESignalRow {
   dataQuality?: Record<string, unknown>;
   modelHealth?: Record<string, unknown>;
   instrument?: string;
+  display?: string;
   decisionTimeMs?: number;
   confluenceScore?: number;
   confidence?: number;
@@ -1471,6 +1472,7 @@ export interface ASEHealthResponse {
 
 export interface ASEExecutedTrade {
   instrument?: string;
+  display?: string;
   direction?: string;
   horizon?: string;
   modelFamily?: string;

@@ -45,6 +45,33 @@ export function fmtLiveQuoteAge(ageSec: unknown): string {
   return `${hours < 10 ? hours.toFixed(1) : Math.round(hours).toString()}h ago`;
 }
 
+const ASE_YAHOO_DISPLAY: Record<string, string> = {
+  'GC=F': 'XAU/USD',
+  'SI=F': 'XAG/USD',
+  'CL=F': 'WTI Oil',
+  'BZ=F': 'Brent Oil',
+  'PL=F': 'XPT/USD',
+  'PA=F': 'XPD/USD',
+  '^GSPC': 'S&P 500',
+  '^DJI': 'Dow Jones',
+  '^GDAXI': 'DAX 40',
+  '^FTSE': 'UK100',
+  '^AXJO': 'ASX 200',
+  '^N225': 'Nikkei 225',
+  '^HSI': 'Hang Seng',
+  NAS100: 'NASDAQ-100',
+};
+
+export function aseInstrumentLabel(
+  row: { display?: string | null; instrument?: string | null } | null | undefined,
+): string {
+  const display = String(row?.display || '').trim();
+  if (display) return display;
+  const instrument = String(row?.instrument || '').trim();
+  if (!instrument) return '—';
+  return ASE_YAHOO_DISPLAY[instrument] || instrument;
+}
+
 export function fmtLiveQuoteMeta(ageSec: unknown, source?: unknown): string {
   const src = typeof source === 'string' && source.trim() ? source.trim() : '';
   return src ? `${fmtLiveQuoteAge(ageSec)} / ${src}` : fmtLiveQuoteAge(ageSec);

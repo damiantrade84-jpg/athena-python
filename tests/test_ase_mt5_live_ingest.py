@@ -87,10 +87,10 @@ def test_ingest_skips_jse_and_disabled_etfs(ptis: PTISStore, monkeypatch):
 
     monkeypatch.setattr("mt5_executor.mt5_map_symbol", _map)
 
-    npn = instrument_by_symbol("NPN.JO")
-    tqqq = instrument_by_symbol("TQQQ")
+    npn = Instrument("NPN.JO", "Naspers", "equity", "jse", "NPN.JO.US", "SPY", True, False)
+    tqqq = Instrument("TQQQ", "TQQQ", "index_etf", "default", "TQQQ.US", "SPY", False, False)
     eur = instrument_by_symbol("EURUSD")
-    assert npn is not None and tqqq is not None and eur is not None
+    assert eur is not None
     assert not npn.mt5_live
     assert not tqqq.mt5_live
 

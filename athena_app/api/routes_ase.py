@@ -401,8 +401,14 @@ def _executed_trade_row(row: dict[str, Any]) -> dict[str, Any]:
             rr1 = abs(tp1 - entry) / sl_dist
     decision_ms = _cell(row.get("decisionTimeMs"))
     detail = _execution_detail_dict(row.get("executionDetail"))
+    instrument = _cell(row.get("instrument"))
+    display = _cell(row.get("display"))
+    if instrument and not display:
+        inst = instrument_by_symbol(str(instrument))
+        display = inst.display if inst is not None else instrument
     return {
-        "instrument": _cell(row.get("instrument")),
+        "instrument": instrument,
+        "display": display,
         "direction": _cell(row.get("direction")),
         "horizon": _cell(row.get("horizon")),
         "modelFamily": _cell(row.get("modelFamily")),

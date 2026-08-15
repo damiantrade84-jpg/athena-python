@@ -498,6 +498,7 @@ def predict_one(
             **({"tradeCapReason": trade_cap_reason} if trade_cap_reason else {}),
         },
         instrument=candidate.instrument,
+        display=instrument.display,
         decisionTimeMs=candidate.decision_time_ms,
     )
 

@@ -141,6 +141,7 @@ def test_executed_trades_filled_only_sorted_desc(client):
     trades = body["trades"]
     assert [t["instrument"] for t in trades] == ["GBPUSD", "EURUSD"]
     eur = trades[1]
+    assert eur["display"] == "EUR/USD"
     assert eur["direction"] == "LONG"
     assert eur["sl"] == pytest.approx(1.08)
     assert eur["tp1"] == pytest.approx(1.15)
