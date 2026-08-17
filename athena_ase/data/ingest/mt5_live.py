@@ -129,11 +129,13 @@ def ingest_instrument_tf(
 
     tf_sec = _TF_SECONDS[tf]
     field_rows: dict[str, list[dict]] = {field: [] for field in _FIELDS}
+    last_confirmed_close_ms: int | None = None
     for bar in rates:
         open_s = int(bar["time"]) - int(shift_s)
         close_ms = (open_s + tf_sec) * 1000
         if close_ms > now * 1000:
             continue  # forming bar — confirmed bars only
+        last_confirmed_close_ms = close_ms
         for field in _FIELDS:
             raw = bar["tick_volume"] if field == "volume" else bar[field]
             sid = price_series_id("MT5", inst.symbol, tf, field)
@@ -151,6 +153,15 @@ def ingest_instrument_tf(
     for field, rows in field_rows.items():
         sid = price_series_id("MT5", inst.symbol, tf, field)
         counts[sid] = append_ptis_rows(store, sid, "MT5", rows)
+        if last_confirmed_close_ms is not None:
+            dropped = store.drop_rows_after(sid, last_confirmed_close_ms)
+            if dropped:
+                log.info(
+                    "mt5_live retracted %d phantom %s bar(s) after %s",
+                    dropped,
+                    sid,
+                    last_confirmed_close_ms,
+                )
     return counts
 
 

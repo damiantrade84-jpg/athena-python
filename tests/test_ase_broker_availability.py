@@ -49,6 +49,19 @@ def test_commodity_kill_switch_still_honours_enabled_override():
     assert instrument_blocked_by_broker(wti, cfg) is True
 
 
+def test_dead_atfx_names_can_be_disabled_from_live_ase():
+    cfg = {
+        "MT5_DISABLED_PAIRS": ["AVGO", "AMD", "PLTR", "USO"],
+        "MT5_ENABLED_PAIRS": [],
+        "MT5_DISABLE_COMMODITIES": False,
+    }
+    for symbol in ("AVGO", "AMD", "PLTR", "USO"):
+        inst = instrument_by_symbol(symbol)
+        assert inst is not None
+        assert instrument_blocked_by_broker(inst, cfg) is True
+    assert instrument_blocked_by_broker(instrument_by_symbol("AAPL"), cfg) is False
+
+
 def test_atfx_crosses_are_in_catalog():
     assert instrument_by_symbol("AUDCAD") is not None
     assert instrument_by_symbol("EURCAD") is not None

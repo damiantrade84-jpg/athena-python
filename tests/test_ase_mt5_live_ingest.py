@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
@@ -188,3 +189,35 @@ def test_mt5_symbol_candidates_prefers_ticker_and_us_fallback():
 
     candidates = mt5_live._mt5_symbol_candidates(inst, _map)
     assert candidates == ["GLD.US", "GLD"]
+
+
+def test_ingest_retracts_phantom_bars_after_last_confirmed(ptis: PTISStore, monkeypatch):
+    now_s = datetime(2026, 8, 17, 6, 45, tzinfo=timezone.utc).timestamp()
+    friday_open = int(datetime(2026, 8, 14, 19, 0, tzinfo=timezone.utc).timestamp())
+    phantom = int(datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    inst = Instrument("FRA40", "France 40", "index_etf", "default", "FRA40", "SPY")
+    sid = price_series_id("MT5", inst.symbol, "H1", "close")
+    from athena_ase.data.availability import AvailabilityRuleId, compute_available_time_ms
+    from athena_ase.data.ptis import build_row
+
+    avail = compute_available_time_ms(
+        AvailabilityRuleId.MT5_BAR, value_time_ms=phantom, bar_close_ms=phantom
+    )
+    ptis.append_rows(sid, [build_row(sid, phantom, avail, 8610.0)], source="MT5")
+
+    fake = _FakeMT5(
+        selectable={"FRA40.s"},
+        rates_by_symbol={"FRA40.s": np.array([_bar(friday_open, close=8635.0)])},
+    )
+    monkeypatch.setattr(mt5_live, "_connect_mt5", lambda: fake)
+    monkeypatch.setattr(mt5_live, "_broker_offset_hours", lambda: 0)
+    monkeypatch.setattr("mt5_executor.mt5_map_symbol", lambda key: "FRA40.s")
+    monkeypatch.setattr(mt5_live.time, "time", lambda: now_s)
+
+    mt5_live.ingest_all(ptis, timeframes=("H1",), instruments=(inst,))
+
+    kept = ptis.asof(sid, int(now_s * 1000), n=4)
+    assert len(kept) == 1
+    # shift 0: close = Friday 19:00 + 1h
+    assert int(kept[0]["value_time"]) == (friday_open + 3600) * 1000
+    assert float(kept[0]["value"]) == pytest.approx(8635.0)

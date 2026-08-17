@@ -76,6 +76,28 @@ def test_append_rows_merges_after_quarantined_corrupt_existing(tmp_path: Path):
     assert row["value"] == pytest.approx(210.0)
 
 
+def test_drop_rows_after_retracts_only_the_tail(tmp_path: Path):
+    store = PTISStore(tmp_path / "ptis")
+    series_id = "MT5:FRA40:H1:close"
+    friday = _ms(datetime(2026, 8, 14, 20, 0, tzinfo=timezone.utc))
+    saturday = _ms(datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc))
+    rows = []
+    for ts, px in ((friday, 8600.0), (saturday, 8610.0)):
+        avail = compute_available_time_ms(
+            AvailabilityRuleId.MT5_BAR, value_time_ms=ts, bar_close_ms=ts
+        )
+        rows.append(build_row(series_id, ts, avail, px))
+    store.append_rows(series_id, rows, source="MT5", auto_register=True)
+
+    dropped = store.drop_rows_after(series_id, friday)
+
+    assert dropped == 1
+    kept = store.asof(series_id, saturday + 3_600_000, n=2)
+    assert len(kept) == 1
+    assert int(kept[0]["value_time"]) == friday
+    assert store.drop_rows_after("MT5:MISSING:H1:close", friday) == 0
+
+
 def test_write_parquet_atomic_survives_concurrent_read(tmp_path: Path):
     store = PTISStore(tmp_path / "ptis")
     series_id = "MT5:EURUSD:H1:close"

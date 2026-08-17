@@ -281,6 +281,34 @@ class PTISStore:
         self._frame_cache.pop(series_id, None)
         return written
 
+    def drop_rows_after(self, series_id: str, value_time_ms: int) -> int:
+        """Delete rows with value_time strictly after ``value_time_ms``.
+
+        Live MT5 ingest is append-only on value_time. A wrong-TZ weekend write
+        can leave phantom bars *after* the latest confirmed broker close; those
+        bars then win ``asof()`` and hide Monday's first confirmed bar. Retract
+        only the tail past the newest confirmed close — never rewrite history
+        before that stamp.
+        """
+        if not self.series_exists(series_id):
+            return 0
+        source = self._series_source(series_id)
+        cutoff = int(value_time_ms)
+        dropped = 0
+        with self._lock:
+            for part_path in self._iter_partition_paths(source, series_id):
+                existing = read_parquet_safe(part_path)
+                if existing.empty or "value_time" not in existing.columns:
+                    continue
+                keep = existing[existing["value_time"] <= cutoff]
+                removed = len(existing) - len(keep)
+                if removed <= 0:
+                    continue
+                write_parquet_atomic(part_path, keep)
+                dropped += removed
+            self._frame_cache.pop(series_id, None)
+        return dropped
+
     def asof(self, series_id: str, decision_time_ms: int, n: int = 1) -> np.ndarray:
         """Last n values with available_time <= decision_time_ms, ordered by value_time."""
         if n <= 0:
