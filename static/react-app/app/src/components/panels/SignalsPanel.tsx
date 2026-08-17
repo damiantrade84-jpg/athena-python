@@ -36,6 +36,7 @@ import {
 } from '@/lib/athenaFormat';
 import { readEngineBCanonicalGatesFromNaked } from '@/lib/engineBCanonicalGates';
 import { engineAV3DecisionRank, engineAV3ListLabel, isEngineAV3Signal } from '@/lib/engineAV3';
+import { resolveChartIntentSymbol } from '@/lib/chartIdentity';
 import { preferredTvChartTf } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
 import {
@@ -436,7 +437,10 @@ function preferredExecutionSignal(row: UnifiedRow): EngineASignal {
 }
 
 function resolveSignalSymbol(signal: EngineASignal): string {
-  return String(signal.symbol || signal.pair || signal.display || '').toUpperCase().trim();
+  return resolveChartIntentSymbol({
+    symbol: signal.symbol,
+    display: signal.display || signal.pair,
+  });
 }
 
 function intentSourceForRow(row: UnifiedRow): 'signals' | 'engine_a' | 'engine_b' {

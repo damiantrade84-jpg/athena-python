@@ -403,6 +403,25 @@ def _chart_symbol_key(value) -> str:
     return re.sub(r"[^A-Z0-9]", "", without_yahoo_fx_suffix)
 
 
+def _chart_identity_keys(value) -> set[str]:
+    """Compact + timeframe-policy canonical keys for one symbol/display token."""
+    keys = {_chart_symbol_key(value)}
+    if not isinstance(value, str) or not str(value).strip():
+        keys.discard("")
+        return keys
+    try:
+        from timeframe_policy import canonical_symbol
+
+        canonical = canonical_symbol(value)
+    except Exception:
+        canonical = None
+    if canonical:
+        keys.add(str(canonical).upper())
+        keys.add(_chart_symbol_key(canonical))
+    keys.discard("")
+    return keys
+
+
 def _find_chart_pair(symbol: str):
     exact = next(
         (p for p in ALL_PAIRS if p.get("symbol") == symbol or p.get("display") == symbol),
@@ -411,18 +430,18 @@ def _find_chart_pair(symbol: str):
     if exact:
         return exact
 
-    requested_key = _chart_symbol_key(symbol)
-    if not requested_key:
+    requested_keys = _chart_identity_keys(symbol)
+    if not requested_keys:
         return None
     return next(
         (
             p
             for p in ALL_PAIRS
-            if requested_key
-            in {
-                _chart_symbol_key(p.get("symbol")),
-                _chart_symbol_key(p.get("display")),
-            }
+            if requested_keys
+            & (
+                _chart_identity_keys(p.get("symbol"))
+                | _chart_identity_keys(p.get("display"))
+            )
         ),
         None,
     )

@@ -100,20 +100,11 @@ def test_yfinance_symbol_for_cocoa_uses_yahoo_futures_ticker():
     assert _ATHENA_MOD._yfinance_symbol_for_pair(pair) == "CC=F"
 
 
-def test_fetch_mt5_falls_back_when_symbol_missing(monkeypatch):
+def test_fetch_mt5_fails_closed_without_yahoo_when_symbol_missing(monkeypatch):
     import mt5_executor
 
-    pair = next(p for p in ALL_PAIRS if p["display"] == "GLD")
-    fallback = [
-        {
-            "time": "2026-04-09T08:00:00+00:00",
-            "open": 210.0,
-            "high": 211.0,
-            "low": 209.5,
-            "close": 210.7,
-            "vol": 1000.0,
-        }
-    ]
+    pair = next(p for p in ALL_PAIRS if p["display"] == "ASX 200")
+    called = {"fallback": False}
 
     class _FakeMT5:
         TIMEFRAME_M1 = 1
@@ -127,15 +118,32 @@ def test_fetch_mt5_falls_back_when_symbol_missing(monkeypatch):
         def symbol_select(self, _symbol, _enable):
             return False
 
+    def _forbidden_fallback(*_args, **_kwargs):
+        called["fallback"] = True
+        return (
+            [
+                {
+                    "time": "2026-04-09T08:00:00+00:00",
+                    "open": 8800.0,
+                    "high": 8810.0,
+                    "low": 8790.0,
+                    "close": 8805.0,
+                    "vol": 1000.0,
+                }
+            ],
+            "yfinance",
+        )
+
     monkeypatch.setattr(mt5_executor, "mt5_connect", lambda: True)
     monkeypatch.setattr(mt5_executor, "_get_mt5", lambda: _FakeMT5())
-    monkeypatch.setattr(_ATHENA_MOD, "_fetch_fallback_candles", lambda *_args, **_kwargs: fallback)
+    monkeypatch.setattr(_ATHENA_MOD, "_fetch_fallback_candles", _forbidden_fallback)
 
     out = _ATHENA_MOD.fetch_mt5(pair, "H4", 10)
 
     assert out["error"] is True
     assert out["detail"] == "symbol not found in MT5"
-    assert out["candles"] == fallback
+    assert "candles" not in out
+    assert called["fallback"] is False
 
 
 def _load_literal_assignment(path: Path, name: str):

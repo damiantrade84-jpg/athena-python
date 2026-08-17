@@ -87,6 +87,28 @@ def test_mt5_error_payload_fallback_candles_are_blocked_by_default(monkeypatch):
     assert meta["bars"] == 0
 
 
+def test_eodhd_index_does_not_fall_back_to_yfinance():
+    pair = {"display": "ASX 200", "symbol": "^AXJO", "type": "index", "source": "eodhd"}
+    yfinance_calls = []
+
+    out = fetch_candles(
+        pair,
+        "H4",
+        10,
+        fetch_candles_live=_unused_fetcher,
+        fetch_binance=_unused_fetcher,
+        fetch_eodhd=lambda *_args, **_kwargs: None,
+        fetch_polygon=_unused_fetcher,
+        fetch_yfinance=lambda *_args, **_kwargs: yfinance_calls.append(True) or _fallback_candles(),
+        yfinance_symbol_for_pair=lambda _pair: "^AXJO",
+        fetch_mt5=_unused_fetcher,
+        tf_b={},
+    )
+
+    assert out is None
+    assert yfinance_calls == []
+
+
 def test_mt5_error_payload_fallback_candles_can_be_explicitly_enabled(monkeypatch):
     monkeypatch.setitem(CONFIG, "MT5_CANDLE_FALLBACK_ENABLED", True)
     pair = {"display": "GBP/USD", "symbol": "GBPUSD", "type": "forex", "source": "mt5"}

@@ -831,6 +831,44 @@ def test_candles_accepts_tradingview_style_forex_alias():
     assert payload["price_precision"]["precision"] == 5
 
 
+def test_candles_accepts_asx200_yahoo_and_broker_aliases():
+    index_pair = {
+        "symbol": "^AXJO",
+        "display": "ASX 200",
+        "type": "index",
+        "source": "mt5",
+        "enabled": True,
+    }
+
+    def _fetch_candles(pair, tf, limit):
+        assert pair == index_pair
+        return [
+            {
+                "time": "2026-05-21T08:00:00Z",
+                "open": 8800.0,
+                "high": 8820.0,
+                "low": 8780.0,
+                "close": 8810.0,
+                "vol": 100.0,
+            }
+        ]
+
+    client = _client(
+        _runtime(
+            ALL_PAIRS=[index_pair],
+            ACTIVE_PAIRS=[index_pair],
+            fetch_candles=_fetch_candles,
+        )
+    )
+
+    for requested in ("ASX200", "AUS200", "AXJO", "^AXJO"):
+        resp = client.get(f"/api/candles?symbol={requested}&tf=H4&limit=300")
+        assert resp.status_code == 200, requested
+        payload = resp.get_json()
+        assert payload["display"] == "ASX 200", requested
+        assert payload["candles"][0]["c"] == pytest.approx(8810.0)
+
+
 def test_candles_jpy_forex_precision_override():
     jpy_pair = {
         "symbol": "GBPJPY=X",

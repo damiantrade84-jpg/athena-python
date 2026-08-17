@@ -1763,27 +1763,28 @@ def _polygon_ticker_for_pair(pair: dict) -> str | None:
     return None
 
 
+def _mt5_non_crypto_pair(pair: dict) -> bool:
+    return (
+        str((pair or {}).get("source") or "").lower() == "mt5"
+        and str((pair or {}).get("type") or "").lower() != "crypto"
+    )
+
+
 def _fallback_source_for_pair(pair: dict) -> str | None:
+    # MT5 non-crypto OHLC has no external substitute. Yahoo/Polygon must not
+    # become a silent second series for indices, FX, metals, or cash names.
+    if _mt5_non_crypto_pair(pair):
+        return None
 
     override = pair.get("fallbackSource") or _vendor_overrides(pair).get("fallback")
+
+    if override and str(override).strip().lower() == "yfinance":
+        return None
 
     if override:
         return override
 
     ptype = pair.get("type", "")
-
-    if ptype == "stock":
-        return "yfinance"
-
-    if ptype == "index":
-        return "yfinance" if _yfinance_symbol_for_pair(pair) else None
-
-    if ptype == "commodity":
-        return (
-            "polygon"
-            if _polygon_ticker_for_pair(pair)
-            else ("yfinance" if _yfinance_symbol_for_pair(pair) else None)
-        )
 
     if ptype == "forex":
         return "polygon" if _polygon_ticker_for_pair(pair) else None
@@ -1792,28 +1793,26 @@ def _fallback_source_for_pair(pair: dict) -> str | None:
 
 
 def _fetch_fallback_candles(pair: dict, tf: str, limit: int, reason: str = ""):
-    """Try fallback sources in order: Polygon → yfinance.
-    Uses only Polygon and yfinance.
-    Returns ``(candles, provider)`` or ``(None, None)`` if all sources fail."""
+    """Optional non-MT5 recovery for non-broker sources.
+
+    Yahoo is never a live OHLC fallback. MT5 non-crypto pairs fail closed.
+    Remaining EODHD/forex recovery may use Polygon only.
+    Returns ``(candles, provider)`` or ``(None, None)`` if no source is allowed.
+    """
 
     tag = f" ({reason})" if reason else ""
-    disp = pair["display"]
+    disp = pair.get("display", pair.get("symbol", "unknown"))
 
-    # 1. Polygon - good for forex/metals, rate-limited to 5 req/min on free tier
-    if _polygon_ticker_for_pair(pair):
+    if _mt5_non_crypto_pair(pair):
+        log.info(f"[FALLBACK] {disp} {tf}: skipped — MT5-only, no Yahoo/Polygon{tag}")
+        return None, None
+
+    if str(pair.get("type") or "").lower() != "crypto" and _polygon_ticker_for_pair(pair):
         resp = fetch_polygon(pair, tf, limit)
         candles = _extract_candles(resp)
         if candles:
             log.info(f"[FALLBACK] {disp} {tf}: using Polygon{tag}")
             return candles, "polygon"
-
-    # 2. yfinance - last resort, broad coverage but lower reliability
-    yf_symbol = _yfinance_symbol_for_pair(pair)
-    if yf_symbol:
-        log.info(f"[FALLBACK] {disp} {tf}: using yfinance{tag}")
-        candles = _extract_candles(fetch_yfinance(yf_symbol, tf, limit))
-        if candles:
-            return candles, "yfinance"
 
     return None, None
 
@@ -3384,6 +3383,10 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
     symbol = pair.get("display", pair.get("symbol", ""))
 
     def _mt5_fallback(detail: str):
+        # Non-crypto broker instruments stay on MT5. Yahoo/Polygon OHLC is not a
+        # substitute series for structure TF, ATR, or the TV chart.
+        if str(pair.get("type") or "").lower() != "crypto":
+            return {"error": True, "symbol": symbol, "detail": detail}
         fallback, fb_provider = _fetch_fallback_candles(pair, tf, limit, reason=detail)
         if fallback:
             return {

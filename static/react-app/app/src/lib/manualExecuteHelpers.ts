@@ -6,6 +6,7 @@ import type {
   ScalpAIChartReviewResponse,
   SuggestedTradePlan,
 } from '@/types/athena';
+import { compactChartSymbolKey } from '@/lib/chartIdentity';
 import { isEngineAV3Signal, resolveEngineAV3Signal } from '@/lib/engineAV3';
 import { readEngineBCanonicalGatesFromNaked } from '@/lib/engineBCanonicalGates';
 
@@ -111,13 +112,7 @@ export interface ScalpExecuteSignalLike {
 }
 
 export function normalizeSymbolKey(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const upper = value.trim().toUpperCase();
-  if (!upper) return null;
-  const withoutProvider = upper.includes(':') ? upper.split(':').pop() || upper : upper;
-  const withoutYahooFxSuffix = withoutProvider.replace(/=X$/, '');
-  const key = withoutYahooFxSuffix.replace(/[^A-Z0-9]/g, '');
-  return key || null;
+  return compactChartSymbolKey(value);
 }
 
 export function stripEngineBFromSignal(signal: EngineASignal): EngineASignal {

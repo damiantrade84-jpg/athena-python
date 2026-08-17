@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from athena_app.services.engine_b_hotlist import (
     _crypto_anchors_from_config,
     _select_slot,
@@ -122,6 +124,30 @@ def test_hotlist_handles_missing_live_prices_and_candles_without_crashing():
     assert payload["groups"]["commodity"]["winner"]["symbol"] == "XAUUSD"
     assert payload["groups"]["index"]["winner"]["symbol"] == "NAS100"
     assert payload["groups"]["commodity"]["winner"]["latest_price"] is None
+
+
+def test_hotlist_uses_asx_display_not_yahoo_index_ticker():
+    pairs = [_pair("^AXJO", "ASX 200", "index")]
+    live_prices = {
+        "ASX 200": {"price": 8810.0, "ts": 1_000.0, "change_pct": 0.4},
+        "^AXJO": {"price": 8810.0, "ts": 1_000.0, "change_pct": 0.4},
+    }
+
+    payload = build_engine_b_hotlist(
+        pairs_universe=pairs,
+        live_prices=live_prices,
+        candle_fetch_fn=lambda *_a, **_k: [],
+        config={},
+        groups_override=["index"],
+        top_per_group=1,
+        timeframe="H1",
+        time_now=1_000.0,
+    )
+
+    winner = payload["groups"]["index"]["winner"]
+    assert winner["symbol"] == "ASX 200"
+    assert winner["display"] == "ASX 200"
+    assert winner["latest_price"] == pytest.approx(8810.0)
 
 
 def test_hotlist_returns_selected_symbols_and_read_only_scoring_contract():

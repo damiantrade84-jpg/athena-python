@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ErrorBanner, RefreshButton } from '@/components/shared';
+import { resolveChartIntentSymbol } from '@/lib/chartIdentity';
 import AITradingAgentPanel from '@/components/ai/AITradingAgentPanel';
 import ConfidenceCalibrationPanel from '@/components/athena/ConfidenceCalibrationPanel';
 import {
@@ -265,7 +266,10 @@ export default function LiveCockpitPanel() {
   // Advisory only - mirrors SignalsPanel's setTvChartIntent handoff; no execution.
   const openOnChart = useCallback(
     (row: LdSymbolRow) => {
-      const symbol = String(row.symbol || '').toUpperCase().trim();
+      const symbol = resolveChartIntentSymbol({
+        symbol: row.symbol,
+        display: row.symbol,
+      });
       if (!symbol) {
         showToast('Cannot open chart: missing symbol', 'error');
         return;
@@ -274,7 +278,7 @@ export default function LiveCockpitPanel() {
       const signal = {
         symbol,
         pair: symbol,
-        display: row.symbol,
+        display: symbol,
         type: row.asset_type,
         direction: eb?.direction || row.engineA?.direction || null,
         engine: 'engine_b',

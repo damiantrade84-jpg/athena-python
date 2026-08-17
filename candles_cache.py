@@ -830,9 +830,9 @@ def fetch_candles(
                 fetch_meta["detail"] = candles.get("detail")
             if candles.get("detail") == "rate_limited":
                 fetch_meta["rateLimited"] = True
-            # Provider-internal fallback (e.g. EODHD/MT5 -> polygon/yfinance):
-            # label provenance so fallback candles never masquerade as the
-            # primary provider in downstream freshness/observability checks.
+            # Provider-internal fallback: label provenance so recovery candles
+            # never masquerade as the primary provider. Yahoo is not a live
+            # OHLC fallback.
             if candles.get("fallback_provider") and candles.get("candles"):
                 fetch_meta["fallback"] = candles.get("fallback_provider")
                 _enrich_fallback_meta(
@@ -842,20 +842,9 @@ def fetch_candles(
                     fallback_reason=str(candles.get("detail") or ""),
                 )
 
-        if not candles and pair.get("type") != "crypto" and pair.get("source") == "eodhd":
-            _yf_sym = yfinance_symbol_for_pair(pair)
-            if _yf_sym:
-                log.info(
-                    f"[CANDLE] {pair.get('display')} EODHD failed, trying yfinance ({_yf_sym})"
-                )
-                fetch_meta["fallback"] = "yfinance"
-                _enrich_fallback_meta(
-                    fetch_meta,
-                    primary_provider="eodhd",
-                    fallback_provider="yfinance",
-                    fallback_reason="EODHD fetch returned no candles",
-                )
-                candles = fetch_yfinance(_yf_sym, tf, limit)
+        # Yahoo is never a live OHLC fallback. Non-crypto recovery stays on the
+        # configured primary (MT5 or EODHD) and fails closed when that source
+        # returns nothing.
 
         candles = extract_candles(candles)
 

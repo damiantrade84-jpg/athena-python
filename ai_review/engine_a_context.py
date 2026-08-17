@@ -730,6 +730,24 @@ def _pair_lookup_key(value: Any) -> str:
     return re.sub(r"[^A-Z0-9]", "", without_yahoo_fx_suffix)
 
 
+def _pair_identity_keys(value: Any) -> set[str]:
+    keys = {_pair_lookup_key(value)}
+    if not isinstance(value, str) or not str(value).strip():
+        keys.discard("")
+        return keys
+    try:
+        from timeframe_policy import canonical_symbol
+
+        canonical = canonical_symbol(value)
+    except Exception:
+        canonical = None
+    if canonical:
+        keys.add(str(canonical).upper())
+        keys.add(_pair_lookup_key(canonical))
+    keys.discard("")
+    return keys
+
+
 def _default_resolve_pair(symbol: str) -> dict[str, Any] | None:
     from athena import ALL_PAIRS
 
@@ -743,17 +761,17 @@ def _default_resolve_pair(symbol: str) -> dict[str, Any] | None:
         None,
     )
     if not pair_obj:
-        requested_key = _pair_lookup_key(symbol)
-        if requested_key:
+        requested_keys = _pair_identity_keys(symbol)
+        if requested_keys:
             pair_obj = next(
                 (
                     p
                     for p in ALL_PAIRS
-                    if requested_key
-                    in {
-                        _pair_lookup_key(p.get("symbol")),
-                        _pair_lookup_key(p.get("display")),
-                    }
+                    if requested_keys
+                    & (
+                        _pair_identity_keys(p.get("symbol"))
+                        | _pair_identity_keys(p.get("display"))
+                    )
                 ),
                 None,
             )

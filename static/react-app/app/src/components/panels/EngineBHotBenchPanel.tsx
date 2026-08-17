@@ -10,6 +10,7 @@ import { useStore } from '@/hooks/useStore';
 import { useLivePrices } from '@/hooks/useLivePrices';
 import apiClient from '@/lib/apiClient';
 import { fmtPrice } from '@/lib/athenaFormat';
+import { compactChartSymbolKey, resolveChartIntentSymbol } from '@/lib/chartIdentity';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import {
   ArrowLeftRight,
@@ -46,11 +47,7 @@ const SNAPSHOT_POLL_MS = 10_000;
 const WATCH_POLL_MS = 15_000;
 
 function symbolKey(value: unknown): string {
-  return String(value ?? '')
-    .trim()
-    .toUpperCase()
-    .replace(/=X$/, '')
-    .replace(/[^A-Z0-9]/g, '');
+  return compactChartSymbolKey(value) || '';
 }
 
 function firstNumber(...values: unknown[]): number | null {
@@ -225,15 +222,19 @@ function statusTone(status: EngineBHotBenchCardState['status']): string {
 
 function openChartIntentPayload(candidate: EngineBHotlistCandidate, row: LdSymbolRow | null, timeframe: string) {
   const direction = directionForRow(row);
+  const chartSymbol = resolveChartIntentSymbol({
+    symbol: candidate.symbol,
+    display: candidate.display,
+  });
   return {
     id: `tv-engine-b-${candidate.symbol}-${Date.now()}`,
     source: 'engine_b' as const,
-    symbol: candidate.symbol,
-    display: candidate.display,
+    symbol: chartSymbol,
+    display: candidate.display || chartSymbol,
     signal: {
-      symbol: candidate.symbol,
-      pair: candidate.symbol,
-      display: candidate.display,
+      symbol: chartSymbol,
+      pair: candidate.display || chartSymbol,
+      display: candidate.display || chartSymbol,
       type: candidate.asset_type,
       direction,
       engine: 'engine_b',

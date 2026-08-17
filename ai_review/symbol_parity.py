@@ -26,15 +26,32 @@ def normalize_symbol_key(value: Any) -> str:
     return re.sub(r"[^A-Z0-9=]", "", without_yahoo_fx)
 
 
+def _identity_keys(value: Any) -> set[str]:
+    """Compact key plus timeframe-policy canonical aliases for one token."""
+    keys = {normalize_symbol_key(value)}
+    if not isinstance(value, str) or not str(value).strip():
+        keys.discard("")
+        return keys
+    try:
+        from timeframe_policy import canonical_symbol
+
+        canonical = canonical_symbol(value)
+    except Exception:
+        canonical = None
+    if canonical:
+        keys.add(normalize_symbol_key(canonical))
+        keys.add(str(canonical).upper())
+    keys.discard("")
+    return keys
+
+
 def _candidate_keys(row: dict[str, Any] | None) -> set[str]:
     if not isinstance(row, dict):
         return set()
-    keys = {
-        normalize_symbol_key(row.get("symbol")),
-        normalize_symbol_key(row.get("display")),
-        normalize_symbol_key(row.get("pair")),
-    }
-    return {k for k in keys if k}
+    keys: set[str] = set()
+    for field in (row.get("symbol"), row.get("display"), row.get("pair")):
+        keys |= _identity_keys(field)
+    return keys
 
 
 @lru_cache(maxsize=4)
@@ -115,13 +132,12 @@ def evaluate_symbol_parity(
 ) -> dict[str, Any]:
     """Return parity result. ``ok=False`` means hard reject the review join."""
     chart_key = normalize_symbol_key(chart_symbol)
+    chart_keys = _identity_keys(chart_symbol)
     engine_keys = _candidate_keys(origin_signal) | _candidate_keys(engine_pair)
     # Prefer explicit display/symbol on pair when present
     if isinstance(engine_pair, dict):
-        engine_keys |= {
-            normalize_symbol_key(engine_pair.get("display")),
-            normalize_symbol_key(engine_pair.get("symbol")),
-        }
+        engine_keys |= _identity_keys(engine_pair.get("display"))
+        engine_keys |= _identity_keys(engine_pair.get("symbol"))
         engine_keys.discard("")
 
     if not chart_key:
@@ -174,7 +190,7 @@ def evaluate_symbol_parity(
                 "symbol_alias_applied": None,
             }
 
-    if chart_key in engine_keys and not (futures_chart and spot_execution):
+    if chart_keys & engine_keys and not (futures_chart and spot_execution):
         return {
             "ok": True,
             "reason": "exact_match",

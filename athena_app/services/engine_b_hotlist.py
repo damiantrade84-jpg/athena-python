@@ -73,6 +73,9 @@ def _canonical_symbol(pair: dict[str, Any]) -> str:
             return token
     if symbol.endswith("=X"):
         return symbol[:-2]
+    # Yahoo index/futures feed tickers are not the chart or broker identity.
+    if (symbol.startswith("^") or symbol.endswith("=F")) and display:
+        return display
     return symbol or display
 
 

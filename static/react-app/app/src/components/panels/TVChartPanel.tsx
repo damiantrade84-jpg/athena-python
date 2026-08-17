@@ -41,7 +41,7 @@ import { useApiPoll } from '@/hooks/useApiData';
 import { useStore } from '@/hooks/useStore';
 import { engineBScoreBreakdown } from '@/lib/athenaFormat';
 import { apiClient } from '@/lib/apiClient';
-import { resolveChartIntentSymbol } from '@/lib/chartIdentity';
+import { compactChartSymbolKey, resolveChartIntentSymbol } from '@/lib/chartIdentity';
 import {
   isFrontendDebugVisible,
   resolveAtrProvenanceRows,
@@ -746,13 +746,7 @@ function pickEngineACandidate(rows: unknown[]): EngineASignal | null {
 }
 
 function symbolKey(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const upper = value.trim().toUpperCase();
-  if (!upper) return null;
-  const withoutProvider = upper.includes(':') ? upper.split(':').pop() || upper : upper;
-  const withoutYahooFxSuffix = withoutProvider.replace(/=X$/, '');
-  const key = withoutYahooFxSuffix.replace(/[^A-Z0-9]/g, '');
-  return key || null;
+  return compactChartSymbolKey(value);
 }
 
 function isEngineSignalLike(value: unknown): value is EngineASignal {
@@ -2842,6 +2836,11 @@ export default function TVChartPanel() {
   useEffect(() => {
     currentPairKeyRef.current = currentSymbolKey;
   }, [currentSymbolKey]);
+
+  useEffect(() => {
+    const resolved = resolveChartIntentSymbol({ symbol: pair });
+    if (resolved && resolved !== pair) setPair(resolved);
+  }, [pair]);
 
   useEffect(() => {
     if (!tvChartIntent?.id || tvChartIntent.id === appliedIntentIdRef.current) return;

@@ -264,6 +264,16 @@ def test_scan2_matching_symbols_pass_parity():
     assert parity["ok"] is True
 
 
+def test_asx200_yahoo_ticker_matches_display_identity():
+    parity = evaluate_symbol_parity(
+        "^AXJO",
+        {"symbol": "ASX 200", "display": "ASX 200"},
+        engine_pair={"symbol": "^AXJO", "display": "ASX 200", "type": "index"},
+    )
+    assert parity["ok"] is True
+    assert parity["reason"] == "exact_match"
+
+
 def test_scan2_active_session_passes_at_0638_utc():
     """06:38 UTC is inside London/NY 06:00-21:00 despite a 01:00 UTC candle."""
     result = normalize_review_gates(
