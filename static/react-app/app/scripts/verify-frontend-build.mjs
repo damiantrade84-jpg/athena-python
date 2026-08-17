@@ -78,6 +78,11 @@ const requiredJsMarkers = [
   'review_role',
   'entry_screenshot_base64',
   'entry_screenshot_meta',
+  // Engine B's ASE overlay must remain visible and explicitly advisory.
+  'ASE SUPPORTS',
+  'ASE WATCH ALIGNED',
+  'supportEligible',
+  'no Engine B score or gate change',
 ];
 for (const marker of requiredJsMarkers) {
   if (!jsText.includes(marker)) {

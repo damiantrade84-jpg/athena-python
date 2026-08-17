@@ -18,6 +18,7 @@ import {
 import type { EngineASignal } from '@/types/athena';
 import { isEngineAV3Signal, resolveEngineAV3Signal } from '@/lib/engineAV3';
 import { resolveTrendCoherenceTimeframeRows } from '@/lib/engineADiagnosticsDisplay';
+import ASESupportIndicator from './ASESupportIndicator';
 
 interface Props {
   signal: EngineASignal;
@@ -344,6 +345,10 @@ export default function EngineASignalCard({
             threshold != null ? `Trade threshold ${fmtNum(threshold, 2)} of ${fmtNum(max, 2)}` : undefined
           }
         />
+
+        {isEngineBOnly && signal.aseShadow && (
+          <ASESupportIndicator shadow={signal.aseShadow} compact={Boolean(compact)} />
+        )}
 
         {/* ── Levels: the numbers actually needed to take the trade ── */}
         <div className="grid grid-cols-4 gap-3">

@@ -6,7 +6,8 @@ import {
   executableLevels,
   readEngineBCanonicalGatesFromNaked,
 } from '@/lib/engineBCanonicalGates';
-import type { EngineBNakedResult } from '@/types/athena';
+import type { ASEShadowContext, EngineBNakedResult } from '@/types/athena';
+import ASESupportIndicator from './ASESupportIndicator';
 
 interface Props {
   data: EngineBNakedResult | null | undefined;
@@ -15,6 +16,7 @@ interface Props {
   livePrice?: number;
   livePriceAgeSec?: number;
   livePriceSource?: string;
+  aseShadow?: ASEShadowContext | null;
   compact?: boolean;
 }
 
@@ -34,6 +36,7 @@ export default function EngineBChecklistCard({
   livePrice,
   livePriceAgeSec,
   livePriceSource,
+  aseShadow,
 }: Props) {
   if (!data) {
     return (
@@ -139,6 +142,8 @@ export default function EngineBChecklistCard({
             <Gate key={g.label} label={g.label} ok={g.ok} dangerLabel={g.dangerLabel} />
           ))}
         </div>
+
+        {aseShadow && <ASESupportIndicator shadow={aseShadow} />}
 
         {/* ── Executable levels ── */}
         <div className="grid grid-cols-4 gap-3">

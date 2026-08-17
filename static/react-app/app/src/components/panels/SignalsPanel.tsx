@@ -1200,6 +1200,7 @@ export default function SignalsPanel() {
                         livePrice={priceFor(engineBPresentationSignal(selectedRow))}
                         livePriceAgeSec={ageSecFor(engineBPresentationSignal(selectedRow))}
                         livePriceSource={sourceFor(engineBPresentationSignal(selectedRow))}
+                        aseShadow={engineBPresentationSignal(selectedRow).aseShadow}
                       />
                     ) : (
                     <EngineASignalCard
@@ -1497,6 +1498,7 @@ export default function SignalsPanel() {
                         livePrice={priceFor(engineBPresentationSignal(selectedRow))}
                         livePriceAgeSec={ageSecFor(engineBPresentationSignal(selectedRow))}
                         livePriceSource={sourceFor(engineBPresentationSignal(selectedRow))}
+                        aseShadow={engineBPresentationSignal(selectedRow).aseShadow}
                       />
                     ) : (
                       <div className="text-[11px] text-muted-foreground border border-border/40 rounded-md p-3 leading-snug">

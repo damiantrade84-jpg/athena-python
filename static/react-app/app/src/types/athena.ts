@@ -149,6 +149,40 @@ export interface ScalpWorkbenchIntent {
   createdAt: string;
 }
 
+export type ASEShadowSupportState =
+  | 'SUPPORTED'
+  | 'OPPOSED'
+  | 'WATCH_ALIGNED'
+  | 'WATCH_OPPOSED'
+  | 'NEUTRAL'
+  | 'NOT_POSITIVE'
+  | 'UNAVAILABLE'
+  | string;
+
+/** Read-only ASE context attached to an Engine B forex card. */
+export interface ASEShadowContext {
+  schemaVersion?: string;
+  direction?: Direction | 'NONE' | string;
+  candidateDirection?: Direction | null | string;
+  decisionStatus?: 'TRADE' | 'WATCH' | 'FLAT' | 'ERROR' | string | null;
+  probabilityPositive?: number | null;
+  expectedNetR?: number | null;
+  alignment?: 'ALIGNED' | 'OPPOSED' | 'ASE_FLAT' | string;
+  supportState?: ASEShadowSupportState;
+  supportEligible?: boolean;
+  reason?: string | null;
+  horizon?: 'intraday' | 'swing' | string | null;
+  modelVersion?: string | null;
+  dataQualityOk?: boolean | null;
+  modelHealthOk?: boolean | null;
+  fxContextBias?: number | null;
+  triangular?: string | null;
+  asOf?: string | null;
+  ageMs?: number | null;
+  advisoryOnly?: boolean;
+  affectsEngineBScore?: boolean;
+}
+
 /** Engine A v2 signal — emitted by `analyze_pair()` (camelCase keys). */
 export interface EngineASignal {
   contractVersion?: string;
@@ -431,6 +465,7 @@ export interface EngineASignal {
   newsContext?: unknown;
   chartVision?: unknown;
   aiAnalysis?: unknown;
+  aseShadow?: ASEShadowContext | null;
 
   // Misc passthroughs for the live cockpit
   isForming?: boolean;
