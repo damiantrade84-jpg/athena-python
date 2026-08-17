@@ -64,6 +64,14 @@ function firstTf(...values: unknown[]): string {
   return '';
 }
 
+export function preferredTvChartTf(signal: VisionSignalLike): string {
+  // Open & Review captures structure then trigger. Land on structure first so
+  // the first paint is the structure image, not setup (H1 on majors).
+  const roles = visionReviewImageTimeframes(signal);
+  if (roles.structureTf) return roles.structureTf;
+  return preferredVisionReviewTf(signal);
+}
+
 export function preferredVisionReviewTf(signal: VisionSignalLike): string {
   const nestedEngineB = signal.naked_data || signal.engine_b;
   const engineB = nestedEngineB && typeof nestedEngineB === 'object'

@@ -1713,6 +1713,54 @@ def test_hard_liquidity_failure_does_not_reclassify_persistent_speed() -> None:
     assert state.m5_quality_acceptable is False
 
 
+def test_empty_market_state_does_not_force_thin_liquidity() -> None:
+    """MT5 ticks often omit market_state; that must not stamp every major THIN."""
+
+    def bars(count: int) -> list[dict]:
+        return [
+            {
+                "high": 101 + index * 0.01,
+                "low": 99 + index * 0.01,
+                "close": 100 + index * 0.01,
+                "vol": 1000 + index,
+            }
+            for index in range(count)
+        ]
+
+    state = calculate_speed_state(
+        bars(240),
+        bars(240),
+        spread=0.0001,
+        quote_age_sec=1,
+        relative_volume=1.2,
+        current_session="london",
+        gap_status="normal",
+        scheduled_event=False,
+        provider_market_state="",
+        last_closed_h1_open_time=1,
+    )
+    assert state.liquidity_class != LiquidityClass.THIN
+
+
+def test_unavailable_liquidity_does_not_demote_forex_major_trigger() -> None:
+    policy = resolve_timeframe_policy(
+        "GBP/USD",
+        "forex",
+        "forex_majors",
+        "intraday",
+        SpeedState(
+            live_speed_class=SpeedClass.FAST,
+            history_ready=True,
+            liquidity_class=LiquidityClass.UNAVAILABLE,
+        ),
+        engine_id="engine_a",
+    )
+    assert policy.structure_tf == Timeframe.H4
+    assert policy.setup_tf == Timeframe.H1
+    assert policy.trigger_tf == Timeframe.M15
+    assert policy.diagnostics.adaptation_applied is False
+
+
 def test_liquidity_is_separate_from_speed_and_blocks_m5_eligibility() -> None:
     liquidity = classify_liquidity(
         quote_age_sec=1,

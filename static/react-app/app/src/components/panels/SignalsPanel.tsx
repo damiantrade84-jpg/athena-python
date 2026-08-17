@@ -36,7 +36,7 @@ import {
 } from '@/lib/athenaFormat';
 import { readEngineBCanonicalGatesFromNaked } from '@/lib/engineBCanonicalGates';
 import { engineAV3DecisionRank, engineAV3ListLabel, isEngineAV3Signal } from '@/lib/engineAV3';
-import { preferredVisionReviewTf } from '@/lib/visionReview';
+import { preferredTvChartTf } from '@/lib/visionReview';
 import apiClient from '@/lib/apiClient';
 import {
   aiLevelOverrideFromReview,
@@ -437,10 +437,6 @@ function preferredExecutionSignal(row: UnifiedRow): EngineASignal {
 
 function resolveSignalSymbol(signal: EngineASignal): string {
   return String(signal.symbol || signal.pair || signal.display || '').toUpperCase().trim();
-}
-
-export function preferredTvChartTf(signal: EngineASignal): string {
-  return preferredVisionReviewTf(signal);
 }
 
 function intentSourceForRow(row: UnifiedRow): 'signals' | 'engine_a' | 'engine_b' {

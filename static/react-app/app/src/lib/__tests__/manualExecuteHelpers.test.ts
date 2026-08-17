@@ -380,10 +380,8 @@ describe('Engine A V3 scanner tier gating', () => {
     })).toBeNull();
   });
 
-  it('routes a V3 chart review to the policy setup timeframe', async () => {
-    const panel = await import('../../components/panels/SignalsPanel') as {
-      preferredTvChartTf?: (signal: EngineASignal) => string;
-    };
+  it('routes a V3 chart review to the policy setup timeframe when structure is absent', async () => {
+    const { preferredTvChartTf } = await import('../visionReview');
     const signal = {
       engine: 'ENGINE_A_V3',
       contractVersion: '3.1.0',
@@ -392,8 +390,20 @@ describe('Engine A V3 scanner tier gating', () => {
       style: 'intraday',
     } as EngineASignal;
 
-    expect(typeof panel.preferredTvChartTf).toBe('function');
-    expect(panel.preferredTvChartTf?.(signal)).toBe('M30');
+    expect(preferredTvChartTf(signal)).toBe('M30');
+  });
+
+  it('opens Open & Review on policy structure, not setup', async () => {
+    const { preferredTvChartTf } = await import('../visionReview');
+    const signal = {
+      engine: 'ENGINE_A_V3',
+      structureTf: 'H4',
+      setupTf: 'H1',
+      triggerTf: 'M15',
+      style: 'intraday',
+    } as EngineASignal;
+
+    expect(preferredTvChartTf(signal)).toBe('H4');
   });
 
   it('blocks a V3 Signals-panel row when its scanner tier is missing', async () => {

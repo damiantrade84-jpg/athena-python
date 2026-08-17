@@ -1365,8 +1365,9 @@ def resolve_timeframe_policy(
     if not adaptation_ready:
         messages.append("INSUFFICIENT_HISTORY: baseline policy retained")
 
-    # THIN/UNAVAILABLE liquidity is an M5-eligibility block and, when trigger
-    # speed adaptation is enabled, demotes an M15 trigger to M30 (cost trap).
+    # THIN/UNAVAILABLE liquidity is an M5-eligibility block. Trigger demotion
+    # is only for observed THIN (or SLOW speed) — missing session/market-state
+    # must not rewrite a major's M15 trigger to M30.
     m5_liquidity_blocked = bool(
         speed_state
         and speed_state.liquidity_class
@@ -1392,10 +1393,7 @@ def resolve_timeframe_policy(
         if adaptation_ready and effective_speed == SpeedClass.SLOW:
             demote = True
             demote_reason = "SLOW_SPEED"
-        elif m5_liquidity_blocked or (
-            speed_state
-            and speed_state.liquidity_class == LiquidityClass.THIN
-        ):
+        elif speed_state and speed_state.liquidity_class == LiquidityClass.THIN:
             demote = True
             demote_reason = "THIN_LIQUIDITY"
         elif (
@@ -1942,7 +1940,6 @@ def calculate_speed_state(
         or spread_ratio > liquidity_cfg.normal_max_spread_trigger_atr
         or gap not in {"", "none", "normal", "open"}
         or session in {"closed", "avoid", "off_hours"}
-        or not str(provider_market_state or "").strip()
         or str(provider_market_state or "").strip().lower()
         in {"closed", "halted", "suspended", "unavailable"}
         or scheduled_event is True
