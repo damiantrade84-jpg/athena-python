@@ -168,6 +168,43 @@ def test_flat_decision_is_neutral_even_if_direction_and_metrics_are_present(stat
     assert shadow["supportEligible"] is False
 
 
+def test_fresh_no_candidate_flat_supersedes_an_old_trade(state_root):
+    from athena_ase.execution.journal import append_trade_signals
+
+    now_ms = int(time.time() * 1000)
+    append_trade_signals(
+        [
+            _trade_signal("EURUSD", "LONG", now_ms - 3 * 3_600_000),
+            _trade_signal(
+                "EURUSD",
+                "NONE",
+                now_ms,
+                status="FLAT",
+                expected_net_r=0.0,
+                probability_positive=0.0,
+                data_quality={
+                    "coreOk": True,
+                    "route": "core",
+                    "missingFeeds": [],
+                    "blocker": "no_layer1_candidate",
+                },
+            ),
+        ]
+    )
+
+    shadow = ebs.ase_shadow_for_card(
+        "EURUSD",
+        "LONG",
+        style="intraday",
+        now_ms=now_ms,
+    )
+
+    assert shadow is not None
+    assert shadow["supportState"] == "NEUTRAL"
+    assert shadow["reason"] == "ase_decision_flat"
+    assert shadow["decisionStatus"] == "FLAT"
+
+
 def test_watch_alignment_is_visible_but_not_support_eligible(state_root):
     from athena_ase.execution.journal import append_trade_signals
 

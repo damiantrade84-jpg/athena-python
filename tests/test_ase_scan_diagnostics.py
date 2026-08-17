@@ -105,8 +105,15 @@ def test_scan_with_bars_and_no_artifacts_yields_error_candidates(ptis: PTISStore
 def test_predict_no_candidate_blocker_metadata(ptis: PTISStore):
     inst = instrument_by_symbol("EURUSD")
     assert inst is not None
-    sig = predict_no_candidate(inst, "intraday", store=ptis)
+    decision_time_ms = 1_777_777_777_000
+    sig = predict_no_candidate(
+        inst,
+        "intraday",
+        store=ptis,
+        decision_time_ms=decision_time_ms,
+    )
     assert sig.decisionStatus == "FLAT"
+    assert sig.decisionTimeMs == decision_time_ms
     assert sig.dataQuality["blocker"] == "ptis_bars_missing"
     # errorReason only when artifacts missing; with re-promoted v2-integrity it is absent
     assert sig.dataQuality["ptisOk"] is False

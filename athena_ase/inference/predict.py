@@ -656,4 +656,5 @@ def predict_no_candidate(
         gate_result=gate.to_dict(),
         data_quality=data_quality,
         model_health=model_health,
+        decision_time_ms=now_ms,
     )

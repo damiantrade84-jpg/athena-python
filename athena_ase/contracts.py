@@ -172,6 +172,7 @@ def flat_signal(
     model_health: dict[str, Any] | None = None,
     primary_signals: list[dict[str, Any]] | None = None,
     display: str | None = None,
+    decision_time_ms: int = 0,
 ) -> ASESignal:
     return ASESignal(
         engineVersion="2.1.0",
@@ -202,4 +203,5 @@ def flat_signal(
         or {"artifactHash": "", "trainedAt": "", "brier": None, "driftScore": 0.0, "gateResult": gate_result},
         instrument=instrument,
         display=resolve_instrument_display(instrument, display),
+        decisionTimeMs=decision_time_ms,
     )

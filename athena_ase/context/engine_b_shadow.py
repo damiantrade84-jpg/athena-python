@@ -121,13 +121,16 @@ def _health_flags(latest: Any) -> tuple[bool, bool]:
     model_health = _json_mapping(latest.get("modelHealth"))
     gate_result = _json_mapping(model_health.get("gateResult"))
     monitor = _json_mapping(model_health.get("monitor"))
+    data_blocker = str(data_quality.get("blocker") or "")
+    model_blocker = str(model_health.get("blocker") or "")
+    benign_blockers = {"", "no_layer1_candidate"}
     data_ok = bool(
         data_quality.get("coreOk") is True
-        and not data_quality.get("blocker")
+        and data_blocker in benign_blockers
     )
     model_ok = bool(
         gate_result.get("ok") is True
-        and not model_health.get("blocker")
+        and model_blocker in benign_blockers
         and not model_health.get("errorReason")
         and monitor.get("watchMax") is not True
     )
