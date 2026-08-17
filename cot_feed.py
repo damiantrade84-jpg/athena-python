@@ -92,7 +92,9 @@ _CONTRACT_FRAGMENTS: dict[str, str | tuple[str, ...]] = {
     "XAU": "GOLD",
     "XAG": "SILVER",
     "OIL": "CRUDE OIL, LIGHT SWEET",
-    "NG": "NATURAL GAS",
+    # NYMEX renamed the current report label from NATURAL GAS to NAT GAS NYME
+    # in March 2026.  Keep both so annual history and current weekly rows join.
+    "NG": ("NATURAL GAS", "NAT GAS NYME"),
     "HG": "COPPER",
     "PL": "PLATINUM",
     # Softs / grains (disaggregated CFTC)

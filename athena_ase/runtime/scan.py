@@ -22,7 +22,7 @@ from athena_ase.horizon import Horizon, is_intraday
 from athena_ase.inference.predict import predict_batch, predict_no_candidate
 from athena_ase.instruments import DEFAULT_INSTRUMENTS, Instrument, instrument_by_symbol, instruments_for_family
 from athena_ase.runtime.health import scan_diagnostics
-from athena_ase.settings import intraday_families
+from athena_ase.settings import commodity_xsec_enabled, intraday_families
 from athena_ase.signals.arbitrate import Candidate, FiredSignal, arbitrate
 from athena_ase.signals.carry import compute_carry
 from athena_ase.signals.common import (
@@ -38,7 +38,7 @@ from athena_ase.signals.xsec import compute_xsec
 
 log = logging.getLogger("ase.runtime.scan")
 
-DEFAULT_SCAN_INGEST_SOURCES = ("mt5_live", "bybit")
+DEFAULT_SCAN_INGEST_SOURCES = ("mt5_live", "bybit", "cot", "fred")
 # Scan-time ingest is a freshness *top-up*, not a historical backfill. Bybit
 # OI/funding history is fetched over the network and its cache key churns with
 # wall-clock now(), so a wide window re-fetches thousands of paginated requests
@@ -219,7 +219,7 @@ def _scan_ingest_sources_for_instruments(
     if selected != DEFAULT_SCAN_INGEST_SOURCES:
         return selected
     if instruments and not any(inst.family == "crypto" for inst in instruments):
-        return ("mt5_live",)
+        return ("mt5_live", "cot", "fred")
     if instruments and all(inst.family == "crypto" for inst in instruments):
         # Crypto-only scans skip the MT5 leg but keep Bybit: klines are the
         # sole live crypto OHLC path into PTIS (the Binance backtest-cache
@@ -231,6 +231,26 @@ def _scan_ingest_sources_for_instruments(
 def _bybit_symbols_for_scan(instruments: tuple[Instrument, ...]) -> list[str] | None:
     symbols = [inst.symbol for inst in instruments if inst.family == "crypto"]
     return symbols or None
+
+
+def _mt5_live_instruments_for_scan(
+    instruments: tuple[Instrument, ...],
+) -> tuple[Instrument, ...]:
+    """Include commodity benchmarks without adding them to the scan universe."""
+    out = list(instruments)
+    seen = {inst.symbol for inst in out}
+    for inst in instruments:
+        if inst.family != "commodity" or inst.benchmark in seen:
+            continue
+        benchmark = instrument_by_symbol(inst.benchmark)
+        if benchmark is None and inst.benchmark == "USDX":
+            benchmark = Instrument(
+                "USDX", "USDX", "index_etf", "benchmark", "", "USDX", True, True
+            )
+        if benchmark is not None:
+            out.append(benchmark)
+            seen.add(benchmark.symbol)
+    return tuple(out)
 
 
 def _latest_candidate(
@@ -261,10 +281,19 @@ def _latest_candidate(
     if horizon == "swing":
         cr = compute_carry(store, instrument, decision_time_ms, sig1)
         fired.append(FiredSignal("carry", cr.direction, cr.raw_strength))
-        if instrument.family in ("equity", "crypto", "index_etf"):
+        if instrument.family in ("equity", "crypto", "index_etf") or (
+            instrument.family == "commodity" and commodity_xsec_enabled()
+        ):
             xs = compute_xsec(instrument, family_bars, decision_time_ms, horizon)
             if not xs.disabled:
-                fired.append(FiredSignal("xsec", xs.direction, xs.raw_strength))
+                fired.append(
+                    FiredSignal(
+                        "xsec",
+                        xs.direction,
+                        xs.raw_strength,
+                        {"percentile": xs.pct, "dispersion": xs.dispersion},
+                    )
+                )
     if horizon == "intraday" and instrument.family == "forex":
         mr = compute_meanrev(instrument, series.close_log, idx, tsm.blend)
         fired.append(FiredSignal("meanrev", mr.direction, mr.raw_strength))
@@ -418,7 +447,7 @@ def run_ase_scan(
             else None
         ),
         mt5_live_instruments=(
-            instruments
+            _mt5_live_instruments_for_scan(instruments)
             if ingest_sources_selected and "mt5_live" in ingest_sources_selected
             else None
         ),
@@ -541,7 +570,7 @@ def run_ase_dual_horizon_scan(
             else None
         ),
         mt5_live_instruments=(
-            instruments
+            _mt5_live_instruments_for_scan(instruments)
             if ingest_sources_selected and "mt5_live" in ingest_sources_selected
             else None
         ),

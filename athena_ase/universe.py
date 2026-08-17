@@ -90,12 +90,15 @@ UNIVERSE: tuple[Instrument, ...] = (
     Instrument("USDHUF", "USD/HUF", "forex", "cross_em", "USDHUF.FOREX", "USDX"),
     Instrument("USDPLN", "USD/PLN", "forex", "cross_em", "USDPLN.FOREX", "USDX"),
     Instrument("USDSEK", "USD/SEK", "forex", "cross_em", "USDSEK.FOREX", "USDX"),
-    Instrument("GC=F", "XAU/USD", "commodity", "cfd", "XAUUSD.FOREX", "XAUUSD"),
-    Instrument("XAUZAR", "XAU/ZAR", "commodity", "cfd", "XAUZAR.FOREX", "XAUUSD"),
-    Instrument("SI=F", "XAG/USD", "commodity", "cfd", "XAGUSD.FOREX", "XAUUSD"),
-    Instrument("CL=F", "WTI Oil", "commodity", "cfd", "CL", "XAUUSD"),
-    Instrument("BZ=F", "Brent Oil", "commodity", "cfd", "BZ", "XAUUSD"),
-    Instrument("NATGAS", "Nat Gas", "commodity", "cfd", "NG", "XAUUSD"),
+    # Commodity benchmarks are explicit tradable context series.  The old
+    # one-size-fits-all XAUUSD benchmark did not exist under ASE's GC=F PTIS
+    # identity, leaving beta_bench entirely NaN for the commodity model.
+    Instrument("GC=F", "XAU/USD", "commodity", "cfd", "XAUUSD.FOREX", "USDX"),
+    Instrument("XAUZAR", "XAU/ZAR", "commodity", "cfd", "XAUZAR.FOREX", "GC=F"),
+    Instrument("SI=F", "XAG/USD", "commodity", "cfd", "XAGUSD.FOREX", "GC=F"),
+    Instrument("CL=F", "WTI Oil", "commodity", "cfd", "CL", "BZ=F"),
+    Instrument("BZ=F", "Brent Oil", "commodity", "cfd", "BZ", "CL=F"),
+    Instrument("NATGAS", "Nat Gas", "commodity", "cfd", "NG", "CL=F"),
     Instrument("NAS100", "NASDAQ-100", "index_etf", "default", "IXIC.INDX", "SPY"),
     Instrument("^GSPC", "S&P 500", "index_etf", "default", "GSPC.INDX", "SPY"),
     Instrument("US2000", "US2000", "index_etf", "default", "US2000", "SPY"),

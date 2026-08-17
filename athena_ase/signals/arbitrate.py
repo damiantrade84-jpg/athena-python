@@ -15,6 +15,7 @@ class FiredSignal:
     name: str
     direction: int
     raw_strength: float
+    context: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -128,10 +129,15 @@ def arbitrate(
         return None
 
     agreeing = [s for s in active if s.direction == direction]
-    sig_dicts = [
-        {"name": s.name, "direction": s.direction, "rawStrength": s.raw_strength}
-        for s in active
-    ]
+    sig_dicts = []
+    for signal in active:
+        row: dict[str, Any] = {
+            "name": signal.name,
+            "direction": signal.direction,
+            "rawStrength": signal.raw_strength,
+        }
+        row.update(signal.context)
+        sig_dicts.append(row)
     return Candidate(
         instrument=instrument.symbol,
         family=instrument.family,

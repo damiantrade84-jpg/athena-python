@@ -51,3 +51,24 @@ def test_xsec_continuous_mode_uses_z_strength(monkeypatch):
     res = compute_xsec(inst, universe, decision, "swing")
     assert res.direction == 1
     assert res.raw_strength > 0.0
+
+
+def test_commodity_xsec_is_research_gated_and_uses_three_asset_sleeve(monkeypatch):
+    cfg = __import__("config").CONFIG
+    monkeypatch.setitem(cfg, "ASE_XSEC", {"COMMODITY_ENABLED": False})
+    inst = Instrument("GC=F", "XAU/USD", "commodity", "cfd", "", "USDX")
+    universe = {
+        "GC=F": _series(drift=0.03),
+        "XAUZAR": _series(drift=0.01),
+        "SI=F": _series(drift=-0.01),
+        "CL=F": _series(drift=0.20),
+    }
+    decision = int(universe["GC=F"].available_time[-1])
+
+    assert compute_xsec(inst, universe, decision, "swing").disabled is True
+
+    monkeypatch.setitem(cfg, "ASE_XSEC", {"COMMODITY_ENABLED": True})
+    result = compute_xsec(inst, universe, decision, "swing")
+    assert result.disabled is False
+    assert result.direction == 1
+    assert result.dispersion > 0.0

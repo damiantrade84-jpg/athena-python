@@ -44,6 +44,14 @@ _CALENDAR_BLOCK = ("hour_sin", "hour_cos", "dow_sin", "dow_cos", "session")
 _INSTRUMENT_BLOCK = ("instrument_id", "subclass")
 _VOL_BLOCK = ("vol_level", "vol_of_vol", "vol_regime")
 _ENRICHED_BLOCK = ("cot_pct", "cot_delta_4w", "funding_z", "oi_delta_z")
+_COMMODITY_MACRO_BLOCK = (
+    "usd_index_ret_21",
+    "us_real_yield_level",
+    "us_real_yield_delta_21",
+    "us_nominal_yield_level",
+    "us_nominal_yield_delta_21",
+    "quote_rate_level",
+)
 _FEATURE_V2_BLOCK = ("trade_imbalance_z", "bucket_delta_z")
 
 FEATURE_SCHEMA_CORE: tuple[str, ...] = (
@@ -58,7 +66,9 @@ FEATURE_SCHEMA_CORE: tuple[str, ...] = (
     *_INSTRUMENT_BLOCK,
 )
 
-FEATURE_SCHEMA_ENRICHED: tuple[str, ...] = FEATURE_SCHEMA_CORE + _ENRICHED_BLOCK
+FEATURE_SCHEMA_ENRICHED: tuple[str, ...] = (
+    FEATURE_SCHEMA_CORE + _ENRICHED_BLOCK + _COMMODITY_MACRO_BLOCK
+)
 FEATURE_SCHEMA_V2: tuple[str, ...] = FEATURE_SCHEMA_CORE + _FEATURE_V2_BLOCK
 FEATURE_SCHEMA_ENRICHED_V2: tuple[str, ...] = FEATURE_SCHEMA_ENRICHED + _FEATURE_V2_BLOCK
 
@@ -123,6 +133,10 @@ def _cot_series_id(asset: str) -> str:
     return f"CFTC:COT:{asset.upper()}:noncomm_net"
 
 
+def _fred_series_id(series_id: str) -> str:
+    return f"FRED:{series_id.upper()}:rate"
+
+
 # ── COT asset mapping ─────────────────────────────────────────────────────────
 # Maps instrument symbol → CFTC COT asset code.  For forex, the non-USD
 # currency (base for XXX/USD, quote for USD/XXX).  For crosses, the base
@@ -137,7 +151,7 @@ COT_ASSET_MAP: dict[str, str] = {
     "GBPJPY": "GBP", "GBPAUD": "GBP", "AUDJPY": "AUD", "AUDCHF": "AUD",
     "AUDNZD": "AUD",
     # Commodities
-    "GC=F": "XAU", "SI=F": "XAG", "CL=F": "OIL", "BZ=F": "OIL",
+    "GC=F": "XAU", "XAUZAR": "XAU", "SI=F": "XAG", "CL=F": "OIL", "BZ=F": "OIL",
     "NATGAS": "NG", "COPPER": "HG", "PL=F": "PL", "PA=F": "PL",
     "WHEAT": "WHEAT", "CORN": "CORN", "SOYBEANS": "SOYBEANS",
     "SUGAR": "SUGAR", "COCOA": "COCOA", "COFFEE": "COFFEE",
@@ -241,6 +255,26 @@ def _asof_values_freshest(
     return best_vals
 
 
+def _asof_rows_freshest(
+    series_ids: Sequence[str],
+    decision_time_ms: int,
+    n: int,
+    *,
+    store: PTISStore | Any | None = None,
+) -> np.ndarray:
+    best_rows = np.empty(0, dtype=PTIS_VALUE_DTYPE)
+    best_t = -1
+    for series_id in series_ids:
+        rows = _read_asof(store, series_id, decision_time_ms, n)
+        if len(rows) == 0:
+            continue
+        last_t = int(rows[-1]["value_time"])
+        if last_t > best_t:
+            best_t = last_t
+            best_rows = rows
+    return best_rows
+
+
 def _asof_close_log(
     symbol: str,
     tf: str,
@@ -339,6 +373,47 @@ def _rolling_beta(
     return cov / var_b
 
 
+def _rolling_beta_aligned(
+    inst_rows: np.ndarray,
+    bench_rows: np.ndarray,
+    window: int = 64,
+) -> float:
+    """Beta from equal timestamps only; never pair unrelated stale tails."""
+    if len(inst_rows) < window or len(bench_rows) < window:
+        return float("nan")
+    inst = {int(r["value_time"]): float(r["value"]) for r in inst_rows}
+    bench = {int(r["value_time"]): float(r["value"]) for r in bench_rows}
+    common = sorted(set(inst).intersection(bench))[-window:]
+    if len(common) < window:
+        return float("nan")
+    inst_log = np.log(np.maximum([inst[t] for t in common], 1e-12))
+    bench_log = np.log(np.maximum([bench[t] for t in common], 1e-12))
+    return _rolling_beta(inst_log, bench_log, window=window)
+
+
+def _fresh_rows(
+    rows: np.ndarray,
+    decision_time_ms: int,
+    max_age_ms: int,
+) -> np.ndarray:
+    if len(rows) == 0:
+        return rows
+    if decision_time_ms - int(rows[-1]["value_time"]) > max_age_ms:
+        return rows[:0]
+    return rows
+
+
+def _delta(rows: np.ndarray, periods: int) -> float:
+    if len(rows) <= periods:
+        return float("nan")
+    vals = rows["value"].astype(float)
+    return float(vals[-1] - vals[-1 - periods])
+
+
+def _commodity_quote_rate_series(symbol: str) -> str:
+    return "IRSTCI01ZAM156N" if _compact_symbol(symbol) == "XAUZAR" else "DFF"
+
+
 @dataclass
 class FeatureBuildContext:
     symbol: str
@@ -361,6 +436,7 @@ class FeatureBuildContext:
     benchmark_symbol: str = "SPY"
     cot_asset: str = ""
     cot_verified: bool = True
+    commodity_macro_enabled: bool = True
     missing_feeds: list[str] = field(default_factory=list)
     enriched_missing_feeds: list[str] = field(default_factory=list)
     # Feeds whose absence degrades a feature to NaN without gating the
@@ -460,15 +536,25 @@ def build_features_for_candidate(
     out["xsec_pct"] = ctx.xsec_pct
     out["family_dispersion"] = ctx.family_dispersion
 
-    bench_log = _asof_close_log(
-        ctx.benchmark_symbol, tf, ctx.decision_time_ms, need_bars, store=store
+    inst_rows = _asof_rows_freshest(
+        _price_series_ids(ctx.symbol, tf, "close"),
+        ctx.decision_time_ms,
+        need_bars,
+        store=store,
     )
-    if len(bench_log) >= 64:
-        out["beta_bench"] = _rolling_beta(close_log, bench_log)
-    else:
-        # Optional, not core-gating: a missing benchmark series degrades
-        # beta_bench to NaN (matching training rows built while the same
-        # series was absent, e.g. XAUUSD for the whole commodity family).
+    bench_rows = _asof_rows_freshest(
+        _price_series_ids(ctx.benchmark_symbol, tf, "close"),
+        ctx.decision_time_ms,
+        need_bars,
+        store=store,
+    )
+    benchmark_max_age = 96 * 3_600_000 if is_intraday(ctx.horizon) else 7 * 86_400_000
+    inst_rows = _fresh_rows(inst_rows, ctx.decision_time_ms, benchmark_max_age)
+    bench_rows = _fresh_rows(bench_rows, ctx.decision_time_ms, benchmark_max_age)
+    out["beta_bench"] = _rolling_beta_aligned(inst_rows, bench_rows)
+    if out["beta_bench"] != out["beta_bench"]:
+        # Missing or timestamp-misaligned benchmark history must never be
+        # paired positionally with a newer instrument tail.
         out["beta_bench"] = float("nan")
         _mark_missing(ctx.optional_missing_feeds, "benchmark")
 
@@ -499,6 +585,7 @@ def build_features_for_candidate(
         cot_rows = _read_asof(
             store, _cot_series_id(ctx.cot_asset), ctx.decision_time_ms, 160
         )
+        cot_rows = _fresh_rows(cot_rows, ctx.decision_time_ms, 28 * 86_400_000)
         pct, delta, n_weeks = _cot_percentile(cot_rows)
         if n_weeks >= COT_MIN_WEEKS:
             out["cot_pct"] = pct
@@ -534,6 +621,59 @@ def build_features_for_candidate(
             out["oi_delta_z"] = (float(oi_ret[-1]) - mu) / sd if sd > 0 else 0.0
         else:
             _mark_missing(ctx.enriched_missing_feeds, "open_interest")
+
+    if enriched and ctx.family == "commodity" and ctx.commodity_macro_enabled:
+        # Commodity opportunity cost is not FX carry.  Use point-in-time USD,
+        # yield, and quote-currency context; stale inputs route to core.
+        daily_max_age = 10 * 86_400_000
+        monthly_max_age = 75 * 86_400_000
+
+        usdx_rows = _fresh_rows(
+            _read_asof(
+                store, _fred_series_id("DTWEXBGS"), ctx.decision_time_ms, 32
+            ),
+            ctx.decision_time_ms,
+            daily_max_age,
+        )
+        if len(usdx_rows) >= 22:
+            vals = np.log(np.maximum(usdx_rows["value"].astype(float), 1e-12))
+            out["usd_index_ret_21"] = float(vals[-1] - vals[-22])
+        else:
+            _mark_missing(ctx.enriched_missing_feeds, "usd_index")
+
+        real_rows = _fresh_rows(
+            _read_asof(store, _fred_series_id("DFII10"), ctx.decision_time_ms, 64),
+            ctx.decision_time_ms,
+            daily_max_age,
+        )
+        if len(real_rows) >= 22:
+            out["us_real_yield_level"] = float(real_rows[-1]["value"])
+            out["us_real_yield_delta_21"] = _delta(real_rows, 21)
+        else:
+            _mark_missing(ctx.enriched_missing_feeds, "us_real_yield")
+
+        nominal_rows = _fresh_rows(
+            _read_asof(store, _fred_series_id("DGS10"), ctx.decision_time_ms, 64),
+            ctx.decision_time_ms,
+            daily_max_age,
+        )
+        if len(nominal_rows) >= 22:
+            out["us_nominal_yield_level"] = float(nominal_rows[-1]["value"])
+            out["us_nominal_yield_delta_21"] = _delta(nominal_rows, 21)
+        else:
+            _mark_missing(ctx.enriched_missing_feeds, "us_nominal_yield")
+
+        quote_series = _commodity_quote_rate_series(ctx.symbol)
+        quote_age = monthly_max_age if quote_series.startswith("IRSTCI") else daily_max_age
+        quote_rows = _fresh_rows(
+            _read_asof(store, _fred_series_id(quote_series), ctx.decision_time_ms, 2),
+            ctx.decision_time_ms,
+            quote_age,
+        )
+        if len(quote_rows):
+            out["quote_rate_level"] = float(quote_rows[-1]["value"])
+        else:
+            _mark_missing(ctx.enriched_missing_feeds, "quote_rate")
 
     if microstructure_enabled() and ctx.family == "crypto":
         imb = _asof_values(

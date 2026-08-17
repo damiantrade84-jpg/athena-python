@@ -30,6 +30,12 @@ def test_enriched_schema_extends_core():
         "cot_delta_4w",
         "funding_z",
         "oi_delta_z",
+        "usd_index_ret_21",
+        "us_real_yield_level",
+        "us_real_yield_delta_21",
+        "us_nominal_yield_level",
+        "us_nominal_yield_delta_21",
+        "quote_rate_level",
     }
 
 

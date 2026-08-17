@@ -169,7 +169,7 @@ def test_forex_symbol_scan_runs_mt5_live_ingest_by_default(ptis: PTISStore, monk
         ptis_root=str(ptis.root),
     )
     assert len(calls) == 1
-    assert calls[0]["sources"] == ("mt5_live",)
+    assert calls[0]["sources"] == ("mt5_live", "cot", "fred")
     assert calls[0]["write_audit"] is False
     assert calls[0]["bybit_lookback_days"] == scan_module.DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS
     assert tuple(inst.symbol for inst in calls[0]["mt5_live_instruments"]) == ("EURUSD",)
@@ -272,7 +272,7 @@ def test_non_crypto_scan_default_ingest_skips_bybit(ptis: PTISStore, monkeypatch
     )
 
     assert len(calls) == 1
-    assert calls[0]["sources"] == ("mt5_live",)
+    assert calls[0]["sources"] == ("mt5_live", "cot", "fred")
     assert "bybit_symbols" not in calls[0]
     assert result["ingestResult"] == {"result": {"mt5_live": {"inserted": 5}}}
 

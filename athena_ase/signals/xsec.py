@@ -9,7 +9,7 @@ import numpy as np
 
 from athena_ase.horizon import HORIZONS
 from athena_ase.instruments import Instrument
-from athena_ase.settings import xsec_continuous_enabled, xsec_z_cap
+from athena_ase.settings import commodity_xsec_enabled, xsec_continuous_enabled, xsec_z_cap
 from athena_ase.signals.common import BarSeries, bar_index_at_decision
 
 log = logging.getLogger("ase.signals.xsec")
@@ -24,6 +24,17 @@ class XSecResult:
     raw_strength: float
     pct: float
     disabled: bool = False
+    dispersion: float = 0.0
+
+
+_COMMODITY_PEERS: dict[str, frozenset[str]] = {
+    "GC=F": frozenset({"GC=F", "XAUZAR", "SI=F"}),
+    "XAUZAR": frozenset({"GC=F", "XAUZAR", "SI=F"}),
+    "SI=F": frozenset({"GC=F", "XAUZAR", "SI=F"}),
+    "CL=F": frozenset({"CL=F", "BZ=F", "NATGAS"}),
+    "BZ=F": frozenset({"CL=F", "BZ=F", "NATGAS"}),
+    "NATGAS": frozenset({"CL=F", "BZ=F", "NATGAS"}),
+}
 
 
 def _r63(close_log: np.ndarray, sigma_bar: np.ndarray, idx: int, lookback: int = 63) -> float | None:
@@ -50,11 +61,19 @@ def compute_xsec(
     decision_time_ms: int,
     horizon: str,
 ) -> XSecResult:
-    if instrument.family not in ("equity", "crypto", "index_etf"):
+    if instrument.family == "commodity" and not commodity_xsec_enabled():
+        return XSecResult(0, 0.0, 0.5, disabled=True)
+    if instrument.family not in ("equity", "crypto", "index_etf", "commodity"):
         return XSecResult(0, 0.0, 0.5)
     lookback = HORIZONS["swing"].xsec_lookback
     all_scores: list[float] = []
-    for series in family_series.values():
+    peer_symbols = _COMMODITY_PEERS.get(instrument.symbol) if instrument.family == "commodity" else None
+    eligible_series = {
+        symbol: series
+        for symbol, series in family_series.items()
+        if peer_symbols is None or symbol in peer_symbols
+    }
+    for series in eligible_series.values():
         i = bar_index_at_decision(series, decision_time_ms)
         if i is None:
             continue
@@ -62,7 +81,8 @@ def compute_xsec(
         if r is not None:
             all_scores.append(r)
 
-    if len(all_scores) < _MIN_UNIVERSE:
+    min_universe = 3 if instrument.family == "commodity" else _MIN_UNIVERSE
+    if len(all_scores) < min_universe:
         day_key = f"{instrument.family}:{decision_time_ms // 86_400_000}"
         if day_key not in _xsec_disable_logged:
             _xsec_disable_logged.add(day_key)
@@ -70,12 +90,12 @@ def compute_xsec(
                 "xsec disabled: family=%s universe=%d<%d at %s",
                 instrument.family,
                 len(all_scores),
-                _MIN_UNIVERSE,
+                min_universe,
                 decision_time_ms,
             )
         return XSecResult(0, 0.0, 0.5, disabled=True)
 
-    target = family_series.get(instrument.symbol)
+    target = eligible_series.get(instrument.symbol)
     if target is None:
         return XSecResult(0, 0.0, 0.5)
     idx = bar_index_at_decision(target, decision_time_ms)
@@ -89,12 +109,13 @@ def compute_xsec(
     less = sum(1 for s in all_scores if s < own)
     pct = less / (len(all_scores) - 1) if len(all_scores) > 1 else 0.5
 
+    arr = np.asarray(all_scores, dtype=float)
+    dispersion = float(np.std(arr))
     if xsec_continuous_enabled():
-        arr = np.asarray(all_scores, dtype=float)
         mu = float(np.mean(arr))
-        sd = float(np.std(arr))
+        sd = dispersion
         if sd <= 1e-12:
-            return XSecResult(0, 0.0, pct)
+            return XSecResult(0, 0.0, pct, dispersion=dispersion)
         z = (own - mu) / sd
         direction = 1 if z > 0 else -1 if z < 0 else 0
         cap = max(xsec_z_cap(), 1e-6)
@@ -102,8 +123,8 @@ def compute_xsec(
         if abs(z) < 0.25:
             direction = 0
             raw_strength = 0.0
-        return XSecResult(direction, raw_strength, pct)
+        return XSecResult(direction, raw_strength, pct, dispersion=dispersion)
 
     direction = _percentile_direction(pct)
     raw_strength = abs(pct - 0.5) * 2.0
-    return XSecResult(direction, raw_strength, pct)
+    return XSecResult(direction, raw_strength, pct, dispersion=dispersion)

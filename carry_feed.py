@@ -84,6 +84,9 @@ _FRED_CURRENCY_SERIES: dict[str, str] = {
 
 # 10Y government bond yields — for index/commodity risk signals
 _FRED_10Y_SERIES = "DGS10"  # US 10-Year Treasury Constant Maturity Rate
+# ASE commodity opportunity-cost context. DTWEXBGS is the daily broad dollar
+# index and avoids depending on an executable MT5 symbol for historical macro.
+_FRED_COMMODITY_MACRO_SERIES = {"DFII10", "DTWEXBGS"}
 _FRED_10Y_SERIES_GB = "IRLTLT01GBM156N"  # UK 10-Year Gilt yield (monthly)
 _FRED_10Y_SERIES_DE = "IRLTLT01DEM156N"  # Germany 10-Year Bund yield (monthly)
 _FRED_10Y_SERIES_AU = "IRLTLT01AUM156N"  # Australia 10-Year yield (monthly)
@@ -838,7 +841,7 @@ def seed_carry_background():
     """Trigger background fetch of all FRED rate series on startup."""
 
     def _seed():
-        all_series = set(_FRED_CURRENCY_SERIES.values()) | set(
+        all_series = set(_FRED_CURRENCY_SERIES.values()) | _FRED_COMMODITY_MACRO_SERIES | set(
             sid for sid, _ in _10Y_SERIES_MAP.values()
         )
         stale = [sid for sid in sorted(all_series) if _needs_refresh(sid)]

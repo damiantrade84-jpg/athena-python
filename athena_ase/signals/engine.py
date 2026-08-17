@@ -10,6 +10,7 @@ from athena_ase.features.build import vol_regime_ordinal
 from athena_ase.horizon import Horizon, HORIZONS, is_intraday
 from athena_ase.instruments import DEFAULT_INSTRUMENTS, Instrument, instruments_for_family
 from athena_ase.settings import (
+    commodity_xsec_enabled,
     intraday_families,
     layer1_vol_regime_extreme_ordinal,
     layer1_vol_regime_filter_enabled,
@@ -105,7 +106,9 @@ def iter_candidates(
             if horizon == "swing":
                 cr = compute_carry(store, inst, decision_time_ms, sig1)
                 fired.append(FiredSignal("carry", cr.direction, cr.raw_strength))
-                if inst.family in ("equity", "crypto", "index_etf"):
+                if inst.family in ("equity", "crypto", "index_etf") or (
+                    inst.family == "commodity" and commodity_xsec_enabled()
+                ):
                     xs = compute_xsec(
                         inst,
                         family_cache.get(inst.family, {}),
@@ -113,7 +116,14 @@ def iter_candidates(
                         horizon,
                     )
                     if not xs.disabled:
-                        fired.append(FiredSignal("xsec", xs.direction, xs.raw_strength))
+                        fired.append(
+                            FiredSignal(
+                                "xsec",
+                                xs.direction,
+                                xs.raw_strength,
+                                {"percentile": xs.pct, "dispersion": xs.dispersion},
+                            )
+                        )
             if is_intraday(horizon) and inst.family == "forex":
                 mr = compute_meanrev(inst, series.close_log, idx, tsm.blend)
                 fired.append(FiredSignal("meanrev", mr.direction, mr.raw_strength))

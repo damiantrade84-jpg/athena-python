@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import os
+
 from typing import Any, FrozenSet
 
 _DEFAULT_INTRADAY_FAMILIES = frozenset({"forex", "crypto", "commodity"})
 
 
 def _cfg() -> dict[str, Any]:
+    # Offline ASE research must not import the full application configuration:
+    # a live-mode checkout correctly fails its real-order confirmation guard.
+    # Explicit research runs use conservative ASE defaults instead of bypassing
+    # that production safety contract.
+    if os.environ.get("ATHENA_ASE_RESEARCH_CONFIG_DEFAULTS", "").strip() == "1":
+        return {}
     try:
         from config import CONFIG
 
@@ -136,6 +144,14 @@ def xsec_z_cap() -> float:
         return float(block.get("Z_CAP", 2.0))
     except (TypeError, ValueError):
         return 2.0
+
+
+def commodity_xsec_enabled() -> bool:
+    """Research gate; operational default remains off until validation passes."""
+    if os.environ.get("ATHENA_ASE_RESEARCH_COMMODITY_XSEC", "").strip() == "1":
+        return True
+    block = _cfg().get("ASE_XSEC") or {}
+    return bool(block.get("COMMODITY_ENABLED", False))
 
 
 def features_v2_enabled() -> bool:

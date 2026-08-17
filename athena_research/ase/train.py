@@ -78,6 +78,16 @@ def _append_audit(event: str, payload: dict[str, Any]) -> None:
 
 
 def _feature_row(cand: Candidate, inst, store: PTISStore) -> dict[str, Any]:
+    def _signal_context(name: str, field: str) -> float:
+        for signal in cand.signals:
+            if str(signal.get("name")) != name:
+                continue
+            try:
+                return float(signal.get(field))
+            except (TypeError, ValueError):
+                return float("nan")
+        return float("nan")
+
     ctx = FeatureBuildContext(
         symbol=inst.symbol,
         family=inst.family,
@@ -102,6 +112,8 @@ def _feature_row(cand: Candidate, inst, store: PTISStore) -> dict[str, Any]:
             and int(s.get("direction") or 0) == cand.direction
             and float(s.get("rawStrength") or 0) >= 0.3
         ),
+        xsec_pct=_signal_context("xsec", "percentile"),
+        family_dispersion=_signal_context("xsec", "dispersion"),
     )
     feats = build_features_for_candidate(ctx, enriched=True)
     feats["decision_time_ms"] = cand.decision_time_ms
@@ -209,7 +221,16 @@ def chronological_train_eval_split(
 def enriched_training_mask(frame: pd.DataFrame, family: str) -> pd.Series:
     required_by_family = {
         "forex": ("cot_pct", "cot_delta_4w"),
-        "commodity": ("cot_pct", "cot_delta_4w"),
+        "commodity": (
+            "cot_pct",
+            "cot_delta_4w",
+            "usd_index_ret_21",
+            "us_real_yield_level",
+            "us_real_yield_delta_21",
+            "us_nominal_yield_level",
+            "us_nominal_yield_delta_21",
+            "quote_rate_level",
+        ),
         "crypto": ("funding_z", "oi_delta_z"),
         "index_etf": ("cot_pct", "cot_delta_4w"),
     }

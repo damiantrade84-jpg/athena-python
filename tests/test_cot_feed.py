@@ -55,6 +55,16 @@ def test_parse_weekly_disagg_no_header_matches_gold_managed_money():
     assert parsed["XAU"]["2026-06-02"] == 76729 - 12888
 
 
+def test_parse_weekly_disagg_matches_current_nymex_nat_gas_name():
+    columns = ["0"] * 18
+    columns[0] = "NAT GAS NYME - NEW YORK MERCANTILE EXCHANGE"
+    columns[2] = "2026-08-11"
+    columns[16] = "90000"
+    columns[17] = "25000"
+    parsed = cot_feed._parse_weekly_disagg_no_header(",".join(columns))
+    assert parsed["NG"]["2026-08-11"] == 65000
+
+
 def test_mark_fetch_failure_uses_shorter_retry_window():
     cot_feed._init_db()
     before = time.time()

@@ -73,6 +73,19 @@ def _sig_value(signals: list[dict[str, Any]], name: str) -> float:
     return 0.0
 
 
+def _sig_context_value(
+    signals: list[dict[str, Any]], name: str, field: str
+) -> float:
+    for signal in signals:
+        if str(signal.get("name")) != name:
+            continue
+        try:
+            return float(signal.get(field))
+        except (TypeError, ValueError):
+            return float("nan")
+    return float("nan")
+
+
 def _predict_proba(model: Any, features: np.ndarray) -> float:
     if hasattr(model, "predict_proba"):
         proba = model.predict_proba(features.reshape(1, -1))[0]
@@ -198,7 +211,20 @@ def _row_to_vector(
     return vec
 
 
-def _build_context(candidate: Candidate, instrument: Instrument) -> FeatureBuildContext:
+def _build_context(
+    candidate: Candidate,
+    instrument: Instrument,
+    *,
+    commodity_macro_enabled: bool = True,
+) -> FeatureBuildContext:
+    benchmark_symbol = instrument.benchmark
+    cot_asset = cot_asset_for_symbol(instrument.symbol)
+    if instrument.family == "commodity" and not commodity_macro_enabled:
+        # Preserve old artifact parity: every legacy commodity bundle was
+        # trained with XAUUSD as benchmark and without XAUZAR COT coverage.
+        benchmark_symbol = "XAUUSD"
+        if instrument.symbol == "XAUZAR":
+            cot_asset = ""
     return FeatureBuildContext(
         symbol=instrument.symbol,
         family=instrument.family,
@@ -215,8 +241,11 @@ def _build_context(candidate: Candidate, instrument: Instrument) -> FeatureBuild
         sig_aggregate=float(candidate.aggregate_strength) * float(candidate.direction),
         conflict_score=float(candidate.conflict_score),
         layer1_confluence=_layer1_confluence(candidate.signals, candidate.direction),
-        benchmark_symbol=instrument.benchmark,
-        cot_asset=cot_asset_for_symbol(instrument.symbol),
+        xsec_pct=_sig_context_value(candidate.signals, "xsec", "percentile"),
+        family_dispersion=_sig_context_value(candidate.signals, "xsec", "dispersion"),
+        benchmark_symbol=benchmark_symbol,
+        cot_asset=cot_asset,
+        commodity_macro_enabled=commodity_macro_enabled,
     )
 
 
@@ -282,7 +311,15 @@ def predict_one(
             model_version=bundle.version,
         )
 
-    ctx = _build_context(candidate, instrument)
+    enriched_schema = tuple((bundle.manifest.feature_schemas or {}).get("enriched") or ())
+    commodity_macro_enabled = (
+        family != "commodity" or "usd_index_ret_21" in enriched_schema
+    )
+    ctx = _build_context(
+        candidate,
+        instrument,
+        commodity_macro_enabled=commodity_macro_enabled,
+    )
     has_enriched_model = bundle.model_enriched is not None
     row_probe = build_features_for_candidate(
         ctx, enriched=has_enriched_model, store=store
