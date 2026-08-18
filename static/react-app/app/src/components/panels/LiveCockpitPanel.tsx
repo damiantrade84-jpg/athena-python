@@ -14,6 +14,7 @@ import { ErrorBanner, RefreshButton } from '@/components/shared';
 import { resolveChartIntentSymbol } from '@/lib/chartIdentity';
 import AITradingAgentPanel from '@/components/ai/AITradingAgentPanel';
 import ConfidenceCalibrationPanel from '@/components/athena/ConfidenceCalibrationPanel';
+import SessionHeatChart, { SessionHeatPill } from '@/components/panels/SessionHeatChart';
 import {
   Radio,
   Bot,
@@ -32,6 +33,7 @@ import {
   Plus,
   Search,
   LineChart,
+  Flame,
 } from 'lucide-react';
 import { cn, fmtNum, toNum } from '@/lib/utils';
 import { engineBScoreBreakdown, fmtPrice } from '@/lib/athenaFormat';
@@ -44,6 +46,8 @@ import type {
   LdEngineCRow,
   LdEngineDRow,
   LdAiReview,
+  LdSessionHeat,
+  SessionHeatIndicator,
   AiTradeChatSignalPayload,
 } from '@/types/athena';
 
@@ -68,6 +72,7 @@ export default function LiveCockpitPanel() {
   const [pairGroups, setPairGroups] = useState<Record<string, string[]>>({});
   const [pairSearch, setPairSearch] = useState('');
   const [pairsDropdownOpen, setPairsDropdownOpen] = useState(false);
+  const [showSessionHeat, setShowSessionHeat] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef(false);
   const hasSnapshotRef = useRef(false);
@@ -313,6 +318,15 @@ export default function LiveCockpitPanel() {
 
   const fresh = snapshot?.freshnessAllOk !== false;
 
+  // Session heat: the snapshot carries the current session plus a per-row cue.
+  // The engine-level cues below are identical across rows of the same score
+  // group, so the header badge reads them off the first available row.
+  const sessionHeatSummary = snapshot?.sessionHeat;
+  const sessionHeatCurrentKey = sessionHeatSummary?.currentSession?.key;
+  const sessionHeatEngineA = symbols.find((s) => s.sessionHeat?.engineA)?.sessionHeat?.engineA;
+  const sessionHeatEngineB = symbols.find((s) => s.sessionHeat?.engineB)?.sessionHeat?.engineB;
+  const selectedScoreGroup = symbols.find((s) => s.symbol === selected)?.sessionHeat?.scoreGroup ?? null;
+
   return (
     <div className="flex flex-col h-[calc(100vh-120px)] gap-3 overflow-hidden">
       {/* Command deck — status + controls in one cohesive header */}
@@ -343,6 +357,40 @@ export default function LiveCockpitPanel() {
             <Badge variant="outline" className="text-[10px]">
               Paper {paperMode.enabled ? 'ON' : 'OFF'} · Orders {paperMode.realOrdersAllowed ? 'LIVE' : 'BLOCKED'}
             </Badge>
+            {sessionHeatSummary?.enabled && (
+              <button
+                type="button"
+                onClick={() => setShowSessionHeat((v) => !v)}
+                title={
+                  sessionHeatSummary.available
+                    ? `${sessionHeatSummary.currentSession?.label} ${sessionHeatSummary.currentSession?.windowUtc} · ${sessionHeatSummary.currentSession?.killzone}. Click for the full session heat chart.`
+                    : 'Session heat aggregate is still warming — click for details.'
+                }
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-mono transition-colors',
+                  showSessionHeat
+                    ? 'border-primary/60 bg-primary/15 text-primary'
+                    : 'border-border/60 bg-muted/30 text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Flame className="w-3 h-3" />
+                {sessionHeatSummary.currentSession?.label || 'Session'}
+                {sessionHeatSummary.available ? (
+                  <>
+                    <span className="opacity-60">A</span>
+                    <span className={heatWordClass(sessionHeatEngineA?.heat)}>
+                      {heatWord(sessionHeatEngineA?.heat)}
+                    </span>
+                    <span className="opacity-60">B</span>
+                    <span className={heatWordClass(sessionHeatEngineB?.heat)}>
+                      {heatWord(sessionHeatEngineB?.heat)}
+                    </span>
+                  </>
+                ) : (
+                  <span className="opacity-60">{sessionHeatSummary.status === 'WARMING' ? 'warming…' : 'n/a'}</span>
+                )}
+              </button>
+            )}
 
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Auto</span>
@@ -518,6 +566,15 @@ export default function LiveCockpitPanel() {
       {error && <ErrorBanner message={error} onRetry={fetchSnap} />}
 
       <ConfidenceCalibrationPanel surface="marcus" lookbackDays={30} />
+
+      {showSessionHeat && sessionHeatSummary?.enabled && (
+        <div className="shrink-0">
+          <SessionHeatChart
+            currentSessionKey={sessionHeatCurrentKey}
+            defaultScoreGroup={selectedScoreGroup}
+          />
+        </div>
+      )}
 
       {/* Two-column layout */}
       <div className="flex-1 grid grid-cols-7 gap-3 overflow-hidden min-h-0">
@@ -780,6 +837,24 @@ function CockpitCard({
           </span>
         </div>
 
+        {row.sessionHeat?.available && row.sessionHeat.primary && (
+          <div className="flex items-center gap-1.5">
+            <SessionHeatPill
+              label={`${row.sessionHeat.primary.label} · ${row.sessionHeat.primaryEngine}`}
+              tone={row.sessionHeat.primary.tone}
+              title={row.sessionHeat.primary.tooltip}
+            />
+            {row.sessionHeat.primary.scope === 'engine' && (
+              <span
+                className="text-[9px] text-muted-foreground"
+                title="This score group has too few recorded trades in this session; the engine-wide read is shown instead."
+              >
+                engine-wide
+              </span>
+            )}
+          </div>
+        )}
+
         {row.freshness?.gateDecision !== 'ALLOW' && (
           <div className="flex items-center gap-1 text-[10px] text-warning">
             <AlertTriangle className="w-3 h-3" />
@@ -855,6 +930,8 @@ function CockpitDetail({
             <Tile label="Timeframe" value={row.timeframe} />
             <Tile label="Engine C state" value={row.engineC?.decisionState || '—'} />
           </div>
+
+          <SessionContextCard heat={row.sessionHeat} />
 
           <FreshnessCard freshness={row.freshness} />
         </TabsContent>
@@ -1329,6 +1406,96 @@ function ReasonList({
           <li key={it}>{it}</li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** Short word for a heat level, used in the compact header badge. */
+function heatWord(heat?: string): string {
+  if (heat === 'STRONG') return 'Strong';
+  if (heat === 'WEAK') return 'Weak';
+  if (heat === 'NEUTRAL') return 'Neutral';
+  return 'n/a';
+}
+
+function heatWordClass(heat?: string): string {
+  if (heat === 'STRONG') return 'text-long';
+  if (heat === 'WEAK') return 'text-short';
+  return 'text-muted-foreground';
+}
+
+/**
+ * Session context for the selected symbol: how each engine has historically
+ * performed in the session that is running right now, plus that engine's best
+ * and worst session. Advisory — it never changes the execute gate.
+ */
+function SessionContextCard({ heat }: { heat?: LdSessionHeat }) {
+  if (!heat) return null;
+
+  if (!heat.available) {
+    return (
+      <div className="rounded-md border border-border/50 bg-muted/20 p-3">
+        <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Session context</p>
+        <p className="text-[11px] text-muted-foreground">
+          {heat.reason === 'disabled'
+            ? 'Session Heat is disabled in config.'
+            : 'Historical session data is still loading — it will appear on the next refresh.'}
+        </p>
+      </div>
+    );
+  }
+
+  const rows: Array<[string, SessionHeatIndicator | undefined]> = [
+    ['Engine A', heat.engineA],
+    ['Engine B', heat.engineB],
+  ];
+
+  return (
+    <div className="rounded-md border border-border/50 bg-muted/20 p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
+          Session context · {heat.sessionLabel}
+        </p>
+        {heat.scoreGroup && (
+          <Badge variant="outline" className="text-[9px] font-mono">
+            {heat.scoreGroup}
+          </Badge>
+        )}
+      </div>
+
+      {rows.map(([label, ind]) => (
+        <div key={label} className="flex items-start justify-between gap-2">
+          <span className="text-[11px] text-muted-foreground w-16 shrink-0">{label}</span>
+          <div className="flex-1 min-w-0">
+            {!ind || ind.heat === 'INSUFFICIENT' ? (
+              <span className="text-[11px] text-muted-foreground" title={ind?.tooltip}>
+                Insufficient sample ({ind?.trades ?? 0} trades) — no call
+              </span>
+            ) : (
+              <>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <SessionHeatPill label={ind.label} tone={ind.tone} title={ind.tooltip} />
+                  <span className="text-[10px] font-mono text-muted-foreground">
+                    n={ind.trades} · exp {ind.expectancyR != null ? `${ind.expectancyR >= 0 ? '+' : ''}${ind.expectancyR.toFixed(3)}R` : '—'}
+                    {ind.profitFactor != null && ` · PF ${ind.profitFactor.toFixed(2)}`}
+                    {ind.winRate != null && ` · WR ${(ind.winRate * 100).toFixed(1)}%`}
+                  </span>
+                </div>
+                <p className="text-[9px] text-muted-foreground mt-0.5">
+                  measured over {ind.scopeLabel}
+                  {ind.bestSession && ` · best ${ind.bestSession}`}
+                  {ind.worstSession && ` · worst ${ind.worstSession}`}
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      ))}
+
+      <p className="text-[9px] text-muted-foreground border-t border-border/40 pt-1.5">
+        From recorded backtest trade outcomes. Advisory context only — it does not gate, size, or approve
+        execution.
+      </p>
     </div>
   );
 }

@@ -892,6 +892,162 @@ def _ld_open_paper_positions() -> list[dict]:
         return []
     return rows
 
+# --- Session heat (advisory, read-only) --------------------------------------
+#
+# Historical Engine A / Engine B performance by session bucket, derived from the
+# recorded backtest_trades_v3 outcomes. Advisory only: it never gates, sizes,
+# scores, or approves anything. The snapshot path never blocks on a build - see
+# session_heat.get_session_heat(block=False).
+
+
+def _ld_session_heat_settings() -> dict:
+    from athena_app.services.session_heat import resolve_settings
+
+    return resolve_settings(CONFIG)
+
+
+def _ld_pair_lookup(symbol: str) -> dict | None:
+    """Resolve a backtest symbol to its live pair dict so score groups match Engine A."""
+    return _ld_resolve_pair(symbol)
+
+
+def _ld_score_group(pair: dict | None) -> str | None:
+    if not pair:
+        return None
+    try:
+        from engine_a_groups import resolve_score_group_by_type
+
+        override = pair.get("score_group")
+        if override:
+            return str(override)
+        return str(resolve_score_group_by_type(pair) or "") or None
+    except Exception:
+        return None
+
+
+def _ld_session_heat_for_row(
+    heat: dict | None,
+    session_key: str,
+    pair: dict | None,
+    engine_a_row: dict,
+    engine_b_row: dict,
+) -> dict:
+    """Compact per-card session cue for both engines plus the one to show first."""
+    from athena_app.services import session_heat as sh
+
+    if not heat:
+        return {"available": False, "reason": "warming", "session": session_key}
+
+    score_group = _ld_score_group(pair)
+    a_ind = sh.card_indicator(heat, "A", session_key, score_group=score_group)
+    b_ind = sh.card_indicator(heat, "B", session_key, score_group=score_group)
+
+    # Show the engine that actually produced the live setup; Engine B leads when
+    # it passed or cleared structure, otherwise Engine A.
+    b_active = bool(
+        engine_b_row.get("confidencePassed") is True
+        or engine_b_row.get("structuralVerdict") == "CLEAR"
+    )
+    primary_engine = "B" if b_active else "A"
+    primary = b_ind if b_active else a_ind
+    if primary.get("heat") == sh.HEAT_INSUFFICIENT:
+        other = a_ind if b_active else b_ind
+        if other.get("heat") != sh.HEAT_INSUFFICIENT:
+            primary_engine = "A" if b_active else "B"
+            primary = other
+
+    return {
+        "available": True,
+        "session": session_key,
+        "sessionLabel": primary.get("sessionLabel"),
+        "scoreGroup": score_group,
+        "primaryEngine": primary_engine,
+        "primary": primary,
+        "engineA": a_ind,
+        "engineB": b_ind,
+    }
+
+
+def api_live_dashboard_session_heat():
+    """Engine x session historical performance matrix (advisory, read-only).
+
+    Query params:
+      engine        A | B | all              (default all)
+      lookbackDays  int, 0 = all history     (default from config)
+      minSample     int                      (default from config)
+      scoreGroup    filter to one score group, plus its engine-wide row
+      refresh       1 to force a rebuild instead of serving the cache
+    """
+    from athena_app.services import session_heat as sh
+
+    cfg_ld = CONFIG.get("LIVE_DASHBOARD") or {}
+    if not cfg_ld.get("ENABLED", True):
+        return jsonify({"error": "Live Dashboard disabled in config"}), 503
+
+    settings = _ld_session_heat_settings()
+    if not settings.get("ENABLED", True):
+        return jsonify({
+            "enabled": False,
+            "status": "DISABLED",
+            "reason": "LIVE_DASHBOARD.SESSION_HEAT.ENABLED is false",
+            "sessions": sh.session_buckets_contract(),
+            "currentSession": sh.current_session(),
+            "matrix": [],
+        })
+
+    for param, key in (("lookbackDays", "LOOKBACK_DAYS"), ("minSample", "MIN_SAMPLE")):
+        raw = request.args.get(param)
+        if raw is None:
+            continue
+        try:
+            settings[key] = int(raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": f"invalid {param}"}), 400
+    if settings["MIN_SAMPLE"] < 1:
+        settings["MIN_SAMPLE"] = 1
+
+    engine_arg = str(request.args.get("engine") or "all").strip().upper()
+    engines = tuple(sh.ENGINES) if engine_arg in ("ALL", "") else (engine_arg,)
+    if engine_arg not in ("ALL", "") and engine_arg not in sh.ENGINES:
+        return jsonify({"error": f"unknown engine {engine_arg}"}), 400
+
+    force = str(request.args.get("refresh") or "").strip().lower() in ("1", "true", "yes")
+    try:
+        if force:
+            payload = sh.build_session_heat(
+                _AUDIT_DB, settings=settings, pair_lookup=_ld_pair_lookup, engines=engines
+            )
+            cache_meta = {"state": "REBUILT"}
+        else:
+            payload, cache_meta = sh.get_session_heat(
+                _AUDIT_DB, settings=settings, pair_lookup=_ld_pair_lookup, block=True
+            )
+    except Exception as exc:
+        log.error("api_live_dashboard_session_heat: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+    payload = dict(payload or {})
+    matrix = payload.get("matrix") or []
+    if engine_arg not in ("ALL", ""):
+        matrix = [m for m in matrix if m.get("engine") == engine_arg]
+    score_group = request.args.get("scoreGroup")
+    if score_group:
+        # Keep the engine-wide row alongside the group so the UI can show the
+        # group against the population it is being compared to.
+        matrix = [m for m in matrix if m.get("scoreGroup") in (None, score_group)]
+    payload["matrix"] = matrix
+    payload["enabled"] = True
+    payload["cache"] = cache_meta
+    payload["currentSession"] = sh.current_session()
+    payload["requested"] = {
+        "engine": engine_arg,
+        "scoreGroup": score_group,
+        "lookbackDays": settings["LOOKBACK_DAYS"],
+        "minSample": settings["MIN_SAMPLE"],
+    }
+    return jsonify(_json_safe(payload))
+
+
 def _ld_resolve_pair(symbol: str) -> dict | None:
     sym_upper = str(symbol or "").upper()
     for p in ALL_PAIRS:
@@ -959,6 +1115,31 @@ def api_live_dashboard_snapshot():
             _last_a_by_display[_disp] = _sig
 
     now = datetime.now(timezone.utc)
+
+    # Session heat: cached aggregate only. block=False guarantees the snapshot
+    # never pays for a rebuild - a cold cache warms in the background and the
+    # feature simply reports itself unavailable for this one poll.
+    from athena_app.services import session_heat as sh
+
+    _heat_settings = _ld_session_heat_settings()
+    _heat_enabled = bool(_heat_settings.get("ENABLED", True))
+    _heat_payload = None
+    _heat_cache_meta = {"state": "DISABLED"}
+    _current_session = sh.current_session(now)
+    if _heat_enabled:
+        try:
+            _heat_payload, _heat_cache_meta = sh.get_session_heat(
+                _AUDIT_DB,
+                settings=_heat_settings,
+                pair_lookup=_ld_pair_lookup,
+                block=False,
+            )
+        except Exception as exc:  # never let an advisory layer break the snapshot
+            log.warning("[LIVE-DASH] session heat unavailable: %s", exc)
+            _heat_payload, _heat_cache_meta = None, {"state": "ERROR", "error": str(exc)}
+    if _heat_payload is not None and _heat_payload.get("status") not in ("OK", "INSUFFICIENT"):
+        _heat_payload = None
+
     symbol_rows = []
     events = []
     freshness_all_ok = True
@@ -1219,6 +1400,13 @@ def api_live_dashboard_snapshot():
             "engineC": engine_c_row,
             "engineD": engine_d_row,
             "aiReview": _ai_review,
+            "sessionHeat": (
+                _ld_session_heat_for_row(
+                    _heat_payload, _current_session["key"], pair, engine_a_row, engine_b_row
+                )
+                if _heat_enabled
+                else {"available": False, "reason": "disabled", "session": _current_session["key"]}
+            ),
         "paperPosition": paper_row,
             "levels": _levels,
             "finalState": final_state,
@@ -1243,6 +1431,20 @@ def api_live_dashboard_snapshot():
         "freshnessAllOk": freshness_all_ok,
         "symbols": symbol_rows,
         "events": events[-50:],
+        "sessionHeat": {
+            "enabled": _heat_enabled,
+            "available": _heat_payload is not None,
+            "status": (_heat_payload or {}).get("status") or _heat_cache_meta.get("state"),
+            "cache": _heat_cache_meta,
+            "currentSession": _current_session,
+            "source": sh.SESSION_HEAT_SOURCE,
+            "version": sh.SESSION_HEAT_VERSION,
+            "generatedAt": (_heat_payload or {}).get("generatedAt"),
+            "settings": (_heat_payload or {}).get("settings"),
+            "coverage": (_heat_payload or {}).get("coverage"),
+            "sessions": sh.session_buckets_contract(),
+            "advisoryOnly": True,
+        },
     }))
 
 def api_live_dashboard_paper_execute():
@@ -1501,6 +1703,11 @@ def register_live_dashboard_routes(app, runtime: SimpleNamespace) -> None:
         "api_live_dashboard_paper_execute",
         api_live_dashboard_paper_execute,
         methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/live-dashboard/session-heat",
+        "api_live_dashboard_session_heat",
+        api_live_dashboard_session_heat,
     )
     app.add_url_rule(
         "/api/shadow-signals",

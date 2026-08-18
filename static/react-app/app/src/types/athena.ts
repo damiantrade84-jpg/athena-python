@@ -978,6 +978,8 @@ export interface LdSymbolRow {
   mainReason: string | null;
   blockReason: string | null;
   executableState: LdExecutableState;
+  /** Advisory session cue — absent/unavailable while the aggregate warms. */
+  sessionHeat?: LdSessionHeat;
   error?: string;
 }
 
@@ -1236,6 +1238,7 @@ export interface LdSnapshot {
   freshnessAllOk?: boolean;
   symbols?: LdSymbolRow[];
   events?: LdEvent[];
+  sessionHeat?: LdSessionHeatSummary;
   error?: string;
 }
 
@@ -2624,4 +2627,150 @@ export interface AiSurfaceVerdict {
   decision?: string | null;
   verdict?: string | null;
   confidence?: number | null;
+}
+
+// ───────────────────────── Session Heat (advisory, read-only) ───────────────
+//
+// Historical Engine A / Engine B performance by time-of-day bucket, aggregated
+// from recorded backtest_trades_v3 outcomes. Display only — it never gates,
+// sizes, scores, or approves anything.
+
+export type SessionHeatLevel = 'STRONG' | 'NEUTRAL' | 'WEAK' | 'INSUFFICIENT';
+export type SessionHeatTone = 'strong' | 'neutral' | 'weak' | 'unknown';
+
+/** One documented session bucket (fixed UTC hours — no DST drift). */
+export interface SessionBucketDef {
+  key: string;
+  label: string;
+  startHourUtc: number;
+  endHourUtc: number;
+  windowUtc: string;
+  killzone: string;
+  description: string;
+}
+
+export interface CurrentSession extends SessionBucketDef {
+  nowUtc: string;
+  minutesElapsed: number;
+  minutesRemaining: number;
+  endsAtUtc: string;
+  isWeekend: boolean;
+}
+
+/** One engine × session cell. `heat` is INSUFFICIENT whenever trades < minSample. */
+export interface SessionHeatCell {
+  session: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number | null;
+  expectancyR: number | null;
+  profitFactor: number | null;
+  totalR: number | null;
+  stdErrR: number | null;
+  symbols: number;
+  heat: SessionHeatLevel;
+  /** -1..+1 colour intensity vs the row baseline; null when INSUFFICIENT. */
+  heatScore: number | null;
+  heatReason: string;
+}
+
+export interface SessionHeatRow {
+  engine: 'A' | 'B' | string;
+  scope: 'engine' | 'scoreGroup';
+  scoreGroup: string | null;
+  baseline: Omit<SessionHeatCell, 'session' | 'heat' | 'heatScore' | 'heatReason'>;
+  engineBaseline: Omit<SessionHeatCell, 'session' | 'heat' | 'heatScore' | 'heatReason'>;
+  cells: Record<string, SessionHeatCell>;
+  bestSession: string | null;
+  worstSession: string | null;
+  sufficientCells: number;
+}
+
+export interface SessionHeatMatrix {
+  version?: string;
+  enabled?: boolean;
+  status: 'OK' | 'INSUFFICIENT' | 'NO_DATA' | 'ERROR' | 'DISABLED' | string;
+  error?: string | null;
+  generatedAt?: string;
+  buildMs?: number;
+  source?: string;
+  reason?: string;
+  settings?: {
+    lookbackDays: number;
+    minSample: number;
+    minDeltaR: number;
+    significanceZ: number;
+    heatScaleR: number;
+  };
+  coverage?: {
+    trades: number;
+    engines: string[];
+    scoreGroups: string[];
+    firstEntryIso: string | null;
+    lastEntryIso: string | null;
+    unbucketedRows: number;
+    runsConsidered?: number;
+    runsUsed?: number;
+    rowsRead?: number;
+    rowsSkipped?: number;
+    cutoffIso?: string | null;
+  };
+  cache?: { state: string; ageSec?: number | null; ttlSec?: number; rebuilding?: boolean };
+  currentSession?: CurrentSession;
+  sessions?: SessionBucketDef[];
+  matrix?: SessionHeatRow[];
+  requested?: { engine: string; scoreGroup: string | null; lookbackDays: number; minSample: number };
+}
+
+/** Compact per-card cue for one engine in the current session. */
+export interface SessionHeatIndicator {
+  engine: string;
+  session: string;
+  sessionLabel: string;
+  heat: SessionHeatLevel;
+  tone: SessionHeatTone;
+  /** Ready-to-render, e.g. "London · Strong". */
+  label: string;
+  trades: number | null;
+  expectancyR: number | null;
+  profitFactor: number | null;
+  winRate: number | null;
+  /** Which population the numbers came from — the score group, or engine-wide. */
+  scope: 'scoreGroup' | 'engine' | null;
+  scopeLabel: string | null;
+  scoreGroup: string | null;
+  heatScore: number | null;
+  bestSession?: string | null;
+  worstSession?: string | null;
+  tooltip: string;
+}
+
+/** Per-symbol session cue carried on every snapshot row. */
+export interface LdSessionHeat {
+  available: boolean;
+  reason?: 'warming' | 'disabled' | string;
+  session: string;
+  sessionLabel?: string;
+  scoreGroup?: string | null;
+  primaryEngine?: 'A' | 'B' | string;
+  primary?: SessionHeatIndicator;
+  engineA?: SessionHeatIndicator;
+  engineB?: SessionHeatIndicator;
+}
+
+/** Snapshot-level session heat status (the matrix itself lives on its own endpoint). */
+export interface LdSessionHeatSummary {
+  enabled: boolean;
+  available: boolean;
+  status: string;
+  cache?: { state: string; ageSec?: number | null; ttlSec?: number; rebuilding?: boolean };
+  currentSession: CurrentSession;
+  source?: string;
+  version?: string;
+  generatedAt?: string | null;
+  settings?: SessionHeatMatrix['settings'];
+  coverage?: SessionHeatMatrix['coverage'];
+  sessions?: SessionBucketDef[];
+  advisoryOnly?: boolean;
 }
