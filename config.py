@@ -3010,6 +3010,39 @@ CONFIG: dict = {
         "BAG_MIN_CONTINUATION_ATR": 0.50,
         "BAG_MAX_FILL_FRACTION": 0.25,
     },
+    # ── Engine B top-down ICT/SMC hierarchy ──────────────────────────────────
+    # Bias model: HTF (Daily primary; Weekly+Daily for swing) -> MTF (H4/H1)
+    # confirmation -> LTF (M15/M5) entry. See engine_b_hierarchy.py.
+    #   "legacy"       — hierarchy evaluated/logged for diagnostics only; no
+    #                    scoring or gate effect (default, full backward compat).
+    #   "hierarchical" — soft weighting: aligned Daily bias keeps score whole
+    #                    (+ MTF confirm bonus), unclear Daily narrative cuts
+    #                    confidence (UNCLEAR_SCORE_MULT), conflicting Daily
+    #                    evidence or counter-bias candidates block.
+    #   "strict"       — state machine: HTF_BIAS must be valid+aligned, then
+    #                    MTF_CONFIRMATION, then LTF_ENTRY; any failed state
+    #                    blocks with a stage-specific reason.
+    "ENGINE_B_BIAS_MODE": "legacy",
+    "ENGINE_B_HIERARCHY": {
+        "WEIGHT_SWEEP": 3.0,
+        "WEIGHT_DISPLACEMENT_BOS": 2.0,
+        "WEIGHT_FVG_NARRATIVE": 2.0,
+        "WEIGHT_ORDER_BLOCK": 1.5,
+        "WEIGHT_SEQUENCE": 1.0,
+        "WEIGHT_WEEKLY": 2.0,
+        "MIN_BIAS_SCORE": 3.0,
+        "MIN_BIAS_STRENGTH": 0.6,
+        "FVG_MIN_DISPLACEMENT_BODY_ATR": 0.8,
+        "UNCLEAR_SCORE_MULT": 0.75,
+        "CONFLICT_SCORE_MULT": 0.50,
+        "CONFLICT_BLOCKS": True,
+        "COUNTER_BIAS_MODE": "block",
+        "COUNTER_BIAS_SCORE_MULT": 0.40,
+        "ALIGNED_NO_MTF_MULT": 0.90,
+        "MTF_CONFIRM_BONUS": 0.5,
+        "SWING_WEEKLY_ENABLED": True,
+        "SWING_WEEKLY_MIN_BARS": 8,
+    },
     "ENGINE_B_WEIGHTED_SCORING": {
         "ENABLED": True,
         "PRUNE_INAPPLICABLE_COMPONENTS": True,

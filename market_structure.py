@@ -9,6 +9,13 @@ import config
 from indicators import calc_atr
 from zone_registry import get_zone_registry
 from engine_b_imbalance import directional_fvg_context, enrich_fvg_lifecycle
+from engine_b_hierarchy import (
+    HIERARCHY_VERSION,
+    evaluate_directional_hierarchy,
+    evaluate_htf_bias,
+    normalize_bias_mode,
+    resample_d1_to_w1,
+)
 
 log = logging.getLogger(__name__)
 
@@ -6080,6 +6087,91 @@ class NakedEngine:
 
         bos_mtf_confirmed = bool((bos_data.get("bos_bull") and d1_bos.get("bos_bull")) or (bos_data.get("bos_bear") and d1_bos.get("bos_bear")))
 
+        # ── ICT top-down hierarchy: HTF (Daily / Weekly+Daily) bias ──────────
+        # Daily is the primary bias source (Weekly+Daily for swing style, with
+        # W1 resampled from the D1 series so no extra fetch wiring is needed).
+        # Evaluated once here (direction-independent) and consumed per direction
+        # in calculate_confidence via evaluate_directional_hierarchy. On any
+        # failure the bias degrades to "unclear" — soft-hierarchical mode then
+        # cuts confidence and strict mode blocks, i.e. missing HTF narrative
+        # fails closed rather than silently neutral.
+        htf_bias: dict | None = None
+        try:
+            _hier_cfg = config.CONFIG.get("ENGINE_B_HIERARCHY", {}) or {}
+            _bias_mode_pre = normalize_bias_mode(config.CONFIG.get("ENGINE_B_BIAS_MODE", "legacy"))
+            # D1 liquidity sweep, mirroring the structure-TF reference discipline:
+            # the reference swing must predate the sweep lookback window.
+            _d1_sweep_swing_high = None
+            _d1_sweep_swing_low = None
+            try:
+                _d1_lb = int(config.CONFIG.get("ENGINE_B_SWEEP_LOOKBACK_BARS", 5) or 5)
+                _d1_ws = len(d1_highs) - max(1, _d1_lb)
+                _d1_pk_pool = [int(p) for p in d1_swings.get("peak_idx", []) if int(p) < _d1_ws]
+                _d1_tr_pool = [int(t) for t in d1_swings.get("trough_idx", []) if int(t) < _d1_ws]
+                if _d1_pk_pool:
+                    _d1_sweep_swing_high = float(d1_highs[_d1_pk_pool[-1]])
+                if _d1_tr_pool:
+                    _d1_sweep_swing_low = float(d1_lows[_d1_tr_pool[-1]])
+            except Exception:
+                pass
+            _d1_sweep = self._detect_sweep(
+                d1_highs, d1_lows, d1_closes, d1_atr,
+                swing_high=_d1_sweep_swing_high, swing_low=_d1_sweep_swing_low,
+            )
+            _d1_seq = self._determine_sequence(d1_highs, d1_lows, d1_atr, "LONG", swings=d1_swings)
+            _w1_evidence = None
+            if str(style or "").lower() == "swing" and bool(_hier_cfg.get("SWING_WEEKLY_ENABLED", True)):
+                _w1_candles = resample_d1_to_w1(d1_candles)
+                try:
+                    _w1_min = int(_hier_cfg.get("SWING_WEEKLY_MIN_BARS", 8) or 8)
+                except (TypeError, ValueError):
+                    _w1_min = 8
+                if len(_w1_candles) >= max(1, _w1_min):
+                    _w1_highs = np.array([float(c["high"]) for c in _w1_candles])
+                    _w1_lows = np.array([float(c["low"]) for c in _w1_candles])
+                    _w1_closes = np.array([float(c["close"]) for c in _w1_candles])
+                    _w1_atr = self._compute_atr_from_candles(_w1_candles, fallback=d1_atr)
+                    if _w1_atr > 0:
+                        _w1_swings = self._swing_cache(_w1_highs, _w1_lows, _w1_atr)
+                        _w1_seq = self._determine_sequence(_w1_highs, _w1_lows, _w1_atr, "LONG", swings=_w1_swings)
+                        _w1_bos = self._detect_bos(_w1_highs, _w1_lows, _w1_atr, closes=_w1_closes, swings=_w1_swings)
+                        _w1_evidence = {
+                            "sequence": _w1_seq.get("state"),
+                            "bos_bull": bool(_w1_bos.get("bos_bull")),
+                            "bos_bear": bool(_w1_bos.get("bos_bear")),
+                            "bars": len(_w1_candles),
+                        }
+            htf_bias = evaluate_htf_bias(
+                style=style,
+                d1_sweep=_d1_sweep,
+                d1_bos=d1_bos,
+                d1_fvgs=d1_fvgs_raw,
+                d1_order_blocks=d1_order_blocks_raw,
+                d1_sequence=_d1_seq,
+                w1_evidence=_w1_evidence,
+                current_price=current_price,
+                d1_atr=d1_atr,
+                config=_hier_cfg,
+            )
+            (_hier_log := log.info if _bias_mode_pre != "legacy" else log.debug)(
+                "[ENGINE_B][HIERARCHY] HTF bias style=%s state=%s dir=%s strength=%.2f bull=%.1f bear=%.1f evidence=%s",
+                style, htf_bias.get("state"), htf_bias.get("direction"),
+                float(htf_bias.get("strength") or 0.0),
+                float(htf_bias.get("bull_score") or 0.0),
+                float(htf_bias.get("bear_score") or 0.0),
+                [e.get("name") for e in htf_bias.get("evidence", [])],
+            )
+        except Exception as _hier_exc:
+            log.warning("[ENGINE_B][HIERARCHY] HTF bias evaluation failed: %s", _hier_exc)
+            htf_bias = {
+                "version": HIERARCHY_VERSION,
+                "state": "unclear",
+                "direction": None,
+                "strength": 0.0,
+                "error": str(_hier_exc),
+            }
+
+
         order_blocks = self._detect_order_blocks(
             struct_candles, bos_data, struct_atr, structure_tf=structure_tf
         )
@@ -6324,6 +6416,10 @@ class NakedEngine:
             "d1_order_blocks_raw": d1_order_blocks_raw,
             "d1_fvgs_raw": d1_fvgs_raw,
             "d1_conflict_window": d1_conflict_window,
+            # ICT top-down hierarchy: HTF (Daily / Weekly+Daily) bias, evaluated
+            # once per scan (direction-independent). Consumed per direction by
+            # calculate_confidence; surfaced on payloads as "htf_bias".
+            "htf_bias": htf_bias,
             "d1_adx": d1_adx_val,
             "h4_adx": h4_adx_val,
             "_structure_quality_score": _structure_quality_score,
@@ -6960,6 +7056,10 @@ class NakedEngine:
             ),
             "d1_order_blocks": d1_order_blocks_raw,
             "d1_fvgs": d1_fvgs_raw,
+            # ICT top-down hierarchy: direction-independent HTF (Daily /
+            # Weekly+Daily) bias from precompute; calculate_confidence resolves
+            # the per-direction HTF->MTF->LTF evaluation from it.
+            "htf_bias": precompute.get("htf_bias"),
             "d1_pd_array_conflict": d1_pd_array_conflict,
             "d1_conflict_details": d1_conflict_details,
             "d1_conflict_metric_details": d1_conflict_metric_details,
@@ -8312,6 +8412,72 @@ class NakedEngine:
         )
         _d1_penalty = _d1_penalty if _d1_conflict else 0.0
 
+        # ── ICT top-down hierarchy: HTF bias -> MTF confirmation -> LTF entry ─
+        # legacy: diagnostics only (no scoring/gate effect — backward compat).
+        # hierarchical: soft weighting — aligned Daily bias keeps the score
+        # whole (+ MTF confirmation bonus), unclear Daily narrative cuts it,
+        # conflicting Daily evidence or a counter-bias candidate blocks.
+        # strict: sequential state machine — HTF_BIAS must be valid and aligned
+        # before MTF_CONFIRMATION is evaluated, and MTF before LTF_ENTRY.
+        _bias_mode = normalize_bias_mode(config.CONFIG.get("ENGINE_B_BIAS_MODE", "legacy"))
+        try:
+            _hierarchy = evaluate_directional_hierarchy(
+                mode=_bias_mode,
+                htf_bias=res.get("htf_bias"),
+                direction=direction,
+                mtf_evidence={
+                    # Structure/setup-TF (H4/H1) evidence, already direction-resolved
+                    # by analyze_structure_direction: bos_confirmed is per-direction,
+                    # liquidity_sweep is the aligned-sweep flag.
+                    "bos": bool(res.get("bos_confirmed")),
+                    "choch": bool(res.get("choch_confirmed")),
+                    "sweep": bool(res.get("liquidity_sweep")),
+                    "sequence": (direction == "LONG" and h4_seq == "HH_HL") or (
+                        direction == "SHORT" and h4_seq == "LH_LL"
+                    ),
+                },
+                ltf_evidence={
+                    # Trigger-TF (M15/M5) entry precision evidence.
+                    "trigger": bool(res.get("trigger_ok")),
+                    "fvg_reaction": bool(res.get("fvg_reaction_confirmed")),
+                    "sweep_at_zone": bool(res.get("liquidity_sweep"))
+                    and bool(res.get("zone_touched")),
+                },
+                config=config.CONFIG.get("ENGINE_B_HIERARCHY", {}),
+            )
+        except Exception as _hier_exc:
+            # Fail closed to a neutral (non-applied) evaluation; a diagnostics
+            # failure must never change gating by accident.
+            log.warning("[ENGINE_B][HIERARCHY] evaluation failed: %s", _hier_exc)
+            _hierarchy = {
+                "version": HIERARCHY_VERSION,
+                "mode": _bias_mode,
+                "applied": False,
+                "decision": "error",
+                "blocked": False,
+                "block_reasons": [],
+                "score_multiplier": 1.0,
+                "score_bonus": 0.0,
+                "reasons": [f"evaluation_error:{_hier_exc}"],
+            }
+        (_hier_log := log.info if _bias_mode != "legacy" else log.debug)(
+            "[ENGINE_B][HIERARCHY] dir=%s mode=%s htf=%s/%s mtf=%s(%s) ltf=%s(%s) "
+            "decision=%s applied=%s mult=%.2f bonus=%.2f reasons=%s",
+            direction,
+            _bias_mode,
+            (_hierarchy.get("stages", {}).get("htf_bias", {}) or {}).get("state"),
+            (_hierarchy.get("stages", {}).get("htf_bias", {}) or {}).get("direction"),
+            (_hierarchy.get("stages", {}).get("mtf_confirmation", {}) or {}).get("passed"),
+            "+".join((_hierarchy.get("stages", {}).get("mtf_confirmation", {}) or {}).get("evidence", []) or []) or "-",
+            (_hierarchy.get("stages", {}).get("ltf_entry", {}) or {}).get("passed"),
+            "+".join((_hierarchy.get("stages", {}).get("ltf_entry", {}) or {}).get("evidence", []) or []) or "-",
+            _hierarchy.get("decision"),
+            _hierarchy.get("applied"),
+            float(_hierarchy.get("score_multiplier") or 1.0),
+            float(_hierarchy.get("score_bonus") or 0.0),
+            _hierarchy.get("reasons"),
+        )
+
         # hard_counter soft penalty in "penalty" mode. In "veto" mode structure_ok
         # is already False and the signal won't pass, so the penalty has no effect.
         # H-3: when the structure gate is explicitly disabled via profile, the
@@ -8355,6 +8521,15 @@ class NakedEngine:
                 - _hard_counter_penalty,
             )
         # gate_score stays integer — never modified by penalty
+
+        # ICT hierarchy: soft-hierarchical weighting applies AFTER all legacy
+        # scoring so the HTF->MTF->LTF verdict scales final confidence without
+        # touching gate_score (which stays a pure mandatory-gate count).
+        if _hierarchy.get("applied"):
+            _hier_mult = float(_hierarchy.get("score_multiplier", 1.0) or 1.0)
+            _hier_bonus = float(_hierarchy.get("score_bonus", 0.0) or 0.0)
+            if _hier_mult != 1.0 or _hier_bonus:
+                total_score = max(0.0, total_score * _hier_mult + _hier_bonus)
 
         pct = min(100, max(0, round((total_score / max_possible) * 100)))
         # M-1: `pct` denominator includes bonus headroom, so passing all mandatory
@@ -8442,6 +8617,10 @@ class NakedEngine:
             passed = False
         if not dxy_ok:
             passed = False
+        # ICT hierarchy: a blocked HTF->MTF->LTF verdict fails the candidate
+        # (counter-bias / conflicting Daily narrative / strict state failure).
+        if _hierarchy.get("applied") and _hierarchy.get("blocked"):
+            passed = False
 
         _trigger_failure_reasons = []
         if not entry_ok:
@@ -8516,6 +8695,10 @@ class NakedEngine:
             failed_gate_names.append(f"lifecycle_{lifecycle_state}")
         if not tape_ok:
             failed_gate_names.append(ENGINE_B_REASON_ADVERSE_TAPE)
+        if _hierarchy.get("applied") and _hierarchy.get("blocked"):
+            for _hier_reason in _hierarchy.get("block_reasons") or []:
+                if _hier_reason not in failed_gate_names:
+                    failed_gate_names.append(_hier_reason)
 
         # FIX 10: Per-gate failure histogram logging
         for gate_name, gate_result in [
@@ -8559,6 +8742,13 @@ class NakedEngine:
                 _diag_codes.append(_trigger_reason)
         if _d1_conflict:
             _diag_codes.append(ENGINE_B_REASON_D1_PD_ARRAY_CONFLICT)
+        if _hierarchy.get("applied") and _hierarchy.get("decision") in ("reduced", "blocked"):
+            for _hier_reason in _hierarchy.get("block_reasons") or []:
+                if _hier_reason not in _diag_codes:
+                    _diag_codes.append(_hier_reason)
+            _hier_decision_code = f"hierarchy_{_hierarchy.get('decision')}"
+            if _hier_decision_code not in _diag_codes:
+                _diag_codes.append(_hier_decision_code)
         if _aggtrade_required and not _aggtrade_available:
             _diag_codes.append(ENGINE_B_REASON_AGGTRADE_REQUIRED)
         elif _aggtrade_cvd_opposed:
@@ -8634,6 +8824,8 @@ class NakedEngine:
                 _hard_fail_reasons.append("engine_b_synthetic_tp_cannot_substitute_room")
             if terminal_lifecycle:
                 _hard_fail_reasons.append(f"engine_b_lifecycle_{lifecycle_state}")
+            if _hierarchy.get("applied") and _hierarchy.get("blocked"):
+                _hard_fail_reasons.append("engine_b_hierarchy_blocked")
             _hard_fail_reasons = sorted(set(_hard_fail_reasons))
 
         _conf_result = {
@@ -8844,6 +9036,12 @@ class NakedEngine:
             "lifecycle_reason": lifecycle_reason,
             "d1_pd_conflict_penalty": round(_d1_penalty, 2),
             "d1_conflict_details": res.get("d1_conflict_details", []),
+            # ICT top-down hierarchy: mode, the direction-independent HTF bias,
+            # and this candidate's HTF->MTF->LTF evaluation (stage pass/fail,
+            # decision, applied multiplier/bonus, block reasons).
+            "bias_mode": _bias_mode,
+            "htf_bias": res.get("htf_bias"),
+            "hierarchy": _hierarchy,
             "hard_counter_active": bool(hard_counter),
             "hard_counter_mode": _hard_counter_mode,
             "hard_counter_penalty": round(_hard_counter_penalty, 2),

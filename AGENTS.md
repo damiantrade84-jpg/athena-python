@@ -53,6 +53,15 @@ these always-on rules.
   indicators, thresholds, or execution semantics between engines unless an explicit
   contract requires it. ASE remains standalone under `athena_ase/` and demo/paper
   only.
+- Engine B bias layer: `engine_b_hierarchy.py` (pure, no `market_structure`
+  imports) evaluates the ICT top-down hierarchy — Daily (Weekly+Daily for swing
+  style, W1 resampled from D1) HTF bias from sweep + displacement + FVG/OB
+  narrative, then MTF (structure-TF) confirmation, then LTF (trigger-TF) entry.
+  `ENGINE_B_BIAS_MODE` gates enforcement: `legacy` (checked-in default;
+  diagnostics only), `hierarchical` (soft score weighting + conflict/counter-bias
+  blocks), `strict` (sequential state machine). Daily FVGs/OBs are both bias
+  contributors and opposing PD-array diagnostics; the conflict diagnostic and
+  `d1_pd_array_penalty` are unchanged.
 - Bybit is the primary crypto venue for candles, levels, live ticks, paper execution,
   and the configured trade-bucket path. Binance candle/live-price support is a
   separate path. `MICROSTRUCTURE_BINANCE_FEEDS_ENABLED` is false in the checked-in
