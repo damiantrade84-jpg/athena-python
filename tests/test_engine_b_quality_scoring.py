@@ -506,6 +506,34 @@ def test_path_inapplicable_components_leave_the_denominator():
     assert "liquidity_proximity" not in bos_off_zone
 
 
+def test_shipped_weights_keep_structure_first_and_ict_as_bonus():
+    """ICT terms matter more, but structure stays the largest single core weight."""
+    from engine_b_quality import (
+        _DEFAULT_COMPONENT_WEIGHTS,
+        _DEFAULT_BONUS_COMPONENTS,
+        weighted_scoring_config,
+    )
+
+    shipped = weighted_scoring_config().get("COMPONENT_WEIGHTS") or {}
+    weights = {**_DEFAULT_COMPONENT_WEIGHTS, **(shipped if isinstance(shipped, dict) else {})}
+    core_names = [
+        name
+        for name in weights
+        if name not in _DEFAULT_BONUS_COMPONENTS and float(weights[name] or 0.0) > 0.0
+    ]
+    assert float(weights["structure_alignment"]) == pytest.approx(0.28)
+    assert float(weights["sweep_quality"]) == pytest.approx(0.10)
+    assert float(weights["bag_continuation"]) == pytest.approx(0.05)
+    assert float(weights["ob_confluence"]) == pytest.approx(0.09)
+    assert float(weights["fvg_confluence"]) == pytest.approx(0.07)
+    assert max(float(weights[name]) for name in core_names) == pytest.approx(
+        float(weights["structure_alignment"])
+    )
+    assert sum(float(value) for value in weights.values()) == pytest.approx(1.0)
+    bonus = weighted_scoring_config().get("BONUS_COMPONENTS")
+    assert bonus is None or set(bonus) == {"ob_confluence", "fvg_confluence"}
+
+
 def test_bonus_components_do_not_enlarge_the_denominator():
     from engine_b_quality import aggregate_quality_score
 

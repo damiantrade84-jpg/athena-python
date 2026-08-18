@@ -29,19 +29,23 @@ _DEFAULT_COMPONENT_MAX: dict[str, float] = {
 _DEFAULT_COMPONENT_WEIGHTS: dict[str, float] = {
     # Core path weights. Path-exclusive terms (followthrough vs sweep) and
     # class-inapplicable terms are dropped from the denominator so a complete
-    # example of the setup that passed can reach 100%. OB/FVG are bonus-only.
-    "structure_alignment": 0.30,
-    "liquidity_proximity": 0.16,
-    "pullback_quality": 0.10,
-    "session_context": 0.08,
+    # example of the setup that passed can reach 100%. OB/FVG stay bonus-only
+    # so a finished BOS/sweep path is not taxed for a missing PD array.
+    # Structure remains the single largest core term; sweep quality and
+    # confirmed BAG are first-class ICT contributors. Location/session donate
+    # the budget because location is already a hard gate.
+    "structure_alignment": 0.28,
+    "liquidity_proximity": 0.12,
+    "pullback_quality": 0.08,
+    "session_context": 0.06,
     "bos_followthrough": 0.07,
-    "sweep_quality": 0.06,
-    "ob_confluence": 0.07,
-    "fvg_confluence": 0.05,
+    "sweep_quality": 0.10,
+    "ob_confluence": 0.09,
+    "fvg_confluence": 0.07,
     "volume_confirmation": 0.04,
-    "orderflow": 0.04,
-    "profile_reaction": 0.02,
-    "bag_continuation": 0.01,
+    "orderflow": 0.03,
+    "profile_reaction": 0.01,
+    "bag_continuation": 0.05,
     "momentum_oscillator_confluence": 0.0,
 }
 
@@ -398,7 +402,10 @@ def _bag_continuation_score(res: dict[str, Any], direction: str) -> float:
         continuation = _float_mapping(bag.get("continuation_atr"), 0.0)
         return round(_clamp01(0.75 + min(0.25, continuation * 0.1)), 4)
     if state == "candidate":
-        return 0.35
+        # Awaiting follow-through is not confirmed BAG. Keep a small mark so
+        # the path stays visible after the 0.05 weight bump, without letting
+        # candidate compete with confirmed continuation.
+        return 0.15
     return 0.0
 
 

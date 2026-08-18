@@ -116,3 +116,40 @@ def test_opposing_bag_cannot_earn_quality():
     )
     assert result["fvg_confluence"] == 0.0
     assert result["bag_continuation"] == 0.0
+
+
+def test_candidate_bag_scores_below_confirmed_and_above_zero():
+    """Awaiting follow-through must not compete with confirmed BAG after the weight bump."""
+    candidate = compute_confluence_subscores(
+        {
+            "fvg_overlap": True,
+            "fvg_context": {
+                "direction": "LONG",
+                "reaction_confirmed": False,
+                "bag_state": "candidate",
+                "bag": {"continuation_atr": 0.2},
+            },
+            "bos_volume_source_applicable": False,
+        },
+        "LONG",
+        2.0,
+        asset_type="forex",
+    )
+    confirmed = compute_confluence_subscores(
+        {
+            "fvg_overlap": True,
+            "fvg_context": {
+                "direction": "LONG",
+                "reaction_confirmed": True,
+                "bag_state": "confirmed",
+                "bag": {"continuation_atr": 1.5},
+            },
+            "bos_volume_source_applicable": False,
+        },
+        "LONG",
+        2.0,
+        asset_type="forex",
+    )
+    assert candidate["bag_continuation"] == 0.15
+    assert confirmed["bag_continuation"] > 0.75
+    assert confirmed["bag_continuation"] > candidate["bag_continuation"]
