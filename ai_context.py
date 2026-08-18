@@ -457,6 +457,20 @@ def build_ai_calibration_context(signal: Dict[str, Any], engine_source: str, exp
         "bag_state": engine_b_data.get("bag_state"),
         "bag": engine_b_data.get("bag"),
         "confirmed_bag_count": engine_b_data.get("confirmed_bag_count", 0),
+        # Top-down (ICT/SMC) hierarchy rungs and verdict. regime/bias complete
+        # the role ladder the reviewer needs once the bias rung can be Daily.
+        "regime_tf": _first_not_none(
+            engine_b_data.get("regime_tf"),
+            engine_b_data.get("regimeTf"),
+        ),
+        "bias_tf": _first_not_none(
+            engine_b_data.get("bias_tf"),
+            engine_b_data.get("biasTf"),
+            engine_b_data.get("macro_sequence_tf"),
+        ),
+        "bias_mode": engine_b_data.get("bias_mode"),
+        "htf_bias": engine_b_data.get("htf_bias"),
+        "hierarchy": engine_b_data.get("hierarchy"),
     }
     
     # 4. Engine C metrics
@@ -753,11 +767,54 @@ def build_ai_calibration_context_string(signal: Dict[str, Any], engine_source: s
             f"| room_ok: {engine_b.get('room_ok')} | space_gate_ok: {engine_b.get('space_gate_ok')}"
         )
         lines.append(
+            # regime/bias lead the line: under the top-down hierarchy the bias
+            # rung (Daily for intraday) is the first thing the reviewer must see.
             "Engine B timeframe roles: "
+            f"regime={engine_b.get('regime_tf')} bias={engine_b.get('bias_tf')} "
             f"struct={engine_b.get('struct_tf')} zone={engine_b.get('zone_tf')} "
             f"setup={engine_b.get('setup_tf')} trigger={engine_b.get('trigger_tf')} "
             f"execution={engine_b.get('execution_tf')} atr={engine_b.get('atr_tf')}"
         )
+        # Engine B top-down (ICT/SMC) hierarchy: HTF bias -> MTF confirmation ->
+        # LTF entry. Emitted only when the engine actually supplied it, so a
+        # legacy-mode signal keeps exactly its previous context text.
+        _bias_mode = engine_b.get("bias_mode")
+        _htf_bias = engine_b.get("htf_bias") if isinstance(engine_b.get("htf_bias"), dict) else None
+        _hierarchy = engine_b.get("hierarchy") if isinstance(engine_b.get("hierarchy"), dict) else None
+        if _bias_mode or _htf_bias or _hierarchy:
+            _evidence = ""
+            if _htf_bias:
+                _names = [
+                    str(item.get("name"))
+                    for item in (_htf_bias.get("evidence") or [])
+                    if isinstance(item, dict) and item.get("name")
+                ]
+                _evidence = "+".join(_names) or "none"
+            lines.append(
+                "Engine B HTF bias: "
+                f"mode={_bias_mode or 'legacy'} "
+                f"state={(_htf_bias or {}).get('state')} "
+                f"direction={(_htf_bias or {}).get('direction')} "
+                f"strength={(_htf_bias or {}).get('strength')} "
+                f"weekly_used={(_htf_bias or {}).get('weekly_used')} "
+                f"evidence={_evidence or 'n/a'}"
+            )
+        if _hierarchy:
+            _stages = _hierarchy.get("stages") or {}
+
+            def _stage(name: str) -> str:
+                stage = _stages.get(name) or {}
+                evidence = "+".join(stage.get("evidence") or []) if isinstance(stage, dict) else ""
+                passed = stage.get("passed") if isinstance(stage, dict) else None
+                return f"{name}={passed}" + (f"({evidence})" if evidence else "")
+
+            lines.append(
+                "Engine B hierarchy: "
+                f"{_stage('htf_bias')} {_stage('mtf_confirmation')} {_stage('ltf_entry')} "
+                f"decision={_hierarchy.get('decision')} applied={_hierarchy.get('applied')} "
+                f"blocked={_hierarchy.get('blocked')} "
+                f"reasons={_hierarchy.get('block_reasons') or []}"
+            )
         lines.append(
             "Engine B trigger TF gate: "
             f"expected={engine_b.get('trigger_timeframe_expected')} "

@@ -1263,6 +1263,19 @@ def build_engine_b_prompt_context(engine_a_ctx: dict[str, Any]) -> dict[str, Any
             conf.get("macro_sequence_tf"),
             struct.get("macro_sequence_tf"),
         ),
+        # Engine B top-down (ICT/SMC) hierarchy: HTF bias -> MTF confirmation ->
+        # LTF entry. biasMode says whether the hierarchy was applied to scoring
+        # (legacy = diagnostics only), htfBias is the direction-independent Daily
+        # narrative, and hierarchy is this candidate's stage-by-stage verdict.
+        # All three are advisory review context; the deterministic gates already
+        # applied whatever effect the mode had.
+        "biasMode": _first_present(conf.get("bias_mode"), struct.get("bias_mode")),
+        "htfBias": conf.get("htf_bias") or struct.get("htf_bias"),
+        "hierarchy": conf.get("hierarchy") or struct.get("hierarchy"),
+        # Stamped policy contract for the same hierarchy (timeframe_policy
+        # payload). Absent when the signal predates the hierarchical policy mode.
+        "hierarchicalBias": signal.get("hierarchicalBias")
+        or (engine_a_ctx.get("timeframe_policy") or {}).get("hierarchicalBias"),
         "triggerTimeframeExpected": trigger_expected,
         "triggerTimeframeActual": trigger_actual,
         "triggerTimeframeGateOk": conf.get(

@@ -1,4 +1,21 @@
-"""Assemble server-trusted Engine B context for TV chart AI review."""
+"""Assemble server-trusted Engine B context for TV chart AI review.
+
+Timeframe contract: the roles stamped on the signal (and re-resolved through
+``resolve_timeframe_policy``) are authoritative — ``regimeTf``/``biasTf``/
+``structureTf``/``setupTf``/``triggerTf``/``executionTf`` plus ``atrTf``. The
+chart interval the reviewer is looking at is presentation only and must never
+override, correct, or infer a role.
+
+Engine B is top-down and sequential: HTF bias (Daily primary for intraday,
+Weekly+Daily for swing) -> MTF confirmation on the structure/setup rungs -> LTF
+entry on the trigger rung. Under ``ENGINE_B_HIERARCHICAL_TF`` the policy bias
+rung is Daily and the payload carries ``hierarchicalBias`` (applied,
+sequenceRequired, htfBiasTf, mtfConfirmationTf, ltfEntryTf); the scoring side of
+the same model is ``ENGINE_B_BIAS_MODE`` with ``biasMode``/``htfBias``/
+``hierarchy`` on the context. All of it is advisory review context — the
+deterministic gates already applied whatever effect the mode had, and a legacy
+bias mode (no hierarchy fields) is a fully supported configuration, not a gap.
+"""
 
 from __future__ import annotations
 

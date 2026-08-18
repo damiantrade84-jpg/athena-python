@@ -454,6 +454,11 @@ class PolicyDiagnostics:
     m5_liquidity_blocked: bool = False
     role_override_applied: bool = False
     role_override_patched_roles: tuple[str, ...] = ()
+    # Engine B top-down hierarchy (see _apply_engine_b_hierarchical). Defaults
+    # keep older constructions and serialized state source-compatible.
+    hierarchical_mode_active: bool = False
+    hierarchical_patched_roles: tuple[str, ...] = ()
+    hierarchical_sequence_required: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -476,6 +481,9 @@ class PolicyDiagnostics:
             "m5LiquidityBlocked": self.m5_liquidity_blocked,
             "roleOverrideApplied": self.role_override_applied,
             "roleOverridePatchedRoles": list(self.role_override_patched_roles),
+            "hierarchicalModeActive": self.hierarchical_mode_active,
+            "hierarchicalPatchedRoles": list(self.hierarchical_patched_roles),
+            "hierarchicalSequenceRequired": self.hierarchical_sequence_required,
         }
 
 
@@ -574,6 +582,19 @@ class TimeframePolicy:
             "liquidityClass": self.diagnostics.liquidity_class.value,
             "adaptationApplied": self.diagnostics.adaptation_applied,
             "adaptationReason": self.diagnostics.adaptation_reason,
+            # Advisory top-down contract for the AI-review layer. Emitted for
+            # every engine (applied=false outside Engine B hierarchical mode)
+            # and excluded from the policy hash, so adding it cannot trip a
+            # TF_POLICY_CHANGED comparison. It never gates execution by itself.
+            "hierarchicalBias": {
+                "applied": self.diagnostics.hierarchical_mode_active,
+                "patchedRoles": list(self.diagnostics.hierarchical_patched_roles),
+                "sequenceRequired": self.diagnostics.hierarchical_sequence_required,
+                "htfBiasTf": self.bias_tf.value,
+                "htfRegimeTf": self.regime_tf.value,
+                "mtfConfirmationTf": self.structure_tf.value,
+                "ltfEntryTf": self.trigger_tf.value,
+            },
             "timeframePolicyDiagnostics": self.diagnostics.to_dict(),
         }
 
@@ -1201,6 +1222,179 @@ def _apply_role_override(
     return patched, True, tuple(kwargs)
 
 
+# -- Engine B top-down (ICT/SMC) hierarchical timeframe mode -----------------
+# Engine B's scoring hierarchy lives in ``engine_b_hierarchy.py`` and is governed
+# by ``ENGINE_B_BIAS_MODE`` (legacy | hierarchical | strict):
+#
+#     HTF bias (Daily primary; Weekly+Daily for swing)
+#         -> MTF confirmation (structure/setup rungs)
+#             -> LTF entry (trigger rung)
+#
+# The stamped role ladder has to agree with that model: on the universal v4
+# ladder Engine B would read its Daily narrative while ``biasTf`` still said H4.
+# This block is the single place the HTF rungs are re-pointed for Engine B. It is
+# config-gated and additive - when disabled (the shipped default) the template is
+# returned untouched, so every non-hierarchical path keeps the exact v4 roles,
+# the same required-closed set, and the same policy hash.
+_ENGINE_B_HIERARCHICAL_KEY = "ENGINE_B_HIERARCHICAL_TF"
+# Only the HTF rungs are hierarchy-owned. MTF confirmation (structure/setup) and
+# LTF entry (trigger) stay with the group template, ENGINE_TF_ROLE_OVERRIDES, and
+# speed adaptation so per-group tuning keeps working unchanged.
+_ENGINE_B_HIERARCHICAL_ROLES = ("regime", "bias")
+_ENGINE_B_HIERARCHICAL_ACTIVE_BIAS_MODES = ("hierarchical", "strict")
+
+
+def _engine_b_hierarchical_config() -> tuple[Any, str]:
+    """Return the raw hierarchical block plus the configured Engine B bias mode.
+
+    Config is read lazily so importing this module stays side-effect free; an
+    unavailable config behaves exactly as "disabled".
+    """
+    try:
+        from config import CONFIG
+    except Exception:
+        return None, "legacy"
+    block = CONFIG.get(_ENGINE_B_HIERARCHICAL_KEY)
+    bias_mode = str(CONFIG.get("ENGINE_B_BIAS_MODE", "legacy") or "legacy").strip().lower()
+    return block, bias_mode
+
+
+def _apply_engine_b_hierarchical(
+    selected: _Template,
+    style: str,
+    *,
+    role_override_patched_roles: tuple[str, ...] = (),
+) -> tuple[_Template, dict[str, Timeframe], bool, tuple[str, ...]]:
+    """Re-point Engine B's HTF rungs for the top-down hierarchy (config-gated).
+
+    Returns ``(template, patched_roles, sequence_required, messages)``.
+    ``patched_roles`` is empty whenever the mode is inactive, and the template is
+    then returned unchanged - disabled preserves the previous behaviour exactly.
+    An invalid block raises ``PolicyConfigurationError`` instead of silently
+    falling back to the H4 bias the hierarchy was meant to replace.
+
+    This runs *after* ``_apply_role_override`` on purpose: the per-group role
+    matrix was authored for the H4-bias model and pins ``bias: H4`` on most
+    intraday rows, which is exactly what the top-down hierarchy replaces for
+    Engine B.  ``RESPECT_ROLE_OVERRIDES=true`` restores the opposite precedence
+    (an explicit role-override row then keeps the rung it patched).
+    """
+    block, bias_mode = _engine_b_hierarchical_config()
+    if block is None:
+        return selected, {}, False, ()
+    if not isinstance(block, Mapping):
+        raise PolicyConfigurationError(f"{_ENGINE_B_HIERARCHICAL_KEY} must be a mapping")
+    enabled = block.get("ENABLED", False)
+    if not isinstance(enabled, bool):
+        raise PolicyConfigurationError(
+            f"{_ENGINE_B_HIERARCHICAL_KEY}.ENABLED must be boolean"
+        )
+    if not enabled:
+        return selected, {}, False, ()
+    follow_bias_mode = block.get("FOLLOW_BIAS_MODE", True)
+    if not isinstance(follow_bias_mode, bool):
+        raise PolicyConfigurationError(
+            f"{_ENGINE_B_HIERARCHICAL_KEY}.FOLLOW_BIAS_MODE must be boolean"
+        )
+    if follow_bias_mode and bias_mode not in _ENGINE_B_HIERARCHICAL_ACTIVE_BIAS_MODES:
+        # The scorer is still on the legacy bias model: leave the ladder alone so
+        # the stamped roles never advertise a hierarchy the engine is not running.
+        return selected, {}, False, (
+            f"ENGINE_B_HIERARCHICAL_TF inactive: ENGINE_B_BIAS_MODE={bias_mode or 'legacy'}",
+        )
+    by_style = block.get("BY_STYLE", {})
+    if not isinstance(by_style, Mapping):
+        raise PolicyConfigurationError(
+            f"{_ENGINE_B_HIERARCHICAL_KEY}.BY_STYLE must be a mapping"
+        )
+    row = by_style.get(style)
+    if row is None:
+        return selected, {}, False, (
+            f"ENGINE_B_HIERARCHICAL_TF: no BY_STYLE row for style={style}",
+        )
+    if not isinstance(row, Mapping):
+        raise PolicyConfigurationError(
+            f"{_ENGINE_B_HIERARCHICAL_KEY}.BY_STYLE row for style {style!r} must be a mapping"
+        )
+    unknown = {str(key).strip().lower() for key in row} - set(_ENGINE_B_HIERARCHICAL_ROLES)
+    if unknown:
+        raise PolicyConfigurationError(
+            f"{_ENGINE_B_HIERARCHICAL_KEY}: unknown role(s) {sorted(unknown)!r} for style "
+            f"{style!r}; the hierarchy owns only {list(_ENGINE_B_HIERARCHICAL_ROLES)} "
+            "(use ENGINE_TF_ROLE_OVERRIDES for structure/setup/trigger)"
+        )
+    kwargs: dict[str, Timeframe] = {}
+    for role in _ENGINE_B_HIERARCHICAL_ROLES:
+        raw = row.get(role, row.get(role.upper()))
+        if raw is None:
+            continue
+        if not isinstance(raw, str) or not raw.strip():
+            raise PolicyConfigurationError(
+                f"{_ENGINE_B_HIERARCHICAL_KEY}: invalid {role} timeframe {raw!r} for "
+                f"style {style!r}"
+            )
+        try:
+            kwargs[role] = Timeframe(raw.strip().upper())
+        except ValueError:
+            raise PolicyConfigurationError(
+                f"{_ENGINE_B_HIERARCHICAL_KEY}: unknown {role} timeframe {raw!r} for "
+                f"style {style!r}. W1 is not a rung on the v4 ladder - the swing "
+                "Weekly+Daily read comes from engine_b_hierarchy "
+                "(SWING_WEEKLY_ENABLED resamples W1 from D1), not from a W1 role."
+            ) from None
+    if not kwargs:
+        return selected, {}, False, (
+            f"ENGINE_B_HIERARCHICAL_TF: empty BY_STYLE row for style={style}",
+        )
+    respect_role_overrides = block.get("RESPECT_ROLE_OVERRIDES", False)
+    if not isinstance(respect_role_overrides, bool):
+        raise PolicyConfigurationError(
+            f"{_ENGINE_B_HIERARCHICAL_KEY}.RESPECT_ROLE_OVERRIDES must be boolean"
+        )
+    deferred: tuple[str, ...] = ()
+    if respect_role_overrides and role_override_patched_roles:
+        deferred = tuple(
+            role for role in kwargs if role in set(role_override_patched_roles)
+        )
+        for role in deferred:
+            kwargs.pop(role, None)
+    if not kwargs:
+        return selected, {}, False, (
+            "ENGINE_B_HIERARCHICAL_TF: all hierarchical rungs deferred to "
+            f"ENGINE_TF_ROLE_OVERRIDES for style={style}",
+        )
+    sequence_required = block.get("REQUIRE_SEQUENTIAL_CONFIRMATION", True)
+    if not isinstance(sequence_required, bool):
+        raise PolicyConfigurationError(
+            f"{_ENGINE_B_HIERARCHICAL_KEY}.REQUIRE_SEQUENTIAL_CONFIRMATION must be boolean"
+        )
+    patched = replace(selected, **kwargs)
+    try:
+        validate_timeframe_role_order(
+            patched.regime,
+            patched.bias,
+            patched.structure,
+            patched.setup,
+            patched.trigger,
+            patched.execution,
+            execution_mode=patched.execution_mode,
+        )
+    except ValueError as exc:
+        raise PolicyConfigurationError(
+            f"{_ENGINE_B_HIERARCHICAL_KEY}: invalid role ladder for style {style!r}: {exc}"
+        ) from exc
+    messages = [
+        f"ENGINE_B_HIERARCHICAL_TF:{style} patched {','.join(kwargs)} "
+        f"(bias_mode={bias_mode})"
+    ]
+    if deferred:
+        messages.append(
+            "ENGINE_B_HIERARCHICAL_TF: deferred to ENGINE_TF_ROLE_OVERRIDES for "
+            f"{','.join(deferred)}"
+        )
+    return patched, kwargs, sequence_required, tuple(messages)
+
+
 def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
     if engine_id == "engine_d":
         # Engine D native scalp contract: H1 context/regime, M15 confirmed
@@ -1338,6 +1532,25 @@ def resolve_timeframe_policy(
                 f"ROLE_OVERRIDE:{role_group}:{resolved_style} patched "
                 f"{','.join(role_override_patched_roles)}"
             )
+    # Engine B top-down hierarchy: owns the HTF rungs (regime/bias) only, and
+    # deliberately runs after the per-group role matrix, which pins bias=H4 on
+    # most intraday rows for the pre-hierarchy model. MTF (structure/setup) and
+    # LTF (trigger) rungs, speed adaptation, and Engine A/D are untouched.
+    hierarchical_patched_roles: tuple[str, ...] = ()
+    hierarchical_sequence_required = False
+    if resolved_engine == "engine_b" and not config_conflict:
+        (
+            selected,
+            hierarchical_requested,
+            hierarchical_sequence_required,
+            hierarchical_messages,
+        ) = _apply_engine_b_hierarchical(
+            selected,
+            resolved_style,
+            role_override_patched_roles=role_override_patched_roles,
+        )
+        messages.extend(hierarchical_messages)
+        hierarchical_patched_roles = tuple(hierarchical_requested)
     reported_speed = (
         speed_state.live_speed_class
         if speed_state and speed_state.live_speed_class is not None
@@ -1487,6 +1700,11 @@ def resolve_timeframe_policy(
         m5_liquidity_blocked=m5_liquidity_blocked,
         role_override_applied=role_override_applied,
         role_override_patched_roles=role_override_patched_roles,
+        hierarchical_mode_active=bool(hierarchical_patched_roles),
+        hierarchical_patched_roles=hierarchical_patched_roles,
+        hierarchical_sequence_required=bool(
+            hierarchical_sequence_required and hierarchical_patched_roles
+        ),
     )
     canonical_identity = canonical or _key(requested) or "UNKNOWN"
     policy_key = policy_key_for(canonical_identity, resolved_engine, resolved_style)

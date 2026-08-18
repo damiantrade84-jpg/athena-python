@@ -3023,6 +3023,42 @@ CONFIG: dict = {
     #                    MTF_CONFIRMATION, then LTF_ENTRY; any failed state
     #                    blocks with a stage-specific reason.
     "ENGINE_B_BIAS_MODE": "legacy",
+    # Timeframe-policy side of the same hierarchy. ENGINE_B_BIAS_MODE decides
+    # whether the *scorer* runs the top-down model; this block decides whether
+    # the *stamped role ladder* follows it, so biasTf can stop reporting H4
+    # while the engine reads its Daily narrative (timeframe_policy
+    # ._apply_engine_b_hierarchical). Engine A, Engine D, and every
+    # non-hierarchical path are untouched.
+    #   ENABLED                        false -> exact previous roles + policy hash.
+    #   FOLLOW_BIAS_MODE               true  -> roles move only while
+    #                                  ENGINE_B_BIAS_MODE is hierarchical/strict,
+    #                                  so the ladder can never advertise a
+    #                                  hierarchy the scorer is not running.
+    #   RESPECT_ROLE_OVERRIDES         false -> the hierarchy owns regime/bias for
+    #                                  Engine B even where an ENGINE_TF_ROLE_OVERRIDES
+    #                                  row pins bias=H4 (those rows were authored
+    #                                  for the pre-hierarchy model and still apply
+    #                                  to Engine A). true -> a role-override row
+    #                                  keeps the rung it patched.
+    #   BY_STYLE                       per-style HTF rungs; only regime/bias may
+    #                                  be set here (structure/setup/trigger stay
+    #                                  with ENGINE_TF_ROLE_OVERRIDES). A style with
+    #                                  no row is left unchanged.
+    #   REQUIRE_SEQUENTIAL_CONFIRMATION advisory contract flag stamped on the
+    #                                  policy payload (hierarchicalBias) for the
+    #                                  AI-review layer; it gates nothing itself.
+    # W1 is not a rung on the v4 ladder: the swing Weekly+Daily read comes from
+    # ENGINE_B_HIERARCHY.SWING_WEEKLY_ENABLED (weekly resampled from D1).
+    "ENGINE_B_HIERARCHICAL_TF": {
+        "ENABLED": False,
+        "FOLLOW_BIAS_MODE": True,
+        "RESPECT_ROLE_OVERRIDES": False,
+        "BY_STYLE": {
+            "intraday": {"REGIME": "D1", "BIAS": "D1"},
+            "swing": {"REGIME": "D1", "BIAS": "D1"},
+        },
+        "REQUIRE_SEQUENTIAL_CONFIRMATION": True,
+    },
     "ENGINE_B_HIERARCHY": {
         "WEIGHT_SWEEP": 3.0,
         "WEIGHT_DISPLACEMENT_BOS": 2.0,
@@ -4041,6 +4077,7 @@ def _fatal_config_validation(cfg: dict) -> None:
         "ENGINE_A_V3_CROSS_SECTIONAL",
         "ENGINE_A_SPREAD_SCORE_PENALTY",
         "ENGINE_A_CORRELATION_SCORE_PENALTY",
+        "ENGINE_B_HIERARCHICAL_TF",
         "ENGINE_B_WEIGHTED_SCORING",
         "ENGINE_B_SUBSYSTEMS",
         "ENGINE_B_CANONICAL_ACTIONABILITY",

@@ -10,11 +10,17 @@ def get_engine_a_playbook() -> dict:
         "schemaVersion": PLAYBOOK_SCHEMA_VERSION,
         "engine": "A",
         "name": "Engine A Confluence Context Review",
-        "reviewOrder": "Confluence -> Factor Alignment -> Direction Quality -> Entry Timing -> Decision",
+        "reviewOrder": (
+            "Confluence -> Factor Alignment -> Direction Quality -> Cross-Sectional Rank "
+            "(when active) -> Entry Timing -> Decision"
+        ),
         "principles": [
             "Review confluence and factor alignment before approving entry.",
             "Ground every judgment in the supplied engineAContext.diagnostics and V3 factorScores, not a freehand chart read; see indicatorUsage.",
-            "Live Engine A is Engine A V3: four components trend/momentum/location/volume. Do not require legacy directionalScore/activeDirectionalFactors unless supplied.",
+            "Live Engine A is Engine A V3: four components trend/momentum/location/volume — a continuous quant quality score, not a vote count. Do not require legacy directionalScore/activeDirectionalFactors unless supplied.",
+            "Engine A V3 may run an explicit cross-sectional ranking layer: already-scored pairs are ranked inside their score_group / universe and only the top N (or top percentile) are promoted to TRADE. Ranking is RELATIVE selection layered on top of the absolute score threshold — it never rewrites component scores, never upgrades WATCH/NO_SIGNAL, and the absolute threshold still has to be met.",
+            "Read ranking only from factorDiagnostics.crossSectionalRanking. When it is absent or applied=false, ranking was not active for this signal: review on absolute thresholds exactly as before and do not report the missing block as a data gap.",
+            "A rank inside the cutoff means this pair was the strongest of its cohort at scan time — it is not independent evidence of setup quality and never substitutes for location, timing, or risk geometry. A signal you are reviewing has already passed selection; do not re-rank it, do not infer rank from the chart, and do not compare it against pairs not supplied to you.",
             "High Engine A score does not imply entry is acceptable now.",
             "Distinguish direction valid from entry timing poor.",
             "Acceptable timing is a valid and common outcome: a confirmed BOS with acceptance/retest, a pullback to structure, or a breakout retest are tradeable continuation entries, not chasing.",
@@ -51,6 +57,15 @@ def get_engine_a_playbook() -> dict:
             "execution_mode": "executionMode — live_quote production execution; executionTf is advisory execution context only.",
             "m5_policy": "m5Policy — disabled|conditional. Conditional M5 requires server-stamped m5Eligible=true with m5EligibilityReasons; M5 refines timing only, never direction or conviction.",
         },
+        "selectionContract": {
+            "purpose": "How the cross-sectional ranking layer changes what promotion means — read before treating a high or low score as the whole selection story.",
+            "absoluteFirst": "Scoring and the absolute TRADE threshold are unchanged and still run first. Ranking can only subtract from the promoted set, never add to it.",
+            "universe": "Pairs are ranked within factorDiagnostics.crossSectionalRanking.groupKey (score_group by default; asset_type or a configured custom universe when groupBy says so). Never assume the cohort was the whole scan.",
+            "cutoff": "method=top_n keeps rank <= topN; method=percentile keeps the top percentile of the eligible cohort. cutoff and eligibleCount on the payload are the deterministic numbers actually used.",
+            "thinGroups": "A cohort smaller than the configured minimum is not ranked (reason=group_below_min_size); the absolute threshold and minScoreFloor alone decide, and a single-pair backtest is a universe of one.",
+            "disabled": "enabled=false or a missing block means the previous absolute-threshold behavior is in force exactly as before. Say nothing about ranking in that case.",
+            "aiBoundary": "Ranking is deterministic selection. AI may explain or question it; it may never re-rank, promote a rejected pair, or use rank as a reason to override location/timing/RR evidence.",
+        },
         "entryModels": [
             "CONFLUENCE_CONTINUATION",
             "PULLBACK_TO_STRUCTURE",
@@ -67,6 +82,7 @@ def get_engine_a_playbook() -> dict:
             "entryTimeframe / entryUsesActiveCandle / activeEntryGate": "Actual entry-scoring timeframe and live-bucket proof. For configured lower-TF entries, activeEntryGate.passed=false is a hard timing blocker; never substitute H1 evidence.",
             "factorDiagnostics.minDirectionalFailed / confluenceScore / confluenceThreshold": "V3 gate diagnostics. If minDirectionalFailed is true, direction quality failed — do not treat as a high-quality entry.",
             "setupId / decision / qualified": "V3 setup identity and TRADE/WATCH/NO_SIGNAL decision — advisory context; never mutate deterministic scores.",
+            "factorDiagnostics.crossSectionalRanking": "Cross-sectional ranking result for this signal: enabled, applied, surface (live_scan|backtest), groupBy (score_group|asset_type|custom), groupKey, method (top_n|percentile), topN/percentile, minScoreFloor, groupSize, eligibleCount, cutoff, rank, eligible, accepted, reason, rankingScore, tieBreakers. accepted=true with reason=rank_within_cutoff means the pair was promoted as a top-of-cohort name; cross_sectional_rank_below_cutoff / group_below_min_size / cross_sectional_below_min_score_floor are deterministic selection outcomes already applied by Python. Cite these values, never recompute them.",
             "legacyScore / legacyDirection vs policyScore": "legacyScore/legacyDirection are the pre-policy shadow evaluation kept for rollback diagnostics and UI display; policyScore is the authoritative score under the enforced timeframe policy. When they disagree, judge the signal on policyScore and treat legacy* as shadow context only.",
             "diagnostics.adxD1 / adxH4": "Trend strength / regime. Low ADX = ranging; do not treat range chop as a continuation entry, and prefer mean-reversion logic at value.",
             "diagnostics.rsi": "Momentum confirmation alongside factorScores.momentum.",
@@ -123,6 +139,11 @@ def get_engine_a_playbook() -> dict:
             "Factor alignment is conflicted or weak across trend/momentum/volume.",
             "Required context is missing and blocks confident tradeability.",
             "Visual chart contradicts Engine A direction or entry timing.",
+        ],
+        "doNotRejectIf": [
+            "Do not downgrade solely because factorDiagnostics.crossSectionalRanking is absent, enabled=false, or applied=false — ranking is config-gated and its absence is the unchanged absolute-threshold path.",
+            "Do not treat a passing rank (accepted=true) as proof of good entry timing, and do not upgrade a WAIT to ENTRY_NOW because the pair ranked first in its group.",
+            "Do not re-rank the cohort, estimate a rank the server did not supply, or reject a signal because a different pair looks stronger on its chart.",
         ],
         "requiredOutputFields": [
             "tradeSkillVersion",

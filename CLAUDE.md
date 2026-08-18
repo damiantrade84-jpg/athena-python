@@ -91,6 +91,13 @@ provider-owned and can change.
   indicators, thresholds, or execution semantics between engines unless an explicit
   contract requires it. ASE remains standalone under `athena_ase/` and demo/paper
   only.
+- Engine A V3 promotion has two layers: the per-pair absolute score threshold, and
+  (when `ENGINE_A_V3_CROSS_SECTIONAL.ENABLED`) an explicit cross-sectional ranking
+  pass in `engine_a_v3/cross_sectional.py` that ranks already-scored pairs inside
+  their `score_group`/universe and keeps only the top N or top percentile. Ranking
+  only restricts TRADE promotion — it never rewrites component scores, never
+  upgrades WATCH/NO_SIGNAL, and is a no-op when disabled. The per-signal result is
+  stamped as `crossSectionalRanking`.
 - Bybit is the primary crypto venue for candles, levels, live ticks, paper execution,
   and the configured trade-bucket path. Binance candle/live-price support is a
   separate path. `MICROSTRUCTURE_BINANCE_FEEDS_ENABLED` is false in the checked-in
@@ -122,6 +129,15 @@ provider-owned and can change.
   emitted `executionTf` is advisory execution context. M5 is conditional refinement
   after M15 confirmation or disabled; it is not a replacement trigger or structure
   timeframe. The v4 `allow_dynamic_m5_execution` promotion is deprecated/ignored.
+- Engine B may run a top-down (ICT/SMC) hierarchy: HTF bias -> MTF confirmation ->
+  LTF entry. `ENGINE_B_BIAS_MODE` governs the scorer (`engine_b_hierarchy.py`);
+  `ENGINE_B_HIERARCHICAL_TF` governs the stamped role ladder
+  (`timeframe_policy._apply_engine_b_hierarchical`) and re-points ONLY the Engine B
+  `regime`/`bias` rungs (Daily bias for intraday, Weekly+Daily swing read via the
+  resampled W1 inside `engine_b_hierarchy`, since W1 is not a rung on the ladder).
+  Both ship disabled/legacy: with them off the roles, required-closed set, and
+  policy hash are unchanged. Engine A and Engine D are never affected, and the
+  hierarchy never bypasses a deterministic gate.
 - Speed and liquidity state do not rewrite the authoritative Engine A/B role ladder
   in v4. They are recorded for diagnostics and M5 eligibility. Only an explicit,
   current resolver/config override may patch a role; verify that override rather than

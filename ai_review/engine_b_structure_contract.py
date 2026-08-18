@@ -19,6 +19,15 @@ empty server-side, and no error raised anywhere. That is exactly the reported
 ``engine_b_overlays_enabled_but_server_structure_context_empty``.
 
 Both contracts are accepted here so the join cannot silently drop structure.
+
+Top-down hierarchy note (ICT/SMC): ``bias_mode``, ``htf_bias``, and ``hierarchy``
+(HTF bias -> MTF confirmation -> LTF entry, see ``engine_b_hierarchy.py``) are
+deliberately NOT evidence keys here. They are a bias/verdict narrative, not
+structure geometry, and they are config-gated: in ``legacy`` bias mode a payload
+may carry none of them while still being a complete Engine B structure payload.
+Treating them as evidence would let a hierarchy-only payload claim structure it
+does not have. They are surfaced to reviewers by ``engine_b_context`` /
+``engine_a_context.build_engine_b_prompt_context`` instead.
 """
 
 from __future__ import annotations

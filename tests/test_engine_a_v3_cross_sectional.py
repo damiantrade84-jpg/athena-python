@@ -357,9 +357,40 @@ def test_min_group_size_skips_cutoff_but_keeps_floor() -> None:
     assert weak[RANKING_FIELD]["reason"] == "group_below_min_size"
 
 
-def test_checked_in_default_is_disabled() -> None:
+def test_code_default_is_disabled_and_yaml_opt_in_is_explicit() -> None:
+    """Ranking is off in code; enabling it must be a deliberate config.yaml opt-in.
+
+    The DEFAULT_CONFIG value is the backward-compatibility guarantee: with no
+    YAML override, absolute-threshold promotion behaves exactly as before.
+    config.yaml may then explicitly turn ranking on for this deployment, and the
+    effective CONFIG is expected to follow that file rather than the code default.
+    """
+    import ast
+    from pathlib import Path
+
     from config import CONFIG
 
-    resolved = resolve_cross_sectional_config(CONFIG)
-    assert resolved.enabled is False
-    assert ranking_enabled(CONFIG) is False
+    # No block at all == previous behavior (absolute thresholds only).
+    assert resolve_cross_sectional_config({}).enabled is False
+    assert ranking_enabled({}) is False
+
+    # The shipped code default in config.py must stay disabled, so a deployment
+    # that does not opt in keeps the pre-ranking promotion path byte-for-byte.
+    source = ast.parse(
+        Path(__file__).resolve().parents[1].joinpath("config.py").read_text(encoding="utf-8")
+    )
+    shipped = None
+    for node in ast.walk(source):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if isinstance(key, ast.Constant) and key.value == "ENGINE_A_V3_CROSS_SECTIONAL":
+                shipped = ast.literal_eval(value)
+    assert shipped is not None, "ENGINE_A_V3_CROSS_SECTIONAL default missing from config.py"
+    assert shipped["ENABLED"] is False
+
+    # Whatever this deployment's config.yaml chose, the block must stay valid and
+    # ranking_enabled must agree with the resolved config.
+    effective = resolve_cross_sectional_config(CONFIG)
+    assert effective.valid is True
+    assert ranking_enabled(CONFIG) is effective.enabled

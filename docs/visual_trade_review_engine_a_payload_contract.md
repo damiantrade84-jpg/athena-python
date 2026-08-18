@@ -83,6 +83,38 @@ Source evidence:
 9. Engine A exposes enough to explain the main pass path at a high level: score, trend coherence, momentum quality, addon value/type, multipliers, feed status, threshold in signal, and risk levels in signal. It does not expose enough for a true raw factor-vote panel.
 10. If the panel needs true raw factor votes later, add explicit source fields for per-timeframe trend votes/weights, raw momentum subcomponent values and contributions, addon subfactor values for funding/OI/carry/COT, volume adjustment, macro/intermarket pre/post deltas, base score before multipliers, each multiplier input reason, and pre/post score stages.
 
+## Cross-Sectional Ranking Fields (Engine A V3)
+
+Ranking is applied after scoring by `engine_a_v3/cross_sectional.py` and stamped
+onto the signal by `_attach_annotation`. It is selection metadata, not a factor.
+
+| Field wanted by panel | Actual source field | Available? | Notes |
+|---|---|---:|---|
+| `ranking.enabled` / `ranking.applied` | `signal.crossSectionalRanking.enabled` / `.applied`, mirrored at `factorDiagnostics.crossSectionalRanking` | Only when the config block is enabled | Absent or `applied=false` means the unchanged absolute-threshold path. Report as `UNAVAILABLE`, never as a failed rank. |
+| `ranking.group` | `crossSectionalRanking.groupKey` + `.groupBy` | Yes when applied | `groupBy` is `score_group` (default), `asset_type`, or `custom`. |
+| `ranking.method` | `crossSectionalRanking.method` + `.topN` / `.percentile` | Yes when applied | `top_n` keeps `rank <= topN`; `percentile` keeps the top slice of the eligible cohort. |
+| `ranking.rank` | `crossSectionalRanking.rank` / `.cutoff` / `.eligibleCount` / `.groupSize` | Yes when applied | Render as `rank / eligibleCount` within `groupKey`. Never recompute. |
+| `ranking.accepted` | `crossSectionalRanking.accepted` + `.reason` | Yes when applied | Reasons: `rank_within_cutoff`, `cross_sectional_rank_below_cutoff`, `group_below_min_size`, `cross_sectional_below_min_score_floor`, plus eligibility reasons. |
+| `ranking.score` | `crossSectionalRanking.rankingScore` + `.tieBreakers` | Yes when applied | The score the cohort was sorted on, with the configured tie-breakers. |
+
+Rules for any panel or reviewer surface:
+
+- Ranking never changes `final_score`, the four V3 components, or direction, and
+  can only subtract from the promoted set — never add to it.
+- A single-pair backtest is a universe of one: ranking reduces to `MIN_SCORE_FLOOR`.
+- Do not re-rank client-side and do not compare against pairs not in the payload.
+
+## Timeframe Interpretation
+
+The reviewed chart timeframe and the policy roles are separate contracts. Roles
+(`regimeTf` / `biasTf` / `structureTf` / `setupTf` / `triggerTf`, plus
+`atrDiagnostics.atr_tf`) are server-supplied and authoritative; the chart
+interval is presentation. A panel must not infer, correct, or override a role
+from the chart, and must not flag a Daily Engine B bias rung
+(`hierarchicalBias.applied=true`) as inconsistent with an H4 structure zone —
+that is the designed hierarchical shape: HTF bias -> MTF confirmation -> LTF
+entry.
+
 ## Adapter Contract
 
 `ai_review.engine_a_panel_adapter.build_engine_a_visual_audit_payload(engine_a_result, signal=None)` is a report-only adapter. Field aliases live in ``FIELD_SPECS`` inside that module and should stay aligned with the evidence table above.

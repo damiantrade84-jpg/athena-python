@@ -16,6 +16,19 @@ _ENGINE_B_OUTPUT_ADDON = (
     "\n\nENGINE B PRIMARY REVIEW RULES:\n"
     "- Engine B naked market structure is the primary deterministic context.\n"
     "- Follow the ATHENA TRADE PLAYBOOKS block (Engine B entry models, mustRejectIf, invalidations).\n"
+    "- Engine B is top-down and SEQUENTIAL: HTF bias (Daily-primary for intraday, "
+    "Weekly+Daily for swing) -> MTF confirmation (structure/setup rungs) -> LTF entry "
+    "(trigger rung). Check the sequence is coherent and name the weakest stage. A strong "
+    "LTF trigger never repairs a missing, unclear, or opposing HTF bias.\n"
+    "- Use the server-supplied bias timeframe role and the supplied HTF bias / hierarchy "
+    "fields only. Never derive bias from the chart timeframe and never assume an H4 bias.\n"
+    "- bias_mode is deterministic and already applied: legacy = diagnostics only (review "
+    "with the standard gate/zone logic and do NOT report the hierarchy as missing data); "
+    "hierarchical = multiplier already applied; strict = state machine already applied. "
+    "Cite block reasons (htf_bias_unclear, htf_bias_conflicting, counter_htf_bias, "
+    "mtf_confirmation_missing, ltf_entry_missing); never re-apply or reverse them.\n"
+    "- The hierarchy is advisory to you and never replaces structure_ok, location_ok, "
+    "entry_ok, space_gate_ok, trigger_timeframe_gate_ok, or RR gates.\n"
     "- Do NOT fabricate Engine A trend_score/structure_score/momentum_score/liquidity_score/"
     "risk_score/confirmation_score/total_score when Engine A factor diagnostics are absent.\n"
     "- Judge by structural_verdict, gate flags, score_pct, min_rr, rr_used_for_gate, and zones.\n"
@@ -279,6 +292,15 @@ def build_marcus_system_prompt(base_prompt: str, engine_source: str) -> str:
     else:
         prompt += (
             '\nreviewSource: use "engine_a_marcus" for Engine A factor/confluence reviews.'
+            "\nENGINE A SELECTION: Engine A V3 is a continuous quant quality score "
+            "(trend / momentum / location / volume-flow). When a cross-sectional ranking "
+            "block is supplied and applied, pairs were ranked inside their score_group / "
+            "universe and only the top N or top percentile were promoted - a RELATIVE "
+            "selection layer on top of the unchanged absolute threshold. Cite rank, "
+            "cutoff, and group only from the supplied block; never re-rank, never infer a "
+            "rank, and never let rank alone move the grade or edgeProbability. No block, "
+            "or applied=false, means ranking was inactive: review on absolute thresholds "
+            "and do not report its absence as missing data."
         )
     return prompt
 

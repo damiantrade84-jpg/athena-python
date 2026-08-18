@@ -54,6 +54,8 @@ def render_playbook_prompt_block(
                 "timeframeContract",
                 "timeframeAuthority",
                 "timeframeMatrix",
+                # Engine A cross-sectional ranking (relative selection layer).
+                "selectionContract",
                 "strategyMapping",
                 "marketStates",
                 "locationChecklist",

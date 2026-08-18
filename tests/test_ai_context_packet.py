@@ -404,7 +404,11 @@ def test_calibration_context_string_injects_engine_b_native_diagnostics():
     assert "Engine B score: 6.0 / 8.0 (75.0%)" in text
     assert "Engine B actionable: False | RR gate: 3.37 | room_ok: False" in text
     assert "space_gate_ok" in text or "Engine B canonical status: REJECT_NO_ROOM" in text
-    assert "Engine B timeframe roles: struct=H4 zone=H4 trigger=M15 atr=H4" in text
+    # regime/bias lead the roles line so the hierarchical bias rung is visible.
+    assert (
+        "Engine B timeframe roles: regime=None bias=None struct=None zone=H4 "
+        "setup=None trigger=M15 execution=None atr=H4"
+    ) in text
     assert "Engine B trigger TF gate: expected=M15 actual=M15 passed=True" in text
     assert "Engine B mandatory gates: structure=True location=True entry=True space=True rr=None" in text
     assert "Engine B score contribution: gates=5.0/5.0 quality=1.0" in text
@@ -711,3 +715,78 @@ def test_calibration_context_asset_default_derivable_only_from_asset_source():
     # Unstamped signals keep None provenance (backward compatible).
     assert tf["m5Eligible"] is None
     assert tf["triggerState"] is None
+
+
+def _engine_b_hierarchy_signal(naked_extra: dict) -> dict:
+    naked = {
+        "structural_verdict": "CLEAR",
+        "regime_tf": "D1",
+        "bias_tf": "D1",
+        "struct_tf": "H4",
+        "zone_tf": "H4",
+        "entry_tf": "M15",
+        "atr_tf": "H4",
+    }
+    naked.update(naked_extra)
+    return {
+        "pair": "GBP/JPY",
+        "symbol": "GBPJPY",
+        "type": "forex",
+        "style": "intraday",
+        "engine_source": "engine_b",
+        "is_naked": True,
+        "direction": "LONG",
+        "naked_data": naked,
+    }
+
+
+def test_calibration_context_surfaces_engine_b_top_down_hierarchy():
+    """HTF bias -> MTF confirmation -> LTF entry must reach the text reviewer."""
+    signal = _engine_b_hierarchy_signal(
+        {
+            "bias_mode": "strict",
+            "htf_bias": {
+                "state": "valid",
+                "direction": "LONG",
+                "strength": 0.82,
+                "weekly_used": False,
+                "evidence": [{"name": "d1_sweep"}, {"name": "d1_displacement_bos"}],
+            },
+            "hierarchy": {
+                "stages": {
+                    "htf_bias": {"passed": True},
+                    "mtf_confirmation": {"passed": True, "evidence": ["bos", "sweep"]},
+                    "ltf_entry": {"passed": False, "evidence": []},
+                },
+                "decision": "blocked",
+                "applied": True,
+                "blocked": True,
+                "block_reasons": ["ltf_entry_missing"],
+            },
+        }
+    )
+
+    text = build_ai_calibration_context_string(
+        signal, "Engine B naked market structure", "intraday"
+    )
+
+    assert "Engine B timeframe roles: regime=D1 bias=D1 struct=H4" in text
+    assert (
+        "Engine B HTF bias: mode=strict state=valid direction=LONG strength=0.82 "
+        "weekly_used=False evidence=d1_sweep+d1_displacement_bos"
+    ) in text
+    assert (
+        "Engine B hierarchy: htf_bias=True mtf_confirmation=True(bos+sweep) "
+        "ltf_entry=False decision=blocked applied=True blocked=True "
+        "reasons=['ltf_entry_missing']"
+    ) in text
+
+
+def test_calibration_context_legacy_signal_has_no_hierarchy_lines():
+    """A signal without hierarchy fields keeps exactly its previous context."""
+    text = build_ai_calibration_context_string(
+        _engine_b_hierarchy_signal({}), "Engine B naked market structure", "intraday"
+    )
+
+    assert "Engine B HTF bias:" not in text
+    assert "Engine B hierarchy:" not in text
