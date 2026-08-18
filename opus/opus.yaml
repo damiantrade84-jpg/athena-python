@@ -1,0 +1,364 @@
+# OPUS Engine configuration.
+#
+# Every tunable the engine reads lives in this file. Nothing in opus/*.py
+# hardcodes a threshold. Values here are the shipped defaults; override them in
+# opus.local.yaml (git-ignored, deep-merged on load) rather than editing this.
+
+OPUS:
+  ENABLED: true
+
+  # paper -> simulated fills against the live quote (default, always safe).
+  # live  -> routes to a real broker. Requires BOTH this flag AND the
+  #          OPUS_LIVE_CONFIRM environment token; see execution/router.py.
+  MODE: paper
+
+  # ---------------------------------------------------------------------
+  # Universe. venue selects the data/broker adapter; class selects the
+  # timeframe ladder, cost model and calibration bucket.
+  # ---------------------------------------------------------------------
+  UNIVERSE:
+    - {symbol: "EURUSD",  display: "EUR/USD",  venue: mt5,    class: forex}
+    - {symbol: "GBPUSD",  display: "GBP/USD",  venue: mt5,    class: forex}
+    - {symbol: "USDJPY",  display: "USD/JPY",  venue: mt5,    class: forex}
+    - {symbol: "AUDUSD",  display: "AUD/USD",  venue: mt5,    class: forex}
+    - {symbol: "USDCAD",  display: "USD/CAD",  venue: mt5,    class: forex}
+    - {symbol: "XAUUSD",  display: "XAU/USD",  venue: mt5,    class: metals}
+    - {symbol: "XAGUSD",  display: "XAG/USD",  venue: mt5,    class: metals}
+    - {symbol: "BTCUSDT", display: "BTC/USDT", venue: bybit,  class: crypto}
+    - {symbol: "ETHUSDT", display: "ETH/USDT", venue: bybit,  class: crypto}
+    - {symbol: "SOLUSDT", display: "SOL/USDT", venue: bybit,  class: crypto}
+
+  # ---------------------------------------------------------------------
+  # Timeframe ladder. OPUS is intraday and uses exactly three rungs plus the
+  # live quote. Roles are distinct and never substitute for one another.
+  #   context   -> regime, session value, liquidity pools
+  #   structure -> voids, displacement legs, pool sweeps
+  #   trigger   -> reclaim / absorption confirmation
+  #   execution -> the live bid/ask, never a candle close
+  # ---------------------------------------------------------------------
+  TIMEFRAMES:
+    default: {context: H1,  structure: M15, trigger: M5}
+    forex:   {context: H1,  structure: M15, trigger: M5}
+    metals:  {context: H1,  structure: M15, trigger: M5}
+    crypto:  {context: H4,  structure: M15, trigger: M5}
+    indices: {context: H1,  structure: M15, trigger: M5}
+
+  # Bars requested per rung, and the hard minimum below which the pair is
+  # skipped rather than scored on thin history.
+  BARS:
+    context_fetch: 400
+    structure_fetch: 700
+    trigger_fetch: 700
+    context_min: 120
+    structure_min: 200
+    trigger_min: 200
+
+  # ---------------------------------------------------------------------
+  # Sessions, in UTC. Used to anchor value (SAV) and to bucket the temporal
+  # conviction model. Ranges are [start, end).
+  # ---------------------------------------------------------------------
+  SESSIONS:
+    ASIA:   {start: 0,  end: 7}
+    LONDON: {start: 7,  end: 13}
+    NY:     {start: 13, end: 21}
+    LATE:   {start: 21, end: 24}
+
+  # ---------------------------------------------------------------------
+  # Indicator parameters.
+  # ---------------------------------------------------------------------
+  INDICATORS:
+
+    # Volatility denominator shared by every sigma-normalised threshold.
+    SIGMA:
+      window: 60          # bars of Yang-Zhang estimation on the structure TF
+      min_window: 20
+
+    # LDI - Liquidity Displacement Index
+    LDI:
+      pivot_k: 2            # bars of context each side of a fractal pivot
+      lookback: 180         # structure bars scanned for pools
+      pool_max_age: 160     # bars after which a pool is considered consumed
+      equality_tol_sigma: 0.15   # |h1-h2| under this => "equal highs" cluster
+      touch_decay_half_life: 60  # bars; recency weight on pool touches
+      sweep_retention_max: 0.30  # close retained <30% of the poke => rejection
+      hold_retention_min: 0.60   # close retained >60% => genuine displacement
+      min_penetration_sigma: 0.08
+      event_half_life: 12        # bars; recency decay on sweep/hold events
+      squash_scale: 1.2
+
+    # ARC - Absorption / Rejection Curve
+    ARC:
+      lookback: 90
+      effort_window: 60      # bars for the robust volume z-score
+      min_range_sigma: 0.25  # bars narrower than this carry no information
+      event_half_life: 8
+      squash_scale: 1.0
+
+    # VFI - Void Field Inefficiency (three-bar imbalances as a decaying field)
+    VFI:
+      lookback: 200
+      min_gap_sigma: 0.12    # voids smaller than this are noise
+      max_age: 150
+      age_half_life: 45
+      fill_invalidate: 0.85  # >85% traded back through => void is dead
+      magnet_distance_sigma: 6.0   # inverse-distance weighting scale
+      shelf_max_distance_sigma: 2.5  # a void further than this is not an entry
+      impulse_lookback: 30           # bars scanned back for the leg's origin swing
+      squash_scale: 1.0
+
+    # SAV - Session Anchored Value
+    SAV:
+      min_bars: 8            # bars into the session before value is trusted
+      band_sigma_mult: [1.0, 2.0]
+      rotation_window: 0     # 0 = whole session
+      migration_scale: 1.5   # sigma of value shift that maps to a full reading
+      max_stretch_sigma: 6.0 # beyond this the feeds disagree; fail closed
+      max_fade_sigma: 2.5    # cap on the fade term so one excursion cannot saturate
+      squash_scale: 1.5
+
+    # KDI - Kinetic Drift Index
+    KDI:
+      fast: 12
+      slow: 40
+      efficiency_window: 20
+      efficiency_gamma: 1.5  # exponent on fractal efficiency; >1 punishes chop
+      drift_scale: 2.0       # sigma of drift that maps to a full reading
+      jump_window: 60
+
+    # OFP - Order Flow Pressure
+    OFP:
+      # The baseline needs many independent windows or the robust scale is
+      # estimated from a handful of overlapping sums and the z-score is noise.
+      lookback: 240
+      delta_window: 12
+      divergence_lookback: 24
+      book_levels: 10        # depth levels used when a live book is available
+      book_weight: 0.6       # blend weight for book-derived vs bar-derived
+      squash_scale: 1.5
+
+    # TCI - Temporal Conviction Index
+    TCI:
+      history_days: 45
+      bucket_minutes: 60
+      min_samples: 20        # below this the bucket falls back to neutral
+      shrinkage_n0: 40       # pseudo-count pulling thin buckets toward neutral
+      continuation_scale: 0.25
+      activity_floor: 0.35   # multiplier floor for dead hours
+
+    # RQS - Regime Quadrant State
+    RQS:
+      vol_baseline_window: 120
+      vol_expansion_z: 0.35     # sigma-z above which the market is expanding
+      vol_contraction_z: -0.35
+      rotation_balance: 0.28    # crossings/bar above which price is balanced
+      efficiency_trend: 0.34    # fractal efficiency above which it is trending
+      jump_displacement: 0.25   # jump ratio above which moves are discontinuous
+
+  # ---------------------------------------------------------------------
+  # Conviction weighting. Per-archetype indicator weights, because a
+  # mean-reversion fade and a continuation trade should not read the same
+  # evidence the same way. Weights are relative and normalised at use.
+  # ---------------------------------------------------------------------
+  WEIGHTS:
+    SWEEP_RECLAIM:
+      LDI: 3.0
+      ARC: 2.2
+      OFP: 2.0
+      SAV: 1.4
+      VFI: 0.8
+      KDI: 0.6
+    DISPLACEMENT_CONTINUATION:
+      KDI: 2.6
+      VFI: 2.4
+      OFP: 2.0
+      LDI: 1.6
+      SAV: 1.0
+      ARC: 0.6
+    VALUE_FADE:
+      SAV: 3.0
+      ARC: 2.4
+      OFP: 1.6
+      LDI: 1.4
+      VFI: 0.8
+      KDI: 0.4
+    VACUUM_BREAK:
+      LDI: 2.2
+      KDI: 2.0
+      VFI: 1.8
+      OFP: 1.8
+      SAV: 1.2
+      ARC: 0.8
+
+  # Coherence: how hard to punish indicator disagreement.
+  # conviction = weighted_mean * coherence**exponent
+  COHERENCE:
+    exponent: 1.0
+    dispersion_scale: 0.85   # weighted stdev that maps to zero coherence
+    min_active_indicators: 4
+
+  # ---------------------------------------------------------------------
+  # Regime routing. Multiplier applied to conviction for each
+  # archetype x regime pair. 0.0 disables that setup in that regime outright.
+  # ---------------------------------------------------------------------
+  REGIME_ROUTING:
+    TREND_DRIVE:
+      DISPLACEMENT_CONTINUATION: 1.25
+      VACUUM_BREAK: 0.95
+      SWEEP_RECLAIM: 0.85
+      VALUE_FADE: 0.0
+    COILED:
+      VACUUM_BREAK: 1.25
+      DISPLACEMENT_CONTINUATION: 0.80
+      SWEEP_RECLAIM: 0.90
+      VALUE_FADE: 0.45
+    VOLATILE_RANGE:
+      SWEEP_RECLAIM: 1.25
+      VALUE_FADE: 1.15
+      DISPLACEMENT_CONTINUATION: 0.55
+      VACUUM_BREAK: 0.60
+    DORMANT:
+      SWEEP_RECLAIM: 0.35
+      VALUE_FADE: 0.40
+      DISPLACEMENT_CONTINUATION: 0.20
+      VACUUM_BREAK: 0.25
+
+  # ---------------------------------------------------------------------
+  # Setup geometry. Stops are structural, but bounded: too tight and spread
+  # noise takes you out, too wide and the cost model can never clear.
+  # ---------------------------------------------------------------------
+  GEOMETRY:
+    stop_buffer_sigma: 0.35     # wick padding beyond the structural stop
+    # Bounds are in units of ONE structure-timeframe bar sigma. A stop under
+    # ~1.5 bar-sigmas sits inside the instrument's own noise and, because cost
+    # in R is inverse to stop distance, hands most of the risk budget to the
+    # spread before the idea has a chance to work.
+    min_stop_sigma: 1.50
+    # 6.0 was too tight for real intraday structure: on M15 FX one sigma is
+    # ~3 pips here, so 6 sigma capped stops at ~18 pips and rejected ordinary
+    # swing-based invalidation levels outright.
+    max_stop_sigma: 10.00
+    min_rr: 1.35                # first target must clear this
+    max_rr: 8.0                 # beyond this the target is fantasy; clamp
+    targets: 2
+    tp2_extension: 1.9          # second target as a multiple of the first R
+    entry_offset_sigma: 0.05    # limit placed this far inside the level
+    # Coil detection is scale-free: observed range divided by the range a
+    # random walk would be EXPECTED to make over the same window
+    # (1.596*sigma*sqrt(n)). Below 1.0 is tighter than chance; 0.85 means
+    # ~15% tighter than a random walk. A fixed sigma count cannot work here
+    # because the expected range grows with the square root of the window.
+    coil_max_compression: 0.85
+    coil_extension: 1.0         # measured move as a multiple of coil height
+    # How far back INTO the coil the stop sits, as a fraction of its height.
+    # A stop at the far side spans the whole range, which caps RR near 1.0 by
+    # construction and makes the setup unreachable.
+    coil_stop_fraction: 0.5
+
+  # ---------------------------------------------------------------------
+  # Probability calibration. Score -> P(target before stop) via a logistic
+  # fitted on triple-barrier outcomes, shrunk toward the prior by sample size.
+  # ---------------------------------------------------------------------
+  CALIBRATION:
+    enabled: true
+    prior_slope: 2.10       # logit slope on conviction before any data
+    prior_intercept: -0.85  # conviction 0 => ~30% hit rate at RR ~1.8
+    shrinkage_n0: 60        # pseudo-count; fitted params get weight n/(n+n0)
+    min_samples_fit: 40
+    max_samples_fit: 4000
+    refit_interval_sec: 900
+    time_barrier_bars: 48   # triple-barrier horizon on the trigger TF
+    probability_floor: 0.05
+    probability_ceiling: 0.95
+
+  # ---------------------------------------------------------------------
+  # Cost model, expressed per side. OPUS converts these into R and gates on
+  # net expectancy - this is the single most important gate in the engine.
+  # ---------------------------------------------------------------------
+  COSTS:
+    forex:   {commission_bps: 0.25, slippage_bps: 0.30, use_live_spread: true}
+    metals:  {commission_bps: 0.40, slippage_bps: 0.80, use_live_spread: true}
+    crypto:  {commission_bps: 5.50, slippage_bps: 1.50, use_live_spread: true}
+    indices: {commission_bps: 0.50, slippage_bps: 1.00, use_live_spread: true}
+    default: {commission_bps: 1.00, slippage_bps: 1.00, use_live_spread: true}
+
+  # ---------------------------------------------------------------------
+  # Promotion gates. A signal must clear ALL of these to reach TRADE.
+  # Missing or ambiguous data fails closed.
+  # ---------------------------------------------------------------------
+  GATES:
+    min_conviction: 0.34
+    min_coherence: 0.30
+    min_probability: 0.34
+    min_expectancy_r: 0.06     # net R after costs; the decisive gate
+    max_cost_r: 0.34           # cost above a third of risk is unrecoverable
+    max_spread_pct: 0.09
+    max_quote_age_sec: 12.0
+    # A quote dated in the FUTURE means a broker clock/timezone mismatch, not a
+    # fresh quote. Tolerance is small and deliberate: it must fail, not pass.
+    max_quote_future_sec: 2.0
+    max_bar_age_mult: 2.5      # bar age vs its own timeframe duration
+    require_live_quote: true
+    watch_conviction: 0.24     # below TRADE but worth surfacing
+
+  # ---------------------------------------------------------------------
+  # Risk. Sizing is fractional Kelly on the calibrated probability, hard
+  # capped by risk_pct_max regardless of what Kelly suggests.
+  # ---------------------------------------------------------------------
+  RISK:
+    account_currency: USD
+    default_equity: 10000.0
+    risk_pct_base: 0.50        # % of equity risked at neutral conviction
+    risk_pct_max: 1.25
+    kelly_fraction: 0.30       # fraction of full Kelly; full Kelly is ruin-prone
+    max_concurrent_positions: 4
+    max_positions_per_symbol: 1
+    max_daily_loss_pct: 3.0
+    max_daily_signals_executed: 12
+    symbol_cooldown_sec: 900
+    # An order older than this is treated as closed. OPUS is intraday and its
+    # trades resolve inside the triple-barrier horizon; without this the router
+    # would count every historical fill as a still-open position forever.
+    position_horizon_sec: 21600
+    correlation_group_cap: 2   # simultaneous positions per correlation group
+    correlation_groups:
+      USD_MAJORS: [EURUSD, GBPUSD, AUDUSD, USDCAD, USDJPY]
+      METALS: [XAUUSD, XAGUSD]
+      CRYPTO: [BTCUSDT, ETHUSDT, SOLUSDT]
+
+  # ---------------------------------------------------------------------
+  # Execution routing.
+  # ---------------------------------------------------------------------
+  EXECUTION:
+    default_broker: paper
+    # Refuse to route live to anything that is not a confirmed DEMO account.
+    # Checked against the terminal's own trade_mode, never the server name -
+    # this broker's demo server is called "ATFXGM16-LIVE". An account type that
+    # cannot be confirmed ('unknown') is refused too. Set false only when you
+    # intend to trade real money.
+    require_demo_account: true
+    broker_by_venue:
+      mt5: mt5
+      bybit: bybit
+      binance: paper
+    paper_slippage_bps: 0.50
+    order_type: limit          # limit | market
+    limit_expiry_sec: 900
+    attach_stop: true
+    attach_target: true
+    deviation_points: 20       # MT5 max price deviation on market orders
+    dedupe_window_sec: 300
+
+  # ---------------------------------------------------------------------
+  # Validation. Applied to the stored outcome history before an archetype is
+  # allowed to promote signals autonomously.
+  # ---------------------------------------------------------------------
+  VALIDATION:
+    min_trades: 30
+    deflated_sharpe_min: 0.90  # required confidence that skill is real
+    trials_assumed: 24         # archetype x class combinations searched
+    enforce: false             # when true, an unvalidated archetype cannot TRADE
+
+  # ---------------------------------------------------------------------
+  STORE:
+    path: "opus_store.sqlite3"
+    retain_days: 400

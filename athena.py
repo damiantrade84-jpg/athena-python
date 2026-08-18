@@ -10880,6 +10880,19 @@ app.register_blueprint(
     )
 )
 
+# OPUS Engine: /api/opus/*. Fully self-contained under opus/ - its own
+# indicators, scoring, calibration, risk model, data adapters and broker
+# adapters, its own config (opus/opus.yaml) and its own SQLite store. It
+# imports nothing from this module and shares no state with it, so a failure
+# to mount it must not take the host down.
+try:
+    from opus.api import create_opus_blueprint  # noqa: E402
+
+    app.register_blueprint(create_opus_blueprint())
+    log.info("OPUS engine mounted at /api/opus")
+except Exception as _opus_exc:  # noqa: BLE001
+    log.warning("OPUS engine blueprint not mounted: %s", _opus_exc)
+
 
 # N4: Kill-switch API - immediately blocks new scans/analyses
 

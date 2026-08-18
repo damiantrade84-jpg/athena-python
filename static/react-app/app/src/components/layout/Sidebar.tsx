@@ -13,7 +13,7 @@ import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
   Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut, Workflow, Cpu, Radar, Landmark, Sparkles,
-  Ghost, Orbit,
+  Ghost, Orbit, Waves,
 } from 'lucide-react';
 
 type NavItem = { id: PanelId; label: string; icon: ElementType; badge?: string; title?: string };
@@ -39,6 +39,13 @@ const navSections: NavSection[] = [
       { id: 'engineC',     label: 'Engine C',     icon: Layers },
       { id: 'ghostTrade',  label: 'Ghost Trade',  icon: Ghost, badge: 'SHADOW' },
       { id: 'solEngine',   label: 'SOL Engine',   icon: Orbit, badge: 'INTRADAY' },
+      {
+        id: 'opusEngine',
+        label: 'OPUS Engine',
+        title: 'OPUS — intraday liquidity/auction engine with a cost-aware expectancy gate',
+        icon: Waves,
+        badge: 'OPUS',
+      },
     ],
   },
   {

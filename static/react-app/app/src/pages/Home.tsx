@@ -30,6 +30,7 @@ import TSMOMPanel from '@/components/panels/TSMOMPanel';
 import ForexFactorPanel from '@/components/panels/ForexFactorPanel';
 import EdgeLabSuggestionsPanel from '@/components/panels/EdgeLabSuggestionsPanel';
 import GhostTradePanel from '@/components/panels/GhostTradePanel';
+import OpusEnginePanel from '@/components/panels/OpusEnginePanel';
 import SolEnginePanel from '@/components/panels/SolEnginePanel';
 
 const panels: Record<string, React.ComponentType> = {
@@ -63,6 +64,7 @@ const panels: Record<string, React.ComponentType> = {
   forexFactor: ForexFactorPanel,
   edgeLab: EdgeLabSuggestionsPanel,
   ghostTrade: GhostTradePanel,
+  opusEngine: OpusEnginePanel,
   solEngine: SolEnginePanel,
 };
 

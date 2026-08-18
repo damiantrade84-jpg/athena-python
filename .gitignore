@@ -68,3 +68,8 @@ devathena-python.pytest_basetemp_full/
 
 # v3 backtester local parquet store (large market data, rebuilt via ETL)
 data/backtest_store/
+
+# OPUS Engine local overrides and store
+opus/opus.local.yaml
+opus_store.sqlite3
+opus_store.sqlite3-*
