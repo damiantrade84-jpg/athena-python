@@ -221,3 +221,116 @@ def test_ingest_retracts_phantom_bars_after_last_confirmed(ptis: PTISStore, monk
     # shift 0: close = Friday 19:00 + 1h
     assert int(kept[0]["value_time"]) == (friday_open + 3600) * 1000
     assert float(kept[0]["value"]) == pytest.approx(8635.0)
+
+
+def test_topup_fetches_full_history_when_series_missing(ptis: PTISStore, monkeypatch):
+    now_s = datetime(2026, 8, 17, 10, 30, tzinfo=timezone.utc).timestamp()
+    inst = instrument_by_symbol("EURUSD")
+    assert inst is not None
+    open_s = int(datetime(2026, 8, 17, 9, 0, tzinfo=timezone.utc).timestamp())
+    fake = _FakeMT5(
+        selectable={"EURUSD"},
+        rates_by_symbol={"EURUSD": np.array([_bar(open_s, close=1.08)])},
+    )
+    monkeypatch.setattr(mt5_live, "_connect_mt5", lambda: fake)
+    monkeypatch.setattr(mt5_live, "_broker_offset_hours", lambda: 0)
+    monkeypatch.setattr("mt5_executor.mt5_map_symbol", lambda key: "EURUSD")
+    monkeypatch.setattr(mt5_live.time, "time", lambda: now_s)
+    monkeypatch.setattr(
+        mt5_live, "infer_mt5_rates_time_shift_seconds", lambda *a, **k: (0, "test")
+    )
+
+    mt5_live.ingest_all(ptis, timeframes=("H1",), instruments=(inst,), topup=True)
+
+    assert fake.copy_calls
+    assert fake.copy_calls[0][3] == mt5_live._BAR_COUNTS["H1"]
+
+
+def test_topup_skips_rewrite_when_last_confirmed_present(ptis: PTISStore, monkeypatch):
+    now_s = datetime(2026, 8, 17, 10, 30, tzinfo=timezone.utc).timestamp()
+    open_s = int(datetime(2026, 8, 17, 9, 0, tzinfo=timezone.utc).timestamp())
+    close_ms = (open_s + 3600) * 1000
+    inst = instrument_by_symbol("EURUSD")
+    assert inst is not None
+    sid = price_series_id("MT5", inst.symbol, "H1", "close")
+    from athena_ase.data.availability import AvailabilityRuleId, compute_available_time_ms
+    from athena_ase.data.ptis import build_row
+
+    avail = compute_available_time_ms(
+        AvailabilityRuleId.MT5_BAR, value_time_ms=close_ms, bar_close_ms=close_ms
+    )
+    ptis.append_rows(sid, [build_row(sid, close_ms, avail, 1.08)], source="MT5")
+
+    fake = _FakeMT5(
+        selectable={"EURUSD"},
+        rates_by_symbol={"EURUSD": np.array([_bar(open_s, close=1.08)])},
+    )
+    monkeypatch.setattr(mt5_live, "_connect_mt5", lambda: fake)
+    monkeypatch.setattr(mt5_live, "_broker_offset_hours", lambda: 0)
+    monkeypatch.setattr("mt5_executor.mt5_map_symbol", lambda key: "EURUSD")
+    monkeypatch.setattr(mt5_live.time, "time", lambda: now_s)
+    monkeypatch.setattr(
+        mt5_live, "infer_mt5_rates_time_shift_seconds", lambda *a, **k: (0, "test")
+    )
+
+    totals = mt5_live.ingest_all(
+        ptis, timeframes=("H1",), instruments=(inst,), topup=True
+    )
+
+    assert fake.copy_calls[0][3] == mt5_live._TOPUP_BARS["H1"]
+    assert totals.get(sid, 0) == 0
+    kept = ptis.asof(sid, int(now_s * 1000), n=2)
+    assert len(kept) == 1
+    assert int(kept[0]["value_time"]) == close_ms
+
+
+def test_topup_still_retracts_phantom_bars(ptis: PTISStore, monkeypatch):
+    now_s = datetime(2026, 8, 17, 6, 45, tzinfo=timezone.utc).timestamp()
+    friday_open = int(datetime(2026, 8, 14, 19, 0, tzinfo=timezone.utc).timestamp())
+    phantom = int(datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    inst = Instrument("FRA40", "France 40", "index_etf", "default", "FRA40", "SPY")
+    sid = price_series_id("MT5", inst.symbol, "H1", "close")
+    from athena_ase.data.availability import AvailabilityRuleId, compute_available_time_ms
+    from athena_ase.data.ptis import build_row
+
+    avail = compute_available_time_ms(
+        AvailabilityRuleId.MT5_BAR, value_time_ms=phantom, bar_close_ms=phantom
+    )
+    ptis.append_rows(sid, [build_row(sid, phantom, avail, 8610.0)], source="MT5")
+
+    fake = _FakeMT5(
+        selectable={"FRA40.s"},
+        rates_by_symbol={"FRA40.s": np.array([_bar(friday_open, close=8635.0)])},
+    )
+    monkeypatch.setattr(mt5_live, "_connect_mt5", lambda: fake)
+    monkeypatch.setattr(mt5_live, "_broker_offset_hours", lambda: 0)
+    monkeypatch.setattr("mt5_executor.mt5_map_symbol", lambda key: "FRA40.s")
+    monkeypatch.setattr(mt5_live.time, "time", lambda: now_s)
+    monkeypatch.setattr(
+        mt5_live, "infer_mt5_rates_time_shift_seconds", lambda *a, **k: (0, "test")
+    )
+
+    mt5_live.ingest_all(ptis, timeframes=("H1",), instruments=(inst,), topup=True)
+
+    kept = ptis.asof(sid, int(now_s * 1000), n=4)
+    assert len(kept) == 1
+    assert int(kept[0]["value_time"]) == (friday_open + 3600) * 1000
+    assert float(kept[0]["value"]) == pytest.approx(8635.0)
+
+
+def test_ingest_all_stops_at_deadline(ptis: PTISStore, monkeypatch):
+    inst = instrument_by_symbol("EURUSD")
+    assert inst is not None
+    fake = _FakeMT5(selectable={"EURUSD"}, rates_by_symbol={"EURUSD": np.array([_bar(1)])})
+    monkeypatch.setattr(mt5_live, "_connect_mt5", lambda: fake)
+    monkeypatch.setattr("mt5_executor.mt5_map_symbol", lambda key: "EURUSD")
+
+    totals = mt5_live.ingest_all(
+        ptis,
+        timeframes=("H1",),
+        instruments=(inst,),
+        deadline_monotonic=time.monotonic() - 1.0,
+    )
+
+    assert totals == {}
+    assert fake.copy_calls == []

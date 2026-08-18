@@ -258,6 +258,16 @@ def test_cot_ingest_monday_availability(tmp_path):
     assert rows[0]["available_time"] > rows[0]["value_time"]
 
 
+def test_cot_ingest_skips_rewrite_when_latest_present(tmp_path):
+    cot_db = tmp_path / "cot.db"
+    _seed_cot_db(cot_db)
+    store = PTISStore(tmp_path / "ptis")
+    first = cot_ingest.ingest_asset(store, "EUR", db_path=str(cot_db))
+    second = cot_ingest.ingest_asset(store, "EUR", db_path=str(cot_db))
+    assert first == 1
+    assert second == 0
+
+
 def test_fred_ingest_flags_unverified_in_catalog(tmp_path):
     carry_db = tmp_path / "carry.db"
     _seed_carry_db(carry_db)

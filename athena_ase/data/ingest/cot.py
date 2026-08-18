@@ -7,7 +7,14 @@ import os
 import sqlite3
 
 from athena_ase.data.availability import AvailabilityRuleId
-from athena_ase.data.ingest.common import append_ptis_rows, cot_series_id, date_iso_to_ms, row_from_rule
+from athena_ase.data.ingest.common import (
+    append_ptis_rows,
+    cot_series_id,
+    date_iso_to_ms,
+    deadline_reached,
+    row_from_rule,
+    series_latest_value_time,
+)
 from athena_ase.data.ptis import PTISStore
 
 log = logging.getLogger("ase.ingest.cot")
@@ -29,9 +36,25 @@ def list_cot_assets(*, db_path: str | None = None) -> list[str]:
     return [r[0] for r in rows]
 
 
+def _latest_report_ms(path: str, asset: str) -> int | None:
+    with sqlite3.connect(path, timeout=15.0) as con:
+        row = con.execute(
+            "SELECT MAX(report_date) FROM cot_net WHERE asset=?",
+            (asset,),
+        ).fetchone()
+    if not row or not row[0]:
+        return None
+    return date_iso_to_ms(str(row[0]))
+
+
 def ingest_asset(store: PTISStore, asset: str, *, db_path: str | None = None) -> int:
     path = _resolve_cot_db(db_path)
     sid = cot_series_id(asset)
+    latest_ms = _latest_report_ms(path, asset)
+    if latest_ms is not None:
+        last_vt = series_latest_value_time(store, sid)
+        if last_vt is not None and last_vt >= latest_ms:
+            return 0
     rows: list[dict] = []
     with sqlite3.connect(path, timeout=15.0) as con:
         cur = con.execute(
@@ -51,9 +74,17 @@ def ingest_asset(store: PTISStore, asset: str, *, db_path: str | None = None) ->
     return append_ptis_rows(store, sid, "CFTC", rows)
 
 
-def ingest_all(store: PTISStore, *, db_path: str | None = None) -> dict[str, int]:
+def ingest_all(
+    store: PTISStore,
+    *,
+    db_path: str | None = None,
+    deadline_monotonic: float | None = None,
+) -> dict[str, int]:
     totals: dict[str, int] = {}
     for asset in list_cot_assets(db_path=db_path):
+        if deadline_reached(deadline_monotonic):
+            log.warning("COT ingest stopped at deadline")
+            break
         try:
             sid = cot_series_id(asset)
             totals[sid] = ingest_asset(store, asset, db_path=db_path)

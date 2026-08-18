@@ -10,8 +10,10 @@ from athena_ase.data.availability import AvailabilityRuleId
 from athena_ase.data.ingest.common import (
     append_ptis_rows,
     bybit_series_id,
+    deadline_reached,
     price_series_id,
     row_from_rule,
+    series_latest_value_time,
 )
 from athena_ase.data.ptis import PTISStore
 
@@ -25,6 +27,9 @@ _KLINE_INTERVALS = {"H1": "60", "D1": "D"}
 _TF_MS = {"H1": 3_600_000, "D1": 86_400_000}
 _KLINE_MAX_LIMIT = 1000
 _PRICE_FIELDS = ("open", "high", "low", "close", "volume")
+# Funding prints every 8h; OI is hourly. Slack so a current print is not refetched.
+_FUNDING_FRESH_MS = 8 * 3_600_000 + 10 * 60_000
+_OI_FRESH_MS = 2 * 3_600_000
 
 def _default_crypto_symbols() -> list[str]:
     from athena_ase.instruments import instruments_for_family
@@ -70,6 +75,29 @@ def _fetch_klines(symbol: str, interval: str, *, limit: int) -> list[list[str]]:
     return list((data.get("result") or {}).get("list") or [])
 
 
+def _last_confirmed_kline_close_ms(tf: str, now_ms: int) -> int:
+    tf_ms = _TF_MS[tf]
+    return (int(now_ms) // tf_ms) * tf_ms
+
+
+def _kline_tf_current(store: PTISStore, symbol: str, tf: str, now_ms: int) -> bool:
+    sid = price_series_id("BYBIT", symbol, tf, "close")
+    last_vt = series_latest_value_time(store, sid)
+    if last_vt is None:
+        return False
+    return last_vt >= _last_confirmed_kline_close_ms(tf, now_ms)
+
+
+def _derivatives_current(store: PTISStore, symbol: str, now_ms: int) -> bool:
+    fund_sid = bybit_series_id(symbol, "funding")
+    oi_sid = bybit_series_id(symbol, "oi")
+    fund_vt = series_latest_value_time(store, fund_sid)
+    oi_vt = series_latest_value_time(store, oi_sid)
+    if fund_vt is None or oi_vt is None:
+        return False
+    return (now_ms - fund_vt) <= _FUNDING_FRESH_MS and (now_ms - oi_vt) <= _OI_FRESH_MS
+
+
 def _kline_limit(store: PTISStore, symbol: str, tf: str, lookback_days: int, now_ms: int) -> int:
     """Top-up size, self-healing to a full fetch when the series is behind."""
     tf_ms = _TF_MS[tf]
@@ -94,6 +122,7 @@ def ingest_symbol_klines(
     lookback_days: int = 730,
     timeframes: tuple[str, ...] = ("H1", "D1"),
     now_ms: int | None = None,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, int]:
     """Confirmed Bybit kline OHLCV → PTIS (BYBIT price source).
 
@@ -104,8 +133,12 @@ def ingest_symbol_klines(
     now = now_ms or int(time.time() * 1000)
     counts: dict[str, int] = {}
     for tf in timeframes:
+        if deadline_reached(deadline_monotonic):
+            break
         interval = _KLINE_INTERVALS.get(tf)
         if interval is None:
+            continue
+        if _kline_tf_current(store, sym, tf, now):
             continue
         tf_ms = _TF_MS[tf]
         limit = _kline_limit(store, sym, tf, lookback_days, now)
@@ -151,8 +184,15 @@ def ingest_symbol(
     symbol: str,
     *,
     lookback_days: int = 730,
+    now_ms: int | None = None,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, int]:
+    if deadline_reached(deadline_monotonic):
+        return {}
     sym = symbol.replace("/", "").upper()
+    now = now_ms or int(time.time() * 1000)
+    if _derivatives_current(store, sym, now):
+        return {}
     funding_rows, oi_rows = _fetch_derivatives(sym, lookback_days=lookback_days)
     counts: dict[str, int] = {}
 
@@ -240,17 +280,35 @@ def ingest_all(
     symbols: list[str] | None = None,
     lookback_days: int = 730,
     include_klines: bool = True,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, int]:
     totals: dict[str, int] = {}
     targets = symbols or _default_crypto_symbols()
     for sym in targets:
+        if deadline_reached(deadline_monotonic):
+            log.warning("Bybit ingest stopped at deadline")
+            break
         if include_klines:
             try:
-                totals.update(ingest_symbol_klines(store, sym, lookback_days=lookback_days))
+                totals.update(
+                    ingest_symbol_klines(
+                        store,
+                        sym,
+                        lookback_days=lookback_days,
+                        deadline_monotonic=deadline_monotonic,
+                    )
+                )
             except Exception as exc:
                 log.warning("Bybit kline ingest failed %s: %s", sym, exc)
         try:
-            totals.update(ingest_symbol(store, sym, lookback_days=lookback_days))
+            totals.update(
+                ingest_symbol(
+                    store,
+                    sym,
+                    lookback_days=lookback_days,
+                    deadline_monotonic=deadline_monotonic,
+                )
+            )
         except Exception as exc:
             log.warning("Bybit ingest failed %s: %s", sym, exc)
         try:

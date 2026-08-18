@@ -13,7 +13,13 @@ import time
 from typing import Callable
 
 from athena_ase.data.availability import AvailabilityRuleId
-from athena_ase.data.ingest.common import append_ptis_rows, price_series_id, row_from_rule
+from athena_ase.data.ingest.common import (
+    append_ptis_rows,
+    deadline_reached,
+    price_series_id,
+    row_from_rule,
+    series_latest_value_time,
+)
 from athena_ase.data.ptis import PTISStore
 from athena_ase.universe import UNIVERSE, Instrument
 from athena_app.services.mt5_time_alignment import infer_mt5_rates_time_shift_seconds
@@ -25,6 +31,8 @@ _TIMEFRAMES = ("H1", "H4", "D1")
 _TF_SECONDS = {"H1": 3600, "H4": 14400, "D1": 86400}
 # Enough history to warm sigma EWMAs for series with no backtest-cache backfill.
 _BAR_COUNTS = {"H1": 1500, "H4": 600, "D1": 400}
+# Scan-time top-up: a few extra bars for TZ / forming-bar / weekend safety.
+_TOPUP_BARS = {"H1": 8, "H4": 4, "D1": 3}
 
 
 def _broker_offset_hours() -> int:
@@ -101,6 +109,29 @@ def _resolve_mt5_symbol(mt5, inst: Instrument, map_symbol: Callable[[str], str |
     return None
 
 
+def _bar_count_for(
+    store: PTISStore,
+    inst: Instrument,
+    tf: str,
+    now_ms: int,
+    *,
+    topup: bool,
+) -> int:
+    """Full warm-up count, or how far behind PTIS is when topping up."""
+    want = _BAR_COUNTS[tf]
+    if not topup:
+        return want
+    sid = price_series_id("MT5", inst.symbol, tf, "close")
+    last_vt = series_latest_value_time(store, sid)
+    if last_vt is None:
+        return want
+    tf_ms = _TF_SECONDS[tf] * 1000
+    behind = max(0, int((now_ms - last_vt) / tf_ms))
+    if behind >= want:
+        return want
+    return min(want, max(_TOPUP_BARS[tf], behind + 3))
+
+
 def ingest_instrument_tf(
     store: PTISStore,
     mt5,
@@ -110,12 +141,15 @@ def ingest_instrument_tf(
     *,
     broker_offset_hours: int,
     now_s: float | None = None,
+    topup: bool = False,
 ) -> dict[str, int]:
     tf_const = {"H1": mt5.TIMEFRAME_H1, "H4": mt5.TIMEFRAME_H4, "D1": mt5.TIMEFRAME_D1}[tf]
-    rates = mt5.copy_rates_from_pos(mt5_symbol, tf_const, 0, _BAR_COUNTS[tf])
+    now = float(now_s if now_s is not None else time.time())
+    now_ms = int(now * 1000)
+    bar_count = _bar_count_for(store, inst, tf, now_ms, topup=topup)
+    rates = mt5.copy_rates_from_pos(mt5_symbol, tf_const, 0, bar_count)
     if rates is None or len(rates) == 0:
         return {}
-    now = float(now_s if now_s is not None else time.time())
 
     tick = mt5.symbol_info_tick(mt5_symbol)
     tick_epoch = float(tick.time) if tick is not None and getattr(tick, "time", 0) else None
@@ -149,6 +183,15 @@ def ingest_instrument_tf(
                 )
             )
 
+    close_sid = price_series_id("MT5", inst.symbol, tf, "close")
+    if (
+        topup
+        and last_confirmed_close_ms is not None
+        and series_latest_value_time(store, close_sid) == last_confirmed_close_ms
+    ):
+        # Already have the latest confirmed close and no later phantom.
+        return {close_sid: 0}
+
     counts: dict[str, int] = {}
     for field, rows in field_rows.items():
         sid = price_series_id("MT5", inst.symbol, tf, field)
@@ -170,6 +213,8 @@ def ingest_all(
     *,
     timeframes: tuple[str, ...] = _TIMEFRAMES,
     instruments: tuple[Instrument, ...] | None = None,
+    topup: bool = False,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, int]:
     mt5 = _connect_mt5()
     if mt5 is None:
@@ -180,6 +225,9 @@ def ingest_all(
     totals: dict[str, int] = {}
     skipped: list[str] = []
     for inst in instruments or UNIVERSE:
+        if deadline_reached(deadline_monotonic):
+            log.warning("mt5_live ingest stopped at deadline")
+            break
         if inst.family == "crypto" or not inst.mt5_live:
             continue
         mt5_symbol = _resolve_mt5_symbol(mt5, inst, mt5_map_symbol)
@@ -190,7 +238,13 @@ def ingest_all(
         for tf in timeframes:
             try:
                 counts = ingest_instrument_tf(
-                    store, mt5, inst, mt5_symbol, tf, broker_offset_hours=offset
+                    store,
+                    mt5,
+                    inst,
+                    mt5_symbol,
+                    tf,
+                    broker_offset_hours=offset,
+                    topup=topup,
                 )
                 if counts:
                     got_any = True

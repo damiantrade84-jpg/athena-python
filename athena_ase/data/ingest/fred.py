@@ -8,7 +8,14 @@ import re
 import sqlite3
 
 from athena_ase.data.availability import AvailabilityRuleId
-from athena_ase.data.ingest.common import append_ptis_rows, date_iso_to_ms, fred_series_id, row_from_rule
+from athena_ase.data.ingest.common import (
+    append_ptis_rows,
+    date_iso_to_ms,
+    deadline_reached,
+    fred_series_id,
+    row_from_rule,
+    series_latest_value_time,
+)
 from athena_ase.data.ptis import PTISStore
 
 log = logging.getLogger("ase.ingest.fred")
@@ -49,10 +56,26 @@ def _rule_for_fred_series(fred_id: str) -> AvailabilityRuleId:
     return AvailabilityRuleId.FRED_DAILY
 
 
+def _latest_obs_ms(path: str, fred_id: str) -> int | None:
+    with sqlite3.connect(path, timeout=15.0) as con:
+        row = con.execute(
+            "SELECT MAX(obs_date) FROM rate_series WHERE series_id=?",
+            (fred_id,),
+        ).fetchone()
+    if not row or not row[0]:
+        return None
+    return date_iso_to_ms(str(row[0]))
+
+
 def ingest_series(store: PTISStore, fred_id: str, *, db_path: str | None = None) -> int:
     path = _resolve_carry_db(db_path)
     sid = fred_series_id(fred_id)
     rule = _rule_for_fred_series(fred_id)
+    latest_ms = _latest_obs_ms(path, fred_id)
+    if latest_ms is not None:
+        last_vt = series_latest_value_time(store, sid)
+        if last_vt is not None and last_vt >= latest_ms:
+            return 0
     rows: list[dict] = []
     with sqlite3.connect(path, timeout=15.0) as con:
         cur = con.execute(
@@ -78,9 +101,17 @@ def ingest_series(store: PTISStore, fred_id: str, *, db_path: str | None = None)
     return append_ptis_rows(store, sid, source, rows)
 
 
-def ingest_all(store: PTISStore, *, db_path: str | None = None) -> dict[str, int]:
+def ingest_all(
+    store: PTISStore,
+    *,
+    db_path: str | None = None,
+    deadline_monotonic: float | None = None,
+) -> dict[str, int]:
     totals: dict[str, int] = {}
     for fred_id in list_fred_series(db_path=db_path):
+        if deadline_reached(deadline_monotonic):
+            log.warning("FRED ingest stopped at deadline")
+            break
         try:
             sid = fred_series_id(fred_id)
             totals[sid] = ingest_series(store, fred_id, db_path=db_path)

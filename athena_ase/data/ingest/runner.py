@@ -10,6 +10,7 @@ from athena_ase.universe import Instrument
 
 from athena_ase.data.ingest import audit as audit_mod
 from athena_ase.data.ingest import binance, bybit, cot, dukascopy, eodhd, fred, mt5, mt5_live
+from athena_ase.data.ingest.common import deadline_reached
 from athena_ase.data.ptis import PTISStore, default_ptis_root
 
 log = logging.getLogger("ase.ingest")
@@ -31,6 +32,8 @@ def run_ingest(
     bybit_lookback_days: int = 730,
     write_audit: bool = True,
     audit_path: Path | str | None = None,
+    mt5_live_topup: bool = False,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, dict[str, int]]:
     ptis = store or PTISStore(ptis_root or default_ptis_root())
     selected = {s.strip().lower() for s in sources}
@@ -39,6 +42,10 @@ def run_ingest(
     # Per-source isolation: one crashing feed must not starve the rest of the
     # pipeline (a failing first source previously aborted the whole run).
     def _run_source(name: str, fn) -> None:
+        if deadline_reached(deadline_monotonic):
+            log.warning("ASE ingest skipped %s (deadline)", name)
+            results[name] = {"skipped": "deadline"}  # type: ignore[dict-item]
+            return
         try:
             results[name] = fn()
         except Exception as exc:
@@ -52,7 +59,12 @@ def run_ingest(
     if "mt5_live" in selected:
         _run_source(
             "mt5_live",
-            lambda: mt5_live.ingest_all(ptis, instruments=mt5_live_instruments),
+            lambda: mt5_live.ingest_all(
+                ptis,
+                instruments=mt5_live_instruments,
+                topup=mt5_live_topup,
+                deadline_monotonic=deadline_monotonic,
+            ),
         )
     if "binance" in selected:
         _run_source("binance", lambda: binance.ingest_all(ptis, db_path=backtest_db))
@@ -62,15 +74,28 @@ def run_ingest(
         _run_source(
             "bybit",
             lambda: bybit.ingest_all(
-                ptis, symbols=bybit_symbols, lookback_days=bybit_lookback_days
+                ptis,
+                symbols=bybit_symbols,
+                lookback_days=bybit_lookback_days,
+                deadline_monotonic=deadline_monotonic,
             ),
         )
     if "cot" in selected:
-        _run_source("cot", lambda: cot.ingest_all(ptis, db_path=cot_db))
+        _run_source(
+            "cot",
+            lambda: cot.ingest_all(
+                ptis, db_path=cot_db, deadline_monotonic=deadline_monotonic
+            ),
+        )
     if "fred" in selected:
-        _run_source("fred", lambda: fred.ingest_all(ptis, db_path=carry_db))
+        _run_source(
+            "fred",
+            lambda: fred.ingest_all(
+                ptis, db_path=carry_db, deadline_monotonic=deadline_monotonic
+            ),
+        )
 
-    if write_audit:
+    if write_audit and not deadline_reached(deadline_monotonic):
         path = audit_path or (
             Path(__file__).resolve().parents[3] / "reports" / "availability_audit.md"
         )

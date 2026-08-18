@@ -46,7 +46,9 @@ DEFAULT_SCAN_INGEST_SOURCES = ("mt5_live", "bybit", "cot", "fred")
 # job still backfills the full history via run_ingest's default lookback.
 DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS = 3
 # Hard wall-clock budget so a slow/hung feed can never stall a scan. On overrun
-# the scan proceeds with existing PTIS data (fail-open).
+# the scan proceeds with existing PTIS data (fail-open). The worker is also
+# given a cooperative deadline so it stops and releases the ingest lock
+# instead of rewriting history in the background.
 DEFAULT_SCAN_INGEST_BUDGET_S = 45.0
 _ASE_SCAN_INGEST_LOCK = threading.Lock()
 
@@ -133,6 +135,10 @@ def _maybe_ingest(
                 "sources": selected,
                 "bybit_lookback_days": bybit_lookback_days,
                 "write_audit": False,
+                # Scan ingest is a freshness top-up. Cooperative deadline leaves
+                # ~1s so the worker can release the lock before join() times out.
+                "mt5_live_topup": True,
+                "deadline_monotonic": time.monotonic() + max(1.0, float(budget_s) - 1.0),
             }
             if bybit_symbols is not None:
                 ingest_kwargs["bybit_symbols"] = bybit_symbols

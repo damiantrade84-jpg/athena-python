@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Iterable, Iterator
 
@@ -10,6 +11,26 @@ from athena_ase.data.ptis import PTISStore, build_row
 
 _TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400, "D1": 86400}
 _MS = 1000
+
+
+def deadline_reached(deadline_monotonic: float | None) -> bool:
+    """True when a scan-time ingest wall-clock deadline has elapsed."""
+    if deadline_monotonic is None:
+        return False
+    return time.monotonic() >= float(deadline_monotonic)
+
+
+def series_latest_value_time(store: PTISStore, series_id: str) -> int | None:
+    """Newest stored value_time, or None when the series is missing/empty."""
+    if not store.series_exists(series_id):
+        return None
+    try:
+        rows = store.asof(series_id, 2**62 - 1, 1)
+    except KeyError:
+        return None
+    if len(rows) == 0:
+        return None
+    return int(rows[-1]["value_time"])
 
 
 def compact_symbol(symbol: str) -> str:

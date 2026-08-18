@@ -141,21 +141,16 @@ def test_ase_health_reports_blockers(ptis: PTISStore):
 def test_forex_symbol_scan_runs_mt5_live_ingest_by_default(ptis: PTISStore, monkeypatch):
     calls: list[dict[str, Any]] = []
 
-    def fake_run_ingest(
-        *,
-        store,
-        sources,
-        write_audit,
-        bybit_lookback_days,
-        mt5_live_instruments,
-    ):
+    def fake_run_ingest(**kwargs):
         calls.append(
             {
-                "store": store,
-                "sources": tuple(sources),
-                "write_audit": write_audit,
-                "bybit_lookback_days": bybit_lookback_days,
-                "mt5_live_instruments": mt5_live_instruments,
+                "store": kwargs["store"],
+                "sources": tuple(kwargs["sources"]),
+                "write_audit": kwargs["write_audit"],
+                "bybit_lookback_days": kwargs["bybit_lookback_days"],
+                "mt5_live_instruments": kwargs["mt5_live_instruments"],
+                "mt5_live_topup": kwargs.get("mt5_live_topup"),
+                "deadline_monotonic": kwargs.get("deadline_monotonic"),
             }
         )
         return {"mt5_live": {"inserted": 5}}
@@ -172,6 +167,8 @@ def test_forex_symbol_scan_runs_mt5_live_ingest_by_default(ptis: PTISStore, monk
     assert calls[0]["sources"] == ("mt5_live", "cot", "fred")
     assert calls[0]["write_audit"] is False
     assert calls[0]["bybit_lookback_days"] == scan_module.DEFAULT_SCAN_BYBIT_LOOKBACK_DAYS
+    assert calls[0]["mt5_live_topup"] is True
+    assert calls[0]["deadline_monotonic"] is not None
     assert tuple(inst.symbol for inst in calls[0]["mt5_live_instruments"]) == ("EURUSD",)
     assert result["ingestResult"]["result"] == {"mt5_live": {"inserted": 5}}
 
@@ -207,7 +204,9 @@ def test_run_ingest_forwards_scoped_mt5_instruments(
     monkeypatch.setattr(
         ingest_runner.mt5_live,
         "ingest_all",
-        lambda store, *, instruments: calls.append(instruments) or {"inserted": 5},
+        lambda store, *, instruments, topup=False, deadline_monotonic=None: (
+            calls.append((instruments, topup)) or {"inserted": 5}
+        ),
     )
 
     result = ingest_runner.run_ingest(
@@ -217,7 +216,7 @@ def test_run_ingest_forwards_scoped_mt5_instruments(
         write_audit=False,
     )
 
-    assert calls == [(eurusd,)]
+    assert calls == [((eurusd,), False)]
     assert result == {"mt5_live": {"inserted": 5}}
 
 
@@ -226,13 +225,13 @@ def test_crypto_only_scan_ingests_bybit_only(ptis: PTISStore, monkeypatch):
     # scans must keep the bybit leg and drop only the MT5 leg.
     calls: list[dict[str, Any]] = []
 
-    def fake_run_ingest(*, store, sources, bybit_lookback_days, write_audit, bybit_symbols):
+    def fake_run_ingest(**kwargs):
         calls.append(
             {
-                "sources": tuple(sources),
-                "lookback": bybit_lookback_days,
-                "write_audit": write_audit,
-                "bybit_symbols": bybit_symbols,
+                "sources": tuple(kwargs["sources"]),
+                "lookback": kwargs["bybit_lookback_days"],
+                "write_audit": kwargs["write_audit"],
+                "bybit_symbols": kwargs["bybit_symbols"],
             }
         )
         return {"bybit": {"inserted": 5}}
@@ -305,8 +304,14 @@ def test_crypto_symbol_scan_limits_bybit_ingest_to_requested_symbols(
 def test_scan_skips_ingest_when_sources_empty(ptis: PTISStore, monkeypatch):
     calls: list[dict[str, Any]] = []
 
-    def fake_run_ingest(*, store, sources, write_audit, bybit_lookback_days):
-        calls.append({"store": store, "sources": tuple(sources), "write_audit": write_audit})
+    def fake_run_ingest(**kwargs):
+        calls.append(
+            {
+                "store": kwargs["store"],
+                "sources": tuple(kwargs["sources"]),
+                "write_audit": kwargs["write_audit"],
+            }
+        )
         return {}
 
     monkeypatch.setattr(scan_module, "run_ingest", fake_run_ingest)
@@ -323,7 +328,7 @@ def test_scan_skips_ingest_when_sources_empty(ptis: PTISStore, monkeypatch):
 
 
 def test_scan_ingest_failure_is_fail_open(ptis: PTISStore, monkeypatch):
-    def fake_run_ingest(*, store, sources, write_audit, bybit_lookback_days):
+    def fake_run_ingest(**kwargs):
         raise RuntimeError("bybit timeout")
 
     monkeypatch.setattr(scan_module, "run_ingest", fake_run_ingest)
@@ -337,3 +342,59 @@ def test_scan_ingest_failure_is_fail_open(ptis: PTISStore, monkeypatch):
     )
     assert result["success"] is True
     assert result["ingestResult"]["error"] == "bybit timeout"
+
+
+def test_run_ingest_skips_remaining_sources_at_deadline(ptis: PTISStore, monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        ingest_runner.mt5_live,
+        "ingest_all",
+        lambda *a, **k: calls.append("mt5_live") or {"inserted": 1},
+    )
+    monkeypatch.setattr(
+        ingest_runner.cot,
+        "ingest_all",
+        lambda *a, **k: calls.append("cot") or {"inserted": 1},
+    )
+    monkeypatch.setattr(
+        ingest_runner.fred,
+        "ingest_all",
+        lambda *a, **k: calls.append("fred") or {"inserted": 1},
+    )
+
+    result = ingest_runner.run_ingest(
+        store=ptis,
+        sources=("mt5_live", "cot", "fred"),
+        write_audit=False,
+        mt5_live_topup=True,
+        deadline_monotonic=time.monotonic() - 1.0,
+    )
+
+    assert calls == []
+    assert result["mt5_live"] == {"skipped": "deadline"}
+    assert result["cot"] == {"skipped": "deadline"}
+    assert result["fred"] == {"skipped": "deadline"}
+
+
+def test_run_ingest_forwards_mt5_live_topup(ptis: PTISStore, monkeypatch):
+    eurusd = instrument_by_symbol("EURUSD")
+    assert eurusd is not None
+    kwargs_seen: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        ingest_runner.mt5_live,
+        "ingest_all",
+        lambda store, **kwargs: kwargs_seen.append(kwargs) or {"inserted": 1},
+    )
+
+    ingest_runner.run_ingest(
+        store=ptis,
+        sources=("mt5_live",),
+        mt5_live_instruments=(eurusd,),
+        mt5_live_topup=True,
+        write_audit=False,
+    )
+
+    assert kwargs_seen[0]["instruments"] == (eurusd,)
+    assert kwargs_seen[0]["topup"] is True
