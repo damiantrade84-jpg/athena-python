@@ -704,6 +704,8 @@ def evaluate_engine_a_v3(
 
     # ── Continuous quant scoring (no-veto). Every valid pair gets a direction +
     # quality. Promotion governs execution eligibility only; it never hides a pair.
+    # Cross-sectional ranking is a later batch step (scanner / backtest) and
+    # must not run here — this evaluator has no universe.
     assert promotion is not None and profile is not None
     _score_kwargs = {
         "context": context,

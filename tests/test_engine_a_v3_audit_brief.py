@@ -6,6 +6,7 @@ from config import CONFIG
 from engine_a_v3.audit import (
     AUDIT_BRIEF_VERSION,
     AUDIT_REPRESENTATIVE_PAIRS,
+    audit_cross_sectional_ranking,
     audit_entry_points,
     audit_execution_gates,
     audit_score_group_parity,
@@ -74,6 +75,7 @@ def test_audit_entry_points_passes():
     assert section.status == "PASS"
     assert any(check.id == "public_evaluator_export" for check in section.checks)
     assert any(check.id == "v3_no_legacy_threshold_imports" for check in section.checks)
+    assert any(check.id == "evaluator_does_not_rank_in_pair_loop" for check in section.checks)
 
 
 def test_audit_threshold_layers_v3_config_driven_and_aligned():
@@ -141,6 +143,13 @@ def test_audit_validation_lanes_five_enabled_twenty_one_unvalidated():
     assert unvalidated.evidence["unvalidated_count"] == 21
 
 
+def test_audit_cross_sectional_ranking_section():
+    section = audit_cross_sectional_ranking(config=CONFIG)
+    assert section.status in {"PASS", "WARN"}
+    assert any(check.id == "cross_sectional_config_is_mapping" for check in section.checks)
+    assert any(check.id == "cross_sectional_apply_callable" for check in section.checks)
+
+
 def test_run_audit_brief_end_to_end():
     pair = AUDIT_REPRESENTATIVE_PAIRS["crypto_btc"]
     report = run_audit_brief(
@@ -155,5 +164,6 @@ def test_run_audit_brief_end_to_end():
     assert "threshold_layer" in report["sections"]
     assert "group_coverage" in report["sections"]
     assert "validation_lanes" in report["sections"]
+    assert "cross_sectional_ranking" in report["sections"]
     assert "exec_gates" in report["sections"]
     assert report["signalSample"]["confluenceThreshold"] == get_score_threshold(pair)

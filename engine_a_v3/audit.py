@@ -157,8 +157,59 @@ def audit_entry_points() -> AuditSection:
             evidence={},
         )
     )
+    checks.append(
+        AuditCheck(
+            id="evaluator_does_not_rank_in_pair_loop",
+            status="PASS" if "apply_cross_sectional_ranking" not in source else "FAIL",
+            detail="per-pair evaluate_engine_a_v3 must not apply cross-sectional ranking",
+            evidence={},
+        )
+    )
 
     return AuditSection(name="audit_entry", checks=checks)
+
+
+def audit_cross_sectional_ranking(
+    *,
+    config: dict[str, Any] | None = None,
+) -> AuditSection:
+    """Ranking is config-gated, batch-only, and off by default."""
+    from engine_a_v3.cross_sectional import (
+        CONFIG_KEY,
+        apply_cross_sectional_ranking,
+        ranking_enabled,
+        resolve_cross_sectional_config,
+    )
+
+    cfg = config if isinstance(config, dict) else CONFIG
+    checks: list[AuditCheck] = []
+    raw = cfg.get(CONFIG_KEY)
+    checks.append(
+        AuditCheck(
+            id="cross_sectional_config_is_mapping",
+            status="PASS" if raw is None or isinstance(raw, dict) else "FAIL",
+            detail="ENGINE_A_V3_CROSS_SECTIONAL must be a mapping when set",
+            evidence={"type": type(raw).__name__},
+        )
+    )
+    resolved = resolve_cross_sectional_config(cfg)
+    checks.append(
+        AuditCheck(
+            id="cross_sectional_default_disabled",
+            status="PASS" if not ranking_enabled(cfg) else "WARN",
+            detail="ranking is an opt-in filter; default checkout should leave it off",
+            evidence=resolved.to_public_dict(),
+        )
+    )
+    checks.append(
+        AuditCheck(
+            id="cross_sectional_apply_callable",
+            status="PASS" if callable(apply_cross_sectional_ranking) else "FAIL",
+            detail="apply_cross_sectional_ranking is the batch ranking entry point",
+            evidence={"module": apply_cross_sectional_ranking.__module__},
+        )
+    )
+    return AuditSection(name="cross_sectional_ranking", checks=checks)
 
 
 def audit_threshold_layers(
@@ -458,6 +509,7 @@ def run_audit_brief(
         audit_threshold_layers(config=config),
         audit_score_group_parity(),
         audit_validation_lanes(manifest_path=manifest_path),
+        audit_cross_sectional_ranking(config=config),
     ]
 
     signal_report: dict[str, Any] | None = None

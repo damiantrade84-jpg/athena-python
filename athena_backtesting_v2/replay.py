@@ -80,6 +80,7 @@ def replay_engine_a(
     style: str,
     policy: dict[str, Any],
 ) -> tuple[list[SignalIntent], dict[str, Any]]:
+    from engine_a_v3.cross_sectional import backtest_ranking_blocks_trade
     from engine_a_v3.evaluator import BacktestCandleValidationIndex, evaluate_engine_a_v3
     from engine_a_v3.promotion import production_registry
     from engine_a_v3.routing import route_specialist
@@ -151,9 +152,17 @@ def replay_engine_a(
         decisions += 1
         for reason in signal.rejectionReasons:
             rejection_counts[str(reason)] += 1
+        ranking_blocked, ranking_diag = backtest_ranking_blocks_trade(signal, pair)
+        if ranking_blocked:
+            rejection_counts[
+                str(ranking_diag.get("reason") or "cross_sectional_rank_below_cutoff")
+            ] += 1
+            continue
         if not signal.qualified or str(signal.direction or "") not in {"LONG", "SHORT"}:
             continue
         payload = signal.to_dict()
+        if ranking_diag.get("applied"):
+            payload["crossSectionalRanking"] = ranking_diag
         signal_id = str(payload.get("signalId") or "")
         if signal_id and signal_id in unique_signal_ids:
             continue

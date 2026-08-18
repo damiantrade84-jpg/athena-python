@@ -533,6 +533,9 @@ def run_v3_backtest(
     funnel_reasons: dict[str, int] = {}
     funnel_scan_reasons: dict[str, int] = {}
     funnel_evaluated = 0
+    funnel_ranking_blocked = 0
+
+    from engine_a_v3.cross_sectional import backtest_ranking_blocks_trade
 
     for index in range(min_index, len(primary) - 1):
         in_cooldown = index < next_available_index
@@ -586,6 +589,12 @@ def run_v3_backtest(
             except Exception:
                 _im_confirmation = None
         raw_qualified = signal.decision == "TRADE" and signal.qualified
+        ranking_blocked, ranking_diag = backtest_ranking_blocks_trade(signal, pair)
+        if ranking_blocked:
+            funnel_ranking_blocked += 1
+            reason = str(ranking_diag.get("reason") or "cross_sectional_rank_below_cutoff")
+            funnel_scan_reasons[reason] = funnel_scan_reasons.get(reason, 0) + 1
+            continue
         if not raw_qualified:
             continue
         # Reuse the funnel classification (same signal object, same result)
@@ -706,6 +715,8 @@ def run_v3_backtest(
         )
         if _im_confirmation is not None:
             trades[-1]["intermarketConfirmation"] = _im_confirmation
+        if ranking_diag.get("applied"):
+            trades[-1]["crossSectionalRanking"] = ranking_diag
         next_available_index = exit_index + 1
 
     result = _summarize(pair, horizon, trades, same_bar, oos_frac=_oos_frac)
@@ -733,6 +744,7 @@ def run_v3_backtest(
             "rawQualified": funnel_raw_qualified,
             "scanEligible": funnel_scan_eligible,
             "tradesTaken": len(trades),
+            "crossSectionalBlocked": funnel_ranking_blocked,
             "topRejectionReasons": dict(
                 sorted(funnel_reasons.items(), key=lambda kv: -kv[1])[:15]
             ),

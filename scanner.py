@@ -2377,6 +2377,10 @@ def run_full_scan(
             "inactive_pair": 0,
             "counter_trend": 0,
             "dead_ranging": 0,
+            "cross_sectional_considered": 0,
+            "cross_sectional_accepted": 0,
+            "cross_sectional_rejected": 0,
+            "cross_sectional_demoted": 0,
         }
 
         for _skip_pair, _phase_detail in session_skipped:
@@ -4061,6 +4065,59 @@ def run_full_scan(
 
                 buffered_ok.append((pair, sig))
 
+        # Engine A v3 explicit ranking: after every pair is scored, before
+        # scan-tier classification / execution promotion. Disabled is a no-op.
+        _xsec_report: dict[str, Any] = {"enabled": False, "applied": False}
+        try:
+            from engine_a_v3.cross_sectional import apply_cross_sectional_ranking
+
+            _xsec_report = apply_cross_sectional_ranking(
+                buffered_ok,
+                surface="live_scan",
+            )
+            if _xsec_report.get("applied"):
+                scan_funnel["cross_sectional_considered"] = int(
+                    _xsec_report.get("considered") or 0
+                )
+                scan_funnel["cross_sectional_accepted"] = int(
+                    _xsec_report.get("accepted") or 0
+                )
+                scan_funnel["cross_sectional_rejected"] = int(
+                    _xsec_report.get("rejected") or 0
+                )
+                scan_funnel["cross_sectional_demoted"] = int(
+                    _xsec_report.get("demoted") or 0
+                )
+        except Exception as _xsec_err:
+            log.warning("[SCAN] Engine A v3 cross-sectional ranking failed: %s", _xsec_err)
+            _xsec_report = {
+                "enabled": False,
+                "applied": False,
+                "error": type(_xsec_err).__name__,
+            }
+            try:
+                from athena_app.services.engine_a_v3_classify import (
+                    demote_v3_trade_to_watch,
+                )
+                from engine_a_v3.cross_sectional import resolve_cross_sectional_config
+
+                _xsec_cfg = resolve_cross_sectional_config()
+                if _xsec_cfg.applies_to("live_scan"):
+                    _xsec_report["enabled"] = True
+                    for _pair, _sig in buffered_ok:
+                        if (
+                            isinstance(_sig, dict)
+                            and str(_sig.get("engine") or "").upper() == "ENGINE_A_V3"
+                            and str(_sig.get("decision") or "").upper() == "TRADE"
+                        ):
+                            demote_v3_trade_to_watch(
+                                _sig,
+                                reason="cross_sectional_ranking_error",
+                            )
+                            scan_funnel["cross_sectional_demoted"] += 1
+            except Exception:
+                pass
+
         # Cross-sectional quantile floors per asset class (this scan only).
         # Engine B-only rows must not enter the Engine A quantile cohort —
         # their confluenceScore is intentionally 0 and would skew the floor.
@@ -4355,6 +4412,9 @@ def run_full_scan(
         print(f"Inactive pair: {scan_funnel['inactive_pair']}")
         print(f"Counter trend: {scan_funnel['counter_trend']}")
         print(f"Dead ranging: {scan_funnel['dead_ranging']}")
+        print(f"Cross-sectional considered: {scan_funnel.get('cross_sectional_considered', 0)}")
+        print(f"Cross-sectional accepted: {scan_funnel.get('cross_sectional_accepted', 0)}")
+        print(f"Cross-sectional demoted: {scan_funnel.get('cross_sectional_demoted', 0)}")
         print("="*80 + "\n")
         
         if _threshold_audit_on:
@@ -4406,6 +4466,7 @@ def run_full_scan(
             "scanQuantileEnabled": _q_enabled,
             "scanQuantileFloors": quantile_floors,
             "scanQuantileMinSamples": _q_min_n,
+            "engineAV3CrossSectional": _xsec_report,
             "payloadVersion": "2.0",
             "marketDataRefreshed": bool(refresh_market_data),
             "contract": {

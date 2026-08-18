@@ -1945,6 +1945,28 @@ CONFIG: dict = {
         "MAX_HOLD_BARS": 24,
     },
     "ENGINE_A_V3_DEMO_UNVALIDATED_ENABLED": False,
+    # Explicit cross-sectional ranking for Engine A v3. Default OFF preserves
+    # today's per-pair absolute thresholds. When ENABLED, a scored scan/backtest
+    # cohort is grouped and only the top N / top percentile are promoted.
+    "ENGINE_A_V3_CROSS_SECTIONAL": {
+        "ENABLED": False,
+        "METHOD": "top_n",
+        "TOP_N": 3,
+        "PERCENTILE": 0.20,
+        "GROUP_BY": "score_group",
+        "CUSTOM_GROUPS": {},
+        "MIN_SCORE_FLOOR": 0.0,
+        "MIN_GROUP_SIZE": 1,
+        "REQUIRE_TRADE_DECISION": True,
+        "REQUIRE_QUALIFIED": True,
+        "APPLY_IN_LIVE_SCAN": True,
+        "APPLY_IN_BACKTEST": True,
+        "TIE_BREAKERS": [
+            "conviction",
+            "direction_confidence",
+            "location_quality",
+        ],
+    },
     "ENGINE_A_V3_PROFILE_TTL_DAYS": 90,
     "ENGINE_A_V3_LEGACY_SHADOW_ENABLED": True,
     # Best-effort JSONL journal of live V3 signals for offline live-vs-backtest
@@ -3983,6 +4005,7 @@ def _fatal_config_validation(cfg: dict) -> None:
         "ENGINE_A_V3_SUBSYSTEMS",
         "ENGINE_A_V3_STRUCTURAL_GEOMETRY",
         "ENGINE_A_V3_MEAN_REVERSION",
+        "ENGINE_A_V3_CROSS_SECTIONAL",
         "ENGINE_A_SPREAD_SCORE_PENALTY",
         "ENGINE_A_CORRELATION_SCORE_PENALTY",
         "ENGINE_B_WEIGHTED_SCORING",
