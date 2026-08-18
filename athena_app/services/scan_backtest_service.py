@@ -11,6 +11,9 @@ def handle_scan_request(payload: dict, *, run_full_scan: Callable) -> dict:
         style=payload.get("style", "auto"),
         asset_class=payload.get("asset_class"),
         refresh_market_data=bool(payload.get("refresh_market_data", False)),
+        # Explicit operator symbol scope (Live Cockpit). Absent/empty keeps the
+        # historical whole-universe / asset-class behaviour unchanged.
+        symbols=payload.get("symbols"),
     )
 
 

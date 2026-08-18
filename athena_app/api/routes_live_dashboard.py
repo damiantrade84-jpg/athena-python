@@ -1428,6 +1428,7 @@ def api_live_dashboard_snapshot():
         "paperMode": paper_mode,
         "connections": connections,
         "truncatedSymbols": truncated,
+        "maxSymbols": max_syms,
         "freshnessAllOk": freshness_all_ok,
         "symbols": symbol_rows,
         "events": events[-50:],

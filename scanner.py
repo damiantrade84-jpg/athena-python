@@ -2246,12 +2246,39 @@ def annotate_signal_for_scan(
     return signal
 
 
+def _normalize_scan_symbol(value: Any) -> str:
+    """Case/separator-insensitive symbol key for explicit scan scopes."""
+    return str(value or "").upper().replace("/", "").replace("_", "").replace(" ", "").strip()
+
+
+def _parse_scan_symbol_scope(raw_symbols: Any) -> set[str] | None:
+    """Normalise a requested symbol scope. ``None`` means "whole universe".
+
+    Mirrors the Engine B (/api/scan-naked) scope semantics so the same operator
+    selection resolves to the same pairs on both engines.
+    """
+    if not raw_symbols:
+        return None
+    if isinstance(raw_symbols, str):
+        raw_symbols = raw_symbols.replace(";", ",").split(",")
+    scope = {_normalize_scan_symbol(s) for s in raw_symbols if _normalize_scan_symbol(s)}
+    return scope or None
+
+
 def run_full_scan(
     style: str = "auto",
     asset_class: str | None = None,
     refresh_market_data: bool = False,
+    symbols: Any = None,
 ) -> dict[str, Any]:
-    """Parallel scan of tracked pairs. Optional asset_class filter."""
+    """Parallel scan of tracked pairs. Optional asset_class filter.
+
+    ``symbols`` narrows the scan to an explicit operator-chosen scope (matched
+    against display or symbol, case/separator-insensitive). When supplied it
+    takes precedence over ``asset_class``, and the closed-market prefilter is
+    skipped so a deliberately requested pair still returns its normal
+    fail-closed result rather than silently vanishing from the response.
+    """
     r = rt()
 
     if refresh_market_data and callable(getattr(r, "clear_bybit_kline_cache", None)):
@@ -2277,6 +2304,8 @@ def run_full_scan(
     _valid_classes = {"crypto", "forex", "stock", "commodity", "index", "etf"}
 
     _ac = asset_class.lower().strip() if asset_class else None
+
+    _symbol_scope = _parse_scan_symbol_scope(symbols)
 
     if _ac and _ac not in _valid_classes:
         return {
@@ -2336,7 +2365,14 @@ def run_full_scan(
             and p.get("symbol") not in _disabled_jse_symbols
         ]
 
-        if _ac:
+        if _symbol_scope is not None:
+            candidate_pairs = [
+                p
+                for p in candidate_pairs
+                if _normalize_scan_symbol(p.get("display")) in _symbol_scope
+                or _normalize_scan_symbol(p.get("symbol")) in _symbol_scope
+            ]
+        elif _ac:
             if _ac == "etf":
                 candidate_pairs = [
                     p for p in candidate_pairs if p.get("type") in ("etf", "etf_bond")
@@ -2354,11 +2390,16 @@ def run_full_scan(
                 _scan_live_prices = dict(r.live_prices)
         except (AttributeError, TypeError):
             _scan_live_prices = {}
-        analysis_pairs, session_skipped = _split_pairs_on_session_phase(
-            active_pairs,
-            at=datetime.now(timezone.utc),
-            live_prices=_scan_live_prices,
-        )
+        if _symbol_scope is not None:
+            # Explicit scans stay diagnostic: the pair still runs and reports its
+            # own deterministic result instead of being dropped before scoring.
+            analysis_pairs, session_skipped = list(active_pairs), []
+        else:
+            analysis_pairs, session_skipped = _split_pairs_on_session_phase(
+                active_pairs,
+                at=datetime.now(timezone.utc),
+                live_prices=_scan_live_prices,
+            )
 
         results, watchlist, errors, skipped = [], [], [], []
         threshold_audit_rows: list[dict[str, Any]] = []

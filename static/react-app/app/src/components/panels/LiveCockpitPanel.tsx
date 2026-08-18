@@ -52,6 +52,14 @@ import type {
 } from '@/types/athena';
 
 const DEFAULT_SYMBOLS = 'EUR/USD,GBP/USD,XAU/USD,BTCUSDT,ETHUSDT,NVDA,AAPL,MSFT';
+
+/**
+ * Case/separator-insensitive symbol key. Mirrors scanner._normalize_scan_symbol
+ * and api_scan_naked._norm_sym so that "BTCUSDT" (cockpit default) and
+ * "BTC/USDT" (/api/pairs label) resolve to the same pair everywhere: checkbox
+ * state, group toggles, and the scan scope the backend receives.
+ */
+const normSym = (s: string) => String(s || '').toUpperCase().replace(/[/_\s]/g, '').trim();
 const PAIR_GROUP_ORDER = ['Forex', 'Crypto', 'Commodities', 'Indices', 'US Stocks', 'ETFs'];
 // Snapshot builds fetch candles per symbol; keep this above observed endpoint
 // latency so the browser does not stack overlapping read-only requests.
@@ -73,12 +81,15 @@ export default function LiveCockpitPanel() {
   const [pairSearch, setPairSearch] = useState('');
   const [pairsDropdownOpen, setPairsDropdownOpen] = useState(false);
   const [showSessionHeat, setShowSessionHeat] = useState(false);
+  const [scanEngine, setScanEngine] = useState<'A' | 'B' | 'AB'>('AB');
+  const [scanScope, setScanScope] = useState<string>('selected');
+  const [scanning, setScanning] = useState(false);
+  const [scanNote, setScanNote] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef(false);
   const hasSnapshotRef = useRef(false);
   const selectedRef = useRef<string | null>(null);
   const { post: postPaperExec, loading: papering } = useApiPost<{ ok?: boolean; error?: string; ticket?: string }>();
-  const { post: postScanB, loading: scanningB } = useApiPost<{ signals?: Array<Record<string, unknown>> }>();
 
   // Keep ref in sync so fetchSnap can read current selection without being a dep
   useEffect(() => { selectedRef.current = selected; }, [selected]);
@@ -155,6 +166,11 @@ export default function LiveCockpitPanel() {
     return new Set(activeSymbols.split(',').map((s) => s.trim()).filter(Boolean));
   }, [activeSymbols]);
 
+  /** Normalised view of the selection, for membership checks against pair labels. */
+  const activeSymbolsNorm = useMemo(() => {
+    return new Set(Array.from(activeSymbolsSet).map(normSym));
+  }, [activeSymbolsSet]);
+
   const filteredPairGroups = useMemo(() => {
     const q = pairSearch.toLowerCase().trim();
     const orderedKeys = [
@@ -213,13 +229,24 @@ export default function LiveCockpitPanel() {
   const selectedRow = symbols.find((s) => s.symbol === selected) || null;
 
   const toggleSymbol = useCallback((display: string) => {
-    const set = new Set(activeSymbols.split(',').map((s) => s.trim()).filter(Boolean));
-    if (set.has(display)) {
-      set.delete(display);
-    } else {
-      set.add(display);
-    }
-    const joined = Array.from(set).join(',');
+    const current = activeSymbols.split(',').map((s) => s.trim()).filter(Boolean);
+    const key = normSym(display);
+    const next = current.some((s) => normSym(s) === key)
+      ? current.filter((s) => normSym(s) !== key)
+      : [...current, display];
+    const joined = next.join(',');
+    setSymbolsInput(joined);
+    setActiveSymbols(joined);
+  }, [activeSymbols]);
+
+  /** Add or remove a whole group of symbols in one action. */
+  const toggleGroup = useCallback((groupSymbols: string[], select: boolean) => {
+    const current = activeSymbols.split(',').map((s) => s.trim()).filter(Boolean);
+    const keys = new Set(groupSymbols.map(normSym));
+    // Drop every spelling of the group's pairs, then re-add if selecting, so a
+    // pair can never end up in the selection twice under two spellings.
+    const kept = current.filter((s) => !keys.has(normSym(s)));
+    const joined = (select ? [...kept, ...groupSymbols] : kept).join(',');
     setSymbolsInput(joined);
     setActiveSymbols(joined);
   }, [activeSymbols]);
@@ -245,27 +272,107 @@ export default function LiveCockpitPanel() {
     [postPaperExec, showToast],
   );
 
-  // Scan the user's CURRENT selection through Engine B (does not replace it).
-  // /api/scan-naked accepts an explicit `symbols` scope so only the selected
-  // pairs are analyzed; the call warms the Engine B cache the snapshot reads,
-  // then we re-rank the existing cards by Engine B confluence.
-  const scanForexB = useCallback(async () => {
-    const scope = activeSymbols.trim();
-    if (!scope) {
-      showToast('Select symbols first, then scan.', 'info');
+  // Unified scan runner. Engine A (/api/scan) and Engine B (/api/scan-naked)
+  // both accept the same explicit `symbols` scope, so one operator selection
+  // resolves to the same pairs on either engine. Scope 'all' sends no symbols
+  // and no asset class, which is each engine's whole-universe scan; an asset
+  // class scope sends assetClass only. Results warm the caches the snapshot
+  // reads, then the cockpit is repopulated with the symbols that produced
+  // signals so a broad scan is actually visible.
+  const runScan = useCallback(async () => {
+    const selected = activeSymbols.trim();
+    if (scanScope === 'selected' && !selected) {
+      showToast('No symbols selected — pick some, or switch the scope to Everything.', 'info');
       return;
     }
-    const res = await postScanB('/api/scan-naked', { symbols: scope, style: 'auto' });
-    const sigs = Array.isArray(res?.signals) ? res.signals : [];
-    setForexBMode(true);
-    setFilter('bcandidate');
-    await fetchSnap();
-    if (sigs.length === 0) {
-      showToast('Engine B: no candidates in your selection', 'info');
-    } else {
-      showToast(`Engine B: ${sigs.length} candidate${sigs.length === 1 ? '' : 's'} in selection`, 'success');
+
+    const body: Record<string, unknown> = { style: 'auto' };
+    if (scanScope === 'selected') body.symbols = selected;
+    else if (scanScope !== 'all') body.asset_class = scanScope;
+
+    const engines: Array<'A' | 'B'> = scanEngine === 'AB' ? ['A', 'B'] : [scanEngine];
+    const scopeLabel =
+      scanScope === 'selected' ? `${activeSymbolsSet.size} selected`
+        : scanScope === 'all' ? 'all pairs'
+          : scanScope;
+
+    setScanning(true);
+    setScanNote(`Scanning ${scopeLabel} — Engine ${engines.join(' + ')}…`);
+    const found: string[] = [];
+    const counts: string[] = [];
+    const failures: string[] = [];
+
+    try {
+      for (const eng of engines) {
+        // Engine B reads `assetClass`; Engine A reads `asset_class`.
+        const payload = eng === 'B' && body.asset_class
+          ? { ...body, assetClass: body.asset_class }
+          : body;
+        const url = eng === 'A' ? '/api/scan' : '/api/scan-naked';
+        let res: { signals?: Array<Record<string, unknown>>; error?: string } | null = null;
+        try {
+          const raw = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          res = await raw.json();
+        } catch (e) {
+          failures.push(`Engine ${eng}: ${String(e)}`);
+          continue;
+        }
+        if (res?.error) {
+          // "Scan already in progress" is the common one — surface it verbatim.
+          failures.push(`Engine ${eng}: ${res.error}`);
+          continue;
+        }
+        const sigs = Array.isArray(res?.signals) ? res.signals : [];
+        counts.push(`Engine ${eng}: ${sigs.length}`);
+        for (const s of sigs) {
+          const label = (s.display || s.pair || s.symbol) as string | undefined;
+          if (label && !found.includes(label)) found.push(label);
+        }
+      }
+
+      // Repopulate the cockpit with what the scan actually found, capped at the
+      // server's MAX_SYMBOLS so the snapshot is not silently truncated.
+      const cap = snapshot?.maxSymbols ?? 16;
+      if (found.length > 0 && scanScope !== 'selected') {
+        const next = found.slice(0, cap).join(',');
+        setSymbolsInput(next);
+        setActiveSymbols(next);
+        if (found.length > cap) {
+          setScanNote(`${found.length} signals — showing the first ${cap} (server MAX_SYMBOLS).`);
+        } else {
+          setScanNote(null);
+        }
+      } else {
+        setScanNote(null);
+      }
+
+      if (engines.includes('B')) {
+        setForexBMode(true);
+        setFilter('bcandidate');
+      } else {
+        setForexBMode(false);
+        setFilter('all');
+      }
+      await fetchSnap();
+
+      if (failures.length) {
+        showToast(failures.join(' · '), 'error');
+      } else if (found.length === 0) {
+        showToast(`No candidates in ${scopeLabel} (${counts.join(', ')})`, 'info');
+      } else {
+        showToast(`${counts.join(', ')} — ${found.length} symbol${found.length === 1 ? '' : 's'} with signals`, 'success');
+      }
+    } finally {
+      setScanning(false);
     }
-  }, [activeSymbols, postScanB, showToast, fetchSnap]);
+  }, [
+    activeSymbols, activeSymbolsSet.size, scanScope, scanEngine,
+    snapshot?.maxSymbols, showToast, fetchSnap,
+  ]);
 
   // Open a cockpit symbol on the TV Chart with Engine B context for AI review.
   // Advisory only - mirrors SignalsPanel's setTvChartIntent handoff; no execution.
@@ -434,13 +541,30 @@ export default function LiveCockpitPanel() {
                   {filteredPairGroups.length === 0 && (
                     <p className="text-[11px] text-muted-foreground p-3">No pairs found.</p>
                   )}
-                  {filteredPairGroups.map(([group, syms]) => (
+                  {filteredPairGroups.map(([group, syms]) => {
+                    const selectedInGroup = syms.filter((s) => activeSymbolsNorm.has(normSym(s))).length;
+                    const allSelected = selectedInGroup === syms.length && syms.length > 0;
+                    return (
                     <div key={group}>
-                      <div className="px-3 py-1.5 text-[9px] uppercase font-semibold text-muted-foreground tracking-widest bg-muted/30 border-b border-border/40">
-                        {group} <span className="opacity-60">({syms.length})</span>
+                      <div
+                        className="px-3 py-1.5 flex items-center gap-2 bg-muted/30 border-b border-border/40 cursor-pointer hover:bg-muted/50 transition-colors"
+                        onClick={() => toggleGroup(syms, !allSelected)}
+                        title={allSelected ? `Deselect all ${syms.length} in ${group}` : `Select all ${syms.length} in ${group}`}
+                      >
+                        <Checkbox
+                          checked={allSelected}
+                          className="h-3.5 w-3.5"
+                          onClick={(e) => { e.stopPropagation(); toggleGroup(syms, !allSelected); }}
+                        />
+                        <span className="text-[9px] uppercase font-semibold text-muted-foreground tracking-widest flex-1">
+                          {group} <span className="opacity-60">({syms.length})</span>
+                        </span>
+                        {selectedInGroup > 0 && (
+                          <span className="text-[9px] font-mono text-primary">{selectedInGroup} on</span>
+                        )}
                       </div>
                       {syms.map((sym) => {
-                        const checked = activeSymbolsSet.has(sym);
+                        const checked = activeSymbolsNorm.has(normSym(sym));
                         return (
                           <div
                             key={sym}
@@ -457,13 +581,32 @@ export default function LiveCockpitPanel() {
                         );
                       })}
                     </div>
-                  ))}
+                    );
+                  })}
                 </ScrollArea>
                 <div className="p-2 border-t flex items-center justify-between">
                   <span className="text-[10px] text-muted-foreground">
                     {activeSymbolsSet.size} selected
                   </span>
                   <div className="flex gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-[10px]"
+                      title="Select every symbol currently listed"
+                      onClick={() => toggleGroup(filteredPairGroups.flatMap(([, s]) => s), true)}
+                    >
+                      All
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-[10px]"
+                      title="Clear the whole selection"
+                      onClick={() => { setSymbolsInput(''); setActiveSymbols(''); }}
+                    >
+                      None
+                    </Button>
                     <Button
                       size="sm"
                       variant="ghost"
@@ -510,17 +653,52 @@ export default function LiveCockpitPanel() {
                 <SelectItem value="blocked">Blocked</SelectItem>
               </SelectContent>
             </Select>
-            <Button
-              size="sm"
-              variant={forexBMode ? 'default' : 'outline'}
-              className="h-8 text-xs gap-1"
-              onClick={scanForexB}
-              disabled={scanningB || activeSymbolsSet.size === 0}
-              title="Run Engine B against your selected symbols and rank by structural confluence"
-            >
-              <Search className="w-3.5 h-3.5" />
-              {scanningB ? 'Scanning…' : 'Scan Selected (Engine B)'}
-            </Button>
+            {/* Scan control: engine x scope x go. Both engines take the same
+                symbol scope, so one selection drives either. */}
+            <div className="flex items-center gap-1 rounded-md border border-border/60 bg-muted/20 pl-1.5 pr-1 py-0.5">
+              <Select value={scanEngine} onValueChange={(v) => setScanEngine(v as 'A' | 'B' | 'AB')}>
+                <SelectTrigger className="w-[104px] h-7 text-[11px] border-0 bg-transparent shadow-none">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="AB">Engine A + B</SelectItem>
+                  <SelectItem value="A">Engine A</SelectItem>
+                  <SelectItem value="B">Engine B</SelectItem>
+                </SelectContent>
+              </Select>
+              <span className="text-[10px] text-muted-foreground">on</span>
+              <Select value={scanScope} onValueChange={setScanScope}>
+                <SelectTrigger className="w-[132px] h-7 text-[11px] border-0 bg-transparent shadow-none">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="selected">Selected ({activeSymbolsSet.size})</SelectItem>
+                  <SelectItem value="all">Everything</SelectItem>
+                  <SelectItem value="forex">Forex</SelectItem>
+                  <SelectItem value="crypto">Crypto</SelectItem>
+                  <SelectItem value="commodity">Commodities</SelectItem>
+                  <SelectItem value="index">Indices</SelectItem>
+                  <SelectItem value="stock">Stocks</SelectItem>
+                  <SelectItem value="etf">ETFs</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                className="h-7 text-[11px] gap-1 px-2"
+                onClick={runScan}
+                disabled={scanning || (scanScope === 'selected' && activeSymbolsSet.size === 0)}
+                title={
+                  scanScope === 'selected'
+                    ? 'Scan the symbols you selected'
+                    : scanScope === 'all'
+                      ? 'Scan every enabled pair, then load the results into the cockpit'
+                      : `Scan every enabled ${scanScope} pair, then load the results into the cockpit`
+                }
+              >
+                <Search className="w-3.5 h-3.5" />
+                {scanning ? 'Scanning…' : 'Scan'}
+              </Button>
+            </div>
             {forexBMode && (
               <Button
                 size="sm"
@@ -552,6 +730,18 @@ export default function LiveCockpitPanel() {
           </div>
         </CardContent>
       </Card>
+
+      {(scanning || scanNote) && (
+        <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-1.5 text-[11px] text-muted-foreground shrink-0">
+          {scanning && <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse shrink-0" />}
+          <span>{scanNote || 'Scanning…'}</span>
+          {scanning && (
+            <span className="opacity-70">
+              A full-universe scan takes a while — the cockpit refreshes when it lands.
+            </span>
+          )}
+        </div>
+      )}
 
       {!paperMode.realOrdersAllowed && (
         <div className="flex items-start gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground leading-relaxed shrink-0">

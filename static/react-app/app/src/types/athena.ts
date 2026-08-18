@@ -1235,6 +1235,8 @@ export interface LdSnapshot {
   paperMode?: { enabled?: boolean; realOrdersAllowed?: boolean };
   connections?: { mt5?: string; binanceWs?: string };
   truncatedSymbols?: boolean;
+  /** Server-side cap (LIVE_DASHBOARD.MAX_SYMBOLS) on symbols per snapshot. */
+  maxSymbols?: number;
   freshnessAllOk?: boolean;
   symbols?: LdSymbolRow[];
   events?: LdEvent[];
