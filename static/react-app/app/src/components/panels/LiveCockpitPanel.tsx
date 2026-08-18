@@ -71,7 +71,7 @@ export default function LiveCockpitPanel() {
   const [activeSymbols, setActiveSymbols] = useState(DEFAULT_SYMBOLS);
   const [tf, setTf] = useState<'H1' | 'H4' | 'D1'>('H4');
   const [autoPoll, setAutoPoll] = useState(true);
-  const [filter, setFilter] = useState<string>('all');
+  const [filter, setFilter] = useState<string>('tradeable');
   const [selected, setSelected] = useState<string | null>(null);
   const [forexBMode, setForexBMode] = useState(false);
   const [snapshot, setSnapshot] = useState<LdSnapshot | null>(null);
@@ -207,6 +207,14 @@ export default function LiveCockpitPanel() {
   const paperMode = snapshot?.paperMode || {};
   const filtered = useMemo(() => {
     const rows = symbols.filter((s) => {
+      // Only signals that actually reached a tradeable decision. Backed by the
+      // snapshot's tradeGrade so this agrees with the execute gate by
+      // construction; falls back to finalState on an older payload.
+      if (filter === 'tradeable') {
+        return s.tradeGrade
+          ? s.tradeGrade.isTradeGrade
+          : s.finalState === 'PAPER CANDIDATE';
+      }
       if (filter === 'aligned') return s.engineC?.decisionState === 'ALIGNED';
       if (filter === 'watchlist') return s.finalState === 'WATCHLIST';
       if (filter === 'paper') return s.finalState === 'PAPER CANDIDATE';
@@ -326,7 +334,13 @@ export default function LiveCockpitPanel() {
           failures.push(`Engine ${eng}: ${res.error}`);
           continue;
         }
-        const sigs = Array.isArray(res?.signals) ? res.signals : [];
+        // Engine A separates tradeSignals from the watchlist; prefer it so a
+        // broad scan loads only what actually reached TRADE. Engine B's
+        // `signals` are already its passing structures.
+        const raw = res as { tradeSignals?: Array<Record<string, unknown>>; signals?: Array<Record<string, unknown>> };
+        const sigs = Array.isArray(raw.tradeSignals)
+          ? raw.tradeSignals
+          : Array.isArray(raw.signals) ? raw.signals : [];
         counts.push(`Engine ${eng}: ${sigs.length}`);
         for (const s of sigs) {
           const label = (s.display || s.pair || s.symbol) as string | undefined;
@@ -350,13 +364,10 @@ export default function LiveCockpitPanel() {
         setScanNote(null);
       }
 
-      if (engines.includes('B')) {
-        setForexBMode(true);
-        setFilter('bcandidate');
-      } else {
-        setForexBMode(false);
-        setFilter('all');
-      }
+      setForexBMode(engines.includes('B'));
+      // Stay on tradeable-only: the scan just loaded the trade-tier symbols and
+      // the operator asked to see what made it to trade, not the rejects.
+      setFilter('tradeable');
       await fetchSnap();
 
       if (failures.length) {
@@ -645,6 +656,7 @@ export default function LiveCockpitPanel() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="tradeable">Tradeable only</SelectItem>
                 <SelectItem value="all">All states</SelectItem>
                 <SelectItem value="bcandidate">Engine B candidate</SelectItem>
                 <SelectItem value="paper">Paper candidate</SelectItem>
@@ -772,8 +784,11 @@ export default function LiveCockpitPanel() {
         <div className="col-span-3 flex flex-col gap-2 overflow-hidden min-h-0 h-full">
           <div className="flex items-center justify-between px-1 shrink-0">
             <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
-              Signals
+              {filter === 'tradeable' ? 'Tradeable' : 'Signals'}
               <span className="ml-1 text-foreground">{filtered.length}</span>
+              {filtered.length !== symbols.length && (
+                <span className="ml-1 opacity-60">/ {symbols.length}</span>
+              )}
             </span>
             {forexBMode && (
               <Badge className="text-[9px] bg-primary/15 text-primary gap-1">
@@ -785,8 +800,30 @@ export default function LiveCockpitPanel() {
             <div className="grid grid-cols-1 gap-2">
               {filtered.length === 0 ? (
                 <Card className="border-border/60 bg-card/50 border-dashed">
-                  <CardContent className="p-8 text-center text-xs text-muted-foreground">
-                    {loading ? 'Loading…' : 'No symbols match this filter.'}
+                  <CardContent className="p-6 text-center text-xs text-muted-foreground space-y-2">
+                    {loading ? (
+                      'Loading…'
+                    ) : filter === 'tradeable' ? (
+                      <>
+                        <p className="text-foreground">
+                          None of the {symbols.length} loaded symbol{symbols.length === 1 ? '' : 's'} reached a
+                          tradeable decision.
+                        </p>
+                        <p>
+                          Run a scan to find candidates, or switch to{' '}
+                          <button
+                            type="button"
+                            className="underline underline-offset-2 hover:text-foreground"
+                            onClick={() => setFilter('all')}
+                          >
+                            All states
+                          </button>{' '}
+                          to see why each one was rejected.
+                        </p>
+                      </>
+                    ) : (
+                      'No symbols match this filter.'
+                    )}
                   </CardContent>
                 </Card>
               ) : (

@@ -298,22 +298,93 @@ def _ld_has_valid_levels(levels: dict | None) -> bool:
     return bool(entry and sl and tp and rr > 0 and entry != sl)
 
 def _ld_final_state(engine_c: dict, engine_d: dict, freshness: dict, levels: dict) -> tuple[str, str | None, str | None]:
+    """Resolve the card's headline state.
+
+    Engine A/B/C/D are independent (see CLAUDE.md). Engine D's own gates
+    therefore govern Engine D setups only: an absent scalp cache entry is "no
+    scalp opinion", not evidence against an Engine A/B structure. Before this
+    was source-aware, a missing Engine D cache reported BLOCKED for every
+    symbol and masked the real A/B/C state underneath it.
+
+    Freshness stays first and unconditional - it is a real deterministic gate
+    for every engine.
+    """
     c_state = engine_c.get("decisionState") or "NO_SETUP"
     d_gate = engine_d.get("gateResult") or "DATA_MISSING"
+    d_is_source = str((levels or {}).get("source") or "") == "engineD"
+    d_missing = ", ".join(_ld_list(engine_d.get("missingData"))) or "engine_d_data_missing"
+
     if freshness.get("gateDecision") != "ALLOW":
         return "BLOCKED", "Freshness gate blocked", freshness.get("blockReason") or freshness.get("consistencyStatus")
-    if d_gate == "DATA_MISSING":
-        missing = ", ".join(_ld_list(engine_d.get("missingData"))) or "Engine D data missing"
-        return "BLOCKED", "Engine D data missing", missing
-    if c_state == "BLOCKED" or d_gate == "BLOCKED":
+    if d_is_source and d_gate == "DATA_MISSING":
+        return "BLOCKED", "Engine D data missing", d_missing
+    if c_state == "BLOCKED" or (d_is_source and d_gate == "BLOCKED"):
         return "BLOCKED", engine_c.get("blockReason") or "Engine gate blocked", engine_c.get("blockReason") or (engine_d.get("failReasons") or [None])[0]
-    if c_state in ("A_ONLY", "B_ONLY", "WATCHLIST") or d_gate == "WATCHLIST":
+    if c_state in ("A_ONLY", "B_ONLY", "WATCHLIST") or (d_is_source and d_gate == "WATCHLIST"):
         return "WATCHLIST", engine_c.get("watchlistReason") or engine_c.get("reason") or "Watchlist only", None
     if c_state == "ALIGNED" and _ld_has_valid_levels(levels):
         return "PAPER CANDIDATE", "Aligned paper candidate", None
     if d_gate == "PASS" and _ld_has_valid_levels(levels):
         return "PAPER CANDIDATE", "Engine D paper candidate", None
-    return "NO SETUP", engine_c.get("reason") or "No executable setup", None
+    # Nothing produced a setup. Report that honestly rather than as a block;
+    # a missing Engine D cache is surfaced as the diagnostic, not the verdict.
+    return (
+        "NO SETUP",
+        engine_c.get("reason") or "No executable setup",
+        d_missing if d_gate == "DATA_MISSING" else None,
+    )
+
+
+def _ld_trade_grade(symbol_row: dict) -> dict:
+    """Did this symbol actually reach a tradeable decision?
+
+    Display/filter helper for the cockpit, derived from the same fields the
+    execution path reads. It never grants permission - executableState remains
+    the only thing that gates paper execution.
+    """
+    engine_a = symbol_row.get("engineA") or {}
+    engine_b = symbol_row.get("engineB") or {}
+    engine_d = symbol_row.get("engineD") or {}
+    freshness = symbol_row.get("freshness") or {}
+    levels = symbol_row.get("levels") or {}
+
+    reasons: list[str] = []
+    # Engine A: decision=TRADE and qualified are not enough on their own; the
+    # contract requires an explicit READY entryReadiness.
+    a_ready = (
+        str(engine_a.get("decision") or "").upper() == "TRADE"
+        and engine_a.get("qualified") is True
+        and str(engine_a.get("entryReadiness") or "").upper() == "READY"
+    )
+    if a_ready:
+        reasons.append("engineA_trade_ready")
+    b_ready = engine_b.get("confidencePassed") is True
+    if b_ready:
+        reasons.append("engineB_confidence_passed")
+    d_ready = engine_d.get("gateResult") == "PASS"
+    if d_ready:
+        reasons.append("engineD_gate_pass")
+
+    fresh_ok = freshness.get("gateDecision") == "ALLOW"
+    levels_ok = _ld_has_valid_levels(levels)
+    is_trade = bool(reasons) and fresh_ok and levels_ok
+
+    blockers: list[str] = []
+    if not reasons:
+        blockers.append("no_engine_reached_trade")
+    if not fresh_ok:
+        blockers.append("freshness_" + str(freshness.get("gateDecision") or "BLOCK").lower())
+    if not levels_ok:
+        blockers.append("levels_incomplete")
+
+    return {
+        "isTradeGrade": is_trade,
+        "engines": reasons,
+        "blockers": blockers,
+        "engineA": a_ready,
+        "engineB": b_ready,
+        "engineD": d_ready,
+    }
 
 def _ld_executable_state(symbol_row: dict, risk_reason: str | None = None) -> dict:
     paper_soak = CONFIG.get("PAPER_SOAK") or {}
@@ -324,6 +395,9 @@ def _ld_executable_state(symbol_row: dict, risk_reason: str | None = None) -> di
     engine_d = symbol_row.get("engineD") or {}
     levels = symbol_row.get("levels") or {}
     final_state = symbol_row.get("finalState") or "NO SETUP"
+    # Engine D gates the setup it produced, not an Engine A/B one. Mirrors
+    # _ld_final_state so the card and the execute gate never disagree.
+    _d_is_source = str((levels or {}).get("source") or "") == "engineD"
 
     disabled_reason = None
     if not paper_enabled:
@@ -334,9 +408,9 @@ def _ld_executable_state(symbol_row: dict, risk_reason: str | None = None) -> di
         disabled_reason = freshness.get("blockReason") or "FRESHNESS_BLOCK"
     elif engine_c.get("decisionState") in ("BLOCKED", "WATCHLIST"):
         disabled_reason = "ENGINE_C_" + str(engine_c.get("decisionState"))
-    elif engine_d.get("gateResult") == "DATA_MISSING":
+    elif _d_is_source and engine_d.get("gateResult") == "DATA_MISSING":
         disabled_reason = "ENGINE_D_DATA_MISSING: " + (", ".join(_ld_list(engine_d.get("missingData"))) or "missing_data")
-    elif engine_d.get("gateResult") == "BLOCKED":
+    elif _d_is_source and engine_d.get("gateResult") == "BLOCKED":
         disabled_reason = "ENGINE_D_BLOCKED"
     elif final_state in ("BLOCKED", "WATCHLIST", "NO SETUP"):
         disabled_reason = final_state.replace(" ", "_")
@@ -414,6 +488,11 @@ def _ld_build_engine_a_row(sig: dict) -> dict:
         "direction": direction,
         "passed": passed,
         "decision": decision if is_v3 else None,
+        # Authoritative trade-readiness provenance, carried verbatim. A high
+        # score or decision=TRADE is not executable proof on its own; the
+        # explicit entryReadiness READY is what the contract requires.
+        "qualified": sig.get("qualified"),
+        "entryReadiness": sig.get("entryReadiness"),
         "factorScores": {
             "trend": factor_scores.get("trend"),
             "momentum": factor_scores.get("momentum"),
@@ -1178,6 +1257,11 @@ def api_live_dashboard_snapshot():
                     "paperMode": bool((CONFIG.get("PAPER_SOAK") or {}).get("ENABLED", True)),
                     "realOrdersAllowed": bool(CONFIG.get("REAL_ORDERS_ALLOWED", False)),
                 },
+                "tradeGrade": {
+                    "isTradeGrade": False, "engines": [],
+                    "blockers": ["symbol_not_found"],
+                    "engineA": False, "engineB": False, "engineD": False,
+                },
             })
             continue
 
@@ -1353,6 +1437,13 @@ def api_live_dashboard_snapshot():
             "finalState": final_state,
         }
         _executable_state_obj = _ld_executable_state(_symbol_state)
+        _trade_grade = _ld_trade_grade({
+            "engineA": engine_a_row,
+            "engineB": engine_b_row,
+            "engineD": engine_d_row,
+            "freshness": freshness_result,
+            "levels": _levels,
+        })
         _ai_confidence = None
         _ai_analysis = sig_a.get("aiAnalysis") or sig_a.get("analysis")
         if isinstance(_ai_analysis, dict):
@@ -1413,6 +1504,7 @@ def api_live_dashboard_snapshot():
             "mainReason": main_reason,
             "blockReason": block_reason,
             "executableState": _executable_state_obj,
+            "tradeGrade": _trade_grade,
         })
 
     return jsonify(_json_safe({

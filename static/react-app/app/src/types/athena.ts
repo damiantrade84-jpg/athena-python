@@ -790,6 +790,9 @@ export interface LdEngineARow {
   direction: Direction | null;
   passed: boolean;
   decision?: string | null;
+  /** Authoritative trade-readiness provenance, carried verbatim from the scan. */
+  qualified?: boolean | null;
+  entryReadiness?: string | null;
   factorScores: { trend: number | null; momentum: number | null; addon: number | null };
   trendScore: number | null;
   momentumScore: number | null;
@@ -978,6 +981,18 @@ export interface LdSymbolRow {
   mainReason: string | null;
   blockReason: string | null;
   executableState: LdExecutableState;
+  /**
+   * Did this symbol actually reach a tradeable decision? Display/filter helper
+   * derived from the same fields execution reads — it never grants permission.
+   */
+  tradeGrade?: {
+    isTradeGrade: boolean;
+    engines: string[];
+    blockers: string[];
+    engineA: boolean;
+    engineB: boolean;
+    engineD: boolean;
+  };
   /** Advisory session cue — absent/unavailable while the aggregate warms. */
   sessionHeat?: LdSessionHeat;
   error?: string;
