@@ -7115,6 +7115,7 @@ def _auth_and_rate_limit():
         path.startswith("/api/execute")
         or path.startswith("/api/killswitch")
         or path.startswith("/api/webhook")
+        or (path.startswith("/api/sol/signals/") and path.endswith("/execute"))
     )
 
     max_req = (
@@ -18743,6 +18744,8 @@ from athena_app.api.routes_forex_factor import register_forex_factor_routes  # n
 from execution import register_execution_routes  # noqa: E402
 from ghost_trade.api import register_ghost_trade_routes  # noqa: E402
 from ghost_trade.runtime import build_ghost_trade_service  # noqa: E402
+from sol_engine.api import register_sol_routes  # noqa: E402
+from sol_engine.runtime import build_sol_service  # noqa: E402
 
 set_runtime(
     SimpleNamespace(
@@ -18999,6 +19002,41 @@ register_ghost_trade_routes(
 # Ghost Trade scans are operator-triggered only via /api/ghost-trade/scan.
 # Do not start the periodic/immediate scheduler; this also prevents a startup
 # scan from racing a manual request and returning scan_already_running.
+
+
+class _LazySolService:
+    """Build the standalone SOL service only when its first route is used."""
+
+    def __init__(self, runtime):
+        self._runtime = runtime
+        self._service = None
+        self._lock = threading.Lock()
+
+    def _get(self):
+        if self._service is not None:
+            return self._service
+        with self._lock:
+            if self._service is None:
+                self._service = build_sol_service(self._runtime)
+        return self._service
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
+
+
+_sol_service = _LazySolService(
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        AUDIT_DB=_AUDIT_DB,
+        fetch_mt5=fetch_mt5,
+        fetch_bybit_klines=_fetch_bybit_klines,
+        fetch_bybit_ticker=_fetch_bybit_ticker,
+        active_pairs=lambda: ACTIVE_PAIRS,
+        kill_switch=lambda: _kill_switch,
+        log=log,
+    )
+)
+register_sol_routes(app, SimpleNamespace(service=_sol_service))
 
 register_ase_routes(app)
 register_tsmom_routes(app)

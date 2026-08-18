@@ -234,7 +234,8 @@ export type PanelId =
   | 'tsmom'
   | 'forexFactor'
   | 'edgeLab'
-  | 'ghostTrade';
+  | 'ghostTrade'
+  | 'solEngine';
 
 /**
  * Derived data-fidelity diagnostic for a Cascade Scan candidate.

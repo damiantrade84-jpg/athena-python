@@ -1,0 +1,102 @@
+version: sol.v1
+enabled: true
+
+scan:
+  max_workers: 6
+  max_errors_returned: 50
+  maximum_clock_skew_sec: 2.0
+  timeframes:
+    context: H4
+    value: H1
+    setup: M15
+    trigger: M5
+  bars:
+    H4: 140
+    H1: 220
+    M15: 260
+    M5: 320
+  minimum_bars:
+    H4: 48
+    H1: 64
+    M15: 80
+    M5: 96
+  maximum_closed_bar_age_buckets:
+    H4: 2.0
+    H1: 2.0
+    M15: 2.0
+    M5: 2.0
+
+indicators:
+  atr_period: 14
+  orbit_lookback: 32
+  orbit_slope_window: 8
+  liquidity_lookback: 20
+  liquidity_recent_bars: 4
+  compression_short_window: 6
+  compression_baseline_window: 30
+  compression_ratio_max: 0.72
+  sweep_excursion_atr_min: 0.04
+  trigger_window: 3
+  trigger_break_lookback: 6
+  participation_recent_window: 3
+  participation_baseline_window: 30
+  participation_scale_floor: 0.05
+
+scoring:
+  ready_threshold: 74.0
+  watch_threshold: 58.0
+  minimum_trigger_strength: 0.38
+  maximum_value_extension_z: 2.25
+  weights:
+    regime_orbit: 20.0
+    value_location: 15.0
+    liquidity_event: 25.0
+    displacement: 20.0
+    participation: 10.0
+    execution_geometry: 10.0
+
+levels:
+  stop_atr_buffer: 0.18
+  minimum_stop_atr: 0.20
+  maximum_stop_atr: 2.20
+  target_rr: 2.20
+  minimum_rr: 1.80
+  opposing_liquidity_buffer_atr: 0.05
+
+execution:
+  default_mode: paper
+  paper_enabled: true
+  demo_enabled: true
+  live_enabled: false
+  require_validated_research_for_live: true
+  research_status: UNVALIDATED
+  paper_equity: 10000.0
+  risk_fraction: 0.0025
+  max_signal_age_sec: 600
+  maximum_clock_skew_sec: 2.0
+  max_quote_drift_atr: 0.25
+  maximum_quote_age_sec:
+    forex: 15.0
+    crypto: 10.0
+    commodity: 20.0
+    index: 20.0
+    stock: 90.0
+    etf: 90.0
+    etf_bond: 90.0
+    default: 20.0
+  maximum_spread_bps:
+    forex: 5.0
+    crypto: 18.0
+    commodity: 15.0
+    index: 12.0
+    stock: 30.0
+    etf: 30.0
+    etf_bond: 30.0
+    default: 20.0
+
+replay:
+  enabled: true
+  default_bars: 600
+  maximum_bars: 1000
+  outcome_horizon_m5_bars: 48
+  minimum_trades_for_evidence: 30
