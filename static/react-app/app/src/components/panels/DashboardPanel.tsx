@@ -22,6 +22,7 @@ import type {
 } from '@/types';
 import type { EngineASignal } from '@/types/athena';
 import { buildExecutionVolumePayload } from '@/lib/manualExecuteHelpers';
+import { formatAuditEngineLabel, resolveAuditEngine } from '@/lib/auditEngine';
 
 interface LastScanResponse {
   signals?: EngineASignal[];
@@ -438,6 +439,9 @@ export default function DashboardPanel() {
                         <div className="flex items-center gap-2">
                           <DirectionChip direction={t.direction} />
                           <span className="readout truncate text-xs">{label}</span>
+                          <span className="shrink-0 text-[10px] font-mono text-muted-foreground">
+                            {formatAuditEngineLabel(resolveAuditEngine(t as unknown as Record<string, unknown>))}
+                          </span>
                         </div>
                         {slLine && (
                           <span className="truncate text-[10px] text-muted-foreground" title={slLine}>

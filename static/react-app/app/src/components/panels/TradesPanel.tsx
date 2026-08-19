@@ -77,6 +77,19 @@ function str(v: unknown): string {
   return String(v);
 }
 
+function EngineBadge({ row }: { row: Record<string, unknown> }) {
+  const engineKey = resolveAuditEngine(row);
+  return (
+    <Badge
+      variant="outline"
+      className="text-[10px] h-5 font-mono"
+      title={auditEngineTitle(engineKey)}
+    >
+      {formatAuditEngineLabel(engineKey)}
+    </Badge>
+  );
+}
+
 function AutoTradeLogRow({ entry }: { entry: Record<string, unknown> }) {
   const providerUnavailable = entry.eventRiskProviderUnavailable === true;
   const effectiveAction = str(entry.eventRiskEffectiveAction);
@@ -87,6 +100,7 @@ function AutoTradeLogRow({ entry }: { entry: Record<string, unknown> }) {
     <div className="p-2 rounded-md bg-muted/30 text-xs space-y-1">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono font-semibold">{str(entry.ts)}</span>
+        <EngineBadge row={entry} />
         <Badge variant="outline" className="text-[10px] h-5">{str(entry.grade)}</Badge>
         <span className="font-mono">{str(entry.pair)} {str(entry.direction)}</span>
         {entry.score != null ? (
@@ -348,6 +362,7 @@ export default function TradesPanel() {
                         <TableHead className="text-[10px] uppercase text-right">P&amp;L %</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">SL / Close</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">TP</TableHead>
+                        <TableHead className="text-[10px] uppercase">Engine</TableHead>
                         <TableHead className="text-[10px] uppercase">Style</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">Advisory</TableHead>
                         <TableHead className="text-[10px] uppercase text-right">Action</TableHead>
@@ -369,7 +384,7 @@ export default function TradesPanel() {
                         const pnlPct = pnlPctRaw == null ? null : num(pnlPctRaw);
                         const sl = num(p.sl);
                         const tp = num(p.tp);
-                        const style = String(p.style || p.audit_engine || '—');
+                        const style = String(p.style || '—');
                         const slCloseLine = String(
                           (p as { sl_close_line?: string }).sl_close_line
                           || (sl > 0 ? `Closes ${fmtNum(sl, 5)}` : '—'),
@@ -399,6 +414,7 @@ export default function TradesPanel() {
                               </div>
                             </TableCell>
                             <TableCell className="text-xs font-mono text-right text-long">{fmtNum(tp, 5)}</TableCell>
+                            <TableCell><EngineBadge row={p} /></TableCell>
                             <TableCell className="text-[10px] font-mono text-muted-foreground">{style}</TableCell>
                             <TableCell className="text-right">
                               <DecayAdvisoryBadge info={decayByPair[normPair(pairLabel)]} />
@@ -451,6 +467,7 @@ export default function TradesPanel() {
                             <TableHead className="text-[10px] uppercase text-right">Entry</TableHead>
                             <TableHead className="text-[10px] uppercase text-right">SL</TableHead>
                             <TableHead className="text-[10px] uppercase text-right">TP</TableHead>
+                            <TableHead className="text-[10px] uppercase">Engine</TableHead>
                             <TableHead className="text-[10px] uppercase">Style</TableHead>
                             <TableHead className="text-[10px] uppercase text-right">Action</TableHead>
                           </TableRow>
@@ -475,7 +492,8 @@ export default function TradesPanel() {
                                 <TableCell className="text-xs font-mono text-right">{fmtNum(num(row.entry_price), 5)}</TableCell>
                                 <TableCell className="text-xs font-mono text-right text-short">{fmtNum(num(row.sl), 5)}</TableCell>
                                 <TableCell className="text-xs font-mono text-right text-long">{fmtNum(num(row.tp), 5)}</TableCell>
-                                <TableCell className="text-[10px] font-mono text-muted-foreground">{String(row.style || row.engine || '-')}</TableCell>
+                                <TableCell><EngineBadge row={row} /></TableCell>
+                                <TableCell className="text-[10px] font-mono text-muted-foreground">{String(row.style || '—')}</TableCell>
                                 <TableCell className="text-right">
                                   {canCloseAudit ? (
                                     <Button
@@ -527,7 +545,6 @@ export default function TradesPanel() {
                     </TableHeader>
                     <TableBody>
                       {performance!.last_20_trades.map((t, i) => {
-                        const engineKey = resolveAuditEngine(t as Record<string, unknown>);
                         const direction = String(t.direction || '—');
                         return (
                         <TableRow key={i}>
@@ -538,13 +555,7 @@ export default function TradesPanel() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            <Badge
-                              variant="outline"
-                              className="text-[10px] h-5 font-mono"
-                              title={auditEngineTitle(engineKey)}
-                            >
-                              {formatAuditEngineLabel(engineKey)}
-                            </Badge>
+                            <EngineBadge row={t as Record<string, unknown>} />
                           </TableCell>
                           <TableCell className="text-xs font-mono text-right">{fmtNum(t.entry_price, 5)}</TableCell>
                           <TableCell className="text-xs font-mono text-right">{fmtNum(t.exit_price, 5)}</TableCell>

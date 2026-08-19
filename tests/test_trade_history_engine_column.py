@@ -24,9 +24,11 @@ def test_trade_history_shows_engine_column():
     assert "export function resolveAuditEngine" in helper_source
     assert "export function formatAuditEngineLabel" in helper_source
     assert "export function auditEngineTitle" in helper_source
-    assert "engine_a: 'A'" in helper_source
+    assert "engine_a: 'Engine A'" in helper_source
     assert "ase: 'ASE'" in helper_source
-    assert "scalp: 'D'" in helper_source
+    assert "scalp: 'Engine D'" in helper_source
+    assert "function EngineBadge" in panel_source
+    assert "Open Positions" in panel_source
 
     assert "export interface AuditClosedTrade" in types_source
     assert "last_20_trades?: AuditClosedTrade[]" in types_source

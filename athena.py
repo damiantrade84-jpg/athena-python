@@ -15166,6 +15166,8 @@ def api_open_trades_timed():
             "open_time_iso":   open_iso,
             "mins_open":       round(mins_open, 1),
             "style":           style,
+            "engine":          audit_engine or pos_engine or None,
+            "engine_resolved": audit_engine or pos_engine or None,
             "in_profit":       in_profit,
             "be_reached":      False,
             "close_reached":   False,
