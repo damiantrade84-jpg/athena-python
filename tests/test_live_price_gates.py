@@ -114,15 +114,19 @@ def test_mt5_max_tick_age_returns_configured_value(monkeypatch):
 
 def test_mt5_max_tick_age_uses_asset_type_override(monkeypatch):
     """Share CFDs (ATFX #HK0005: median 22s / max 78s inter-tick gaps inside the HK
-    cash session) get the per-asset-type limit; other classes keep the venue limit."""
+    cash session) and index CFDs (AUS200.s: 47.28s live tick on 2026-08-19)
+    get the per-asset-type limit; forex keeps the venue limit."""
     import mt5_executor
 
     monkeypatch.setitem(mt5_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"mt5": 5})
     monkeypatch.setitem(
-        mt5_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC_BY_ASSET_TYPE", {"stock": 90}
+        mt5_executor.CONFIG,
+        "MAX_BROKER_TICK_AGE_SEC_BY_ASSET_TYPE",
+        {"stock": 90, "index": 60},
     )
 
     assert mt5_executor._mt5_max_tick_age_sec({"pair": "HK0005", "type": "stock"}) == 90.0
+    assert mt5_executor._mt5_max_tick_age_sec({"pair": "ASX 200", "type": "index"}) == 60.0
     assert mt5_executor._mt5_max_tick_age_sec({"pair": "EUR/USD", "type": "forex"}) == 5.0
     assert mt5_executor._mt5_max_tick_age_sec({}) == 5.0
     assert mt5_executor._mt5_max_tick_age_sec() == 5.0
@@ -135,12 +139,31 @@ def test_mt5_max_tick_age_override_still_rejects_closed_market(monkeypatch):
 
     monkeypatch.setitem(mt5_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC", {"mt5": 5})
     monkeypatch.setitem(
-        mt5_executor.CONFIG, "MAX_BROKER_TICK_AGE_SEC_BY_ASSET_TYPE", {"stock": 90}
+        mt5_executor.CONFIG,
+        "MAX_BROKER_TICK_AGE_SEC_BY_ASSET_TYPE",
+        {"stock": 90, "index": 60},
     )
     limit = mt5_executor._mt5_max_tick_age_sec({"type": "stock"})
 
     assert limit is not None
     assert 78 < limit < 3600  # above the measured live gap, below any session break
+
+    index_limit = mt5_executor._mt5_max_tick_age_sec({"type": "index"})
+    assert index_limit is not None
+    # AUS200.s printed 47.28s while still quoting; a closed ASX cash session
+    # leaves the last tick hours old.
+    assert 47.28 < index_limit < 3600
+
+
+def test_checked_in_index_tick_age_override_matches_live_price_gate():
+    """Index broker-tick override must stay aligned with LIVE_PRICE_MAX_AGE_SEC.index."""
+    from config import CONFIG
+
+    by_type = CONFIG.get("MAX_BROKER_TICK_AGE_SEC_BY_ASSET_TYPE") or {}
+    live = (CONFIG.get("LIVE_PRICE_MAX_AGE_SEC") or {}).get("index")
+    assert by_type.get("index") == 60
+    assert by_type.get("index") == live
+    assert (CONFIG.get("MAX_BROKER_TICK_AGE_SEC") or {}).get("mt5") == 5
 
 
 def test_mt5_tick_age_seconds_normalizes_broker_clock(monkeypatch):

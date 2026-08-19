@@ -2503,9 +2503,10 @@ CONFIG: dict = {
     "MAX_BROKER_TICK_AGE_SEC": {"mt5": 5, "bybit": 3},
     # Per-asset-type MT5 overrides for the broker tick-age gate. Share CFDs rest
     # for tens of seconds between broker ticks inside their own cash session, so
-    # the flat 5s limit rejects them almost always. Classes absent here keep
-    # MAX_BROKER_TICK_AGE_SEC.mt5.
-    "MAX_BROKER_TICK_AGE_SEC_BY_ASSET_TYPE": {"stock": 90},
+    # the flat 5s limit rejects them almost always. Index CFDs do the same
+    # outside cash hours (AUS200.s 47.28s on 2026-08-19). Classes absent here
+    # keep MAX_BROKER_TICK_AGE_SEC.mt5.
+    "MAX_BROKER_TICK_AGE_SEC_BY_ASSET_TYPE": {"stock": 90, "index": 60},
     "MAX_EXECUTION_SPREAD_PCT": {
         "forex": 0.0005,
         "commodity": 0.0015,
