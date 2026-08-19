@@ -28,7 +28,9 @@ scan:
 
 sessions:
   timezone: America/New_York
+  display_timezone: Africa/Johannesburg
   fallback_utc_offset_hours: -4.0
+  display_fallback_utc_offset_hours: 2.0
   weekend_close_weekday: 4
   weekend_close_hour: 17
   weekend_open_weekday: 6

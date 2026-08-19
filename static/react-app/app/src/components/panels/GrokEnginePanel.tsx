@@ -25,9 +25,11 @@ import {
   grokClockLabel,
   grokComponentLabel,
   grokDecisionClass,
+  grokDisplayZoneLabel,
   grokNarrativeSteps,
   grokPrice,
   grokScanProgress,
+  grokWindowSchedule,
   grokSetupLabel,
   type GrokAccounts,
   type GrokCapabilities,
@@ -129,6 +131,39 @@ function NarrativeRail({ current }: { current?: GrokNarrative }) {
             )}
           >
             {step.replaceAll('_', ' ')}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function KillzoneSchedule({ clock }: { clock: Record<string, unknown> | undefined }) {
+  const rows = grokWindowSchedule(clock);
+  if (!rows.length) return null;
+  const zone = grokDisplayZoneLabel(clock);
+  const active = typeof clock?.primaryWindow === 'string' ? clock.primaryWindow : '';
+  return (
+    <div className="relative mt-4 grid grid-cols-2 gap-1.5 lg:grid-cols-4">
+      {rows.map((row) => {
+        const here = row.name === active;
+        return (
+          <div
+            key={row.name}
+            className={cn(
+              'rounded-lg border px-2 py-1.5',
+              here ? 'border-cyan-400/40 bg-cyan-400/10' : 'border-border/60 bg-background/30',
+            )}
+          >
+            <div className="truncate text-[9px] font-medium uppercase tracking-[0.12em] text-foreground">
+              {row.name.replaceAll('_', ' ')}
+            </div>
+            <div className="mt-0.5 text-[11px] text-cyan-200">
+              {row.displayStart}–{row.displayEnd} {zone}
+            </div>
+            <div className="text-[9px] text-muted-foreground">
+              {row.nyStart}–{row.nyEnd} NY · {row.kind.replaceAll('_', ' ')}
+            </div>
           </div>
         );
       })}
@@ -443,7 +478,8 @@ export default function GrokEnginePanel() {
               </div>
               <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
                 Killzone Displacement Delivery — time-first ICT: session raid, displacement, open void, CISD,
-                then broker-attested execution on the live instrument book.
+                then broker-attested execution on the live instrument book. Killzones score in New York time and
+                are labeled in SAST (Africa/Johannesburg).
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
                 <span className="inline-flex items-center gap-1.5"><DatabaseZap className="h-3.5 w-3.5" /> {universeCount} live pairs · MT5 + Bybit</span>
@@ -461,6 +497,8 @@ export default function GrokEnginePanel() {
             </Button>
           </div>
         </div>
+
+        <KillzoneSchedule clock={clock} />
 
         <div className="relative mt-5 grid grid-cols-1 gap-2 md:grid-cols-2">
           <div className="rounded-xl border border-border/70 bg-background/30 p-3">

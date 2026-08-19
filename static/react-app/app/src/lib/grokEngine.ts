@@ -224,8 +224,46 @@ export function grokPrice(value: number | null | undefined): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
+export function grokDisplayZoneLabel(clock: Record<string, unknown> | undefined): string {
+  const tz = typeof clock?.displayTimezone === 'string' ? clock.displayTimezone : '';
+  if (tz === 'Africa/Johannesburg' || tz === 'Africa/Harare') return 'SAST';
+  const tail = tz.split('/').pop();
+  return tail ? tail.replaceAll('_', ' ') : 'local';
+}
+
 export function grokClockLabel(clock: Record<string, unknown> | undefined): string {
   const windowName = typeof clock?.primaryWindow === 'string' ? clock.primaryWindow : 'off-session';
   const kind = typeof clock?.primaryKind === 'string' ? clock.primaryKind : 'off';
-  return `${windowName.replaceAll('_', ' ')} · ${kind.replaceAll('_', ' ')}`;
+  const base = `${windowName.replaceAll('_', ' ')} · ${kind.replaceAll('_', ' ')}`;
+  const displayClock = typeof clock?.displayClock === 'string' ? clock.displayClock : '';
+  const localClock = typeof clock?.localClock === 'string' ? clock.localClock : '';
+  if (!displayClock || !localClock) return base;
+  return `${base} · ${displayClock} ${grokDisplayZoneLabel(clock)} / ${localClock} NY`;
+}
+
+export interface GrokWindowScheduleRow {
+  name: string;
+  kind: string;
+  quality: number;
+  nyStart: string;
+  nyEnd: string;
+  displayStart: string;
+  displayEnd: string;
+}
+
+export function grokWindowSchedule(clock: Record<string, unknown> | undefined): GrokWindowScheduleRow[] {
+  const rows = clock?.windowSchedule;
+  if (!Array.isArray(rows)) return [];
+  return rows.filter((row): row is GrokWindowScheduleRow => {
+    if (!row || typeof row !== 'object') return false;
+    const item = row as Record<string, unknown>;
+    return (
+      typeof item.name === 'string'
+      && typeof item.kind === 'string'
+      && typeof item.nyStart === 'string'
+      && typeof item.nyEnd === 'string'
+      && typeof item.displayStart === 'string'
+      && typeof item.displayEnd === 'string'
+    );
+  });
 }

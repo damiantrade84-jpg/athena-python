@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   grokClockLabel,
   grokComponentLabel,
+  grokDisplayZoneLabel,
   grokPrice,
   grokScanProgress,
   grokSetupLabel,
+  grokWindowSchedule,
   type GrokScanState,
 } from '../grokEngine';
 
@@ -47,5 +49,30 @@ describe('GROK UI helpers', () => {
     expect(grokClockLabel({ primaryWindow: 'ny_am_silver_bullet', primaryKind: 'silver_bullet' })).toBe(
       'ny am silver bullet · silver bullet',
     );
+    expect(
+      grokClockLabel({
+        primaryWindow: 'london_killzone',
+        primaryKind: 'killzone',
+        displayClock: '11:40',
+        localClock: '05:40',
+        displayTimezone: 'Africa/Johannesburg',
+      }),
+    ).toBe('london killzone · killzone · 11:40 SAST / 05:40 NY');
+    expect(grokDisplayZoneLabel({ displayTimezone: 'Africa/Johannesburg' })).toBe('SAST');
+    expect(
+      grokWindowSchedule({
+        windowSchedule: [
+          {
+            name: 'london_killzone',
+            kind: 'killzone',
+            quality: 0.84,
+            nyStart: '02:00',
+            nyEnd: '05:00',
+            displayStart: '08:00',
+            displayEnd: '11:00',
+          },
+        ],
+      }),
+    ).toHaveLength(1);
   });
 });

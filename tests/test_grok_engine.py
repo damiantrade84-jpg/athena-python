@@ -239,10 +239,30 @@ def test_ny_silver_bullet_clock_and_weekday_session_gate() -> None:
     clock = classify_session(NOW, config)
     assert clock["primaryKind"] == "silver_bullet"
     assert clock["quality"] == 1.0
+    assert clock["displayTimezone"] == "Africa/Johannesburg"
+    assert clock["displayClock"] == "16:32"
+    assert clock["localClock"] == "10:32"
     assert market_is_open(NOW, config, "forex") is True
     friday_close = datetime(2026, 3, 13, 21, 30, tzinfo=timezone.utc).timestamp()
     assert market_is_open(friday_close, config, "forex") is False
     assert market_is_open(friday_close, config, "crypto") is True
+
+
+def test_sast_display_clock_does_not_move_ny_killzones() -> None:
+    config = load_grok_config()
+    # 11:40 SAST on 2026-08-19 == 09:40 UTC == 05:40 NY (EDT).
+    epoch = datetime(2026, 8, 19, 9, 40, tzinfo=timezone.utc).timestamp()
+    clock = classify_session(epoch, config)
+    assert clock["displayClock"] == "11:40"
+    assert clock["localClock"] == "05:40"
+    assert clock["displayTimezone"] == "Africa/Johannesburg"
+    assert clock["inWindow"] is False
+    london = next(row for row in clock["windowSchedule"] if row["name"] == "london_killzone")
+    ny_am = next(row for row in clock["windowSchedule"] if row["name"] == "ny_am_killzone")
+    assert london["nyStart"] == "02:00" and london["nyEnd"] == "05:00"
+    assert london["displayStart"] == "08:00" and london["displayEnd"] == "11:00"
+    assert ny_am["nyStart"] == "07:00" and ny_am["nyEnd"] == "10:00"
+    assert ny_am["displayStart"] == "13:00" and ny_am["displayEnd"] == "16:00"
 
 
 def test_candle_normalization_drops_forming_future_and_malformed_rows() -> None:

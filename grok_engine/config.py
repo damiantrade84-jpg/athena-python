@@ -134,7 +134,10 @@ def _validate(raw: dict[str, Any]) -> None:
     sessions = raw["sessions"]
     if not str(sessions.get("timezone") or "").strip():
         raise GrokConfigError("sessions.timezone is required")
+    if not str(sessions.get("display_timezone") or "").strip():
+        raise GrokConfigError("sessions.display_timezone is required")
     _number(sessions.get("fallback_utc_offset_hours"), "sessions.fallback_utc_offset_hours")
+    _number(sessions.get("display_fallback_utc_offset_hours"), "sessions.display_fallback_utc_offset_hours")
     for key in ("weekend_close_weekday", "weekend_open_weekday"):
         weekday = _integer(sessions.get(key), f"sessions.{key}", minimum=0)
         if weekday > 6:

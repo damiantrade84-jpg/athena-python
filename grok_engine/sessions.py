@@ -10,17 +10,66 @@ from .config import GrokConfig
 from .models import Candle, utc_iso
 
 
-def _zone(config: GrokConfig):
-    name = str(config.sessions.get("timezone") or "America/New_York")
+def _zone_from_name(name: str, fallback_hours: float):
     try:
         return ZoneInfo(name)
     except ZoneInfoNotFoundError:
-        offset = float(config.sessions.get("fallback_utc_offset_hours") or -4.0)
-        return timezone(timedelta(hours=offset))
+        return timezone(timedelta(hours=fallback_hours))
+
+
+def _zone(config: GrokConfig):
+    name = str(config.sessions.get("timezone") or "America/New_York")
+    offset = float(config.sessions.get("fallback_utc_offset_hours") or -4.0)
+    return _zone_from_name(name, offset)
+
+
+def _display_zone(config: GrokConfig):
+    name = str(config.sessions.get("display_timezone") or "Africa/Johannesburg")
+    offset = float(config.sessions.get("display_fallback_utc_offset_hours") or 2.0)
+    return _zone_from_name(name, offset)
 
 
 def ny_datetime(epoch: float, config: GrokConfig) -> datetime:
     return datetime.fromtimestamp(float(epoch), tz=timezone.utc).astimezone(_zone(config))
+
+
+def display_datetime(epoch: float, config: GrokConfig) -> datetime:
+    return datetime.fromtimestamp(float(epoch), tz=timezone.utc).astimezone(_display_zone(config))
+
+
+def _hm(local: datetime) -> str:
+    return local.strftime("%H:%M")
+
+
+def _window_schedule(epoch: float, config: GrokConfig) -> list[dict[str, Any]]:
+    ny_now = ny_datetime(epoch, config)
+    ny_midnight = ny_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    display_zone = _display_zone(config)
+    rows: list[dict[str, Any]] = []
+    for name, window in config.sessions["windows"].items():
+        start_minute = int(window["start_minute"])
+        end_minute = int(window["end_minute"])
+        start_ny = ny_midnight + timedelta(minutes=start_minute)
+        if start_minute >= end_minute:
+            end_ny = (ny_midnight + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) + timedelta(minutes=end_minute)
+        else:
+            end_ny = ny_midnight + timedelta(minutes=end_minute)
+        start_display = start_ny.astimezone(display_zone)
+        end_display = end_ny.astimezone(display_zone)
+        rows.append(
+            {
+                "name": name,
+                "kind": str(window["kind"]),
+                "quality": float(window["quality"]),
+                "nyStart": _hm(start_ny),
+                "nyEnd": _hm(end_ny),
+                "displayStart": _hm(start_display),
+                "displayEnd": _hm(end_display),
+            }
+        )
+    return rows
 
 
 def _minute_of_day(local: datetime) -> int:
@@ -104,9 +153,14 @@ def classify_session(epoch: float, config: GrokConfig) -> dict[str, Any]:
         nearest_kind = bullet["kind"]
         nearest_quality = float(bullet["quality"])
         nearest_distance = 0
+    display = display_datetime(epoch, config)
     return {
         "timezone": str(config.sessions.get("timezone")),
+        "displayTimezone": str(config.sessions.get("display_timezone") or "Africa/Johannesburg"),
         "localIso": local.isoformat(),
+        "displayIso": display.isoformat(),
+        "localClock": _hm(local),
+        "displayClock": _hm(display),
         "weekday": local.strftime("%A"),
         "minuteOfDay": minute,
         "activeWindows": active,
@@ -117,6 +171,7 @@ def classify_session(epoch: float, config: GrokConfig) -> dict[str, Any]:
         "distanceMinutes": nearest_distance if nearest_distance < 10_000 else None,
         "quality": round(float(nearest_quality), 4),
         "clock": utc_iso(epoch),
+        "windowSchedule": _window_schedule(epoch, config),
     }
 
 
