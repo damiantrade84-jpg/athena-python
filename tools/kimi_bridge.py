@@ -488,7 +488,7 @@ def engine_config():
     eng = _get_engine()
     if "minScore" in data:
         try:
-            eng.min_score = float(data["minScore"])
+            eng.set_min_score(float(data["minScore"]))
         except (TypeError, ValueError):
             pass
     if "autoTrade" in data:
@@ -496,26 +496,32 @@ def engine_config():
     return jsonify({"ok": True, "minScore": eng.min_score, "autoTrade": eng.auto_trade})
 
 
+def host_active_pairs(modules: dict | None = None) -> list:
+    """Read the live Athena pair book without re-importing athena.py.
+
+    ``python athena.py`` registers the host as ``__main__``. ``import athena``
+    from that process either fails, re-executes the monolith, or sees a
+    second copy without the live toggle state — all of which made ALL ACTIVE
+    return an empty list and pushed the user onto the 500+ catalog.
+    """
+    mods = sys.modules if modules is None else modules
+    for name in ("athena", "__main__"):
+        mod = mods.get(name)
+        pairs = getattr(mod, "ACTIVE_PAIRS", None) if mod is not None else None
+        if pairs:
+            return list(pairs)
+    return []
+
+
 def _portfolio_symbols() -> list[str]:
     """Athena's currently enabled pairs, in KIMI's naming scheme.
 
-    Lets the picker offer "scan the whole portfolio" instead of ticking a
-    hundred boxes by hand. Two filters are deliberate rather than incidental:
-
-      * share CFDs are dropped, because KIMI's MT5 resolver skips '#'-prefixed
-        equity symbols by design - including them would add a hundred symbols
-        that error on every scan;
-      * anything whose broker symbol is not plain alphanumeric is dropped,
-        because set_symbols() rejects it anyway. Catalog ids like 'AAPL.US'
-        and 'GC=F' fail this test, which is the point - they are not feed
-        symbols.
+    This is the 'ALL ACTIVE' book (~189 on the live desk), not the exchange
+    catalog. Broker suffixes (``.s``) and share prefixes (``#``) are stripped
+    so ATFX-mapped names are kept rather than dropped.
     """
-    import re
-
-    try:
-        import athena  # noqa: PLC0415 - the host module owns the pair list
-        pairs = list(getattr(athena, "ACTIVE_PAIRS", []) or [])
-    except Exception:  # noqa: BLE001 - no host, no portfolio; not an error
+    pairs = host_active_pairs()
+    if not pairs:
         return []
 
     try:
@@ -523,28 +529,11 @@ def _portfolio_symbols() -> list[str]:
     except Exception:  # noqa: BLE001
         mt5_map_symbol = None  # type: ignore[assignment]
 
-    scannable = {"forex", "commodity", "index", "crypto"}
-    out: list[str] = []
-    for pair in pairs:
-        if not isinstance(pair, dict) or not pair.get("enabled", True):
-            continue
-        if str(pair.get("type") or "").strip().lower() not in scannable:
-            continue
-        display = str(pair.get("display") or "").strip()
-        if not display:
-            continue
-        candidate = ""
-        if mt5_map_symbol is not None and str(pair.get("source")) == "mt5":
-            try:
-                candidate = str(mt5_map_symbol(display) or "").strip()
-            except Exception:  # noqa: BLE001
-                candidate = ""
-        if not candidate:
-            candidate = display.replace("/", "").replace(" ", "").replace("-", "")
-        candidate = candidate.upper()
-        if re.fullmatch(r"[A-Z0-9]{4,20}", candidate) and candidate not in out:
-            out.append(candidate)
-    return out
+    if str(KIMI_ENGINE_DIR) not in sys.path:
+        sys.path.insert(0, str(KIMI_ENGINE_DIR))
+    from kimi.universe import portfolio_symbols  # noqa: PLC0415
+
+    return portfolio_symbols(pairs, mt5_map_symbol)
 
 
 @kimi_engine_bp.route("/api/symbols", methods=["GET"])

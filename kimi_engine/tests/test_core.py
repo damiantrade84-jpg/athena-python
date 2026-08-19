@@ -111,6 +111,17 @@ def test_mt5_symbol_resolution(monkeypatch):
     assert feed._mt5_resolve("NOPE") is None
 
 
+def test_mt5_resolves_hash_prefixed_shares(monkeypatch):
+    import sys
+    from kimi.datafeed import DataFeed
+    monkeypatch.setitem(sys.modules, "MetaTrader5",
+                        _fake_mt5(("#AAPL", "#FB", "EURUSD.s")))
+    feed = DataFeed()
+    assert feed._mt5_resolve("AAPL") == "#AAPL"
+    assert feed._mt5_resolve("FB") == "#FB"
+    assert feed._mt5_resolve("EURUSD") == "EURUSD.s"
+
+
 def test_mt5_symbols_canonical(monkeypatch):
     import sys
     from kimi.datafeed import DataFeed
@@ -437,6 +448,31 @@ def test_auto_venue_prefers_host_when_available(monkeypatch, tmp_path):
     r = eng.execute(sig.id, venue="auto")
     assert r["ok"] and r["venue"] == "host-mt5"
     assert calls["exec"] is not None
+
+
+def test_min_score_drops_subthreshold_signals(tmp_path):
+    import kimi.engine as engmod
+    from kimi.scoring import ScoreCard
+    from kimi.signals import Signal
+    eng = engmod.Engine()
+    eng.paper.state_path = str(tmp_path / "st.json")
+    keep = Signal(id="KHI", symbol="EURUSD", direction=1, entry=101,
+                  sl=100, tp1=102.5, tp2=104, atr=0.5,
+                  card=ScoreCard("EURUSD", 1, 80.0, "A", {}, [], True),
+                  valid_until=time.time() + 3600)
+    drop = Signal(id="KLO", symbol="GBPUSD", direction=1, entry=101,
+                  sl=100, tp1=102.5, tp2=104, atr=0.5,
+                  card=ScoreCard("GBPUSD", 1, 70.0, "B", {}, [], True),
+                  valid_until=time.time() + 3600)
+    eng.signals[keep.id] = keep
+    eng.signals[drop.id] = drop
+    r = eng.set_min_score(75)
+    assert r["ok"] and r["minScore"] == 75
+    assert keep.id in eng.signals
+    assert drop.id not in eng.signals
+    snap = eng.snapshot()
+    ids = {s["id"] for s in snap["signals"]}
+    assert "KHI" in ids and "KLO" not in ids
 
 
 def test_host_exec_disabled_falls_back_to_paper(monkeypatch, tmp_path):

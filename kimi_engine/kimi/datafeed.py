@@ -134,8 +134,13 @@ class DataFeed:
             resolved = s
         elif s + ".s" in names:
             resolved = s + ".s"
+        elif "#" + s in names:
+            resolved = "#" + s
         else:
-            resolved = next((n for n in sorted(names) if n.upper().startswith(s)), None)
+            hash_hit = next((n for n in sorted(names)
+                             if n[:1] == "#" and n[1:].upper() == s), None)
+            resolved = hash_hit or next(
+                (n for n in sorted(names) if n.upper().startswith(s)), None)
         if resolved is None:
             self._mt5_names = None          # refresh name cache next attempt
             self.last_error = f"mt5: no symbol matching {symbol}"

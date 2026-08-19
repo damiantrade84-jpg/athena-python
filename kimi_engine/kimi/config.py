@@ -46,9 +46,9 @@ class Config:
     KLINE_LIMIT = 240
 
     # Upper bound on the scan universe. The old limit was 30, which forced the
-    # picker to be an exercise in choosing favourites; the whole active Athena
-    # portfolio is ~120 instruments, so the cap is sized to hold it with room
-    # to spare. It is still a cap, not a suggestion: an unbounded universe
+    # picker to be an exercise in choosing favourites; the live Athena active
+    # book is ~189 instruments, so the cap is sized to hold it with room to
+    # spare. It is still a cap, not a suggestion: an unbounded universe
     # would blow the per-cycle request budget at both venues.
     MAX_SYMBOLS = _env_int("KIMI_MAX_SYMBOLS", 200)
     # Per-symbol evaluation is three kline fetches deep. Serially that is fine

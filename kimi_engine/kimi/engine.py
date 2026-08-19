@@ -81,12 +81,12 @@ class Engine:
     def set_symbols(self, symbols: list[str]) -> dict:
         """Replace the scan universe. Validates format; unknown symbols simply
         fail data fetch and surface in the errors feed — fail-closed."""
-        import re
+        from .universe import SYMBOL_RE, canonicalize_kimi_symbol
         clean = []
         for s in symbols:
-            s = s.strip().upper()
-            if re.fullmatch(r"[A-Z0-9]{4,20}", s) and s not in clean:
-                clean.append(s)
+            hit = canonicalize_kimi_symbol(s)
+            if hit and SYMBOL_RE.fullmatch(hit) and hit not in clean:
+                clean.append(hit)
         if not clean:
             return {"ok": False, "error": "empty universe"}
         if len(clean) > Config.MAX_SYMBOLS:
@@ -370,6 +370,19 @@ class Engine:
             self.risk.kill_switch = on
             return {"ok": True, "killSwitch": on}
 
+    def set_min_score(self, value: float) -> dict:
+        """Update the signal floor and drop any live signal now below it."""
+        with self.lock:
+            self.min_score = float(value)
+            self._drop_subthreshold_signals()
+            return {"ok": True, "minScore": self.min_score}
+
+    def _drop_subthreshold_signals(self) -> None:
+        for sig in list(self.signals.values()):
+            if sig.card.total < self.min_score:
+                sig.status = "CANCELLED"
+                del self.signals[sig.id]
+
     def _host_available(self) -> bool:
         try:
             from . import host_exec
@@ -440,7 +453,8 @@ class Engine:
                 "accounts": self._broker_accounts(),
                 "dailyLossPct": round(self.risk.daily_loss_pct(account["equity"]), 2),
                 "symbols": self.scores,
-                "signals": [s.to_dict() for s in self.signals.values()],
+                "signals": [s.to_dict() for s in self.signals.values()
+                            if s.card.total >= self.min_score],
                 "signalHistory": list(reversed(self.signal_history[-40:])),
                 "account": account,
                 "events": list(reversed(self.events[-25:])),

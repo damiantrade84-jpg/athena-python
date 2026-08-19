@@ -32,6 +32,17 @@ WEB = ROOT / "web"
 engine = Engine()
 
 
+def _symbols_payload() -> dict:
+    """Active scan list + exchange catalog. The Athena active book is only
+    published by the host bridge (tools/kimi_bridge.py) — standalone has none."""
+    return {
+        "active": list(engine.symbols),
+        "available": engine.feed.available_symbols(),
+        "portfolio": [],
+        "maxSymbols": int(Config.MAX_SYMBOLS),
+    }
+
+
 def _json_body(handler: BaseHTTPRequestHandler) -> dict:
     n = int(handler.headers.get("Content-Length") or 0)
     if n <= 0:
@@ -80,8 +91,7 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/state":
             self._json(engine.snapshot())
         elif u.path == "/api/symbols":
-            self._json({"active": list(engine.symbols),
-                        "available": engine.feed.available_symbols()})
+            self._json(_symbols_payload())
         elif u.path == "/api/chart":
             sym = (q.get("symbol", [Config.SYMBOLS[0]])[0] or Config.SYMBOLS[0]).upper()
             tf = q.get("tf", [Config.TF_CONTEXT])[0]
@@ -119,7 +129,7 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/config":
             if "minScore" in body:
                 try:
-                    engine.min_score = float(body["minScore"])
+                    engine.set_min_score(float(body["minScore"]))
                 except (TypeError, ValueError):
                     pass
             if "autoTrade" in body:

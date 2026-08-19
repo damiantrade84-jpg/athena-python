@@ -81,9 +81,21 @@ async function loadChart() {
 /* ---------------- render ---------------- */
 function gradeClass(g) { return g === "A+" ? "ap" : g === "A" ? "a" : "b"; }
 
+function bestScore(d) {
+  const L = Number(d && d.cards && d.cards.long && d.cards.long.total) || 0;
+  const S = Number(d && d.cards && d.cards.short && d.cards.short.total) || 0;
+  return Math.max(L, S);
+}
+
 function renderWatchlist() {
   const el = $("watchlist");
-  const syms = Object.entries(state.symbols || {});
+  const min = Number(state.minScore) || 0;
+  const all = Object.entries(state.symbols || {});
+  const syms = all
+    .filter(([, d]) => bestScore(d) >= min)
+    .sort((a, b) => bestScore(b[1]) - bestScore(a[1]));
+  const wc = $("watch-count");
+  if (wc) wc.textContent = all.length ? `${syms.length}/${all.length} ≥ ${min}` : "";
   el.innerHTML = syms.map(([sym, d]) => {
     const tk = d.ticker || {};
     const chg = tk.changePct24h;
@@ -102,7 +114,7 @@ function renderWatchlist() {
         <div class="scorebar"><div class="lbl"><span>S</span><span class="grade ${gradeClass(S.grade)}">${S.grade} ${fmt(S.total, 0)}</span></div>
           <div class="bar short"><div style="width:${S.total}%"></div></div></div>
       </div></div>`;
-  }).join("") || `<div class="dim" style="padding:10px">scanning…</div>`;
+  }).join("") || `<div class="dim" style="padding:10px">${all.length ? "no pairs at min score " + min : "scanning…"}</div>`;
   el.querySelectorAll(".sym").forEach(n => n.onclick = () => {
     selSymbol = n.dataset.sym; renderWatchlist(); loadChart();
   });
@@ -110,7 +122,8 @@ function renderWatchlist() {
 
 function renderSignals() {
   const el = $("signals");
-  const sigs = state.signals || [];
+  const min = Number(state.minScore) || 0;
+  const sigs = (state.signals || []).filter(s => Number(s.score) >= min);
   el.innerHTML = sigs.map(s => {
     const ttl = Math.max(0, Math.round((s.validUntil - Date.now() / 1000) / 60));
     const comps = Object.entries(s.components).map(([k, v]) => {
@@ -249,7 +262,10 @@ function render() {
   $("k-upnl").innerHTML = `<span class="${up >= 0 ? "pnl pos" : "pnl neg"}">${up >= 0 ? "+" : ""}${fmt(up)}</span>`;
   $("k-dloss").textContent = fmt(state.dailyLossPct ?? 0) + "%";
   $("k-open").textContent = (a.positions || []).length;
-  $("k-sigs").textContent = (state.signals || []).length;
+  const min = Number(state.minScore) || 0;
+  $("k-sigs").textContent = (state.signals || []).filter(s => Number(s.score) >= min).length;
+  const ms = $("min-score");
+  if (ms && document.activeElement !== ms && state.minScore != null) ms.value = state.minScore;
   $("clock").textContent = new Date().toISOString().slice(11, 19) + " UTC";
   const pill = $("scan-pill");
   const age = Date.now() / 1000 - (state.lastScan || 0);
@@ -288,6 +304,7 @@ $("kill").onclick = async () => {
 $("min-score").onchange = async (e) => {
   await fetch(`${BASE}/api/config`, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ minScore: Number(e.target.value) }) });
+  refresh();
 };
 $("auto-trade").onchange = async (e) => {
   await fetch(`${BASE}/api/config`, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -310,30 +327,37 @@ let pairsCache = null;
 // re-rendered the list, and it made "select all" impossible to express.
 let pairsSel = new Set();
 
-function pairsUniverse() {
+function pairsBook() {
+  // Athena's current active book, plus anything already in this KIMI scan.
+  // The exchange catalog is NOT part of the book — that is the 512-symbol dump.
   return [...new Set([
-    ...(pairsCache.active || []),
     ...(pairsCache.portfolio || []),
-    ...(pairsCache.available || []),
+    ...(pairsCache.active || []),
   ])];
 }
 
 function pairsShown() {
   const f = $("pairs-filter").value.trim().toUpperCase();
-  return pairsUniverse().filter(s => !f || s.includes(f));
+  const book = pairsBook();
+  if (!f) return book;
+  const fromBook = book.filter(s => s.includes(f));
+  const fromAvail = (pairsCache.available || []).filter(s => s.includes(f));
+  return [...new Set([...fromBook, ...fromAvail])];
 }
 
 function renderPairsList() {
   if (!pairsCache) return;
   const shown = pairsShown();
+  const book = pairsBook();
   const max = pairsCache.maxSymbols || 200;
   const over = pairsSel.size > max;
-  $("pairs-count").innerHTML = `${pairsSel.size} selected · max ${max}` +
+  $("pairs-count").innerHTML = `${pairsSel.size} selected · ${book.length} active book · max ${max}` +
     (over ? ` <b style="color:var(--short)">over limit</b>` : "");
   $("pairs-save").disabled = over || pairsSel.size === 0;
   $("pairs-list").innerHTML = shown.map(s =>
     `<label><input type="checkbox" data-sym="${s}" ${pairsSel.has(s) ? "checked" : ""}>
-       ${dispSym(s)}</label>`).join("");
+       ${dispSym(s)}</label>`).join("") ||
+    `<div class="dim">no active book — type to search the exchange catalog</div>`;
 }
 
 $("pairs-list").onchange = (e) => {
@@ -356,17 +380,22 @@ $("pairs-filter").oninput = renderPairsList;
 $("pairs-all-portfolio").onclick = () => {
   const portfolio = pairsCache && pairsCache.portfolio || [];
   if (!portfolio.length) {
-    alert("No portfolio pairs available — the host has not published an active pair list.");
+    alert("No active book available — Athena has not published its enabled pair list.");
     return;
   }
-  // Replace rather than merge: "all portfolio" should mean exactly that, not
-  // the portfolio plus whatever happened to be ticked before.
+  // Replace rather than merge: ALL ACTIVE is the current book, not extras.
   pairsSel = new Set(portfolio);
   $("pairs-filter").value = "";
   renderPairsList();
 };
 $("pairs-all-shown").onclick = () => {
-  pairsShown().forEach(s => pairsSel.add(s));
+  const shown = pairsShown();
+  if (!shown.length) {
+    alert("Nothing listed to select. Open the picker from Athena so the active book is published.");
+    return;
+  }
+  // Replace, do not union the exchange catalog into an existing selection.
+  pairsSel = new Set(shown);
   renderPairsList();
 };
 $("pairs-clear").onclick = () => { pairsSel = new Set(); renderPairsList(); };
