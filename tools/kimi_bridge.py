@@ -369,3 +369,210 @@ def register_kimi_routes(app):
     # Dashboard widget calls /api/conductor/last — mirror it at root
     app.add_url_rule("/api/conductor/last", "conductor_last_mirror", conductor_last, methods=["GET"])
     print("[KIMI] Bridge routes registered at /api/kimi/*  (+ /api/conductor/last mirror)")
+    # KIMI Engine (intraday quant terminal) — never break host startup
+    try:
+        register_kimi_engine(app)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[KIMI] Engine routes unavailable: {exc}")
+
+
+# ════════════════════════════════════════════════════════════════════════
+# KIMI Engine — intraday quant engine embedded into Athena.
+# Serves the terminal UI at /kimi/ and its API at /kimi/api/*.
+# The engine code lives in <repo>/kimi_engine and is imported lazily.
+# ════════════════════════════════════════════════════════════════════════
+
+import threading
+import time as _time
+
+from flask import Response, send_from_directory, stream_with_context
+
+KIMI_ENGINE_DIR = PROJECT_ROOT / "kimi_engine"
+KIMI_WEB_DIR = KIMI_ENGINE_DIR / "web"
+
+_engine = None
+_engine_lock = threading.Lock()
+
+
+def _get_engine():
+    """Lazy singleton; starts the scan loop on first use. Never raises."""
+    global _engine
+    with _engine_lock:
+        if _engine is None:
+            if str(KIMI_ENGINE_DIR) not in sys.path:
+                sys.path.insert(0, str(KIMI_ENGINE_DIR))
+            from kimi.engine import Engine  # noqa: PLC0415
+            _engine = Engine()
+            _engine.start()
+    return _engine
+
+
+kimi_engine_bp = Blueprint("kimi_engine", __name__, url_prefix="/kimi")
+
+
+@kimi_engine_bp.route("/", methods=["GET"])
+def engine_home():
+    html = (KIMI_WEB_DIR / "index.html").read_text(encoding="utf-8")
+    html = html.replace('window.KIMI_BASE = window.KIMI_BASE || "";',
+                        'window.KIMI_BASE = "/kimi";')
+    return Response(html, mimetype="text/html")
+
+
+@kimi_engine_bp.route("", methods=["GET"])
+def engine_home_redirect():
+    from flask import redirect
+    return redirect("/kimi/", code=302)
+
+
+@kimi_engine_bp.route("/<path:asset>", methods=["GET"])
+def engine_assets(asset):
+    if asset in ("app.js", "styles.css"):
+        return send_from_directory(KIMI_WEB_DIR, asset)
+    return jsonify({"error": "not found"}), 404
+
+
+@kimi_engine_bp.route("/api/state", methods=["GET"])
+def engine_state():
+    return jsonify(_get_engine().snapshot())
+
+
+@kimi_engine_bp.route("/api/chart", methods=["GET"])
+def engine_chart():
+    symbol = (request.args.get("symbol") or "BTCUSDT").upper()
+    tf = request.args.get("tf") or "15m"
+    try:
+        return jsonify(_get_engine().chart(symbol, tf))
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 502
+
+
+@kimi_engine_bp.route("/api/stream", methods=["GET"])
+def engine_stream():
+    eng = _get_engine()
+
+    @stream_with_context
+    def gen():
+        for _ in range(1200):  # ~1h, client reconnects
+            try:
+                yield f"data: {json.dumps(eng.snapshot())}\n\n"
+            except Exception:  # noqa: BLE001
+                yield 'data: {"error":"snapshot"}\n\n'
+            _time.sleep(3)
+
+    return Response(gen(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@kimi_engine_bp.route("/api/execute", methods=["POST"])
+def engine_execute():
+    data = request.get_json(silent=True) or {}
+    return jsonify(_get_engine().execute(str(data.get("id", "")),
+                                         str(data.get("venue", "auto"))))
+
+
+@kimi_engine_bp.route("/api/close", methods=["POST"])
+def engine_close():
+    data = request.get_json(silent=True) or {}
+    return jsonify(_get_engine().close_position(str(data.get("id", ""))))
+
+
+@kimi_engine_bp.route("/api/kill", methods=["POST"])
+def engine_kill():
+    data = request.get_json(silent=True) or {}
+    return jsonify(_get_engine().set_kill(bool(data.get("on"))))
+
+
+@kimi_engine_bp.route("/api/config", methods=["POST"])
+def engine_config():
+    data = request.get_json(silent=True) or {}
+    eng = _get_engine()
+    if "minScore" in data:
+        try:
+            eng.min_score = float(data["minScore"])
+        except (TypeError, ValueError):
+            pass
+    if "autoTrade" in data:
+        eng.auto_trade = bool(data["autoTrade"])
+    return jsonify({"ok": True, "minScore": eng.min_score, "autoTrade": eng.auto_trade})
+
+
+def _portfolio_symbols() -> list[str]:
+    """Athena's currently enabled pairs, in KIMI's naming scheme.
+
+    Lets the picker offer "scan the whole portfolio" instead of ticking a
+    hundred boxes by hand. Two filters are deliberate rather than incidental:
+
+      * share CFDs are dropped, because KIMI's MT5 resolver skips '#'-prefixed
+        equity symbols by design - including them would add a hundred symbols
+        that error on every scan;
+      * anything whose broker symbol is not plain alphanumeric is dropped,
+        because set_symbols() rejects it anyway. Catalog ids like 'AAPL.US'
+        and 'GC=F' fail this test, which is the point - they are not feed
+        symbols.
+    """
+    import re
+
+    try:
+        import athena  # noqa: PLC0415 - the host module owns the pair list
+        pairs = list(getattr(athena, "ACTIVE_PAIRS", []) or [])
+    except Exception:  # noqa: BLE001 - no host, no portfolio; not an error
+        return []
+
+    try:
+        from mt5_executor import mt5_map_symbol  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        mt5_map_symbol = None  # type: ignore[assignment]
+
+    scannable = {"forex", "commodity", "index", "crypto"}
+    out: list[str] = []
+    for pair in pairs:
+        if not isinstance(pair, dict) or not pair.get("enabled", True):
+            continue
+        if str(pair.get("type") or "").strip().lower() not in scannable:
+            continue
+        display = str(pair.get("display") or "").strip()
+        if not display:
+            continue
+        candidate = ""
+        if mt5_map_symbol is not None and str(pair.get("source")) == "mt5":
+            try:
+                candidate = str(mt5_map_symbol(display) or "").strip()
+            except Exception:  # noqa: BLE001
+                candidate = ""
+        if not candidate:
+            candidate = display.replace("/", "").replace(" ", "").replace("-", "")
+        candidate = candidate.upper()
+        if re.fullmatch(r"[A-Z0-9]{4,20}", candidate) and candidate not in out:
+            out.append(candidate)
+    return out
+
+
+@kimi_engine_bp.route("/api/symbols", methods=["GET"])
+def engine_symbols_get():
+    eng = _get_engine()
+    from kimi.config import Config  # noqa: PLC0415
+
+    return jsonify({"active": list(eng.symbols),
+                    "available": eng.feed.available_symbols(),
+                    "portfolio": _portfolio_symbols(),
+                    "maxSymbols": int(Config.MAX_SYMBOLS)})
+
+
+@kimi_engine_bp.route("/api/symbols", methods=["POST"])
+def engine_symbols_set():
+    data = request.get_json(silent=True) or {}
+    return jsonify(_get_engine().set_symbols(data.get("symbols", [])))
+
+
+@kimi_engine_bp.route("/api/scan", methods=["POST"])
+def engine_scan_now():
+    return jsonify(_get_engine().scan_now())
+
+
+def register_kimi_engine(app):
+    """Register the KIMI Engine blueprint and warm the scan loop."""
+    if "kimi_engine" not in app.blueprints:
+        app.register_blueprint(kimi_engine_bp)
+        print("[KIMI] Engine terminal at /kimi/  (api: /kimi/api/*)")
+    # Warm the engine so the panel opens on live data.
+    threading.Thread(target=_get_engine, daemon=True, name="kimi-engine-boot").start()

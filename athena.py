@@ -10885,11 +10885,24 @@ app.register_blueprint(
 # adapters, its own config (opus/opus.yaml) and its own SQLite store. It
 # imports nothing from this module and shares no state with it, so a failure
 # to mount it must not take the host down.
+# The one thing it does take from the host is the instrument list: OPUS scans
+# whatever the portfolio currently has enabled, rather than a second list that
+# drifts out of step with the toggles. Injected, not imported - opus/ has no
+# reference to this module.
 try:
     from opus.api import create_opus_blueprint  # noqa: E402
+    from opus.universe import set_portfolio_provider as _opus_set_universe  # noqa: E402
+    import mt5_executor  # noqa: E402
 
+    _opus_set_universe(
+        lambda: list(ACTIVE_PAIRS),
+        symbol_resolver=mt5_executor.mt5_map_symbol,
+    )
     app.register_blueprint(create_opus_blueprint())
-    log.info("OPUS engine mounted at /api/opus")
+    log.info(
+        "OPUS engine mounted at /api/opus (universe follows %d active pairs)",
+        len(ACTIVE_PAIRS),
+    )
 except Exception as _opus_exc:  # noqa: BLE001
     log.warning("OPUS engine blueprint not mounted: %s", _opus_exc)
 

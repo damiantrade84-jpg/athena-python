@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KIMI ENGINE — Intraday Quant Terminal</title>
+<link rel="stylesheet" href="./styles.css">
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <span class="word">KIMI&nbsp;ENGINE</span>
+    <span class="ver">v1.0</span>
+  </div>
+  <div class="status">
+    <span id="scan-pill" class="pill dim">BOOT</span>
+    <span id="clock" class="mono">--:--:-- UTC</span>
+  </div>
+  <div class="controls">
+    <label class="ctl">min score <input id="min-score" type="number" value="75" min="50" max="95" step="1"></label>
+    <label class="ctl">auto A+ <input id="auto-trade" type="checkbox"></label>
+    <button id="kill" class="btn kill">KILL SWITCH</button>
+  </div>
+</header>
+
+<section id="kpis">
+  <div class="kpi"><div class="k-label">EQUITY</div><div id="k-equity" class="k-val mono">—</div></div>
+  <div class="kpi"><div class="k-label">UNREALIZED</div><div id="k-upnl" class="k-val mono">—</div></div>
+  <div class="kpi"><div class="k-label">DAILY LOSS</div><div id="k-dloss" class="k-val mono">—</div></div>
+  <div class="kpi"><div class="k-label">OPEN</div><div id="k-open" class="k-val mono">—</div></div>
+  <div class="kpi"><div class="k-label">SIGNALS</div><div id="k-sigs" class="k-val mono">—</div></div>
+  <div class="kpi wide"><div class="k-label">EQUITY CURVE</div><canvas id="spark" height="34"></canvas></div>
+</section>
+
+<main id="grid">
+  <aside id="watch">
+    <div class="panel-title">WATCHLIST · KIMI SCORE</div>
+    <div id="watchlist"></div>
+    <div class="panel-title" style="margin-top:10px">EVENTS</div>
+    <div id="events"></div>
+  </aside>
+
+  <section id="center">
+    <div id="chart-head">
+      <span id="chart-symbol" class="mono">—</span>
+      <span id="chart-meta" class="dim mono"></span>
+      <span class="tf-switch">
+        <button class="tfbtn" data-tf="5m">5m</button>
+        <button class="tfbtn on" data-tf="15m">15m</button>
+        <button class="tfbtn" data-tf="1h">1h</button>
+      </span>
+    </div>
+    <div id="chart"></div>
+    <div class="panel-title">ACTIVE SIGNALS</div>
+    <div id="signals"></div>
+  </section>
+
+  <aside id="right">
+    <div class="panel-title">POSITIONS</div>
+    <div id="positions"></div>
+    <div class="panel-title" style="margin-top:10px">TRADE LOG</div>
+    <div id="trades"></div>
+  </aside>
+</main>
+
+<footer id="foot">
+  <span id="feed-status" class="dim mono">feed: —</span>
+  <span id="errors" class="err mono"></span>
+  <span class="dim">PAPER MODE · live execution requires broker keys + explicit enable</span>
+</footer>
+
+<script src="./_snapshot_data.js"></script><script src="./_snapshot_stub.js"></script><script src="./app.js"></script>
+</body>
+</html>

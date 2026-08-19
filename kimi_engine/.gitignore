@@ -1,0 +1,6 @@
+# Runtime artefacts, not source.
+__pycache__/
+.pytest_tmp/
+server.log
+state/
+web/_snapshot_data.js
