@@ -66,6 +66,7 @@ def create_opus_blueprint() -> Blueprint:
             "liveArmed": armed,
             "liveReason": why,
             "universe": config.universe(),
+            "universeSource": config.universe_source(),
             "store": stats,
             "lastScanTs": _last_scan["ts"],
             "serverTs": time.time(),

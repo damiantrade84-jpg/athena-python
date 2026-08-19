@@ -297,7 +297,11 @@ def scan(
             calibrators, validations = {}, {}
 
     result = ScanResult(started_ts=now)
-    workers = int(max_workers or min(8, max(1, len(universe))))
+    # The universe now tracks the whole active portfolio, which is an order of
+    # magnitude larger than the old fixed list, so the pool width is config-
+    # driven rather than pinned at 8.
+    configured = int(config.get("SCAN.max_workers", 8) or 8)
+    workers = int(max_workers or min(max(1, configured), max(1, len(universe))))
 
     def _one(spec: dict) -> tuple[dict, list[Signal] | None, str | None]:
         try:

@@ -46,6 +46,13 @@ const navSections: NavSection[] = [
         icon: Waves,
         badge: 'OPUS',
       },
+      {
+        id: 'kimiEngine',
+        label: 'KIMI Engine',
+        title: 'KIMI — intraday quant engine: KIMI Score composite, sweep/displacement structure, paper-first execution',
+        icon: Sparkles,
+        badge: 'KIMI',
+      },
     ],
   },
   {

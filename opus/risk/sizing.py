@@ -105,11 +105,27 @@ def size_position(
 
 
 def correlation_group_of(symbol: str) -> str | None:
-    groups = config.load()["RISK"].get("correlation_groups") or {}
+    """The concentration bucket a symbol belongs to, or None if uncapped.
+
+    An explicit group in RISK.correlation_groups always wins. Anything not
+    listed falls back to its own asset class, because the universe now follows
+    the whole active portfolio: without the fallback every instrument outside
+    the handful of named groups would carry NO correlation cap at all, and the
+    cap would silently weaken as the portfolio grew. Set
+    RISK.correlation_group_fallback_to_class to false to restore the old
+    listed-symbols-only behaviour.
+    """
+    risk = config.load()["RISK"]
+    groups = risk.get("correlation_groups") or {}
     for name, members in groups.items():
         if symbol in (members or []):
             return str(name)
-    return None
+
+    if not bool(risk.get("correlation_group_fallback_to_class", True)):
+        return None
+    spec = config.universe_map().get(symbol)
+    asset_class = str((spec or {}).get("class") or "").strip()
+    return f"CLASS_{asset_class.upper()}" if asset_class else None
 
 
 __all__ = ["SizeResult", "size_position", "correlation_group_of"]

@@ -141,7 +141,55 @@ def require(path: str) -> Any:
 
 
 def universe() -> list[dict]:
+    """The instruments OPUS scans.
+
+    With UNIVERSE_SOURCE: portfolio (the default) this is Athena's currently
+    enabled/active pair list, mapped to OPUS specs by opus/universe.py. The
+    static UNIVERSE list in opus.yaml is the fallback used when no portfolio
+    provider is installed (tests, tool scripts, a bare import) or when the
+    provider yields nothing - never an empty universe.
+    """
+    source = str(load().get("UNIVERSE_SOURCE", "portfolio")).strip().lower()
+    if source == "portfolio":
+        from opus import universe as _universe  # local: avoids an import cycle
+
+        specs, _skipped = _universe.portfolio_specs()
+        if specs:
+            return specs
     return [dict(entry) for entry in load()["UNIVERSE"]]
+
+
+def universe_source() -> dict:
+    """Which list universe() actually returned, and what it dropped."""
+    configured = str(load().get("UNIVERSE_SOURCE", "portfolio")).strip().lower()
+    if configured == "portfolio":
+        from opus import universe as _universe
+
+        specs, skipped = _universe.portfolio_specs()
+        if specs:
+            return {
+                "configured": configured,
+                "resolved": "portfolio",
+                "count": len(specs),
+                "skipped": skipped,
+            }
+        return {
+            "configured": configured,
+            "resolved": "config",
+            "count": len(load()["UNIVERSE"]),
+            "skipped": skipped,
+            "fallbackReason": (
+                "portfolio provider not installed"
+                if not _universe.has_portfolio_provider()
+                else "portfolio provider yielded no mappable pairs"
+            ),
+        }
+    return {
+        "configured": configured,
+        "resolved": "config",
+        "count": len(load()["UNIVERSE"]),
+        "skipped": [],
+    }
 
 
 def universe_map() -> dict[str, dict]:
@@ -205,6 +253,6 @@ def store_path() -> str:
 
 __all__ = [
     "OpusConfigError", "load", "get", "require", "universe", "universe_map",
-    "timeframes_for", "cost_model", "weights_for", "regime_multiplier",
+    "universe_source", "timeframes_for", "cost_model", "weights_for", "regime_multiplier",
     "indicator", "sessions", "is_live_mode", "store_path",
 ]

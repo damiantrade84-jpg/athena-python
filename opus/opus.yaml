@@ -13,9 +13,57 @@ OPUS:
   MODE: paper
 
   # ---------------------------------------------------------------------
-  # Universe. venue selects the data/broker adapter; class selects the
-  # timeframe ladder, cost model and calibration bucket.
+  # Scan concurrency. Feed calls are IO-bound (MT5 IPC, HTTP), so the pool
+  # width is set by venue rate limits rather than CPU count.
   # ---------------------------------------------------------------------
+  SCAN:
+    max_workers: 12
+
+  # ---------------------------------------------------------------------
+  # Universe.
+  #
+  # UNIVERSE_SOURCE: portfolio -> OPUS scans whatever Athena currently has
+  # enabled/active, so toggling a pair in the portfolio takes effect here too.
+  # UNIVERSE_SOURCE: config    -> OPUS scans the fixed UNIVERSE list below.
+  #
+  # The static list is also the automatic fallback when no portfolio provider
+  # is installed (tests, tool scripts, a bare import). It is never empty.
+  # ---------------------------------------------------------------------
+  UNIVERSE_SOURCE: portfolio
+
+  # How a portfolio pair becomes an OPUS spec. venue selects the data/broker
+  # adapter; class selects the timeframe ladder, cost model and calibration
+  # bucket. A source with no OPUS adapter is skipped with a reason, not
+  # admitted and left to raise on every scan.
+  UNIVERSE_MAPPING:
+    venue_by_source:
+      mt5: mt5
+      bybit: bybit
+      # Athena tags its crypto pairs source=binance, but Bybit is the primary
+      # crypto venue for candles, levels and paper execution. Route crypto to
+      # Bybit here rather than opening a second venue for the same symbols.
+      binance: bybit
+      # eodhd / yfinance are deliberately absent: they are delayed overlay
+      # sources, not live OHLC authority, and OPUS has no adapter for them.
+    class_by_type:
+      forex: forex
+      commodity: commodities
+      index: indices
+      stock: equities
+      etf: equities
+      etf_bond: equities
+      crypto: crypto
+    # Split out of `commodity` by symbol: metals cost nothing like energy or
+    # grains, and sharing a bucket would mis-price the expectancy gate.
+    metals_symbols: ["XAU/USD", "XAG/USD", "XPT/USD", "XPD/USD", "XAU/ZAR", "XAU/EUR", "XAU/GBP"]
+    # Per-display escape hatch: {venue, symbol, class}. Use when the derived
+    # broker symbol or class is wrong for one instrument only.
+    overrides: {}
+    # Displays never scanned by OPUS regardless of portfolio state.
+    exclude: []
+
+  # Fallback list. Used only when UNIVERSE_SOURCE is `config`, or when the
+  # portfolio provider is unavailable.
   UNIVERSE:
     - {symbol: "EURUSD",  display: "EUR/USD",  venue: mt5,    class: forex}
     - {symbol: "GBPUSD",  display: "GBP/USD",  venue: mt5,    class: forex}
@@ -37,11 +85,13 @@ OPUS:
   #   execution -> the live bid/ask, never a candle close
   # ---------------------------------------------------------------------
   TIMEFRAMES:
-    default: {context: H1,  structure: M15, trigger: M5}
-    forex:   {context: H1,  structure: M15, trigger: M5}
-    metals:  {context: H1,  structure: M15, trigger: M5}
-    crypto:  {context: H4,  structure: M15, trigger: M5}
-    indices: {context: H1,  structure: M15, trigger: M5}
+    default:     {context: H1,  structure: M15, trigger: M5}
+    forex:       {context: H1,  structure: M15, trigger: M5}
+    metals:      {context: H1,  structure: M15, trigger: M5}
+    commodities: {context: H1,  structure: M15, trigger: M5}
+    crypto:      {context: H4,  structure: M15, trigger: M5}
+    indices:     {context: H1,  structure: M15, trigger: M5}
+    equities:    {context: H1,  structure: M15, trigger: M5}
 
   # Bars requested per rung, and the hard minimum below which the pair is
   # skipped rather than scored on thin history.
@@ -275,11 +325,15 @@ OPUS:
   # net expectancy - this is the single most important gate in the engine.
   # ---------------------------------------------------------------------
   COSTS:
-    forex:   {commission_bps: 0.25, slippage_bps: 0.30, use_live_spread: true}
-    metals:  {commission_bps: 0.40, slippage_bps: 0.80, use_live_spread: true}
-    crypto:  {commission_bps: 5.50, slippage_bps: 1.50, use_live_spread: true}
-    indices: {commission_bps: 0.50, slippage_bps: 1.00, use_live_spread: true}
-    default: {commission_bps: 1.00, slippage_bps: 1.00, use_live_spread: true}
+    forex:       {commission_bps: 0.25, slippage_bps: 0.30, use_live_spread: true}
+    metals:      {commission_bps: 0.40, slippage_bps: 0.80, use_live_spread: true}
+    # Energy/softs/grains CFDs quote wider than metals and fill worse.
+    commodities: {commission_bps: 0.60, slippage_bps: 1.20, use_live_spread: true}
+    crypto:      {commission_bps: 5.50, slippage_bps: 1.50, use_live_spread: true}
+    indices:     {commission_bps: 0.50, slippage_bps: 1.00, use_live_spread: true}
+    # Share CFDs carry a per-side commission and the widest slippage of the set.
+    equities:    {commission_bps: 2.00, slippage_bps: 2.00, use_live_spread: true}
+    default:     {commission_bps: 1.00, slippage_bps: 1.00, use_live_spread: true}
 
   # ---------------------------------------------------------------------
   # Promotion gates. A signal must clear ALL of these to reach TRADE.
@@ -320,6 +374,9 @@ OPUS:
     # would count every historical fill as a still-open position forever.
     position_horizon_sec: 21600
     correlation_group_cap: 2   # simultaneous positions per correlation group
+    # A symbol in no explicit group below is capped by its asset class instead
+    # of being left uncapped. See risk/sizing.correlation_group_of.
+    correlation_group_fallback_to_class: true
     correlation_groups:
       USD_MAJORS: [EURUSD, GBPUSD, AUDUSD, USDCAD, USDJPY]
       METALS: [XAUUSD, XAGUSD]

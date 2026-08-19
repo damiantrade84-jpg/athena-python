@@ -1,0 +1,9 @@
+{
+  "name": "kimi-engine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "KIMI Engine — autonomous intraday quant engine: proprietary indicators, KIMI Score, paper + broker execution, live terminal UI.",
+  "scripts": {
+    "dev": "python server.py"
+  }
+}
