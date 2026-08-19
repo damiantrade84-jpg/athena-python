@@ -483,6 +483,25 @@ def test_fresh_stock_quote_does_not_treat_spread_or_with_trend_tick_as_drift(tmp
     assert drift["passed"] is True
 
 
+def test_fresh_crypto_quote_does_not_reject_a_few_adverse_ticks(tmp_path) -> None:
+    signal = _ready_signal()
+    signal["assetType"] = "crypto"
+    signal["venue"] = "bybit"
+    signal["direction"] = "SHORT"
+    signal["entry"] = 0.5316
+    signal["atr"] = 0.001451
+    signal["stop"] = 0.534732
+    signal["target"] = 0.525023
+    quote = Quote("bybit", signal["symbol"], 0.532, 0.5321, NOW, "bybit_rest")
+    coordinator = _coordinator(tmp_path, [signal], _Gateway(quote), database="apt-drift.db")
+    preview = coordinator.preview(signal)
+    assert preview["quote"]["ageSec"] == pytest.approx(0.0)
+    assert preview["error"] != "BROKER_QUOTE_STALE"
+    assert preview["executable"] is True, preview
+    drift = next(gate for gate in preview["gates"] if gate["name"] == "quote_drift")
+    assert drift["passed"] is True
+
+
 def test_adverse_mid_move_still_rejects_quote_drift(tmp_path) -> None:
     signal = _ready_signal()
     signal["assetType"] = "stock"
@@ -491,7 +510,7 @@ def test_adverse_mid_move_still_rejects_quote_drift(tmp_path) -> None:
     signal["atr"] = 0.299317
     signal["stop"] = 108.0
     signal["target"] = 111.0
-    quote = Quote("mt5", signal["symbol"], 108.575, 108.665, NOW - 5.2, "mt5_tick")
+    quote = Quote("mt5", signal["symbol"], 108.366, 108.456, NOW - 5.2, "mt5_tick")
     coordinator = _coordinator(tmp_path, [signal], _Gateway(quote), database="adverse-drift.db")
     preview = coordinator.preview(signal)
     assert preview["executable"] is False

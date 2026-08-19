@@ -136,7 +136,9 @@ execution:
   risk_fraction: 0.0025
   max_signal_age_sec: 600
   maximum_clock_skew_sec: 2.0
-  max_quote_drift_atr: 0.25
+  # Last M5 close vs live mid. 0.25 rejected fresh crypto by a few ticks
+  # (APT/USDT ~0.31 ATR). 1.0 still fail-closes when the market has left.
+  max_quote_drift_atr: 1.0
   maximum_quote_age_sec:
     forex: 15.0
     crypto: 10.0
