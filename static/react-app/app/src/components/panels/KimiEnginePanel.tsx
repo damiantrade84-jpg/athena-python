@@ -2,7 +2,8 @@
  * KIMI Engine panel — embeds the KIMI intraday quant terminal served by the
  * Flask bridge at /kimi/ (tools/kimi_bridge.py → kimi_engine/).
  *
- * The terminal runs its own scan loop against live Binance/Bybit data and
+ * The terminal runs its own scan loop against Bybit-first crypto quotes,
+ * Binance crypto candles/fallback quotes, and MT5 broker data. It
  * ships as a self-contained page (SSE-driven), so an iframe keeps the panel
  * isolated from the SPA lifecycle: no duplicated state, no re-render storms.
  */

@@ -3,6 +3,7 @@ Run: python -m pytest tests/ -q   (from kimi_engine/)
 """
 from __future__ import annotations
 
+import threading
 import time
 
 import numpy as np
@@ -140,27 +141,112 @@ def test_available_symbols_merges_crypto_and_broker(monkeypatch):
 
 
 def test_mixed_tickers_split_and_last_known(monkeypatch):
-    """Non-crypto must route away from the Binance batch (one bad symbol
-    fails the whole call) and failed refreshes keep last-known prices."""
+    """Non-crypto must route away from the Bybit batch and failed refreshes
+    keep last-known prices."""
     from kimi.datafeed import DataFeed
     feed = DataFeed()
-    calls = {"binance": [], "alt": []}
-    monkeypatch.setattr(feed, "_binance_tickers",
-                        lambda syms: calls["binance"].append(list(syms))
+    calls = {"bybit": [], "alt": []}
+    monkeypatch.setattr(feed, "_bybit_tickers",
+                        lambda syms: calls["bybit"].append(list(syms))
                         or {s: {"price": 1.0} for s in syms})
+    monkeypatch.setattr(feed, "_binance_tickers", lambda syms: {})
     monkeypatch.setattr(feed, "_alt_ticker",
                         lambda s: calls["alt"].append(s) or {"price": 2.0})
     out = feed.tickers(["BTCUSDT", "EURUSD", "XAUUSD"])
-    assert calls["binance"] == [["BTCUSDT"]]
+    assert calls["bybit"] == [["BTCUSDT"]]
     assert calls["alt"] == ["EURUSD", "XAUUSD"]
     assert out["BTCUSDT"]["price"] == 1.0 and out["EURUSD"]["price"] == 2.0
 
-    monkeypatch.setattr(feed, "_binance_tickers", lambda syms: {})
+    monkeypatch.setattr(feed, "_bybit_tickers", lambda syms: {})
     monkeypatch.setattr(feed, "_alt_ticker", lambda s: None)
     feed._tick_ts = 0.0
     out = feed.tickers(["BTCUSDT", "EURUSD"])
     assert "BTCUSDT" not in out or out.get("BTCUSDT", {}).get("price") == 1.0
     assert out["EURUSD"]["price"] == 2.0     # last-known retained
+
+
+def test_crypto_tickers_prefer_bybit_with_binance_fallback(monkeypatch):
+    """KIMI executes USDT instruments on Bybit, so its displayed live quote
+    must use the same venue first and label any Binance fallback explicitly."""
+    from kimi.datafeed import DataFeed
+    feed = DataFeed()
+    calls = {"bybit": [], "binance": []}
+    monkeypatch.setattr(
+        feed,
+        "_bybit_tickers",
+        lambda syms: calls["bybit"].append(list(syms))
+        or {"BTCUSDT": {"price": 101.0, "source": "bybit"}},
+    )
+    monkeypatch.setattr(
+        feed,
+        "_binance_tickers",
+        lambda syms: calls["binance"].append(list(syms))
+        or {s: {"price": 99.0, "source": "binance_fallback"} for s in syms},
+    )
+
+    out = feed.tickers(["BTCUSDT", "ETHUSDT"])
+
+    assert calls["bybit"] == [["BTCUSDT", "ETHUSDT"]]
+    assert calls["binance"] == [["ETHUSDT"]]
+    assert out["BTCUSDT"]["source"] == "bybit"
+    assert out["ETHUSDT"]["source"] == "binance_fallback"
+
+
+def test_ticker_cache_is_scoped_to_requested_symbols():
+    """Changing the scan universe must not return cached quotes for removed pairs."""
+    from kimi.datafeed import DataFeed
+    feed = DataFeed()
+    now = time.time()
+    feed._tick_ts = now
+    feed._tick_cache = {
+        "BTCUSDT": {"price": 100.0, "ts": now, "source": "bybit"},
+        "XAUUSD": {"price": 2000.0, "ts": now, "source": "mt5"},
+    }
+
+    assert set(feed.tickers(["XAUUSD"])) == {"XAUUSD"}
+
+
+def test_removed_symbol_cannot_reappear_from_inflight_scan(monkeypatch, tmp_path):
+    """A scan started before Save must not repopulate a pair removed by Save."""
+    import kimi.engine as engmod
+    from kimi.datafeed import CandleSet
+
+    entered = threading.Event()
+    release = threading.Event()
+    now_ms = int(time.time() * 1000)
+    n = 60
+    t = np.array([now_ms - i * 300_000 for i in range(n)][::-1])
+    c = np.linspace(100, 101, n)
+    candles = CandleSet(
+        "BTCUSDT", "5m", t, c, c + 0.5, c - 0.5, c,
+        np.full(n, 10.0), np.zeros(n), np.ones(n, dtype=bool), "test",
+    )
+    eng = engmod.Engine()
+    eng.paper.state_path = str(tmp_path / "st.json")
+    eng.symbols = ["BTCUSDT"]
+    monkeypatch.setattr(
+        eng.feed,
+        "tickers",
+        lambda syms: {"BTCUSDT": {"price": 101.0, "ts": time.time(), "source": "bybit"}},
+    )
+
+    def blocked_klines(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return candles
+
+    monkeypatch.setattr(eng.feed, "klines", blocked_klines)
+    monkeypatch.setattr(engmod, "evaluate", lambda *args, **kwargs: (None, []))
+
+    scan = threading.Thread(target=eng._scan_once_inner)
+    scan.start()
+    assert entered.wait(1)
+    assert eng.set_symbols(["XAUUSD"])["ok"]
+    release.set()
+    scan.join(3)
+
+    assert not scan.is_alive()
+    assert "BTCUSDT" not in eng.snapshot()["symbols"]
 
 
 def test_noncrypto_position_marks(tmp_path):

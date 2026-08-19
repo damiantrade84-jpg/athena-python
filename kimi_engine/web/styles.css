@@ -64,14 +64,18 @@ body {
 }
 
 .sym {
-  padding: 7px 12px; cursor: pointer; border-left: 2px solid transparent;
+  padding: 5px 10px; cursor: pointer; border-left: 2px solid transparent;
 }
 .sym:hover { background: var(--bg2); }
 .sym.sel { background: var(--bg2); border-left-color: var(--acc); }
 .sym .row1 { display: flex; justify-content: space-between; }
 .sym .name { font-weight: 600; }
 .sym .chg.pos { color: var(--long); } .sym .chg.neg { color: var(--short); }
-.sym .row2 { display: flex; gap: 6px; margin-top: 4px; }
+.sym .row2 { display: flex; gap: 6px; margin-top: 3px; }
+.compact-scores { justify-content: space-between; }
+.score-chip { color: var(--dim); font-size: 9px; letter-spacing: .3px; }
+.score-chip.long { border-bottom: 1px solid rgba(38,166,154,.55); }
+.score-chip.short { border-bottom: 1px solid rgba(239,83,80,.55); }
 .scorebar { flex: 1; }
 .scorebar .lbl { font-size: 9px; color: var(--dim); display: flex; justify-content: space-between; }
 .bar { height: 5px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
@@ -86,6 +90,10 @@ body {
   border-bottom: 1px solid var(--line);
 }
 #chart-symbol { font-size: 15px; font-weight: 700; }
+.chart-live { font-size: 13px; font-weight: 700; }
+.chart-live.fresh, .signal-live.fresh { color: var(--acc); }
+.chart-live.stale, .signal-live.stale { color: var(--gold); }
+.signal-live { font-size: 11px; }
 .tf-switch { margin-left: auto; display: flex; gap: 4px; }
 .tfbtn {
   background: var(--bg3); color: var(--dim); border: 1px solid var(--line);

@@ -8,6 +8,8 @@ let state = null;
 let selSymbol = null;
 let selTf = "15m";
 let chart = null, cSeries = null, vSeries = null, eSeries = null, vChartSymbol = null;
+let livePriceLine = null;
+let chartRequestSeq = 0;
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n, d = 2) => n === null || n === undefined ? "—" :
@@ -51,8 +53,14 @@ function initChart() {
 
 async function loadChart() {
   if (!selSymbol) return;
-  const r = await fetch(`${BASE}/api/chart?symbol=${selSymbol}&tf=${selTf}`);
+  const symbol = selSymbol;
+  const tf = selTf;
+  const requestSeq = ++chartRequestSeq;
+  const r = await fetch(`${BASE}/api/chart?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}`);
   const d = await r.json();
+  // A slower response for the previously selected pair must never overwrite
+  // the chart after the user has selected another one.
+  if (requestSeq !== chartRequestSeq || symbol !== selSymbol || tf !== selTf) return;
   if (d.error) { $("chart-meta").textContent = d.error; return; }
   cSeries.setData(d.candles.map(k => ({ time: k.t, open: k.o, high: k.h, low: k.l, close: k.c })));
   vSeries.setData(d.vwap.map(p => ({ time: p.t, value: p.v })));
@@ -75,7 +83,8 @@ async function loadChart() {
   cSeries.setMarkers(markers);
   $("chart-symbol").textContent = d.symbol + " · " + d.tf;
   $("chart-meta").textContent = `src:${d.source} bars:${d.candles.length}`;
-  if (vChartSymbol !== selSymbol + selTf) { chart.timeScale().fitContent(); vChartSymbol = selSymbol + selTf; }
+  if (vChartSymbol !== symbol + tf) { chart.timeScale().fitContent(); vChartSymbol = symbol + tf; }
+  renderLiveQuote();
 }
 
 /* ---------------- render ---------------- */
@@ -87,10 +96,63 @@ function bestScore(d) {
   return Math.max(L, S);
 }
 
+function selectedQuote() {
+  const row = state?.symbols?.[selSymbol];
+  const price = Number(row?.price);
+  return row && Number.isFinite(price) && price > 0 ? { row, price } : null;
+}
+
+function quoteAgeSec(row) {
+  const tickerTs = Number(row?.ticker?.ts);
+  return Number.isFinite(tickerTs) && tickerTs > 0 ?
+    Math.max(0, Date.now() / 1000 - tickerTs) : Number(row?.priceAgeSec);
+}
+
+function quoteIsFresh(row) {
+  const age = quoteAgeSec(row);
+  const maxAge = Number(state?.config?.tickStaleSec);
+  return row?.priceFresh !== false && Number.isFinite(age) &&
+    (!Number.isFinite(maxAge) || age <= maxAge);
+}
+
+function renderLiveQuote() {
+  const el = $("chart-live-price");
+  const src = $("chart-live-source");
+  const quote = selectedQuote();
+  if (!quote) {
+    if (el) el.textContent = "LIVE —";
+    if (src) src.textContent = "no current quote";
+    if (livePriceLine && cSeries) cSeries.removePriceLine(livePriceLine);
+    livePriceLine = null;
+    return;
+  }
+  const { row, price } = quote;
+  const age = quoteAgeSec(row);
+  const fresh = quoteIsFresh(row);
+  const source = String(row.priceSource || row.ticker?.source || "unknown").toUpperCase();
+  if (el) {
+    el.textContent = `LIVE ${fmtPx(price)}`;
+    el.className = `mono chart-live ${fresh ? "fresh" : "stale"}`;
+  }
+  if (src) src.textContent = `${source} · ${Number.isFinite(age) ? Math.round(age) + "s" : "age unknown"}`;
+  const opts = {
+    price,
+    color: fresh ? "#4fd1c5" : "#e5c07b",
+    lineWidth: 1,
+    lineStyle: 2,
+    axisLabelVisible: true,
+    title: fresh ? `LIVE ${source}` : `STALE ${source}`,
+  };
+  if (livePriceLine) livePriceLine.applyOptions(opts);
+  else if (cSeries) livePriceLine = cSeries.createPriceLine(opts);
+}
+
 function renderWatchlist() {
   const el = $("watchlist");
   const min = Number(state.minScore) || 0;
-  const all = Object.entries(state.symbols || {});
+  const active = new Set(state.universe || []);
+  const all = Object.entries(state.symbols || {})
+    .filter(([sym]) => !active.size || active.has(sym));
   const syms = all
     .filter(([, d]) => bestScore(d) >= min)
     .sort((a, b) => bestScore(b[1]) - bestScore(a[1]));
@@ -108,11 +170,9 @@ function renderWatchlist() {
       <div class="row1"><span class="name">${dispSym(sym)}${d.fresh === false ? '<span class="dim"> ·stale</span>' : ""}</span>
         <span class="mono ${d.priceFresh === false ? "px-stale" : ""}" title="${d.priceSource || "?"}${d.priceAgeSec != null ? " · quote " + d.priceAgeSec + "s old" : " · no quote timestamp"}">${fmtPx(d.price || 0)}${d.priceFresh === false ? " ⚠" : ""}</span>
         ${chgHtml}</div>
-      <div class="row2">
-        <div class="scorebar"><div class="lbl"><span>L</span><span class="grade ${gradeClass(L.grade)}">${L.grade} ${fmt(L.total, 0)}</span></div>
-          <div class="bar long"><div style="width:${L.total}%"></div></div></div>
-        <div class="scorebar"><div class="lbl"><span>S</span><span class="grade ${gradeClass(S.grade)}">${S.grade} ${fmt(S.total, 0)}</span></div>
-          <div class="bar short"><div style="width:${S.total}%"></div></div></div>
+      <div class="row2 compact-scores">
+        <span class="score-chip long">L <b class="grade ${gradeClass(L.grade)}">${L.grade} ${fmt(L.total, 0)}</b></span>
+        <span class="score-chip short">S <b class="grade ${gradeClass(S.grade)}">${S.grade} ${fmt(S.total, 0)}</b></span>
       </div></div>`;
   }).join("") || `<div class="dim" style="padding:10px">${all.length ? "no pairs at min score " + min : "scanning…"}</div>`;
   el.querySelectorAll(".sym").forEach(n => n.onclick = () => {
@@ -136,12 +196,19 @@ function renderSignals() {
     const he = state.hostExec || {};
     const hostBtn = he.available ?
       `<button class="btn exec" data-exec="${s.id}" data-venue="host" title="Athena pipeline: risk engine + guardian + managed execution">EXECUTE ${s.symbol.endsWith("USDT") ? "BYBIT" : "MT5"}${he.demoOnly ? " DEMO" : ""}</button>` : "";
+    const quoteRow = state.symbols?.[s.symbol];
+    const livePrice = Number(quoteRow?.price);
+    const liveSource = String(quoteRow?.priceSource || quoteRow?.ticker?.source || "").toUpperCase();
+    const liveHtml = Number.isFinite(livePrice) && livePrice > 0 ?
+      `<span class="signal-live mono ${quoteIsFresh(quoteRow) ? "fresh" : "stale"}">live ${fmtPx(livePrice)} · ${liveSource || "UNKNOWN"}</span>` :
+      `<span class="signal-live mono stale">live quote unavailable</span>`;
     return `<div class="sig">
       <div class="top">
         <span class="dir-${s.direction.toLowerCase()}">${s.direction}</span>
         <b>${s.symbol}</b>
         <span class="grade ${gradeClass(s.grade)}">${s.grade} ${s.score}</span>
-        <span class="lvl mono">entry ${fmtPx(s.entry)} · SL ${fmtPx(s.sl)} · TP1 ${fmtPx(s.tp1)} · TP2 ${fmtPx(s.tp2)}</span>
+        <span class="lvl mono">signal entry ${fmtPx(s.entry)} · SL ${fmtPx(s.sl)} · TP1 ${fmtPx(s.tp1)} · TP2 ${fmtPx(s.tp2)}</span>
+        ${liveHtml}
         <span class="ttl">⏱ ${ttl}m</span>
         ${hostBtn}
         <button class="btn exec" data-exec="${s.id}" data-venue="paper">EXECUTE PAPER</button>
@@ -286,13 +353,14 @@ function render() {
   const sn = $("scan-now");
   sn.classList.toggle("busy", !!state.scanning);
   sn.textContent = state.scanning ? "⟳ …" : "⟳ SCAN";
-  $("feed-status").textContent = `feeds: binance · mt5 · yahoo · scan #${state.scanCount} · broker ${state.brokerMode}${state.liveAvailable ? " (live armed)" : ""}`;
+  $("feed-status").textContent = `quotes: bybit · mt5 · fallbacks binance/yahoo · scan #${state.scanCount} · broker ${state.brokerMode}${state.liveAvailable ? " (live armed)" : ""}`;
   $("errors").textContent = (state.errors || [])[0] || "";
-  if (!selSymbol && state.symbols) {
-    const first = Object.keys(state.symbols)[0];
+  const universe = state.universe || [];
+  if ((!selSymbol || (universe.length && !universe.includes(selSymbol))) && state.symbols) {
+    const first = universe.find(sym => state.symbols[sym]) || Object.keys(state.symbols)[0];
     if (first) { selSymbol = first; loadChart(); }
   }
-  renderWatchlist(); renderSignals(); renderPositions(); renderTrades(); renderEvents(); drawSpark();
+  renderWatchlist(); renderLiveQuote(); renderSignals(); renderPositions(); renderTrades(); renderEvents(); drawSpark();
 }
 
 /* ---------------- controls ---------------- */
@@ -416,7 +484,14 @@ $("pairs-save").onclick = async () => {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ symbols: sel }),
   }).then(x => x.json());
-  if (r.ok) { $("pairs-modal").classList.add("hidden"); refresh(); }
+  if (r.ok) {
+    if (!sel.includes(selSymbol)) selSymbol = sel[0];
+    chartRequestSeq += 1;
+    pairsCache.active = sel;
+    $("pairs-modal").classList.add("hidden");
+    await refresh();
+    loadChart();
+  }
   else alert(r.error || "failed to save universe");
 };
 
