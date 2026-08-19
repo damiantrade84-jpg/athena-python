@@ -405,7 +405,15 @@ class GrokExecutionCoordinator:
         )
         atr = float(signal["atr"])
         signal_entry = float(signal["entry"])
-        drift_atr = abs(entry - signal_entry) / atr if atr > 0 else math.inf
+        # Signal entry is the last closed M5 close (mid-like). Spread is a
+        # separate gate. Drift is adverse mid displacement only, so a fresh
+        # bid/ask around that close cannot fail this check on spread alone.
+        mid = quote.mid
+        if direction == "LONG":
+            adverse = max(0.0, signal_entry - mid)
+        else:
+            adverse = max(0.0, mid - signal_entry)
+        drift_atr = adverse / atr if atr > 0 else math.inf
         drift_limit = float(self.config.execution["max_quote_drift_atr"])
         drift_ok = drift_atr <= drift_limit
         gates.append(
@@ -415,6 +423,7 @@ class GrokExecutionCoordinator:
                 "reason": None if drift_ok else "QUOTE_DRIFT_EXCEEDS_LIMIT",
                 "driftAtr": round(drift_atr, 5) if math.isfinite(drift_atr) else None,
                 "maxDriftAtr": drift_limit,
+                "reference": "mid_adverse",
             }
         )
         stop = float(signal["stop"])

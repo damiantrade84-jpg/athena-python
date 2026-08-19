@@ -378,6 +378,19 @@ def test_same_setup_keeps_one_identity_across_trigger_refreshes() -> None:
     assert refreshed["signalId"] == first["signalId"]
 
 
+def test_failed_stop_width_still_stamps_entry_stop_and_target() -> None:
+    config = load_grok_config(
+        {"GROK_ENGINE": {"levels": {"minimum_stop_atr": 0.01, "maximum_stop_atr": 0.02}}}
+    )
+    signal = evaluate_snapshot(_ready_snapshot(), config, generated_at_epoch=NOW)
+    assert any("STOP_TOO_WIDE" in reason for reason in signal["blockingReasons"])
+    assert signal["decision"] != "READY"
+    assert signal["entry"] is not None and signal["entry"] > 0
+    assert signal["stop"] is not None and signal["stop"] > 0
+    assert signal["target"] is not None and signal["target"] > 0
+    assert signal["rr"] is not None and signal["rr"] > 0
+
+
 def test_outside_killzone_cannot_be_ready() -> None:
     lunch = datetime(2026, 3, 17, 16, 20, tzinfo=timezone.utc).timestamp()
     snapshot = _ready_snapshot(as_of=lunch)
@@ -450,6 +463,39 @@ def test_paper_execution_attests_quote_and_never_calls_broker_order(tmp_path) ->
     assert second["idempotent"] is True
     assert gateway.quote_calls == 1
     assert gateway.execute_calls == 0
+
+
+def test_fresh_stock_quote_does_not_treat_spread_or_with_trend_tick_as_drift(tmp_path) -> None:
+    signal = _ready_signal()
+    signal["assetType"] = "stock"
+    signal["direction"] = "LONG"
+    signal["entry"] = 108.77
+    signal["atr"] = 0.299317
+    signal["stop"] = 108.0
+    signal["target"] = 111.0
+    quote = Quote("mt5", signal["symbol"], 108.81, 108.90, NOW - 5.2, "mt5_tick")
+    coordinator = _coordinator(tmp_path, [signal], _Gateway(quote))
+    preview = coordinator.preview(signal)
+    assert preview["error"] != "BROKER_QUOTE_STALE"
+    assert preview["quote"]["ageSec"] == pytest.approx(5.2)
+    assert preview["executable"] is True, preview
+    drift = next(gate for gate in preview["gates"] if gate["name"] == "quote_drift")
+    assert drift["passed"] is True
+
+
+def test_adverse_mid_move_still_rejects_quote_drift(tmp_path) -> None:
+    signal = _ready_signal()
+    signal["assetType"] = "stock"
+    signal["direction"] = "LONG"
+    signal["entry"] = 108.77
+    signal["atr"] = 0.299317
+    signal["stop"] = 108.0
+    signal["target"] = 111.0
+    quote = Quote("mt5", signal["symbol"], 108.575, 108.665, NOW - 5.2, "mt5_tick")
+    coordinator = _coordinator(tmp_path, [signal], _Gateway(quote), database="adverse-drift.db")
+    preview = coordinator.preview(signal)
+    assert preview["executable"] is False
+    assert preview["error"] == "QUOTE_DRIFT_EXCEEDS_LIMIT"
 
 
 @pytest.mark.parametrize(

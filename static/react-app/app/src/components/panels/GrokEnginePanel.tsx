@@ -719,6 +719,9 @@ export default function GrokEnginePanel() {
                     {preview.quote ? (
                       <div className="mt-1 text-muted-foreground">
                         bid {grokPrice(preview.quote.bid)} · ask {grokPrice(preview.quote.ask)} · spread {preview.quote.spreadBps.toFixed(2)} bps · age {preview.quote.ageSec.toFixed(1)}s
+                        {preview.gates?.some((gate) => gate.name === 'quote_drift' && gate.passed === false)
+                          ? ` · drift ${Number(preview.gates.find((gate) => gate.name === 'quote_drift')?.driftAtr ?? 0).toFixed(2)} ATR`
+                          : ''}
                       </div>
                     ) : null}
                   </div>

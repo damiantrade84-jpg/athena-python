@@ -148,13 +148,15 @@ def _execution_geometry(
         opposing = external.get("pdl")
     risk = abs(entry - stop)
     if entry <= 0 or stop <= 0 or risk <= 0:
-        return {"valid": False, "reason": "INVALID_STOP_GEOMETRY", "quality": 0.0, "atr": atr}
+        return {
+            "valid": False,
+            "reason": "INVALID_STOP_GEOMETRY",
+            "quality": 0.0,
+            "entry": entry,
+            "stop": stop,
+            "atr": atr,
+        }
     stop_atr = risk / atr
-    if stop_atr < float(levels["minimum_stop_atr"]):
-        return {"valid": False, "reason": "STOP_TOO_TIGHT", "quality": 0.0, "stopAtr": stop_atr, "atr": atr}
-    if stop_atr > float(levels["maximum_stop_atr"]):
-        return {"valid": False, "reason": "STOP_TOO_WIDE", "quality": 0.0, "stopAtr": stop_atr, "atr": atr}
-
     target_rr = float(levels["target_rr"])
     target = entry + direction * target_rr * risk
     opposing_buffer = atr * float(levels["opposing_pool_buffer_atr"])
@@ -170,13 +172,17 @@ def _execution_geometry(
     rr = reward / risk if risk > 0 else 0.0
     minimum_rr = float(levels["minimum_rr"])
     valid_side = stop < entry < target if direction > 0 else target < entry < stop
-    if not valid_side:
+    if stop_atr < float(levels["minimum_stop_atr"]):
+        reason = "STOP_TOO_TIGHT"
+    elif stop_atr > float(levels["maximum_stop_atr"]):
+        reason = "STOP_TOO_WIDE"
+    elif not valid_side:
         reason = "LEVELS_WRONG_SIDE"
     elif rr < minimum_rr:
         reason = "OPPOSING_LIQUIDITY_LIMITS_RR"
     else:
         reason = None
-    valid = valid_side and rr >= minimum_rr
+    valid = reason is None
     rr_quality = clamp((rr - minimum_rr + 0.40) / max(target_rr - minimum_rr + 0.40, 1e-9))
     stop_quality = clamp(1.0 - abs(stop_atr - 1.05) / 1.70)
     quality = 0.64 * rr_quality + 0.36 * stop_quality if valid else 0.0
