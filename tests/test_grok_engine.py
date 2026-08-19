@@ -378,6 +378,15 @@ def test_same_setup_keeps_one_identity_across_trigger_refreshes() -> None:
     assert refreshed["signalId"] == first["signalId"]
 
 
+def test_structural_stop_is_capped_to_max_atr_when_raid_still_fits() -> None:
+    config = load_grok_config({"GROK_ENGINE": {"levels": {"maximum_stop_atr": 1.50}}})
+    signal = evaluate_snapshot(_ready_snapshot(), config, generated_at_epoch=NOW)
+    assert signal["decision"] == "READY", signal["blockingReasons"]
+    assert "STOP_TOO_WIDE" not in signal["blockingReasons"]
+    stop_atr = abs(float(signal["entry"]) - float(signal["stop"])) / float(signal["atr"])
+    assert stop_atr <= 1.50 + 1e-6
+
+
 def test_failed_stop_width_still_stamps_entry_stop_and_target() -> None:
     config = load_grok_config(
         {"GROK_ENGINE": {"levels": {"minimum_stop_atr": 0.01, "maximum_stop_atr": 0.02}}}
@@ -500,6 +509,41 @@ def test_fresh_crypto_quote_does_not_reject_a_few_adverse_ticks(tmp_path) -> Non
     assert preview["executable"] is True, preview
     drift = next(gate for gate in preview["gates"] if gate["name"] == "quote_drift")
     assert drift["passed"] is True
+
+
+def test_fresh_index_quote_rebases_target_when_with_trend_fill_compresses_rr(tmp_path) -> None:
+    signal = _ready_signal()
+    signal["assetType"] = "index"
+    signal["direction"] = "LONG"
+    signal["entry"] = 66156.7
+    signal["atr"] = 190.64649
+    signal["stop"] = 65961.196562
+    signal["target"] = 66567.25722
+    quote = Quote("mt5", signal["symbol"], 66266.6, 66286.6, NOW, "mt5_tick")
+    coordinator = _coordinator(tmp_path, [signal], _Gateway(quote), database="nikkei-geometry.db")
+    preview = coordinator.preview(signal)
+    assert preview["error"] != "QUOTE_DRIFT_EXCEEDS_LIMIT"
+    assert preview["executable"] is True, preview
+    assert preview["liveRr"] >= 1.80
+    assert preview["liveTarget"] > signal["target"]
+    geom = next(gate for gate in preview["gates"] if gate["name"] == "live_geometry")
+    assert geom["passed"] is True
+    assert geom.get("rebasedTarget") is True
+
+
+def test_live_fill_past_original_target_still_rejects_geometry(tmp_path) -> None:
+    signal = _ready_signal()
+    signal["assetType"] = "index"
+    signal["direction"] = "LONG"
+    signal["entry"] = 66156.7
+    signal["atr"] = 190.64649
+    signal["stop"] = 65961.196562
+    signal["target"] = 66567.25722
+    quote = Quote("mt5", signal["symbol"], 66580.0, 66600.0, NOW, "mt5_tick")
+    coordinator = _coordinator(tmp_path, [signal], _Gateway(quote), database="nikkei-past-target.db")
+    preview = coordinator.preview(signal)
+    assert preview["executable"] is False
+    assert preview["error"] == "LIVE_GEOMETRY_INVALID"
 
 
 def test_adverse_mid_move_still_rejects_quote_drift(tmp_path) -> None:

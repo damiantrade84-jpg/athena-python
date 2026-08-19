@@ -429,13 +429,24 @@ class GrokExecutionCoordinator:
         stop = float(signal["stop"])
         target = float(signal["target"])
         if direction == "LONG":
-            correct_side = stop < entry < target
-            live_rr = (target - entry) / (entry - stop) if correct_side else 0.0
+            in_channel = stop < entry < target
+            live_rr = (target - entry) / (entry - stop) if in_channel else 0.0
         else:
-            correct_side = target < entry < stop
-            live_rr = (entry - target) / (stop - entry) if correct_side else 0.0
+            in_channel = target < entry < stop
+            live_rr = (entry - target) / (stop - entry) if in_channel else 0.0
         minimum_rr = float(self.config.levels["minimum_rr"])
-        geometry_ok = correct_side and live_rr >= minimum_rr
+        target_rr = float(self.config.levels["target_rr"])
+        live_target = target
+        rebased_target = False
+        risk = abs(entry - stop)
+        if in_channel and live_rr < minimum_rr and risk > 0:
+            # With-trend fill toward the original target compresses leftover R:R.
+            # Keep the scanned stop; rebase TP from the live fill at target_rr.
+            sign = 1.0 if direction == "LONG" else -1.0
+            live_target = entry + sign * target_rr * risk
+            live_rr = target_rr
+            rebased_target = True
+        geometry_ok = in_channel and live_rr >= minimum_rr
         gates.append(
             {
                 "name": "live_geometry",
@@ -443,6 +454,7 @@ class GrokExecutionCoordinator:
                 "reason": None if geometry_ok else "LIVE_GEOMETRY_INVALID",
                 "liveRr": round(live_rr, 4),
                 "minimumRr": minimum_rr,
+                "rebasedTarget": rebased_target,
             }
         )
         executable = all(bool(gate["passed"]) for gate in gates)
@@ -454,6 +466,8 @@ class GrokExecutionCoordinator:
             "quoteEpoch": quote.timestamp,
             "executableEntry": entry,
             "liveRr": round(live_rr, 4),
+            "liveStop": stop,
+            "liveTarget": live_target,
         }
 
     def _broker_payload(self, signal: dict[str, Any], preview: dict[str, Any]) -> dict[str, Any]:
@@ -489,8 +503,8 @@ class GrokExecutionCoordinator:
             "price": float(preview["executableEntry"]),
             "livePrice": float(preview["executableEntry"]),
             "sl": float(signal["stop"]),
-            "tp1": float(signal["target"]),
-            "tp2": float(signal["target"]),
+            "tp1": float(preview.get("liveTarget") if preview.get("liveTarget") is not None else signal["target"]),
+            "tp2": float(preview.get("liveTarget") if preview.get("liveTarget") is not None else signal["target"]),
             "rr": float(preview["liveRr"]),
             "confluenceScore": float(signal["score"]),
             "maxScore": 100.0,
@@ -650,7 +664,7 @@ class GrokExecutionCoordinator:
                     "quantity": quantity,
                     "riskCash": risk_cash,
                     "stop": signal["stop"],
-                    "target": signal["target"],
+                    "target": preview.get("liveTarget", signal["target"]),
                     "quote": preview["quote"],
                     "message": "Paper fill recorded; no broker order was placed.",
                 }

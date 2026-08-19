@@ -129,6 +129,8 @@ export interface GrokPreview {
   detail?: string;
   executableEntry?: number;
   liveRr?: number;
+  liveStop?: number;
+  liveTarget?: number;
   quote?: {
     venue: string;
     symbol: string;

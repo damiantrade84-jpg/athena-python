@@ -722,6 +722,10 @@ export default function GrokEnginePanel() {
                         {preview.gates?.some((gate) => gate.name === 'quote_drift' && gate.passed === false)
                           ? ` · drift ${Number(preview.gates.find((gate) => gate.name === 'quote_drift')?.driftAtr ?? 0).toFixed(2)} ATR`
                           : ''}
+                        {preview.liveRr != null ? ` · live R:R ${preview.liveRr.toFixed(2)}` : ''}
+                        {preview.gates?.some((gate) => gate.name === 'live_geometry' && gate.rebasedTarget === true)
+                          ? ` · live TP ${grokPrice(preview.liveTarget)}`
+                          : ''}
                       </div>
                     ) : null}
                   </div>

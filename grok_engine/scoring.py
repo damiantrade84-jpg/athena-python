@@ -157,6 +157,17 @@ def _execution_geometry(
             "atr": atr,
         }
     stop_atr = risk / atr
+    max_stop_atr = float(levels["maximum_stop_atr"])
+    if stop_atr > max_stop_atr:
+        capped = entry - direction * max_stop_atr * atr
+        covers_raid = (direction > 0 and capped <= event_extreme) or (
+            direction < 0 and capped >= event_extreme
+        )
+        on_side = (direction > 0 and capped < entry) or (direction < 0 and capped > entry)
+        if covers_raid and on_side:
+            stop = capped
+            risk = abs(entry - stop)
+            stop_atr = max_stop_atr
     target_rr = float(levels["target_rr"])
     target = entry + direction * target_rr * risk
     opposing_buffer = atr * float(levels["opposing_pool_buffer_atr"])
@@ -174,7 +185,7 @@ def _execution_geometry(
     valid_side = stop < entry < target if direction > 0 else target < entry < stop
     if stop_atr < float(levels["minimum_stop_atr"]):
         reason = "STOP_TOO_TIGHT"
-    elif stop_atr > float(levels["maximum_stop_atr"]):
+    elif stop_atr > max_stop_atr + 1e-9:
         reason = "STOP_TOO_WIDE"
     elif not valid_side:
         reason = "LEVELS_WRONG_SIDE"
