@@ -11,6 +11,7 @@ Endpoints
     GET  /api/opus/signals     recently stored signals
     POST /api/opus/execute     submit ONE signal (paper by default)
     GET  /api/opus/orders      order history
+    POST /api/opus/reconcile   sweep working orders (fill / expire / hold)
     GET  /api/opus/account     broker account state
     POST /api/opus/resolve     label matured signals (feeds calibration)
     GET  /api/opus/calibration calibration and evidence per bucket
@@ -27,12 +28,38 @@ import opus.config as config
 from opus import engine
 from opus.data.feed import FeedError, fetch_bundle
 from opus.data.store import default_store
-from opus.execution import router
+from opus.execution import reconcile, router
 from opus.scoring import resolver
 from opus.types import plain
 from opus.version import ENGINE_NAME, ENGINE_VERSION, SCORE_MODEL_VERSION
 
 _last_scan: dict = {"result": None, "ts": 0.0}
+_last_sweep: dict = {"ts": 0.0}
+
+def _sweep_if_due(force: bool = False) -> dict | None:
+    """Reconcile working orders, at most once per configured interval.
+
+    The status poll is the reconciler's heartbeat, but it must not turn every
+    poll into a round of venue calls. One sweep per interval is enough: a
+    resting order's expiry is measured in minutes.
+    """
+    now = time.time()
+    interval = float(
+        config.load()["EXECUTION"].get("reconcile_interval_sec", 20.0) or 0.0
+    )
+    if not force and (now - float(_last_sweep["ts"])) < interval:
+        return None
+    try:
+        store = default_store()
+        if not force and int(store.stats().get("working", 0) or 0) <= 0:
+            _last_sweep["ts"] = now
+            return None
+        report = reconcile.reconcile(store, now=now)
+    except Exception as exc:  # noqa: BLE001 - a sweep failure is not fatal
+        _last_sweep["ts"] = now
+        return {"error": str(exc)}
+    _last_sweep["ts"] = now
+    return report.as_dict()
 
 
 def _payload() -> dict:
@@ -52,6 +79,10 @@ def create_opus_blueprint() -> Blueprint:
     @bp.get("/status")
     def status():
         armed, why = router.live_enabled()
+        # The panel polls this, so it is the heartbeat a resting order gets:
+        # without a sweep somewhere on a timer, a working order is only ever
+        # resolved when a human happens to click something.
+        sweep = _sweep_if_due()
         try:
             stats = default_store().stats()
         except Exception as exc:  # noqa: BLE001
@@ -68,6 +99,7 @@ def create_opus_blueprint() -> Blueprint:
             "universe": config.universe(),
             "universeSource": config.universe_source(),
             "store": stats,
+            "reconcile": sweep,
             "lastScanTs": _last_scan["ts"],
             "serverTs": time.time(),
         })
@@ -170,6 +202,14 @@ def create_opus_blueprint() -> Blueprint:
             "order": result.as_dict(),
             "signal": match.as_dict(),
         }), (200 if result.ok else 422)
+
+    @bp.post("/reconcile")
+    def reconcile_orders():
+        """Sweep working orders: fill, expire, or leave alone."""
+        report = _sweep_if_due(force=True)
+        if report is not None and "error" in report:
+            return _error(f"reconcile failed: {report['error']}", 500)
+        return jsonify({"ok": True, "report": report or {}})
 
     @bp.get("/orders")
     def orders():

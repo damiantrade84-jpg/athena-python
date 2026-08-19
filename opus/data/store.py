@@ -185,6 +185,27 @@ class Store:
                 ),
             )
 
+    def update_order(self, order_id: str, *, status: str, **fields) -> None:
+        """Move an order to a new state.
+
+        Only the columns a reconciler legitimately learns about are settable,
+        so a sweep cannot rewrite the size, the stop or the signal an order
+        came from.
+        """
+        allowed = {"entry", "stop", "target", "units", "broker_ref"}
+        sets = ["status = ?"]
+        args: list = [str(status)]
+        for key, value in fields.items():
+            if key not in allowed or value is None:
+                continue
+            sets.append(f"{key} = ?")
+            args.append(value)
+        args.append(str(order_id))
+        with self._cursor() as conn:
+            conn.execute(
+                f"UPDATE orders SET {', '.join(sets)} WHERE order_id = ?", args
+            )
+
     def record_outcome(self, signal_id: str, outcome: cal.Outcome) -> None:
         with self._cursor() as conn:
             conn.execute(
@@ -353,12 +374,16 @@ class Store:
             signals = conn.execute("SELECT COUNT(*) AS n FROM signals").fetchone()["n"]
             outcomes = conn.execute("SELECT COUNT(*) AS n FROM outcomes").fetchone()["n"]
             orders = conn.execute("SELECT COUNT(*) AS n FROM orders").fetchone()["n"]
+            working = conn.execute(
+                "SELECT COUNT(*) AS n FROM orders WHERE status = 'working'"
+            ).fetchone()["n"]
             trades = conn.execute(
                 "SELECT COUNT(*) AS n FROM signals WHERE decision = 'TRADE'"
             ).fetchone()["n"]
         return {
             "signals": int(signals), "tradeSignals": int(trades),
             "outcomes": int(outcomes), "orders": int(orders),
+            "working": int(working),
             "path": self.path, "scoreModel": SCORE_MODEL_VERSION,
         }
 

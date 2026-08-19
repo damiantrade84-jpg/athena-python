@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { ErrorBanner, Details } from '@/components/shared';
 import {
   Activity, AlertTriangle, CheckCircle2, ChevronRight, CircleSlash,
-  Gauge, Layers, Play, RefreshCw, ShieldCheck, Target, Waves, XCircle,
+  Gauge, Layers, Play, RefreshCw, ShieldCheck, Target, Timer, Waves, XCircle,
 } from 'lucide-react';
 
 const OPUS = 'hsl(199 89% 52%)';
@@ -539,12 +539,16 @@ export default function OpusEnginePanel() {
         </Card>
       )}
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
         {[
           { label: 'Universe', value: status?.universe?.length ?? '—', icon: Layers },
           { label: 'Scanned', value: scan?.scanned ?? '—', icon: Activity },
           { label: 'Signals', value: scan?.signals?.length ?? '—', icon: Gauge },
           { label: 'Tradeable', value: scan ? tradeCount : '—', icon: Target },
+          // OPUS entries rest at the planned price rather than filling at the
+          // market, so an order can be live at the broker with nothing on
+          // screen to say so. This is that count.
+          { label: 'Resting', value: status?.store?.working ?? '—', icon: Timer },
           {
             label: 'Scan time',
             value: scan ? `${num(scan.elapsedSec, 2)}s` : '—',

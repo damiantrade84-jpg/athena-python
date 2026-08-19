@@ -1,18 +1,33 @@
 """Live MT5 order placement for OPUS.
 
-Attaches the stop and target to the order itself rather than managing them in
-process. If this application dies between entry and exit, a broker-side stop
-still protects the position; an in-process stop does not.
+Two things are pushed onto the broker deliberately.
+
+The stop and target are attached to the order itself rather than managed in
+process: if this application dies between entry and exit, a broker-side stop
+still protects the position.
+
+The ENTRY is a resting order, at the price the geometry chose, with a
+broker-side expiry. OPUS entries are limits and stops - a reclaim level, a void
+midpoint, a break beyond a coil - and filling those at the market instead
+changes the stop distance, the reward multiple and the size that every gate
+was evaluated against.
 """
 
 from __future__ import annotations
 
+import time
+from datetime import datetime, timezone
+
 import opus.config as config
-from opus.data.mt5_feed import ensure_connected, resolve_symbol
+from opus.data.mt5_feed import ensure_connected, resolve_symbol, server_time_offset
 from opus.execution.broker import Broker, OrderResult, new_order_id
+from opus.execution.orders import LIMIT, MARKET, STOP, OrderPlan
 from opus.types import Direction, Signal
 
 SOURCE = "MT5"
+
+# MT5 expiration_mode is a bitmask; 4 is SYMBOL_EXPIRATION_SPECIFIED.
+_EXPIRATION_SPECIFIED = 4
 
 
 def _mt5():
@@ -63,7 +78,15 @@ class MT5Broker(Broker):
             return mt5.ORDER_FILLING_FOK
         return mt5.ORDER_FILLING_RETURN
 
-    def place(self, signal: Signal, *, units: float) -> OrderResult:
+    def _order_type(self, mt5, plan: OrderPlan, is_long: bool):
+        """The MT5 order type this plan means. No plan maps to two types."""
+        if plan.kind == MARKET:
+            return mt5.ORDER_TYPE_BUY if is_long else mt5.ORDER_TYPE_SELL
+        if plan.kind == LIMIT:
+            return mt5.ORDER_TYPE_BUY_LIMIT if is_long else mt5.ORDER_TYPE_SELL_LIMIT
+        return mt5.ORDER_TYPE_BUY_STOP if is_long else mt5.ORDER_TYPE_SELL_STOP
+
+    def place(self, signal: Signal, *, units: float, plan: OrderPlan) -> OrderResult:
         order_id = new_order_id()
         cfg = config.load()["EXECUTION"]
 
@@ -74,6 +97,9 @@ class MT5Broker(Broker):
                 units=float(units), message=message, signal_id=signal.signal_id,
                 detail=detail or {},
             )
+
+        if plan.rejected:
+            return _reject(plan.reason or "no executable order plan")
 
         try:
             ensure_connected()
@@ -115,42 +141,76 @@ class MT5Broker(Broker):
         tick_size = float(getattr(info, "trade_tick_size", 0) or 0)
         tick_value = float(getattr(info, "trade_tick_value", 0) or 0)
 
-        stop_distance = abs(float(signal.levels.entry) - float(signal.levels.stop))
+        # The order price is the PLAN's price - the resting level for a pending
+        # order, the crossed spread for a market one - and the risk is measured
+        # against that same price, so the size expresses the risk actually
+        # taken rather than the risk of a fill that never happens.
+        order_price = float(plan.price if plan.kind != MARKET else price)
+        stop_distance = abs(order_price - float(signal.levels.stop))
         equity = self._equity()
         risk_fraction = float(signal.risk_pct) / 100.0
 
-        sizing_basis = "tick_value"
-        if tick_size > 0 and tick_value > 0 and stop_distance > 0 and equity > 0 and risk_fraction > 0:
-            risk_amount = equity * risk_fraction
-            ticks = stop_distance / tick_size
-            lots_raw = risk_amount / (ticks * tick_value)
-        else:
-            # Fall back only when the symbol does not publish tick economics.
-            # Labelled so a mis-sized order is attributable rather than silent.
-            sizing_basis = "units_per_contract_fallback"
-            lots_raw = float(units) / contract
+        # No fallback. Sizing from base-currency units is only correct when the
+        # account currency equals the quote currency; on this ZAR account it
+        # oversized every USD-quoted position by the USDZAR rate - measured at
+        # 16.27x. trade_tick_value carries the conversion, so when the symbol
+        # or the account will not tell us the tick economics, the honest answer
+        # is that this order cannot be sized, not that it can be guessed.
+        if tick_size <= 0 or tick_value <= 0:
+            return _reject(
+                f"{broker_symbol} publishes no tick economics "
+                f"(tick_size={tick_size}, tick_value={tick_value}); "
+                f"refusing to size an order without them"
+            )
+        if equity <= 0:
+            return _reject(
+                "MT5 account equity could not be read; refusing to size an "
+                "order against an unknown account"
+            )
+        if stop_distance <= 0 or risk_fraction <= 0:
+            return _reject(
+                f"no usable risk geometry (stop distance {stop_distance:.8g}, "
+                f"risk {risk_fraction * 100:.3f}%)"
+            )
+
+        risk_amount = equity * risk_fraction
+        ticks = stop_distance / tick_size
+        lots_raw = risk_amount / (ticks * tick_value)
 
         volume = round(round(lots_raw / step) * step, 8)
         volume = max(vol_min, min(vol_max, volume))
         if lots_raw < vol_min:
             return _reject(
                 f"size {lots_raw:.4f} lots is below the broker minimum {vol_min} "
-                f"(basis={sizing_basis}, risk {risk_fraction * 100:.2f}% of "
-                f"{equity:.2f})"
+                f"(risk {risk_fraction * 100:.2f}% of {equity:.2f})"
             )
 
+        is_pending = plan.is_pending
         request = {
-            "action": mt5.TRADE_ACTION_DEAL,
+            "action": mt5.TRADE_ACTION_PENDING if is_pending else mt5.TRADE_ACTION_DEAL,
             "symbol": broker_symbol,
             "volume": volume,
-            "type": mt5.ORDER_TYPE_BUY if is_long else mt5.ORDER_TYPE_SELL,
-            "price": round(price, digits),
-            "deviation": int(cfg.get("deviation_points", 20)),
+            "type": self._order_type(mt5, plan, is_long),
+            "price": round(order_price, digits),
             "magic": 20260818,
             "comment": f"OPUS {signal.archetype.value[:12]}",
-            "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": self._filling_mode(mt5, info),
         }
+        if is_pending:
+            # Expiry is read by the terminal in the BROKER's timezone. OPUS
+            # normalises broker timestamps to UTC on the way in, so the offset
+            # has to go back on here or the order expires hours early - or is
+            # rejected outright as a time already past.
+            allowed = int(getattr(info, "expiration_mode", 0) or 0)
+            if plan.expires_ts and (allowed & _EXPIRATION_SPECIFIED):
+                request["type_time"] = mt5.ORDER_TIME_SPECIFIED
+                request["expiration"] = int(plan.expires_ts + server_time_offset())
+            else:
+                # The reconciler cancels it instead; see execution/reconcile.py.
+                request["type_time"] = mt5.ORDER_TIME_GTC
+        else:
+            request["type_time"] = mt5.ORDER_TIME_GTC
+            request["deviation"] = int(cfg.get("deviation_points", 20))
         if bool(cfg.get("attach_stop", True)):
             request["sl"] = round(float(signal.levels.stop), digits)
         if bool(cfg.get("attach_target", True)) and signal.levels.targets:
@@ -176,17 +236,25 @@ class MT5Broker(Broker):
             )
 
         return OrderResult(
-            ok=True, order_id=order_id, status="filled", broker=self.name,
+            ok=True, order_id=order_id,
+            status="working" if is_pending else "filled", broker=self.name,
             mode="live", symbol=signal.symbol, direction=signal.direction.value,
-            units=float(volume), entry=float(getattr(result, "price", price)),
+            units=float(volume),
+            entry=float(order_price if is_pending else getattr(result, "price", price)),
             stop=request.get("sl"), target=request.get("tp"),
-            order_type="market", broker_ref=str(getattr(result, "order", "")),
-            message="filled", signal_id=signal.signal_id,
+            order_type=plan.kind, broker_ref=str(getattr(result, "order", "")),
+            message=(
+                f"resting {plan.kind} order at {order_price:.8g}"
+                if is_pending else "filled"
+            ),
+            signal_id=signal.signal_id,
             detail={
                 "brokerSymbol": broker_symbol,
                 "deal": str(getattr(result, "deal", "")),
                 "requestedUnits": float(units),
-                "sizingBasis": sizing_basis,
+                "sizingBasis": "tick_value",
+                "planKind": plan.kind,
+                "expiresTs": plan.expires_ts,
                 "accountKind": self.account_kind(),
                 "accountEquity": float(equity),
                 "riskPct": float(signal.risk_pct),
@@ -197,8 +265,144 @@ class MT5Broker(Broker):
                 "submittedLots": float(volume),
                 "filledLots": float(getattr(result, "volume", volume)),
                 "plannedEntry": float(signal.levels.entry),
+                "marketAtSubmit": float(price),
             },
         )
+
+    def realised_pnl_today(self, now: float | None = None) -> float | None:
+        """Account-wide realised P&L since the broker's own midnight.
+
+        Deal times, and the datetimes `history_deals_get` filters on, are in
+        the SERVER's timezone. Asking for UTC midnight on a UTC+3 server drops
+        the first three hours of the trading day - and those hours contain the
+        Asia session that a European-morning loss would have started in.
+
+        Commission and swap are included. A day that looks flat on gross
+        profit can be well down once costs are paid, and it is the net figure
+        the loss cap is about.
+        """
+        now = float(now if now is not None else time.time())
+        try:
+            ensure_connected()
+            mt5 = _mt5()
+        except Exception:  # noqa: BLE001
+            return None
+
+        utc_midnight = datetime.fromtimestamp(now, tz=timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).timestamp()
+        offset = server_time_offset()
+        date_from = datetime.fromtimestamp(utc_midnight + offset, tz=timezone.utc)
+        date_to = datetime.fromtimestamp(now + offset + 60.0, tz=timezone.utc)
+
+        try:
+            deals = mt5.history_deals_get(
+                date_from=date_from.replace(tzinfo=None),
+                date_to=date_to.replace(tzinfo=None),
+            )
+        except Exception:  # noqa: BLE001 - unavailable history is not a flat day
+            return None
+        if deals is None:
+            return None
+
+        total = 0.0
+        for deal in deals:
+            total += float(getattr(deal, "profit", 0.0) or 0.0)
+            total += float(getattr(deal, "commission", 0.0) or 0.0)
+            total += float(getattr(deal, "swap", 0.0) or 0.0)
+        return float(total)
+
+    def order_state(self, order_row: dict) -> dict:
+        """What the terminal says became of a pending order.
+
+        Two lookups, in order: the live pending list, then order history. An
+        order in neither is NOT evidence that it is gone - a terminal that has
+        just reconnected, or a history window that does not reach back far
+        enough, both look identical to "cancelled" - so that case reports
+        `unknown` and the reconciler leaves the row alone.
+        """
+        ticket = str(order_row.get("broker_ref") or "").strip()
+        if not ticket.isdigit():
+            return {"status": "unknown", "detail": "no ticket recorded"}
+
+        try:
+            ensure_connected()
+            mt5 = _mt5()
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "unknown", "detail": f"MT5 unavailable: {exc}"}
+
+        try:
+            if mt5.orders_get(ticket=int(ticket)):
+                return {"status": "working"}
+            history = mt5.history_orders_get(ticket=int(ticket)) or ()
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "unknown", "detail": str(exc)}
+
+        if not history:
+            return {"status": "unknown", "detail": "no terminal record"}
+
+        record = history[0]
+        state = int(getattr(record, "state", -1))
+        if state == int(getattr(mt5, "ORDER_STATE_FILLED", 4)):
+            price = float(getattr(record, "price_open", 0.0) or 0.0)
+            return {"status": "filled", "entry": price or None}
+        if state in (
+            int(getattr(mt5, "ORDER_STATE_CANCELED", 2)),
+            int(getattr(mt5, "ORDER_STATE_EXPIRED", 6)),
+            int(getattr(mt5, "ORDER_STATE_REJECTED", 5)),
+        ):
+            return {"status": "cancelled", "detail": f"order state {state}"}
+        return {"status": "working", "detail": f"order state {state}"}
+
+    def cancel(self, order_row: dict) -> OrderResult:
+        """Remove a working pending order from the broker."""
+        order_id = str(order_row.get("order_id") or new_order_id())
+
+        def _result(ok: bool, status: str, message: str) -> OrderResult:
+            return OrderResult(
+                ok=ok, order_id=order_id, status=status, broker=self.name,
+                mode=str(order_row.get("mode") or "live"),
+                symbol=str(order_row.get("symbol") or ""),
+                direction=str(order_row.get("direction") or ""),
+                units=float(order_row.get("units") or 0.0),
+                entry=order_row.get("entry"), stop=order_row.get("stop"),
+                target=order_row.get("target"),
+                order_type=str(order_row.get("order_type") or ""),
+                broker_ref=order_row.get("broker_ref"), message=message,
+                signal_id=order_row.get("signal_id"),
+                submitted_ts=float(order_row.get("submitted_ts") or time.time()),
+            )
+
+        ticket = str(order_row.get("broker_ref") or "").strip()
+        if not ticket.isdigit():
+            # Without a ticket there is nothing to remove, and reporting a
+            # cancel would leave a live order running while the store says it
+            # is gone - the one state this must never produce.
+            return _result(False, str(order_row.get("status") or "working"),
+                           "no MT5 ticket recorded for this order")
+
+        try:
+            ensure_connected()
+            mt5 = _mt5()
+        except Exception as exc:  # noqa: BLE001
+            return _result(False, str(order_row.get("status") or "working"),
+                           f"MT5 unavailable: {exc}")
+
+        result = mt5.order_send({
+            "action": mt5.TRADE_ACTION_REMOVE,
+            "order": int(ticket),
+        })
+        if result is None:
+            code, message = mt5.last_error()
+            return _result(False, str(order_row.get("status") or "working"),
+                           f"MT5 cancel returned nothing ({code}: {message})")
+
+        retcode = int(getattr(result, "retcode", -1))
+        if retcode != mt5.TRADE_RETCODE_DONE:
+            return _result(False, str(order_row.get("status") or "working"),
+                           f"MT5 refused the cancel ({retcode}): "
+                           f"{getattr(result, 'comment', '')}")
+        return _result(True, "cancelled", "cancelled at the broker")
 
     def account(self) -> dict:
         try:

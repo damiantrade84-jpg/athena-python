@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import time
-
 import numpy as np
 import requests
 
-from opus.data.feed import Feed, FeedError
+from opus.data.feed import Feed, FeedError, venue_time
 from opus.types import Candles, Quote
 
 SOURCE = "BINANCE"
@@ -23,15 +21,21 @@ _session = requests.Session()
 _session.headers.update({"User-Agent": "OPUS/1.0"})
 
 
-def _get(path: str, params: dict):
+def _request(path: str, params: dict):
+    """(payload, venue timestamp). Binance publishes no timestamp on
+    bookTicker, so the HTTP `Date` header is the venue clock available."""
     try:
         response = _session.get(f"{_BASE}{path}", params=params, timeout=_TIMEOUT)
         response.raise_for_status()
-        return response.json()
+        return response.json(), venue_time(None, response)
     except requests.RequestException as exc:
         raise FeedError(f"Binance request failed: {exc}") from exc
     except ValueError as exc:
         raise FeedError("Binance returned a non-JSON response") from exc
+
+
+def _get(path: str, params: dict):
+    return _request(path, params)[0]
 
 
 class BinanceFeed(Feed):
@@ -77,7 +81,7 @@ class BinanceFeed(Feed):
         )
 
     def quote(self, symbol: str) -> Quote | None:
-        payload = _get("/api/v3/ticker/bookTicker", {"symbol": symbol})
+        payload, venue_ts = _request("/api/v3/ticker/bookTicker", {"symbol": symbol})
         try:
             bid = float(payload.get("bidPrice") or 0.0)
             ask = float(payload.get("askPrice") or 0.0)
@@ -85,7 +89,10 @@ class BinanceFeed(Feed):
             return None
         if bid <= 0 or ask <= 0 or ask < bid:
             return None
-        return Quote(symbol=symbol, bid=bid, ask=ask, ts=time.time(), source=SOURCE)
+        if venue_ts is None:
+            # Without the venue's clock, `quote_age` cannot fail on this feed.
+            return None
+        return Quote(symbol=symbol, bid=bid, ask=ask, ts=venue_ts, source=SOURCE)
 
     def book(self, symbol: str, depth: int = 10) -> dict | None:
         try:

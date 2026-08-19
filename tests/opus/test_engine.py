@@ -713,8 +713,16 @@ def test_revalidation_rejects_blocking_gates():
 
 
 def test_paper_fill_crosses_the_spread_and_adds_slippage():
-    signal = _make_signal()
-    result = PaperBroker().place(signal, units=10_000.0)
+    from opus.execution.orders import resolve_order_plan
+
+    signal = _make_signal(
+        levels=Levels(entry=1.10, stop=1.0980, targets=[1.1040],
+                      entry_kind="market"),
+    )
+    result = PaperBroker().place(
+        signal, units=10_000.0,
+        plan=resolve_order_plan(signal, signal.quote),
+    )
     assert result.ok is True
     # A long must fill at or above the ask, never at mid and never at the limit.
     assert result.entry is not None
@@ -722,8 +730,17 @@ def test_paper_fill_crosses_the_spread_and_adds_slippage():
 
 
 def test_paper_broker_refuses_zero_size_and_missing_quote():
-    assert PaperBroker().place(_make_signal(), units=0.0).ok is False
-    assert PaperBroker().place(_make_signal(quote=None), units=100.0).ok is False
+    from opus.execution.orders import resolve_order_plan
+
+    signal = _make_signal()
+    plan = resolve_order_plan(signal, signal.quote)
+    assert PaperBroker().place(signal, units=0.0, plan=plan).ok is False
+
+    no_quote = _make_signal(quote=None)
+    assert PaperBroker().place(
+        no_quote, units=100.0,
+        plan=resolve_order_plan(no_quote, None),
+    ).ok is False
 
 
 def test_duplicate_execution_is_blocked(tmp_store):
@@ -889,11 +906,38 @@ def client():
     return app.test_client()
 
 
-def test_status_endpoint(client):
-    body = client.get("/api/opus/status").get_json()
+def test_status_endpoint(client, monkeypatch):
+    """Both live switches are set explicitly.
+
+    Reading them from the ambient environment made this assertion a statement
+    about the developer's machine: on a box with MODE: live in opus.local.yaml
+    and OPUS_LIVE_CONFIRM exported, a correct engine failed its own test.
+    """
+    monkeypatch.delenv("OPUS_LIVE_CONFIRM", raising=False)
+    cfg = config.load()
+    original = cfg.get("MODE")
+    try:
+        cfg["MODE"] = "paper"
+        body = client.get("/api/opus/status").get_json()
+    finally:
+        cfg["MODE"] = original
+
     assert body["ok"] is True
     assert body["engine"] == "OPUS"
     assert body["liveArmed"] is False
+
+
+def test_status_reports_live_when_both_switches_are_set(client, monkeypatch):
+    monkeypatch.setenv("OPUS_LIVE_CONFIRM", "yes")
+    cfg = config.load()
+    original = cfg.get("MODE")
+    try:
+        cfg["MODE"] = "live"
+        body = client.get("/api/opus/status").get_json()
+    finally:
+        cfg["MODE"] = original
+
+    assert body["liveArmed"] is True
 
 
 def test_scan_endpoint(client):

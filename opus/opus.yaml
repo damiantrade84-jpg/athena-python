@@ -398,12 +398,18 @@ OPUS:
       bybit: bybit
       binance: paper
     paper_slippage_bps: 0.50
-    order_type: limit          # limit | market
-    limit_expiry_sec: 900
+    # Order type is NOT configurable: it comes from the setup's geometry. A
+    # reclaim and a void midpoint are limits, a break beyond a coil is a stop,
+    # and a value fade is the one genuine market entry. See execution/orders.py.
+    limit_expiry_sec: 900      # how long a resting entry stays live
     attach_stop: true
     attach_target: true
     deviation_points: 20       # MT5 max price deviation on market orders
     dedupe_window_sec: 300
+    # How often the status poll may sweep working orders. A resting order's
+    # expiry is measured in minutes, so this only has to be frequent enough
+    # that the UI is not showing a stale order state.
+    reconcile_interval_sec: 20
 
   # ---------------------------------------------------------------------
   # Validation. Applied to the stored outcome history before an archetype is

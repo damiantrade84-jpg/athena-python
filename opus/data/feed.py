@@ -22,6 +22,47 @@ class FeedError(RuntimeError):
     """Raised when a venue cannot supply usable data."""
 
 
+def venue_time(payload_ms, response=None) -> float | None:
+    """The VENUE's clock for a REST response, in epoch seconds, or None.
+
+    A quote timestamped with our own clock cannot fail a freshness gate: a
+    response served from a cache, a feed that has stopped moving and a healthy
+    tick all read as zero seconds old. Only the venue's own clock can
+    contradict us, so it is taken from the payload where the venue publishes
+    one and from the HTTP `Date` header - which every HTTP/1.1 response carries
+    - where it does not. None means the quote is not datable, and the caller
+    fails closed rather than inventing a timestamp.
+    """
+    try:
+        if payload_ms is not None:
+            seconds = float(payload_ms) / 1000.0
+            if seconds > 0:
+                return seconds
+    except (TypeError, ValueError):
+        pass
+
+    header = None
+    try:
+        header = (getattr(response, "headers", None) or {}).get("Date")
+    except Exception:  # noqa: BLE001
+        header = None
+    if not header:
+        return None
+    try:
+        import email.utils
+
+        parsed = email.utils.parsedate_to_datetime(header)
+    except (TypeError, ValueError):
+        return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        from datetime import timezone as _tz
+
+        parsed = parsed.replace(tzinfo=_tz.utc)
+    return float(parsed.timestamp())
+
+
 @dataclass
 class DataBundle:
     """Everything one symbol needs for a full evaluation."""

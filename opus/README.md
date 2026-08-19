@@ -116,6 +116,19 @@ then bounded by `min_stop_sigma` / `max_stop_sigma`.
 | `VALUE_FADE` | market at the band | beyond the excursion extreme | session VWAP |
 | `VACUUM_BREAK` | stop beyond the coil | opposite side of the coil | measured move, capped at resting liquidity |
 
+Three of the four are RESTING orders, and they are sent to the broker as
+resting orders - a limit or a stop at the planned price, with the stop and
+target attached and a broker-side expiry. This is not cosmetic. Filling a
+limit entry at the market instead changes the stop distance, so it changes the
+reward multiple that cleared `min_rr`, the cost in R that cleared `max_cost_r`
+and the size that expressed `risk_pct_max`. Measured on synthetic paths, the
+median gap between planned entry and live mid was 0.72R for `SWEEP_RECLAIM`
+and 0.55R for `VACUUM_BREAK`.
+
+An order that cannot rest is refused rather than downgraded: a buy limit above
+the market would fill instantly, and a buy stop below it means the break has
+already happened. Both are reported with their reason (`opus/execution/orders.py`).
+
 `min_stop_sigma` exists for an economic reason, not a cosmetic one: cost in R is
 *inverse* to stop distance, so a stop inside the instrument's own noise hands
 most of the risk budget to the spread before the idea can work.
@@ -166,7 +179,22 @@ by construction. Reported by default (`VALIDATION.enforce: false`); set
 - **Signals are re-validated at submit time**, re-derived from a fresh scan —
   never from a client-supplied payload.
 - **Deduplication** on signal id (keyed to the trigger bar), plus portfolio
-  caps: concurrent positions, per symbol, correlation group, cooldown, daily.
+  caps: concurrent positions, per symbol, correlation group, cooldown, daily
+  signal count, and an account-wide **daily loss cap** measured from the
+  broker's own realised P&L. A venue that cannot report the day's P&L blocks
+  live routing rather than being assumed flat.
+- **Size is capped by the risk model.** `units` on `/api/opus/execute` may ask
+  for LESS than the authorised size and never more.
+- **Sizing needs tick economics.** Lots come from `trade_tick_value`, which is
+  denominated in the account currency. If the symbol or the account will not
+  report it, the order is refused - dividing a risk amount by a stop distance
+  is only correct when account currency equals quote currency, and on a ZAR
+  account trading USD pairs it oversized every position by 16.27x.
+- **Working orders are swept**, not forgotten: `POST /api/opus/reconcile`, and
+  automatically on the status poll. An order leaves `working` only on positive
+  evidence - the level traded, or the venue confirmed. Anything unknown stays
+  working, because a store that shows no exposure where exposure exists
+  defeats every portfolio cap at once.
 - Credentials come from the environment only (`OPUS_BYBIT_KEY`,
   `OPUS_BYBIT_SECRET`) and are never written to config or returned in a payload.
 
@@ -182,6 +210,7 @@ by construction. Reported by default (`VALIDATION.enforce: false`); set
 | GET | `/api/opus/signals` | recently stored signals |
 | POST | `/api/opus/execute` | submit one signal; `{signalId, symbol, live?, units?}` |
 | GET | `/api/opus/orders` | order history |
+| POST | `/api/opus/reconcile` | sweep working orders: fill, expire, or hold |
 | GET | `/api/opus/account` | broker account state |
 | POST | `/api/opus/resolve` | label matured signals, refit calibration |
 | GET | `/api/opus/calibration` | calibration and evidence per bucket |

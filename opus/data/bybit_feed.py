@@ -6,12 +6,10 @@ out of the box for crypto data even when no API key is configured.
 
 from __future__ import annotations
 
-import time
-
 import numpy as np
 import requests
 
-from opus.data.feed import Feed, FeedError
+from opus.data.feed import Feed, FeedError, venue_time
 from opus.types import Candles, Quote
 
 SOURCE = "BYBIT"
@@ -28,7 +26,13 @@ _session = requests.Session()
 _session.headers.update({"User-Agent": "OPUS/1.0"})
 
 
-def _get(path: str, params: dict) -> dict:
+def _request(path: str, params: dict) -> tuple[dict, float | None]:
+    """(result, venue timestamp). The timestamp is the VENUE's clock.
+
+    Bybit stamps the response envelope in milliseconds; where that is missing
+    the HTTP `Date` header carries the same information. One of the two has to
+    be present for a quote to be datable at all - see `venue_time`.
+    """
     try:
         response = _session.get(f"{_BASE}{path}", params=params, timeout=_TIMEOUT)
         response.raise_for_status()
@@ -40,7 +44,11 @@ def _get(path: str, params: dict) -> dict:
 
     if int(payload.get("retCode", -1)) != 0:
         raise FeedError(f"Bybit error {payload.get('retCode')}: {payload.get('retMsg')}")
-    return payload.get("result") or {}
+    return payload.get("result") or {}, venue_time(payload.get("time"), response)
+
+
+def _get(path: str, params: dict) -> dict:
+    return _request(path, params)[0]
 
 
 def _category(symbol: str) -> str:
@@ -96,7 +104,7 @@ class BybitFeed(Feed):
         )
 
     def quote(self, symbol: str) -> Quote | None:
-        result = _get(
+        result, venue_ts = _request(
             "/v5/market/tickers", {"category": _category(symbol), "symbol": symbol}
         )
         rows = result.get("list") or []
@@ -110,7 +118,11 @@ class BybitFeed(Feed):
             return None
         if bid <= 0 or ask <= 0 or ask < bid:
             return None
-        return Quote(symbol=symbol, bid=bid, ask=ask, ts=time.time(), source=SOURCE)
+        if venue_ts is None:
+            # Stamping the local clock here would make `quote_age` inert on
+            # this venue: every quote, however stale, would read as fresh.
+            return None
+        return Quote(symbol=symbol, bid=bid, ask=ask, ts=venue_ts, source=SOURCE)
 
     def book(self, symbol: str, depth: int = 10) -> dict | None:
         try:

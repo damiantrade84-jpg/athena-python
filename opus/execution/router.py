@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 import opus.config as config
 from opus.execution.broker import Broker, OrderResult, PaperBroker, new_order_id
+from opus.execution.orders import resolve_order_plan
 from opus.risk.sizing import correlation_group_of
 from opus.types import Decision, Readiness, Signal
 
@@ -98,10 +99,21 @@ def revalidate(signal: Signal, *, now: float | None = None) -> tuple[bool, str]:
     if quote is None:
         return False, "no live quote at submit time"
 
-    age = quote.age_sec(now)
+    # Signed skew, not the clamped age. `Quote.age_sec` floors at zero, so a
+    # future-dated quote reads as "0 seconds old" and passes - the same
+    # fail-open the scan-time gate rejects. A broker reporting server-local
+    # time read as UTC dates every tick hours ahead, and an arbitrarily stale
+    # quote would then be accepted here at the last moment before an order.
+    skew = float(now) - float(quote.ts)
     max_age = float(gates_cfg["max_quote_age_sec"])
-    if age > max_age:
-        return False, f"quote is {age:.1f}s old at submit (limit {max_age:.0f}s)"
+    future_tolerance = float(gates_cfg.get("max_quote_future_sec", 2.0))
+    if skew < -future_tolerance:
+        return False, (
+            f"quote is dated {abs(skew):.1f}s in the FUTURE at submit - "
+            f"broker clock or timezone mismatch"
+        )
+    if skew > max_age:
+        return False, f"quote is {skew:.1f}s old at submit (limit {max_age:.0f}s)"
 
     if quote.spread_pct > float(gates_cfg["max_spread_pct"]):
         return False, (
@@ -113,6 +125,44 @@ def revalidate(signal: Signal, *, now: float | None = None) -> tuple[bool, str]:
         return False, "stop distance is zero"
 
     return True, "revalidated"
+
+
+def daily_loss_ok(broker) -> tuple[bool, str]:
+    """Whether today's realised loss still leaves room to trade.
+
+    Measured ACCOUNT-WIDE rather than per engine. The thing being protected is
+    the account's capital, and a per-engine cap on a shared account can be
+    evaded by running two engines that are each under their own limit.
+
+    Unmeasurable is not zero. If the venue cannot report the day's P&L, this
+    refuses: 'we could not check the loss cap' and 'the loss cap is fine' are
+    different states, and only one of them is safe to act on.
+    """
+    cap_pct = float(config.load()["RISK"].get("max_daily_loss_pct", 0.0) or 0.0)
+    if cap_pct <= 0:
+        return True, "daily loss cap disabled (max_daily_loss_pct <= 0)"
+
+    try:
+        pnl = broker.realised_pnl_today()
+    except Exception as exc:  # noqa: BLE001
+        return False, f"daily loss could not be measured: {exc}"
+    if pnl is None:
+        return False, "daily loss could not be measured at this venue"
+
+    try:
+        equity = float((broker.account() or {}).get("equity") or 0.0)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"daily loss could not be measured: account read failed ({exc})"
+    if equity <= 0:
+        return False, "daily loss could not be measured: account equity is unknown"
+
+    loss_pct = max(0.0, -float(pnl)) / equity * 100.0
+    if loss_pct >= cap_pct:
+        return False, (
+            f"daily loss {loss_pct:.2f}% of equity has reached the "
+            f"{cap_pct:.2f}% cap"
+        )
+    return True, f"daily loss {loss_pct:.2f}% is within the {cap_pct:.2f}% cap"
 
 
 def portfolio_limits(signal: Signal, open_orders: list[dict]) -> tuple[bool, str]:
@@ -286,7 +336,8 @@ def submit(
             message=f"portfolio limit: {why}", signal_id=signal.signal_id,
         )
 
-    size = float(units if units is not None else signal.size_units)
+    authorised = float(signal.size_units)
+    size = float(units if units is not None else authorised)
     if size <= 0:
         return OrderResult(
             ok=False, order_id=new_order_id(), status="rejected",
@@ -294,10 +345,70 @@ def submit(
             symbol=signal.symbol, direction=signal.direction.value,
             message="no size authorised for this signal", signal_id=signal.signal_id,
         )
+    # `units` arrives from the API caller. The risk model - fractional Kelly
+    # capped by risk_pct_max - decided what this signal may risk, so a caller
+    # may trade LESS than that but never more. Taken at face value the field
+    # allowed 6451x the authorised size with no reference to the cap at all.
+    if size > authorised * (1.0 + 1e-9):
+        return OrderResult(
+            ok=False, order_id=new_order_id(), status="rejected",
+            broker=decision.broker_name, mode=decision.mode,
+            symbol=signal.symbol, direction=signal.direction.value,
+            message=(
+                f"requested size {size:.6g} exceeds the authorised size "
+                f"{authorised:.6g} for this signal"
+            ),
+            signal_id=signal.signal_id,
+        )
+
+    # The order type and price are decided once, here, and handed to the venue.
+    # A pending plan that cannot rest is a rejection, never a market order.
+    plan = resolve_order_plan(signal, signal.quote, now=now)
+    if plan.rejected:
+        return OrderResult(
+            ok=False, order_id=new_order_id(), status="rejected",
+            broker=decision.broker_name, mode=decision.mode,
+            symbol=signal.symbol, direction=signal.direction.value,
+            message=f"no executable order: {plan.reason}",
+            signal_id=signal.signal_id,
+        )
 
     broker = _broker_for(str(signal.provenance.get("venue", "")), decision.mode == "live")
-    result = broker.place(signal, units=size)
+    # Resolving the broker a second time can yield a different adapter to the
+    # one `route` approved - an unavailable live adapter falls back to paper.
+    # Stamping that paper fill "live" would record an order that never reached
+    # a broker as though it had.
+    if broker.is_live != (decision.mode == "live"):
+        return OrderResult(
+            ok=False, order_id=new_order_id(), status="rejected",
+            broker=broker.name, mode=decision.mode,
+            symbol=signal.symbol, direction=signal.direction.value,
+            message=(
+                f"routing resolved to the {broker.name} adapter after "
+                f"'{decision.mode}' was approved; refusing to mislabel the order"
+            ),
+            signal_id=signal.signal_id,
+        )
+
+    # The account-level loss cap is checked against the venue that would take
+    # the order, so it is only meaningful - and only checkable - on a live
+    # route. A paper order risks none of the capital this protects.
+    if decision.mode == "live":
+        within, why = daily_loss_ok(broker)
+        if not within:
+            return OrderResult(
+                ok=False, order_id=new_order_id(), status="rejected",
+                broker=broker.name, mode=decision.mode,
+                symbol=signal.symbol, direction=signal.direction.value,
+                message=f"portfolio limit: {why}", signal_id=signal.signal_id,
+            )
+
+    # The venue is needed to reconcile this order later: it decides which feed
+    # prices a paper fill and which adapter can cancel a live one.
+    result = broker.place(signal, units=size, plan=plan)
     result.mode = decision.mode
+    result.detail.setdefault("venue", str(signal.provenance.get("venue", "")))
+    result.detail.setdefault("assetClass", signal.asset_class)
 
     if store is not None:
         try:
