@@ -22,12 +22,109 @@ _initialised = False
 _symbol_cache: dict[str, str] = {}
 _offset_lock = threading.Lock()
 _server_offset: float | None = None
+_clock_drift: float = 0.0
 _offset_stamp: float = 0.0
 _OFFSET_TTL_SEC = 900.0
+# Ceiling on the sub-minute clock-drift correction. It exists to fix a few
+# seconds of disagreement between this machine's clock and the broker's, so a
+# cap well below max_quote_age_sec keeps a bad measurement from ageing an
+# otherwise fresh quote past the freshness gate.
+_MAX_CLOCK_DRIFT_SEC = 10.0
+# A plausible broker timezone offset. Anything outside this is a measurement
+# fault, not a timezone, and is rejected rather than applied.
+_MAX_TZ_OFFSET_SEC = 14 * 3600.0
+_OFFSET_SAMPLE_SYMBOLS = 12
+
+
+def _measure_offsets(now: float) -> tuple[float, float] | None:
+    """(timezone offset, clock drift) in seconds, or None if unmeasurable.
+
+    Both come from the same probe. For a tick observed at true instant t:
+
+        tick.time = t + tz + drift          (broker clock, broker timezone)
+        raw       = tick.time - now = tz + drift - age
+
+    so the FRESHEST tick in the sample (age -> 0) is the best estimator of
+    tz + drift. That is why this takes the maximum raw rather than the median:
+    a median over a set that includes an out-of-session instrument is biased
+    downward by that instrument's staleness, and with a 117-pair universe the
+    sample now routinely contains closed markets.
+    """
+    mt5 = _mt5()
+    samples: list[float] = []
+
+    # Prefer symbols already in use, then fill from the broker's list. Both
+    # paths need the terminal up - see the ensure_connected() call in the
+    # caller; probing before that returns an empty symbol list.
+    candidates = list(_symbol_cache.values())[:_OFFSET_SAMPLE_SYMBOLS]
+    if len(candidates) < _OFFSET_SAMPLE_SYMBOLS:
+        for info in (mt5.symbols_get() or [])[:40]:
+            if info.name not in candidates:
+                candidates.append(info.name)
+            if len(candidates) >= _OFFSET_SAMPLE_SYMBOLS:
+                break
+
+    for symbol in candidates:
+        try:
+            tick = mt5.symbol_info_tick(symbol)
+        except Exception:  # noqa: BLE001 - one bad symbol must not end the probe
+            continue
+        if tick is not None and getattr(tick, "time", 0):
+            samples.append(float(tick.time) - time.time())
+
+    if not samples:
+        return None
+
+    raw = max(samples)
+    # Snap to the nearest half hour: real broker offsets are whole or half
+    # hours, so snapping recovers the timezone without the latency noise.
+    tz = round(raw / 1800.0) * 1800.0
+    if abs(tz) > _MAX_TZ_OFFSET_SEC:
+        return None
+
+    # Whatever the snap left over is this machine's clock disagreeing with the
+    # broker's. Correct ONLY when the broker runs ahead (a positive residual):
+    # that is the case that makes a live quote look future-dated and trips the
+    # freshness gate. A negative residual is either a broker running behind -
+    # which already makes quotes look older, the conservative direction - or a
+    # sample set with no fresh tick in it at all, e.g. a weekend. Applying a
+    # negative correction there would make a stale quote read as fresh, which
+    # is the one failure mode this gate exists to prevent.
+    drift = raw - tz
+    drift = min(max(drift, 0.0), _MAX_CLOCK_DRIFT_SEC)
+    return float(tz), float(drift)
+
+
+def _refresh_offsets(force: bool = False) -> tuple[float, float]:
+    global _server_offset, _clock_drift, _offset_stamp
+    now = time.time()
+    with _offset_lock:
+        if not force and _server_offset is not None and                 (now - _offset_stamp) < _OFFSET_TTL_SEC:
+            return _server_offset, _clock_drift
+
+        # The terminal must be up before probing. Without this the symbol list
+        # comes back empty, the probe finds nothing, and a 0.0 offset gets
+        # cached for the full TTL - during which every MT5 timestamp is left
+        # uncorrected and every quote reads hours in the future.
+        try:
+            ensure_connected()
+        except Exception:  # noqa: BLE001
+            return (_server_offset or 0.0), _clock_drift
+
+        measured = _measure_offsets(now)
+        if measured is None:
+            # Do NOT cache a failed measurement. Returning an uncorrected 0.0
+            # makes quotes look future-dated and fail closed, which is correct;
+            # pinning it for 15 minutes is not.
+            return (_server_offset or 0.0), _clock_drift
+
+        _server_offset, _clock_drift = measured
+        _offset_stamp = now
+        return _server_offset, _clock_drift
 
 
 def server_time_offset(force: bool = False) -> float:
-    """Seconds to SUBTRACT from MT5 timestamps to reach true UTC.
+    """Seconds to SUBTRACT from MT5 BAR timestamps to reach true UTC.
 
     MT5 reports bar times and tick times in the BROKER'S server timezone, not
     UTC, and the API exposes no timezone field. Read as epoch UTC, an MT5
@@ -36,44 +133,30 @@ def server_time_offset(force: bool = False) -> float:
     as zero seconds old and passes), session assignment for SAV, and the
     time-of-day buckets TCI learns from.
 
-    The offset is measured by comparing a fresh tick's timestamp against the
-    machine's own UTC clock, then snapped to the nearest 30 minutes - real
-    broker offsets are whole or half hours, so snapping removes the latency
-    noise in the measurement without hiding a genuine offset.
+    Bars sit on the server's own hour boundaries, so they take the snapped
+    timezone offset only. Quotes additionally carry the clock drift - see
+    quote_time_offset.
     """
-    global _server_offset, _offset_stamp
-    now = time.time()
-    with _offset_lock:
-        if not force and _server_offset is not None and (now - _offset_stamp) < _OFFSET_TTL_SEC:
-            return _server_offset
+    return _refresh_offsets(force)[0]
 
-        mt5 = _mt5()
-        samples: list[float] = []
-        for symbol in list(_symbol_cache.values())[:3] or []:
-            tick = mt5.symbol_info_tick(symbol)
-            if tick is not None and getattr(tick, "time", 0):
-                samples.append(float(tick.time) - time.time())
 
-        if not samples:
-            # No cached symbol yet: probe the first visible one.
-            for info in (mt5.symbols_get() or [])[:40]:
-                tick = mt5.symbol_info_tick(info.name)
-                if tick is not None and getattr(tick, "time", 0):
-                    samples.append(float(tick.time) - time.time())
-                    break
+def quote_time_offset(force: bool = False) -> float:
+    """Seconds to SUBTRACT from MT5 TICK timestamps to reach true UTC.
 
-        if not samples:
-            _server_offset = 0.0
-            _offset_stamp = now
-            return 0.0
+    The timezone offset plus this machine's clock drift against the broker's.
+    Snapping the timezone to the nearest half hour deliberately discards the
+    residual, but for a tick that residual is not noise: it is the reason a
+    quote that arrived a moment ago can read as several seconds in the FUTURE
+    and be rejected by the freshness gate as a clock mismatch. Bars are
+    unaffected because they are stamped on server hour boundaries.
+    """
+    tz, drift = _refresh_offsets(force)
+    return tz + drift
 
-        raw = float(np.median(samples))
-        # Snap to the nearest half hour; a live tick can lag by seconds, and an
-        # unsnapped offset would drift that noise into every timestamp.
-        offset = round(raw / 1800.0) * 1800.0
-        _server_offset = float(offset)
-        _offset_stamp = now
-        return _server_offset
+
+def clock_drift_sec(force: bool = False) -> float:
+    """Measured broker-ahead-of-local clock drift, for diagnostics."""
+    return _refresh_offsets(force)[1]
 
 
 def _mt5():
@@ -200,7 +283,7 @@ class MT5Feed(Feed):
             ts = float(getattr(tick, "time", 0) or 0.0)
         if ts <= 0:
             return None          # no usable timestamp: fail closed, not "now"
-        ts -= server_time_offset()
+        ts -= quote_time_offset()
         return Quote(symbol=symbol, bid=bid, ask=ask, ts=ts, source=SOURCE)
 
     def book(self, symbol: str, depth: int = 10) -> dict | None:
