@@ -236,7 +236,9 @@ export type PanelId =
   | 'edgeLab'
   | 'ghostTrade'
   | 'solEngine'
-  | 'opusEngine';
+  | 'opusEngine'
+  | 'kimiEngine'
+  | 'grokEngine';
 
 /**
  * Derived data-fidelity diagnostic for a Cascade Scan candidate.

@@ -1,0 +1,362 @@
+"""Native GROK indicators: session pools, raids, displacement, voids, CISD."""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from .config import GrokConfig
+from .models import Candle
+from .sessions import envelope_for_window
+
+
+def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, float(value)))
+
+
+def true_ranges(candles: list[Candle]) -> list[float]:
+    if not candles:
+        return []
+    out: list[float] = []
+    previous_close = candles[0].close
+    for candle in candles:
+        out.append(
+            max(
+                candle.high - candle.low,
+                abs(candle.high - previous_close),
+                abs(candle.low - previous_close),
+            )
+        )
+        previous_close = candle.close
+    return out
+
+
+def wilder_atr(candles: list[Candle], period: int = 14) -> float:
+    period = max(2, int(period))
+    ranges = true_ranges(candles)
+    if len(ranges) < period:
+        return 0.0
+    atr = sum(ranges[:period]) / period
+    for value in ranges[period:]:
+        atr = ((period - 1) * atr + value) / period
+    return float(atr)
+
+
+def external_liquidity(daily: list[Candle]) -> dict[str, Any]:
+    if len(daily) < 2:
+        return {"available": False, "reason": "INSUFFICIENT_DAILY_BARS"}
+    prior = daily[-1]
+    week = daily[-5:] if len(daily) >= 5 else daily
+    return {
+        "available": True,
+        "pdh": prior.high,
+        "pdl": prior.low,
+        "pdc": prior.close,
+        "weeklyHigh": max(candle.high for candle in week),
+        "weeklyLow": min(candle.low for candle in week),
+    }
+
+
+def session_pools(candles: list[Candle], epoch: float, config: GrokConfig) -> dict[str, Any]:
+    asia = envelope_for_window(candles, epoch, config, "asia_range")
+    return {
+        "asia": asia,
+        "asiaHigh": asia.get("high"),
+        "asiaLow": asia.get("low"),
+        "asiaAvailable": bool(asia.get("available")),
+    }
+
+
+def raid_signature(
+    candles: list[Candle],
+    pools: dict[str, Any],
+    external: dict[str, Any],
+    *,
+    atr: float,
+    lookback: int,
+    recent_bars: int,
+    min_excursion_atr: float,
+) -> dict[str, Any]:
+    if len(candles) < 6 or atr <= 0:
+        return {"available": False, "direction": 0, "strength": 0.0, "reason": "RAID_INPUT_UNAVAILABLE"}
+    candidates: list[tuple[float, int, dict[str, Any]]] = []
+    sample = candles[-max(8, lookback) :]
+    pool_lows = [value for value in (pools.get("asiaLow"), external.get("pdl"), external.get("weeklyLow")) if isinstance(value, (int, float))]
+    pool_highs = [value for value in (pools.get("asiaHigh"), external.get("pdh"), external.get("weeklyHigh")) if isinstance(value, (int, float))]
+    for offset, candle in enumerate(sample):
+        age = len(sample) - 1 - offset
+        for pool in pool_lows:
+            if candle.low < pool <= candle.close:
+                excursion = (pool - candle.low) / atr
+                if excursion < min_excursion_atr:
+                    continue
+                reclaim = clamp((candle.close - pool) / max(atr * 0.35, 1e-12))
+                recency = clamp(1.0 - age / max(recent_bars, 1))
+                strength = clamp(0.48 * clamp(excursion / 0.45) + 0.32 * reclaim + 0.20 * recency)
+                candidates.append(
+                    (
+                        strength,
+                        1,
+                        {
+                            "kind": "SELL_SIDE_RAID",
+                            "pool": pool,
+                            "extreme": candle.low,
+                            "reclaimClose": candle.close,
+                            "excursionAtr": excursion,
+                            "eventIndex": len(candles) - len(sample) + offset,
+                            "eventAgeBars": age,
+                        },
+                    )
+                )
+        for pool in pool_highs:
+            if candle.high > pool >= candle.close:
+                excursion = (candle.high - pool) / atr
+                if excursion < min_excursion_atr:
+                    continue
+                reclaim = clamp((pool - candle.close) / max(atr * 0.35, 1e-12))
+                recency = clamp(1.0 - age / max(recent_bars, 1))
+                strength = clamp(0.48 * clamp(excursion / 0.45) + 0.32 * reclaim + 0.20 * recency)
+                candidates.append(
+                    (
+                        strength,
+                        -1,
+                        {
+                            "kind": "BUY_SIDE_RAID",
+                            "pool": pool,
+                            "extreme": candle.high,
+                            "reclaimClose": candle.close,
+                            "excursionAtr": excursion,
+                            "eventIndex": len(candles) - len(sample) + offset,
+                            "eventAgeBars": age,
+                        },
+                    )
+                )
+    if not candidates:
+        return {"available": False, "direction": 0, "strength": 0.0, "reason": "NO_RAID"}
+    recent = [item for item in candidates if int(item[2]["eventAgeBars"]) <= max(1, recent_bars)]
+    strength, direction, evidence = max(
+        recent or candidates,
+        key=lambda item: (-int(item[2]["eventAgeBars"]), item[0]),
+    )
+    return {"available": True, "direction": direction, "strength": strength, **evidence}
+
+
+def impulse_vector(
+    candles: list[Candle],
+    *,
+    atr: float,
+    min_run: int,
+    body_fraction: float,
+    range_atr: float,
+    single_range_atr: float,
+) -> dict[str, Any]:
+    if len(candles) < 5 or atr <= 0:
+        return {"available": False, "direction": 0, "strength": 0.0, "reason": "IMPULSE_INPUT_UNAVAILABLE"}
+
+    def _expansive(candle: Candle) -> bool:
+        return candle.range >= atr * range_atr and candle.body >= candle.range * body_fraction
+
+    sample = candles[-16:]
+    best: dict[str, Any] | None = None
+    index = 0
+    while index < len(sample):
+        candle = sample[index]
+        if not _expansive(candle) or candle.direction == 0:
+            index += 1
+            continue
+        run = [candle]
+        cursor = index + 1
+        while (
+            cursor < len(sample)
+            and sample[cursor].direction in {0, candle.direction}
+            and _expansive(sample[cursor])
+        ):
+            run.append(sample[cursor])
+            cursor += 1
+        used_direction = candle.direction
+        origin = run[0].low if used_direction > 0 else run[0].high
+        terminus = run[-1].high if used_direction > 0 else run[-1].low
+        span = abs(terminus - origin)
+        efficiency = clamp(sum(row.body for row in run) / max(span, 1e-12))
+        strength = clamp(0.45 * clamp(span / (atr * 1.8)) + 0.35 * efficiency + 0.20 * clamp(len(run) / 4.0))
+        age = len(sample) - cursor
+        recency = clamp(1.0 - age / 8.0)
+        candidate = {
+            "available": True,
+            "direction": used_direction,
+            "strength": strength,
+            "origin": origin,
+            "terminus": terminus,
+            "spanAtr": span / atr,
+            "efficiency": efficiency,
+            "bars": len(run),
+            "ageBars": age,
+            "_rank": strength * (0.72 + 0.28 * recency),
+        }
+        if best is None or float(candidate["_rank"]) > float(best.get("_rank") or 0.0):
+            best = candidate
+        index = max(cursor, index + 1)
+
+    singles = [
+        candle
+        for candle in sample
+        if candle.range >= atr * single_range_atr and candle.body >= candle.range * body_fraction
+    ]
+    if singles:
+        single = singles[-1]
+        used_direction = single.direction or (1 if single.close >= single.open else -1)
+        span = single.range
+        efficiency = clamp(single.body / max(span, 1e-12))
+        strength = clamp(0.50 * clamp(span / (atr * 1.8)) + 0.35 * efficiency + 0.15)
+        candidate = {
+            "available": True,
+            "direction": used_direction,
+            "strength": strength,
+            "origin": single.low if used_direction > 0 else single.high,
+            "terminus": single.high if used_direction > 0 else single.low,
+            "spanAtr": span / atr,
+            "efficiency": efficiency,
+            "bars": 1,
+            "ageBars": len(sample) - 1 - sample.index(single),
+            "_rank": strength,
+        }
+        if best is None or float(candidate["_rank"]) >= float(best.get("_rank") or 0.0):
+            best = candidate
+
+    if best is None:
+        return {"available": False, "direction": 0, "strength": 0.0, "reason": "NO_DISPLACEMENT"}
+    if int(best.get("bars") or 0) < min_run and int(best.get("bars") or 0) < 1:
+        return {"available": False, "direction": 0, "strength": 0.0, "reason": "NO_DISPLACEMENT"}
+    best.pop("_rank", None)
+    return best
+
+
+def void_map(candles: list[Candle], *, lookback: int, atr: float) -> dict[str, Any]:
+    if len(candles) < 6 or atr <= 0:
+        return {"available": False, "direction": 0, "strength": 0.0, "reason": "VOID_INPUT_UNAVAILABLE"}
+    start = max(2, len(candles) - lookback)
+    voids: list[dict[str, Any]] = []
+    for index in range(start, len(candles)):
+        left = candles[index - 2]
+        right = candles[index]
+        if left.high < right.low:
+            low, high, direction = left.high, right.low, 1
+        elif left.low > right.high:
+            low, high, direction = right.high, left.low, -1
+        else:
+            continue
+        width = high - low
+        if width < atr * 0.08:
+            continue
+        subsequent = candles[index + 1 :]
+        if direction > 0:
+            fill_extreme = min((candle.low for candle in subsequent), default=high)
+            filled = max(0.0, high - fill_extreme)
+        else:
+            fill_extreme = max((candle.high for candle in subsequent), default=low)
+            filled = max(0.0, fill_extreme - low)
+        fill_fraction = clamp(filled / max(width, 1e-12))
+        ce = (high + low) / 2.0
+        last = candles[-1].close
+        inside = low <= last <= high
+        voids.append(
+            {
+                "direction": direction,
+                "low": low,
+                "high": high,
+                "ce": ce,
+                "widthAtr": width / atr,
+                "fillFraction": fill_fraction,
+                "open": fill_fraction < 0.999,
+                "inside": inside,
+                "ageBars": len(candles) - 1 - index,
+                "index": index,
+            }
+        )
+    if not voids:
+        return {"available": False, "direction": 0, "strength": 0.0, "reason": "NO_VOID"}
+    open_voids = [row for row in voids if row["open"]]
+    chosen = min(open_voids or voids, key=lambda row: (row["ageBars"], -row["widthAtr"]))
+    location = 1.0 if chosen["inside"] else clamp(1.0 - abs(candles[-1].close - chosen["ce"]) / max(atr * 1.6, 1e-12))
+    freshness = clamp(1.0 - chosen["ageBars"] / 18.0)
+    openness = 1.0 - chosen["fillFraction"]
+    strength = clamp(0.42 * location + 0.33 * openness + 0.25 * freshness)
+    return {"available": True, "strength": strength, **chosen}
+
+
+def dealing_range(candles: list[Candle], *, lookback: int, ote_inner: float, ote_outer: float) -> dict[str, Any]:
+    if len(candles) < 12:
+        return {"available": False, "reason": "DEALING_RANGE_UNAVAILABLE"}
+    sample = candles[-lookback:]
+    high = max(candle.high for candle in sample)
+    low = min(candle.low for candle in sample)
+    width = high - low
+    if width <= 0:
+        return {"available": False, "reason": "DEALING_RANGE_FLAT"}
+    close = sample[-1].close
+    position = (close - low) / width
+    ote_low = high - ote_outer * width
+    ote_high = high - ote_inner * width
+    in_ote = ote_low <= close <= ote_high
+    return {
+        "available": True,
+        "high": high,
+        "low": low,
+        "mid": (high + low) / 2.0,
+        "position": position,
+        "discount": position <= 0.50,
+        "premium": position >= 0.50,
+        "inOte": in_ote,
+        "oteLow": ote_low,
+        "oteHigh": ote_high,
+    }
+
+
+def cisd_state(
+    candles: list[Candle],
+    raid: dict[str, Any],
+    impulse: dict[str, Any],
+    *,
+    lookback: int,
+) -> dict[str, Any]:
+    if len(candles) < 8:
+        return {"available": False, "confirmed": False, "strength": 0.0, "reason": "CISD_INPUT_UNAVAILABLE"}
+    direction = int(raid.get("direction") or impulse.get("direction") or 0)
+    if direction == 0:
+        return {"available": False, "confirmed": False, "strength": 0.0, "reason": "CISD_DIRECTION_UNRESOLVED"}
+    origin = impulse.get("origin")
+    if not isinstance(origin, (int, float)):
+        sample = candles[-lookback:]
+        opposite = [candle for candle in sample if candle.direction == -direction]
+        if not opposite:
+            return {"available": False, "confirmed": False, "strength": 0.0, "reason": "CISD_ORIGIN_UNAVAILABLE"}
+        origin = opposite[-1].open
+    last = candles[-1]
+    if direction > 0:
+        confirmed = last.close > float(origin)
+        forming = last.high > float(origin) and not confirmed
+    else:
+        confirmed = last.close < float(origin)
+        forming = last.low < float(origin) and not confirmed
+    strength = 1.0 if confirmed else 0.42 if forming else 0.0
+    return {
+        "available": True,
+        "confirmed": confirmed,
+        "forming": forming,
+        "strength": strength,
+        "origin": float(origin),
+        "direction": direction,
+    }
+
+
+def dealing_quality(dealing: dict[str, Any], direction: int) -> float:
+    if not dealing.get("available") or direction == 0:
+        return 0.0
+    position = float(dealing.get("position") or 0.5)
+    if direction > 0:
+        if dealing.get("inOte"):
+            return 1.0
+        return clamp(1.0 - position / 0.72)
+    if dealing.get("inOte"):
+        return 1.0
+    return clamp(position / 0.72)

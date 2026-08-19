@@ -33,6 +33,7 @@ import GhostTradePanel from '@/components/panels/GhostTradePanel';
 import OpusEnginePanel from '@/components/panels/OpusEnginePanel';
 import SolEnginePanel from '@/components/panels/SolEnginePanel';
 import KimiEnginePanel from '@/components/panels/KimiEnginePanel';
+import GrokEnginePanel from '@/components/panels/GrokEnginePanel';
 
 const panels: Record<string, React.ComponentType> = {
   dashboard: DashboardPanel,
@@ -68,6 +69,7 @@ const panels: Record<string, React.ComponentType> = {
   opusEngine: OpusEnginePanel,
   solEngine: SolEnginePanel,
   kimiEngine: KimiEnginePanel,
+  grokEngine: GrokEnginePanel,
 };
 
 export default function Home() {

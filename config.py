@@ -3310,6 +3310,7 @@ _KNOWN_YAML_ONLY_KEYS = {
     "THRESHOLD_AUDIT",
     "TIMED_EXIT",
     "VISION_MODIFIERS",
+    "GROK_ENGINE",
 }
 
 for _k, _v in _yaml_overrides.items():
