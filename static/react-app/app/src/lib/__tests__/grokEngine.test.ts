@@ -4,6 +4,7 @@ import {
   grokClockLabel,
   grokComponentLabel,
   grokDisplayZoneLabel,
+  grokPreviewNotice,
   grokPrice,
   grokScanProgress,
   grokSetupLabel,
@@ -74,5 +75,16 @@ describe('GROK UI helpers', () => {
         ],
       }),
     ).toHaveLength(1);
+  });
+
+  it('does not treat a rejected quote preview as an attested fill', () => {
+    expect(grokPreviewNotice({ executable: true, gates: [] })).toEqual({
+      tone: 'success',
+      message: 'Broker quote attested; execution geometry is current',
+    });
+    expect(grokPreviewNotice({ executable: false, error: 'SPREAD_TOO_WIDE', gates: [] })).toEqual({
+      tone: 'error',
+      message: 'Quote attestation rejected: SPREAD_TOO_WIDE',
+    });
   });
 });

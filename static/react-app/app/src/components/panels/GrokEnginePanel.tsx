@@ -27,6 +27,7 @@ import {
   grokDecisionClass,
   grokDisplayZoneLabel,
   grokNarrativeSteps,
+  grokPreviewNotice,
   grokPrice,
   grokScanProgress,
   grokWindowSchedule,
@@ -400,7 +401,8 @@ export default function GrokEnginePanel() {
     try {
       const result = await apiClient.post<GrokPreview>(`/api/grok/signals/${selected.signalId}/preview`, {});
       setPreview(result);
-      showToast('Broker quote attested; execution geometry is current', 'success');
+      const notice = grokPreviewNotice(result);
+      showToast(notice.message, notice.tone);
     } catch (error) {
       setPreview({ executable: false, error: errorText(error), gates: [] });
       showToast(`Quote attestation rejected: ${errorText(error)}`, 'error');

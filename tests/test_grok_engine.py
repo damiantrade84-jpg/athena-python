@@ -234,6 +234,20 @@ def test_default_contract_is_valid_and_live_requires_research_validation() -> No
         load_grok_config({"GROK_ENGINE": {"execution": {"live_enabled": True}}})
 
 
+def test_checked_in_yaml_overlay_keeps_live_locked() -> None:
+    from pathlib import Path
+    import yaml
+
+    overlay = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8")).get("GROK_ENGINE")
+    config = load_grok_config({"GROK_ENGINE": overlay})
+    assert config.enabled is True
+    assert config.execution["default_mode"] == "paper"
+    assert config.execution["live_enabled"] is False
+    assert str(config.execution["research_status"]).upper() == "UNVALIDATED"
+    assert config.sessions["display_timezone"] == "Africa/Johannesburg"
+    assert config.sessions["timezone"] == "America/New_York"
+
+
 def test_ny_silver_bullet_clock_and_weekday_session_gate() -> None:
     config = load_grok_config()
     clock = classify_session(NOW, config)
@@ -263,6 +277,23 @@ def test_sast_display_clock_does_not_move_ny_killzones() -> None:
     assert london["displayStart"] == "08:00" and london["displayEnd"] == "11:00"
     assert ny_am["nyStart"] == "07:00" and ny_am["nyEnd"] == "10:00"
     assert ny_am["displayStart"] == "13:00" and ny_am["displayEnd"] == "16:00"
+
+
+def test_post_as_of_bar_is_dropped_without_false_future_error() -> None:
+    rows = [
+        {"open_time": NOW - 600, "open": 1.10, "high": 1.12, "low": 1.09, "close": 1.11},
+        {"open_time": NOW + 20, "open": 1.11, "high": 1.12, "low": 1.10, "close": 1.115},
+    ]
+    candles, provenance, errors = normalize_closed_candles(
+        rows,
+        "M5",
+        now_epoch=NOW,
+        observed_at_epoch=NOW + 120,
+        provider="test",
+    )
+    assert len(candles) == 1
+    assert provenance["postAsOfBarsDropped"] == 1
+    assert not any(error.startswith("FUTURE_CANDLES") for error in errors)
 
 
 def test_candle_normalization_drops_forming_future_and_malformed_rows() -> None:
@@ -317,6 +348,36 @@ def test_ready_signal_is_symmetric_auditable_and_fully_gated(mirrored: bool, dir
         assert signal["target"] < signal["entry"] < signal["stop"]
 
 
+def test_same_setup_keeps_one_identity_across_trigger_refreshes() -> None:
+    config = load_grok_config()
+    snapshot = _ready_snapshot()
+    first = evaluate_snapshot(snapshot, config, generated_at_epoch=NOW)
+    frames = {timeframe: list(rows) for timeframe, rows in snapshot.frames.items()}
+    prior = frames["M5"][-1]
+    refreshed_close = prior.close + 0.00012
+    frames["M5"].append(
+        Candle(
+            NOW,
+            prior.close,
+            refreshed_close + 0.00004,
+            prior.close - 0.00002,
+            refreshed_close,
+            260,
+            "synthetic",
+        )
+    )
+    refreshed = evaluate_snapshot(
+        MarketSnapshot(snapshot.pair, frames, snapshot.provenance, NOW + 300),
+        config,
+        generated_at_epoch=NOW + 300,
+    )
+    assert first["decision"] == "READY", first["blockingReasons"]
+    assert refreshed["decision"] == "READY", refreshed["blockingReasons"]
+    assert refreshed["barClosedAt"] != first["barClosedAt"]
+    assert refreshed["setupEventAt"] == first["setupEventAt"]
+    assert refreshed["signalId"] == first["signalId"]
+
+
 def test_outside_killzone_cannot_be_ready() -> None:
     lunch = datetime(2026, 3, 17, 16, 20, tzinfo=timezone.utc).timestamp()
     snapshot = _ready_snapshot(as_of=lunch)
@@ -343,6 +404,38 @@ def test_same_bar_stop_and_target_is_scored_stop_first() -> None:
     signal = {"direction": "LONG", "entry": 100.0, "stop": 99.0, "target": 102.0}
     future = [Candle(NOW, 100.0, 103.0, 98.0, 101.0, 1, "synthetic")]
     assert _outcome(signal, future) == {"outcome": "LOSS", "rMultiple": -1.0, "barsHeld": 1, "exit": 99.0}
+
+
+def test_signal_upsert_preserves_execution_foreign_key(tmp_path) -> None:
+    repository = GrokRepository(tmp_path / "ledger.db")
+    repository.migrate()
+    signal = _ready_signal()
+    first_scan = repository.create_scan({"scan": 1})
+    repository.save_signals(first_scan, [signal])
+    reservation, created = repository.reserve_execution(
+        signal_id=signal["signalId"],
+        idempotency_key="first",
+        mode="paper",
+        venue="mt5",
+        request_payload={"signal": signal},
+    )
+    assert created is True
+    repository.complete_execution(reservation["execution_id"], "SUCCESS", {"success": True})
+
+    second_scan = repository.create_scan({"scan": 2})
+    updated = {**signal, "score": signal["score"] + 0.01}
+    repository.save_signals(second_scan, [updated])
+
+    assert repository.get_signal(signal["signalId"])["score"] == updated["score"]
+    duplicate, duplicate_created = repository.reserve_execution(
+        signal_id=signal["signalId"],
+        idempotency_key="second",
+        mode="paper",
+        venue="mt5",
+        request_payload={"signal": updated},
+    )
+    assert duplicate_created is False
+    assert duplicate["status"] == "SUCCESS"
 
 
 def test_paper_execution_attests_quote_and_never_calls_broker_order(tmp_path) -> None:
@@ -573,6 +666,18 @@ def test_grok_risk_policy_stays_fail_closed_and_not_engine_a() -> None:
     )
 
 
+def test_idempotency_key_cannot_be_reused_for_another_signal(tmp_path) -> None:
+    first_signal = _ready_signal(display="GROK-ONE")
+    second_signal = _ready_signal(display="GROK-TWO")
+    gateway = _Gateway(_passing_quote(first_signal))
+    coordinator = _coordinator(tmp_path, [first_signal, second_signal], gateway)
+    coordinator.execute(first_signal, mode="paper", idempotency_key="shared-key")
+    with pytest.raises(GrokExecutionError) as error:
+        coordinator.execute(second_signal, mode="paper", idempotency_key="shared-key")
+    assert error.value.code == "IDEMPOTENCY_KEY_CONFLICT"
+    assert gateway.execute_calls == 0
+
+
 def test_live_mode_is_disabled_by_default(tmp_path) -> None:
     signal = _ready_signal()
     gateway = _Gateway(_passing_quote(signal))
@@ -626,3 +731,59 @@ def test_api_routes_register_under_the_grok_namespace() -> None:
     assert "/api/grok/signals/<signal_id>/execute" in rules
     assert "/api/grok/accounts" in rules
     assert "/api/grok/replay" in rules
+
+
+def test_api_preview_maps_execution_errors_to_forbidden() -> None:
+    config = load_grok_config()
+
+    class Service:
+        def preview_execution(self, signal_id):
+            raise GrokExecutionError("PAIR_NOT_IN_ACTIVE_BOOK")
+
+        def execute_signal(self, *args, **kwargs):
+            raise GrokExecutionError("GROK_ENGINE_DISABLED")
+
+    service = Service()
+    service.config = config
+    app = Flask(__name__)
+    register_grok_routes(app, SimpleNamespace(service=service))
+    client = app.test_client()
+
+    preview = client.post("/api/grok/signals/test/preview", json={})
+    execute = client.post(
+        "/api/grok/signals/test/execute",
+        json={"mode": "paper", "idempotencyKey": "preview-error"},
+    )
+
+    assert preview.status_code == 403
+    assert preview.get_json()["error"] == "PAIR_NOT_IN_ACTIVE_BOOK"
+    assert execute.status_code == 403
+    assert execute.get_json()["error"] == "GROK_ENGINE_DISABLED"
+
+
+def test_api_rejected_execute_surfaces_the_gate_code() -> None:
+    config = load_grok_config()
+
+    class Service:
+        def execute_signal(self, signal_id, **kwargs):
+            return {
+                "idempotent": False,
+                "execution_id": "grokexec_test",
+                "signal_id": signal_id,
+                "status": "REJECTED",
+                "result": {"success": False, "error": "SPREAD_TOO_WIDE", "detail": None},
+            }
+
+    service = Service()
+    service.config = config
+    app = Flask(__name__)
+    register_grok_routes(app, SimpleNamespace(service=service))
+    response = app.test_client().post(
+        "/api/grok/signals/test/execute",
+        json={"mode": "paper", "idempotencyKey": "reject-code"},
+    )
+    payload = response.get_json()
+    assert response.status_code == 403
+    assert payload["success"] is False
+    assert payload["error"] == "SPREAD_TOO_WIDE"
+    assert payload["result"]["error"] == "SPREAD_TOO_WIDE"

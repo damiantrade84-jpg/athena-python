@@ -96,6 +96,8 @@ def register_grok_routes(app, runtime) -> GrokService:
             return jsonify({"success": bool(result.get("executable")), **result})
         except LookupError:
             return _error("signal_not_found", 404)
+        except GrokExecutionError as exc:
+            return _error(exc.code, 403, detail=exc.detail)
 
     def execute(signal_id: str):
         payload = request.get_json(silent=True) or {}
@@ -119,7 +121,11 @@ def register_grok_routes(app, runtime) -> GrokService:
             return jsonify({"success": True, **result})
         if result.get("idempotent") and status == "PENDING":
             return jsonify({"success": False, "error": "execution_in_progress", **result}), 409
-        return jsonify({"success": False, **result}), (403 if status == "REJECTED" else 503)
+        nested = result.get("result") if isinstance(result.get("result"), dict) else {}
+        code = nested.get("error") or result.get("error") or status or "EXECUTION_FAILED"
+        return jsonify({**result, "success": False, "error": str(code)}), (
+            403 if status == "REJECTED" else 503
+        )
 
     def executions():
         try:

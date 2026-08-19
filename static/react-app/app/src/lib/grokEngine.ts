@@ -251,6 +251,22 @@ export interface GrokWindowScheduleRow {
   displayEnd: string;
 }
 
+export function grokPreviewNotice(preview: Pick<GrokPreview, 'executable' | 'error'>): {
+  tone: 'success' | 'error';
+  message: string;
+} {
+  if (preview.executable) {
+    return {
+      tone: 'success',
+      message: 'Broker quote attested; execution geometry is current',
+    };
+  }
+  return {
+    tone: 'error',
+    message: `Quote attestation rejected: ${preview.error || 'not executable'}`,
+  };
+}
+
 export function grokWindowSchedule(clock: Record<string, unknown> | undefined): GrokWindowScheduleRow[] {
   const rows = clock?.windowSchedule;
   if (!Array.isArray(rows)) return [];
