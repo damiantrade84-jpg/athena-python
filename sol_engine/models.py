@@ -142,3 +142,4 @@ class Quote:
             "ageSec": max(0.0, now_value - self.timestamp),
             "source": self.source,
         }
+

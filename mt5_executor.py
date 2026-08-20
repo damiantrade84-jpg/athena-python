@@ -1948,6 +1948,12 @@ def mt5_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         drift = abs(price - signal_price) / signal_price
 
         if drift > 0.01:  # >1% drift — rebase levels to live price
+            if signal.get("solExecution") is True:
+                return {
+                    "success": False,
+                    "error": "SOL_SEND_DRIFT_TOO_LARGE",
+                    "drift": drift,
+                }
             sl_offset = float(signal.get("sl", 0)) - signal_price
 
             tp_offset = float(signal.get("tp1", 0)) - signal_price

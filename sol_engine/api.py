@@ -36,6 +36,9 @@ def register_sol_routes(app, runtime) -> SolService:
     def health():
         return jsonify(service.health())
 
+    def accounts():
+        return jsonify(service.accounts())
+
     def config():
         return jsonify(service.config_dict())
 
@@ -100,7 +103,11 @@ def register_sol_routes(app, runtime) -> SolService:
         payload = request.get_json(silent=True) or {}
         if not isinstance(payload, dict):
             return _error("json_object_required", 400)
-        mode = str(payload.get("mode") or service.config.execution["default_mode"]).strip().lower()
+        mode = str(
+            payload.get("mode")
+            or service.execution.capabilities()["defaultMode"]
+            or service.config.execution["default_mode"]
+        ).strip().lower()
         key = str(payload.get("idempotencyKey") or "").strip()
         try:
             result = service.execute_signal(
@@ -149,6 +156,7 @@ def register_sol_routes(app, runtime) -> SolService:
             return _error("replay_failed", 503, detail=str(exc))
 
     add("/api/sol/health", "sol_health", health)
+    add("/api/sol/accounts", "sol_accounts", accounts)
     add("/api/sol/config", "sol_config", config)
     add("/api/sol/scan", "sol_scan", scan, ("POST",))
     add("/api/sol/scan/current", "sol_scan_current", current_scan)

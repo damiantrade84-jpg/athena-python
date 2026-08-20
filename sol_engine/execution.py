@@ -81,10 +81,23 @@ class SolExecutionCoordinator:
                 or not bool(execution.get("require_validated_research_for_live", True))
             )
         )
+        configured_default = str(execution.get("default_mode") or "paper").strip().lower()
+        follow_global = bool(execution.get("follow_global_executor_mode", True))
+        if follow_global and global_mode == "demo" and bool(execution.get("demo_enabled")):
+            default_mode = "demo"
+        elif follow_global and live_static:
+            default_mode = "live"
+        elif bool(execution.get(f"{configured_default}_enabled", False)):
+            default_mode = configured_default
+        elif bool(execution.get("paper_enabled", True)):
+            default_mode = "paper"
+        else:
+            default_mode = configured_default
         return {
-            "defaultMode": str(execution.get("default_mode") or "paper"),
+            "defaultMode": default_mode,
             "globalExecutorMode": global_mode,
             "researchStatus": research_status,
+            "followGlobalExecutorMode": follow_global,
             "modes": {
                 "paper": {
                     "enabled": bool(execution.get("paper_enabled", True)),
@@ -117,7 +130,7 @@ class SolExecutionCoordinator:
             if os.environ.get("ATHENA_REAL_ORDERS_CONFIRM", "") != "I_UNDERSTAND_REAL_ORDER_RISK":
                 raise SolExecutionError("LIVE_SERVER_CONFIRMATION_MISSING")
 
-    def _static_signal_gates(self, signal: dict[str, Any]) -> list[dict[str, Any]]:
+    def _identity_gates(self, signal: dict[str, Any]) -> list[dict[str, Any]]:
         gates: list[dict[str, Any]] = []
         contract_matches = signal.get("contractVersion") == self.config.version
         gates.append(
@@ -127,6 +140,75 @@ class SolExecutionCoordinator:
                 "reason": None if contract_matches else "SIGNAL_CONTRACT_STALE",
             }
         )
+        attestable = str(signal.get("decision") or "").upper() in {"READY", "WATCH"}
+        gates.append(
+            {
+                "name": "signal_attestable",
+                "passed": attestable,
+                "reason": None if attestable else "SIGNAL_NOT_ATTESTABLE",
+            }
+        )
+        try:
+            raw_age = float(self.now_fn()) - _parse_iso(signal.get("generatedAt"))
+        except (TypeError, ValueError):
+            raw_age = math.inf
+        clock_skew = float(self.config.execution["maximum_clock_skew_sec"])
+        timestamp_valid = math.isfinite(raw_age) and raw_age >= -clock_skew
+        gates.append(
+            {
+                "name": "signal_timestamp",
+                "passed": timestamp_valid,
+                "reason": None if timestamp_valid else "SIGNAL_TIMESTAMP_INVALID",
+            }
+        )
+        age = max(0.0, raw_age) if timestamp_valid else math.inf
+        max_age = float(self.config.execution["max_signal_age_sec"])
+        gates.append(
+            {
+                "name": "signal_freshness",
+                "passed": age <= max_age,
+                "reason": None if age <= max_age else "SIGNAL_STALE",
+                "ageSec": age if math.isfinite(age) else None,
+                "maxAgeSec": max_age,
+            }
+        )
+        kill_switch = bool(self.kill_switch_fn())
+        gates.append(
+            {
+                "name": "kill_switch_clear",
+                "passed": not kill_switch,
+                "reason": "KILL_SWITCH_ACTIVE" if kill_switch else None,
+            }
+        )
+        direction_valid = str(signal.get("direction") or "").upper() in {"LONG", "SHORT"}
+        venue_valid = str(signal.get("venue") or "").lower() in {"mt5", "bybit"}
+        asset_type = str(signal.get("assetType") or "").lower()
+        venue_matches_asset = (
+            signal.get("venue") == "bybit" if asset_type == "crypto" else signal.get("venue") == "mt5"
+        )
+        gates.extend(
+            [
+                {
+                    "name": "direction_valid",
+                    "passed": direction_valid,
+                    "reason": None if direction_valid else "SIGNAL_DIRECTION_INVALID",
+                },
+                {
+                    "name": "venue_valid",
+                    "passed": venue_valid,
+                    "reason": None if venue_valid else "SIGNAL_VENUE_INVALID",
+                },
+                {
+                    "name": "venue_asset_match",
+                    "passed": venue_matches_asset,
+                    "reason": None if venue_matches_asset else "SIGNAL_VENUE_ASSET_MISMATCH",
+                },
+            ]
+        )
+        return gates
+
+    def _static_signal_gates(self, signal: dict[str, Any]) -> list[dict[str, Any]]:
+        gates = self._identity_gates(signal)
         gates.append(
             {
                 "name": "signal_ready",
@@ -162,38 +244,6 @@ class SolExecutionCoordinator:
                 },
             ]
         )
-        try:
-            raw_age = float(self.now_fn()) - _parse_iso(signal.get("generatedAt"))
-        except (TypeError, ValueError):
-            raw_age = math.inf
-        clock_skew = float(self.config.execution["maximum_clock_skew_sec"])
-        timestamp_valid = math.isfinite(raw_age) and raw_age >= -clock_skew
-        gates.append(
-            {
-                "name": "signal_timestamp",
-                "passed": timestamp_valid,
-                "reason": None if timestamp_valid else "SIGNAL_TIMESTAMP_INVALID",
-            }
-        )
-        age = max(0.0, raw_age) if timestamp_valid else math.inf
-        max_age = float(self.config.execution["max_signal_age_sec"])
-        gates.append(
-            {
-                "name": "signal_freshness",
-                "passed": age <= max_age,
-                "reason": None if age <= max_age else "SIGNAL_STALE",
-                "ageSec": age if math.isfinite(age) else None,
-                "maxAgeSec": max_age,
-            }
-        )
-        kill_switch = bool(self.kill_switch_fn())
-        gates.append(
-            {
-                "name": "kill_switch_clear",
-                "passed": not kill_switch,
-                "reason": "KILL_SWITCH_ACTIVE" if kill_switch else None,
-            }
-        )
         levels_valid = all(
             isinstance(signal.get(key), (int, float))
             and not isinstance(signal.get(key), bool)
@@ -208,46 +258,23 @@ class SolExecutionCoordinator:
                 "reason": None if levels_valid else "SIGNAL_LEVELS_INVALID",
             }
         )
-        direction_valid = str(signal.get("direction") or "").upper() in {"LONG", "SHORT"}
-        venue_valid = str(signal.get("venue") or "").lower() in {"mt5", "bybit"}
-        asset_type = str(signal.get("assetType") or "").lower()
-        venue_matches_asset = (
-            signal.get("venue") == "bybit" if asset_type == "crypto" else signal.get("venue") == "mt5"
-        )
-        gates.extend(
-            [
-                {
-                    "name": "direction_valid",
-                    "passed": direction_valid,
-                    "reason": None if direction_valid else "SIGNAL_DIRECTION_INVALID",
-                },
-                {
-                    "name": "venue_valid",
-                    "passed": venue_valid,
-                    "reason": None if venue_valid else "SIGNAL_VENUE_INVALID",
-                },
-                {
-                    "name": "venue_asset_match",
-                    "passed": venue_matches_asset,
-                    "reason": None if venue_matches_asset else "SIGNAL_VENUE_ASSET_MISMATCH",
-                },
-            ]
-        )
         return gates
 
     def preview(self, signal: dict[str, Any]) -> dict[str, Any]:
-        gates = self._static_signal_gates(signal)
-        if not all(gate["passed"] for gate in gates):
+        identity = self._identity_gates(signal)
+        if not all(gate["passed"] for gate in identity):
             return {
                 "executable": False,
-                "gates": gates,
-                "error": next(gate["reason"] for gate in gates if not gate["passed"]),
+                "gates": identity,
+                "error": next(gate["reason"] for gate in identity if not gate["passed"]),
             }
         try:
             quote = self.gateway.quote(signal)
         except Exception as exc:
-            gates.append({"name": "quote_available", "passed": False, "reason": "QUOTE_UNAVAILABLE"})
-            return {"executable": False, "gates": gates, "error": "QUOTE_UNAVAILABLE", "detail": str(exc)}
+            identity.append({"name": "quote_available", "passed": False, "reason": "QUOTE_UNAVAILABLE"})
+            return {"executable": False, "gates": identity, "error": "QUOTE_UNAVAILABLE", "detail": str(exc)}
+        gates = self._static_signal_gates(signal)
+        gates.append({"name": "quote_available", "passed": True, "reason": None})
 
         now_epoch = float(self.now_fn())
         asset_type = str(signal.get("assetType") or "unknown").lower()
@@ -304,39 +331,91 @@ class SolExecutionCoordinator:
                 "maxSpreadBps": spread_limit,
             }
         )
-        atr = float(signal["atr"])
-        signal_entry = float(signal["entry"])
-        drift_atr = abs(entry - signal_entry) / atr if atr > 0 else math.inf
-        drift_limit = float(self.config.execution["max_quote_drift_atr"])
-        drift_ok = drift_atr <= drift_limit
-        gates.append(
-            {
-                "name": "quote_drift",
-                "passed": drift_ok,
-                "reason": None if drift_ok else "QUOTE_DRIFT_EXCEEDS_LIMIT",
-                "driftAtr": round(drift_atr, 5) if math.isfinite(drift_atr) else None,
-                "maxDriftAtr": drift_limit,
-            }
+        levels_valid = all(
+            isinstance(signal.get(key), (int, float))
+            and not isinstance(signal.get(key), bool)
+            and math.isfinite(float(signal[key]))
+            and float(signal[key]) > 0
+            for key in ("entry", "stop", "target", "atr")
         )
-        stop = float(signal["stop"])
-        target = float(signal["target"])
-        if direction == "LONG":
-            correct_side = stop < entry < target
-            live_rr = (target - entry) / (entry - stop) if correct_side else 0.0
-        else:
-            correct_side = target < entry < stop
-            live_rr = (entry - target) / (stop - entry) if correct_side else 0.0
-        minimum_rr = float(self.config.levels["minimum_rr"])
-        geometry_ok = correct_side and live_rr >= minimum_rr
-        gates.append(
-            {
-                "name": "live_geometry",
-                "passed": geometry_ok,
-                "reason": None if geometry_ok else "LIVE_GEOMETRY_INVALID",
-                "liveRr": round(live_rr, 4),
-                "minimumRr": minimum_rr,
-            }
-        )
+        live_rr = 0.0
+        live_target = None
+        rebased_target = False
+        if levels_valid:
+            atr = float(signal["atr"])
+            signal_entry = float(signal["entry"])
+            scan_close = signal.get("scanClose")
+            drift_ref = (
+                float(scan_close)
+                if isinstance(scan_close, (int, float))
+                and not isinstance(scan_close, bool)
+                and math.isfinite(float(scan_close))
+                and float(scan_close) > 0
+                else signal_entry
+            )
+            mid = quote.mid
+            if direction == "LONG":
+                adverse = max(0.0, drift_ref - mid)
+            else:
+                adverse = max(0.0, mid - drift_ref)
+            drift_atr = adverse / atr if atr > 0 else math.inf
+            drift_limit = float(self.config.execution["max_quote_drift_atr"])
+            drift_ok = drift_atr <= drift_limit
+            gates.append(
+                {
+                    "name": "quote_drift",
+                    "passed": drift_ok,
+                    "reason": None if drift_ok else "QUOTE_DRIFT_EXCEEDS_LIMIT",
+                    "driftAtr": round(drift_atr, 5) if math.isfinite(drift_atr) else None,
+                    "maxDriftAtr": drift_limit,
+                    "reference": "scan_close_mid_adverse",
+                    "driftRef": drift_ref,
+                }
+            )
+            stop = float(signal["stop"])
+            target = float(signal["target"])
+            live_target = target
+            if direction == "LONG":
+                in_channel = stop < entry < target
+                live_rr = (target - entry) / (entry - stop) if in_channel else 0.0
+            else:
+                in_channel = target < entry < stop
+                live_rr = (entry - target) / (stop - entry) if in_channel else 0.0
+            levels = self.config.levels_for(asset_type)
+            minimum_rr = float(levels["minimum_rr"])
+            target_rr = float(levels["target_rr"])
+            risk = abs(entry - stop)
+            if in_channel and live_rr < minimum_rr and risk > 0:
+                sign = 1.0 if direction == "LONG" else -1.0
+                candidate = entry + sign * target_rr * risk
+                wall = signal.get("opposingLiquidity")
+                if wall is None:
+                    for component in signal.get("components") or []:
+                        if isinstance(component, dict) and component.get("name") == "execution_geometry":
+                            evidence = component.get("evidence") or {}
+                            wall = evidence.get("opposingLiquidity")
+                            break
+                buffer = atr * float(levels["opposing_liquidity_buffer_atr"])
+                if isinstance(wall, (int, float)) and not isinstance(wall, bool) and math.isfinite(float(wall)):
+                    wall = float(wall)
+                    if direction == "LONG" and wall > entry + buffer:
+                        candidate = min(candidate, wall - buffer)
+                    elif direction == "SHORT" and wall < entry - buffer:
+                        candidate = max(candidate, wall + buffer)
+                live_target = candidate
+                live_rr = abs(live_target - entry) / risk
+                rebased_target = True
+            geometry_ok = in_channel and live_rr >= minimum_rr
+            gates.append(
+                {
+                    "name": "live_geometry",
+                    "passed": geometry_ok,
+                    "reason": None if geometry_ok else "LIVE_GEOMETRY_INVALID",
+                    "liveRr": round(live_rr, 4),
+                    "minimumRr": minimum_rr,
+                    "rebasedTarget": rebased_target,
+                }
+            )
         executable = all(bool(gate["passed"]) for gate in gates)
         return {
             "executable": executable,
@@ -346,6 +425,8 @@ class SolExecutionCoordinator:
             "quoteEpoch": quote.timestamp,
             "executableEntry": entry,
             "liveRr": round(live_rr, 4),
+            "liveStop": float(signal["stop"]) if levels_valid else None,
+            "liveTarget": live_target,
         }
 
     def _broker_payload(self, signal: dict[str, Any], preview: dict[str, Any]) -> dict[str, Any]:
@@ -381,8 +462,8 @@ class SolExecutionCoordinator:
             "price": float(preview["executableEntry"]),
             "livePrice": float(preview["executableEntry"]),
             "sl": float(signal["stop"]),
-            "tp1": float(signal["target"]),
-            "tp2": float(signal["target"]),
+            "tp1": float(preview["liveTarget"] if preview.get("liveTarget") is not None else signal["target"]),
+            "tp2": float(preview["liveTarget"] if preview.get("liveTarget") is not None else signal["target"]),
             "rr": float(preview["liveRr"]),
             "confluenceScore": float(signal["score"]),
             "maxScore": 100.0,
@@ -510,7 +591,7 @@ class SolExecutionCoordinator:
         idempotency_key: str,
         confirm_live: bool = False,
     ) -> dict[str, Any]:
-        normalized_mode = str(mode or self.config.execution["default_mode"]).strip().lower()
+        normalized_mode = str(mode or self.capabilities()["defaultMode"] or self.config.execution["default_mode"]).strip().lower()
         if not idempotency_key or len(idempotency_key) > 128:
             raise SolExecutionError("IDEMPOTENCY_KEY_REQUIRED")
         self._assert_mode(normalized_mode, confirm_live=confirm_live)
@@ -542,7 +623,7 @@ class SolExecutionCoordinator:
                     "quantity": quantity,
                     "riskCash": risk_cash,
                     "stop": signal["stop"],
-                    "target": signal["target"],
+                    "target": preview["liveTarget"] if preview.get("liveTarget") is not None else signal["target"],
                     "quote": preview["quote"],
                     "message": "Paper fill recorded; no broker order was placed.",
                 }

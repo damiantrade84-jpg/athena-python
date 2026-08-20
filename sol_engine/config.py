@@ -56,6 +56,10 @@ class SolConfig:
         return bool(self.raw.get("enabled", False))
 
     @property
+    def sessions(self) -> dict[str, Any]:
+        return self.raw["sessions"]
+
+    @property
     def scan(self) -> dict[str, Any]:
         return self.raw["scan"]
 
@@ -82,9 +86,29 @@ class SolConfig:
     def public_dict(self) -> dict[str, Any]:
         return deepcopy(self.raw)
 
+    def levels_for(self, asset_type: str) -> dict[str, Any]:
+        return _asset_overlay(self.levels, asset_type)
+
+    def scoring_for(self, asset_type: str) -> dict[str, Any]:
+        return _asset_overlay(self.scoring, asset_type)
+
+
+def _asset_overlay(section: dict[str, Any], asset_type: str) -> dict[str, Any]:
+    merged = {key: deepcopy(value) for key, value in section.items() if key != "by_asset_type"}
+    overrides = section.get("by_asset_type") or {}
+    if not isinstance(overrides, dict):
+        return merged
+    asset = overrides.get(str(asset_type or "").strip().lower()) or {}
+    if isinstance(asset, dict):
+        for key, value in asset.items():
+            if key == "weights":
+                continue
+            merged[key] = deepcopy(value)
+    return merged
+
 
 def _validate(raw: dict[str, Any]) -> None:
-    required_sections = ("scan", "indicators", "scoring", "levels", "execution", "replay")
+    required_sections = ("scan", "indicators", "scoring", "levels", "execution", "replay", "sessions")
     for section in required_sections:
         if not isinstance(raw.get(section), dict):
             raise SolConfigError(f"{section} must be a mapping")
@@ -119,6 +143,42 @@ def _validate(raw: dict[str, Any]) -> None:
     for timeframe, value in freshness.items():
         _number(value, f"maximum_closed_bar_age_buckets.{timeframe}", minimum=0.0)
 
+    sessions = raw["sessions"]
+    if not str(sessions.get("timezone") or "").strip():
+        raise SolConfigError("sessions.timezone is required")
+    if not str(sessions.get("display_timezone") or "").strip():
+        raise SolConfigError("sessions.display_timezone is required")
+    _number(sessions.get("fallback_utc_offset_hours"), "sessions.fallback_utc_offset_hours")
+    _number(sessions.get("display_fallback_utc_offset_hours"), "sessions.display_fallback_utc_offset_hours")
+    for key in ("weekend_close_weekday", "weekend_open_weekday"):
+        weekday = _integer(sessions.get(key), f"sessions.{key}", minimum=0)
+        if weekday > 6:
+            raise SolConfigError(f"sessions.{key} must be 0-6")
+    for key in ("weekend_close_hour", "weekend_open_hour"):
+        hour = _integer(sessions.get(key), f"sessions.{key}", minimum=0)
+        if hour > 23:
+            raise SolConfigError(f"sessions.{key} must be 0-23")
+    _integer(sessions.get("adjacent_minutes"), "sessions.adjacent_minutes", minimum=0)
+    _number(sessions.get("adjacent_quality"), "sessions.adjacent_quality", minimum=0.0)
+    _number(sessions.get("off_session_quality"), "sessions.off_session_quality", minimum=0.0)
+    windows = sessions.get("windows")
+    if not isinstance(windows, dict) or not windows:
+        raise SolConfigError("sessions.windows must be a non-empty mapping")
+    allowed_kinds = {"range", "killzone", "silver_bullet", "dead"}
+    for name, window in windows.items():
+        if not isinstance(window, dict):
+            raise SolConfigError(f"sessions.windows.{name} must be a mapping")
+        start = _integer(window.get("start_minute"), f"sessions.windows.{name}.start_minute", minimum=0)
+        end = _integer(window.get("end_minute"), f"sessions.windows.{name}.end_minute", minimum=1)
+        if start > 1440 or end > 1440 or start == end:
+            raise SolConfigError(f"sessions.windows.{name} has an invalid minute range")
+        kind = str(window.get("kind") or "")
+        if kind not in allowed_kinds:
+            raise SolConfigError(f"sessions.windows.{name}.kind is unsupported")
+        quality = _number(window.get("quality"), f"sessions.windows.{name}.quality", minimum=0.0)
+        if quality > 1.0:
+            raise SolConfigError(f"sessions.windows.{name}.quality cannot exceed 1")
+
     indicators = raw["indicators"]
     for key in (
         "atr_period",
@@ -132,6 +192,7 @@ def _validate(raw: dict[str, Any]) -> None:
         "trigger_break_lookback",
         "participation_recent_window",
         "participation_baseline_window",
+        "session_lookback_bars",
     ):
         _integer(indicators.get(key), f"indicators.{key}")
     _number(indicators.get("participation_scale_floor"), "indicators.participation_scale_floor", minimum=1e-9)
@@ -163,6 +224,11 @@ def _validate(raw: dict[str, Any]) -> None:
     if trigger_strength > 1.0:
         raise SolConfigError("scoring.minimum_trigger_strength cannot exceed 1")
     _number(raw["scoring"].get("maximum_value_extension_z"), "scoring.maximum_value_extension_z", minimum=0.0)
+    _number(raw["scoring"].get("minimum_killzone_quality"), "scoring.minimum_killzone_quality", minimum=0.0)
+    _number(raw["scoring"].get("value_conflict_extension_z"), "scoring.value_conflict_extension_z", minimum=0.0)
+    asset_scoring = raw["scoring"].get("by_asset_type") or {}
+    if asset_scoring and not isinstance(asset_scoring, dict):
+        raise SolConfigError("scoring.by_asset_type must be a mapping")
 
     minimum_rr = _number(raw["levels"].get("minimum_rr"), "levels.minimum_rr", minimum=1.0)
     target_rr = _number(raw["levels"].get("target_rr"), "levels.target_rr", minimum=minimum_rr)
@@ -172,6 +238,17 @@ def _validate(raw: dict[str, Any]) -> None:
     maximum_stop = _number(raw["levels"].get("maximum_stop_atr"), "levels.maximum_stop_atr", minimum=minimum_stop)
     if maximum_stop < minimum_stop:
         raise SolConfigError("levels.maximum_stop_atr must be >= levels.minimum_stop_atr")
+    asset_levels = raw["levels"].get("by_asset_type") or {}
+    if asset_levels and not isinstance(asset_levels, dict):
+        raise SolConfigError("levels.by_asset_type must be a mapping")
+    if isinstance(asset_levels, dict):
+        for asset, overlay in asset_levels.items():
+            if not isinstance(overlay, dict):
+                raise SolConfigError(f"levels.by_asset_type.{asset} must be a mapping")
+            if "maximum_stop_atr" in overlay:
+                _number(overlay["maximum_stop_atr"], f"levels.by_asset_type.{asset}.maximum_stop_atr", minimum=minimum_stop)
+            if "minimum_rr" in overlay:
+                _number(overlay["minimum_rr"], f"levels.by_asset_type.{asset}.minimum_rr", minimum=1.0)
 
     execution = raw["execution"]
     default_mode = str(execution.get("default_mode") or "").strip().lower()

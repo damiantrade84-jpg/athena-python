@@ -1521,9 +1521,9 @@ def risk_check(
         elif _is_engine_b_execution_signal(signal):
             _policy_engine = "engine_b"
         elif (
-            execution_context in {"ase_bridge", "fx_factor_bridge", "grok_engine"}
+            execution_context in {"ase_bridge", "fx_factor_bridge", "grok_engine", "sol_engine"}
             or _raw_profitability_engine
-            in {"c", "engine_c", "engine_c_consensus", "consensus", "d", "engine_d", "scalp", "scalp_vp", "grok"}
+            in {"c", "engine_c", "engine_c_consensus", "consensus", "d", "engine_d", "scalp", "scalp_vp", "grok", "sol"}
         ):
             _policy_engine = _raw_profitability_engine or None
         else:
@@ -1648,7 +1648,8 @@ def risk_check(
     )
     _is_engine_d_rr = _eng_rr in ("scalp", "scalp_vp", "engine_d", "d")
     _is_grok_rr = execution_context == "grok_engine" and signal.get("grokExecution") is True
-    if _is_ase_rr or _is_fx_factor_rr or _is_engine_d_rr or _is_grok_rr:
+    _is_sol_rr = execution_context == "sol_engine" and signal.get("solExecution") is True
+    if _is_ase_rr or _is_fx_factor_rr or _is_engine_d_rr or _is_grok_rr or _is_sol_rr:
         _rr_gate_enabled = True
     else:
         _rr_gate_enabled = _profitability_gates_enforced

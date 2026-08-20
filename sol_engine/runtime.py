@@ -140,3 +140,4 @@ def build_sol_service(runtime: Any) -> SolService:
         execution=execution,
         log=runtime.log,
     )
+

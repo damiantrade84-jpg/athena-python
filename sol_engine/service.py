@@ -22,6 +22,30 @@ class ScanAlreadyRunning(RuntimeError):
     pass
 
 
+def _redact_account(raw: dict[str, Any], venue: str) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {"venue": venue, "connected": False, "error": "ACCOUNT_UNAVAILABLE"}
+    if raw.get("error"):
+        return {
+            "venue": venue,
+            "connected": False,
+            "error": str(raw.get("detail") or raw.get("error") or "ACCOUNT_UNAVAILABLE"),
+        }
+    return {
+        "venue": venue,
+        "connected": True,
+        "environment": raw.get("accountEnvironment") or ("demo" if raw.get("demo") else "real"),
+        "demo": bool(raw.get("demo")),
+        "testnet": bool(raw.get("testnet")),
+        "login": raw.get("login") or raw.get("accountId"),
+        "server": raw.get("server") or raw.get("exchange"),
+        "balance": raw.get("balance"),
+        "equity": raw.get("equity"),
+        "currency": raw.get("currency"),
+        "riskDomain": raw.get("risk_domain"),
+    }
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -50,6 +74,19 @@ class SolService:
         self._state_lock = threading.RLock()
         self._state: dict[str, Any] | None = None
         self.repository.migrate()
+
+    def accounts(self) -> dict[str, Any]:
+        venues: dict[str, Any] = {}
+        for venue in ("mt5", "bybit"):
+            try:
+                venues[venue] = _redact_account(self.execution.gateway.account(venue), venue)
+            except Exception as exc:
+                venues[venue] = {"venue": venue, "connected": False, "error": str(exc)}
+        return {
+            "success": True,
+            "venues": venues,
+            "brokerCapabilities": self.execution.capabilities(),
+        }
 
     def health(self) -> dict[str, Any]:
         latest = self.current_scan()
@@ -243,6 +280,7 @@ class SolService:
             idempotency_key=idempotency_key,
             confirm_live=confirm_live,
         )
+
     def execution_history(self, *, limit: int = 100) -> list[dict[str, Any]]:
         return self.repository.list_executions(limit=limit)
 
@@ -269,3 +307,4 @@ class SolService:
             provenance=snapshot.provenance,
             config=self.config,
         )
+

@@ -20,12 +20,16 @@ import {
 import { useStore } from '@/hooks/useStore';
 import apiClient from '@/lib/apiClient';
 import { cn } from '@/lib/utils';
+import { LiveQuoteChip } from '@/components/shared';
 import {
+  solCanAttest,
   solComponentLabel,
   solDecisionClass,
+  solPreferredMode,
   solPrice,
   solScanProgress,
   solSetupLabel,
+  type SolAccounts,
   type SolCapabilities,
   type SolDecision,
   type SolExecutionMode,
@@ -167,6 +171,7 @@ function SignalRow({ signal, selected, onSelect }: { signal: SolSignal; selected
             </span>
           </div>
           <div className="mt-1 text-xs text-muted-foreground">{solSetupLabel(signal.setup)}</div>
+          <LiveQuoteChip compact pair={signal.pair} symbol={signal.symbol} type={signal.assetType} className="mt-1" />
           <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
             <div><span className="text-muted-foreground">Entry </span><span className="readout">{solPrice(signal.entry)}</span></div>
             <div><span className="text-muted-foreground">RR </span><span className="readout">{signal.rr?.toFixed(2) ?? '—'}</span></div>
@@ -181,6 +186,7 @@ function SignalRow({ signal, selected, onSelect }: { signal: SolSignal; selected
 export default function SolEnginePanel() {
   const { showToast } = useStore();
   const [health, setHealth] = useState<SolHealth | null>(null);
+  const [accounts, setAccounts] = useState<SolAccounts | null>(null);
   const [scan, setScan] = useState<SolScanState | null>(null);
   const [signals, setSignals] = useState<SolSignal[]>([]);
   const [executions, setExecutions] = useState<SolExecutionRecord[]>([]);
@@ -197,7 +203,7 @@ export default function SolEnginePanel() {
   const [replaying, setReplaying] = useState(false);
   const mounted = useRef(true);
 
-  const capabilities: SolCapabilities | null = health?.brokerCapabilities ?? null;
+  const capabilities: SolCapabilities | null = health?.brokerCapabilities ?? accounts?.brokerCapabilities ?? null;
   const selected = useMemo(
     () => signals.find((signal) => signal.signalId === selectedId) ?? signals[0] ?? null,
     [signals, selectedId],
@@ -215,8 +221,9 @@ export default function SolEnginePanel() {
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
-    const [healthResult, scanResult, signalResult, executionResult] = await Promise.allSettled([
+    const [healthResult, accountResult, scanResult, signalResult, executionResult] = await Promise.allSettled([
       apiClient.get<SolHealth>('/api/sol/health'),
+      apiClient.get<SolAccounts>('/api/sol/accounts'),
       apiClient.get<SolScanState & { success: boolean }>('/api/sol/scan/current'),
       loadSignals(selectedDecisions),
       apiClient.get<{ executions: SolExecutionRecord[] }>('/api/sol/executions?limit=25'),
@@ -224,12 +231,11 @@ export default function SolEnginePanel() {
     if (!mounted.current) return;
     if (healthResult.status === 'fulfilled') {
       setHealth(healthResult.value);
-      const defaultMode = healthResult.value.brokerCapabilities.defaultMode;
-      setMode((current) => {
-        if (healthResult.value.brokerCapabilities.modes[current]?.enabled) return current;
-        const order: SolExecutionMode[] = [defaultMode, 'paper', 'demo', 'live'];
-        return order.find((candidate) => healthResult.value.brokerCapabilities.modes[candidate]?.enabled) ?? 'paper';
-      });
+      setMode(solPreferredMode(healthResult.value.brokerCapabilities));
+    }
+    if (accountResult.status === 'fulfilled') {
+      setAccounts(accountResult.value);
+      if (healthResult.status !== 'fulfilled') setMode(solPreferredMode(accountResult.value.brokerCapabilities));
     }
     if (scanResult.status === 'fulfilled') setScan(scanResult.value);
     if (executionResult.status === 'fulfilled') setExecutions(executionResult.value.executions || []);
@@ -268,7 +274,7 @@ export default function SolEnginePanel() {
   useEffect(() => {
     setPreview(null);
     setReplay(null);
-  }, [selected?.signalId, mode]);
+  }, [selected?.signalId]);
 
   useEffect(() => {
     void loadSignals(selectedDecisions).catch(() => undefined);
@@ -313,20 +319,39 @@ export default function SolEnginePanel() {
     }
   };
 
-  const attestQuote = async () => {
-    if (!selected) return;
+  const attestQuote = useCallback(async (signal?: SolSignal | null, { silent = false }: { silent?: boolean } = {}) => {
+    const target = signal ?? selected;
+    if (!target || !solCanAttest(target.decision)) return;
     setPreviewing(true);
     try {
-      const result = await apiClient.post<SolPreview>(`/api/sol/signals/${selected.signalId}/preview`, {});
+      const result = await apiClient.post<SolPreview>(`/api/sol/signals/${target.signalId}/preview`, {});
+      if (!mounted.current) return;
       setPreview(result);
-      showToast('Broker quote attested; execution geometry is current', 'success');
+      if (silent) return;
+      if (result.quote) {
+        showToast(
+          result.executable
+            ? 'Live bid/ask attested; demo geometry is current'
+            : `Live quote ${solPrice(result.quote.bid)}/${solPrice(result.quote.ask)} · ${result.error || 'not executable'}`,
+          result.executable ? 'success' : 'info',
+        );
+      } else {
+        showToast('Broker quote attested; execution geometry is current', 'success');
+      }
     } catch (error) {
+      if (!mounted.current) return;
       setPreview({ executable: false, error: errorText(error), gates: [] });
-      showToast(`Quote attestation rejected: ${errorText(error)}`, 'error');
+      if (!silent) showToast(`Quote attestation rejected: ${errorText(error)}`, 'error');
     } finally {
-      setPreviewing(false);
+      if (mounted.current) setPreviewing(false);
     }
-  };
+  }, [selected, showToast]);
+
+  useEffect(() => {
+    if (!selected || !solCanAttest(selected.decision)) return undefined;
+    void attestQuote(selected, { silent: true });
+    return undefined;
+  }, [attestQuote, selected]);
 
   const confirmExecution = async () => {
     if (!confirmSignal) return;
@@ -406,7 +431,11 @@ export default function SolEnginePanel() {
                 displacement confirmation, and broker-side quote attestation.
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-                <span className="inline-flex items-center gap-1.5"><DatabaseZap className="h-3.5 w-3.5" /> MT5 + Bybit venue data</span>
+                <span className="inline-flex items-center gap-1.5"><DatabaseZap className="h-3.5 w-3.5" />
+                  {accounts?.venues?.mt5?.connected ? `MT5 ${accounts.venues.mt5.environment || 'connected'}` : 'MT5'}
+                  {' · '}
+                  {accounts?.venues?.bybit?.connected ? `Bybit ${accounts.venues.bybit.environment || 'connected'}` : 'Bybit'}
+                </span>
                 <span className="inline-flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5" /> Score cannot bypass gates</span>
                 <span className="inline-flex items-center gap-1.5"><FlaskConical className="h-3.5 w-3.5" /> {health?.researchStatus ?? 'UNVALIDATED'}</span>
               </div>
@@ -427,7 +456,15 @@ export default function SolEnginePanel() {
           <Metric label="Watch" value={scan?.watchCount ?? 0} note="one or more gates" />
           <Metric label="Processed" value={`${scan?.processedPairs ?? 0}/${scan?.totalPairs ?? 0}`} note={scan?.status ?? 'idle'} />
           <Metric label="Score gate" value={selected ? selected.readyThreshold.toFixed(0) : '74'} note="out of 100" />
-          <Metric label="Execution" value={mode.toUpperCase()} note={readyForMode ? 'available' : 'disabled'} />
+          <Metric
+            label="Execution"
+            value={mode.toUpperCase()}
+            note={
+              capabilities?.globalExecutorMode
+                ? `desk ${capabilities.globalExecutorMode}${readyForMode ? '' : ' · disabled'}`
+                : readyForMode ? 'available' : 'disabled'
+            }
+          />
           <Metric label="Latest" value={shortTime(scan?.completedAt || scan?.startedAt)} note={scan?.scanId?.slice(-8) || 'no scan'} />
         </div>
         {scan?.status === 'RUNNING' ? (
@@ -513,6 +550,7 @@ export default function SolEnginePanel() {
                     <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-medium', solDecisionClass(selected.decision))}>{selected.decision}</span>
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">{solSetupLabel(selected.setup)} · {selected.direction} · {selected.assetType}</div>
+                  <LiveQuoteChip pair={selected.pair} symbol={selected.symbol} type={selected.assetType} showBook className="mt-1" />
                 </div>
                 <div className="text-right">
                   <div className="readout text-3xl font-semibold text-warning">{selected.score.toFixed(1)}</div>
@@ -521,10 +559,23 @@ export default function SolEnginePanel() {
               </div>
 
               <div className="grid grid-cols-3 gap-2">
-                <Metric label="Entry" value={solPrice(selected.entry)} />
-                <Metric label="Stop" value={solPrice(selected.stop)} />
-                <Metric label="Target" value={solPrice(selected.target)} note={`RR ${selected.rr?.toFixed(2) ?? '—'}`} />
+                <Metric
+                  label="Live entry"
+                  value={solPrice(preview?.executableEntry ?? selected.entry)}
+                  note={preview?.quote ? `${preview.quote.source} ${preview.quote.ageSec.toFixed(1)}s` : 'scan close'}
+                />
+                <Metric label="Stop" value={solPrice(preview?.liveStop ?? selected.stop)} />
+                <Metric
+                  label="Target"
+                  value={solPrice(preview?.liveTarget ?? selected.target)}
+                  note={`RR ${(preview?.liveRr ?? selected.rr)?.toFixed(2) ?? '—'}`}
+                />
               </div>
+              {selected.sessionClock?.localClock ? (
+                <div className="text-[10px] text-muted-foreground">
+                  NY {selected.sessionClock.localClock} · {selected.sessionClock.primaryWindow || 'off-session'} · SAST {selected.sessionClock.displayClock}
+                </div>
+              ) : null}
 
               <div className="space-y-2 rounded-xl border border-border/70 bg-background/30 p-3">
                 <div className="flex items-center justify-between">
@@ -620,8 +671,8 @@ export default function SolEnginePanel() {
                   </div>
                 ) : null}
                 <div className="mt-3 flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => void attestQuote()} disabled={previewing || selected.decision !== 'READY'} className="flex-1">
-                    <Crosshair className={cn('h-4 w-4', previewing && 'animate-pulse')} /> Attest quote
+                  <Button variant="outline" size="sm" onClick={() => void attestQuote(selected)} disabled={previewing || !solCanAttest(selected.decision)} className="flex-1">
+                    <Crosshair className={cn('h-4 w-4', previewing && 'animate-pulse')} /> Attest live quote
                   </Button>
                   <Button size="sm" onClick={() => setConfirmSignal(selected)} disabled={!canExecute || executing} className="flex-1 bg-warning text-black hover:bg-warning/90">
                     <Play className="h-4 w-4" /> Execute {mode}

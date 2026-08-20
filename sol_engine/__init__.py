@@ -9,3 +9,4 @@ from .config import SolConfig, load_sol_config
 from .scoring import evaluate_snapshot
 
 __all__ = ["SolConfig", "evaluate_snapshot", "load_sol_config"]
+

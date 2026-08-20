@@ -200,7 +200,8 @@ def _coordinator(
 
 
 def _passing_quote(signal: dict, *, timestamp: float = NOW) -> Quote:
-    ask = float(signal["entry"]) + float(signal["atr"]) * 0.01
+    reference = float(signal.get("scanClose") or signal["entry"])
+    ask = reference + float(signal["atr"]) * 0.01
     return Quote("mt5", signal["symbol"], ask - 0.002, ask, timestamp, "test_tick")
 
 
@@ -258,13 +259,14 @@ def test_ready_signal_is_symmetric_auditable_and_fully_gated(mirrored: bool, dir
 
     assert signal["decision"] == "READY"
     assert signal["direction"] == direction
-    assert signal["setup"] == "SWEEP_RECLAIM"
+    assert signal["setup"] in {"SWEEP_RECLAIM", "SESSION_SWEEP"}
     assert signal["score"] >= signal["readyThreshold"]
     assert sum(component["maxScore"] for component in signal["components"]) == 100.0
     assert sum(component["score"] for component in signal["components"]) == pytest.approx(signal["score"])
     assert all(gate["passed"] for gate in signal["gates"])
     assert signal["blockingReasons"] == []
     assert signal["setupEventAt"]
+    assert signal["scanClose"]
     assert abs(signal["indicatorState"]["participationImpulse"]["z"]) < 100
     if direction == "LONG":
         assert signal["stop"] < signal["entry"] < signal["target"]
@@ -415,7 +417,7 @@ def test_stale_contract_and_kill_switch_reject_before_quote(tmp_path) -> None:
     assert gateway.quote_calls == 0
 
 
-def test_tampered_deterministic_gate_proof_rejects_before_quote(tmp_path) -> None:
+def test_tampered_deterministic_gate_proof_rejects_execution_but_still_attests_quote(tmp_path) -> None:
     signal = _ready_signal()
     gateway = _Gateway(_passing_quote(signal))
     coordinator = _coordinator(tmp_path, [signal], gateway)
@@ -426,7 +428,8 @@ def test_tampered_deterministic_gate_proof_rejects_before_quote(tmp_path) -> Non
 
     assert preview["executable"] is False
     assert preview["error"] == "SIGNAL_GATE_PROOF_INVALID"
-    assert gateway.quote_calls == 0
+    assert gateway.quote_calls == 1
+    assert preview["quote"]["bid"] > 0
 
 
 def test_demo_order_rejects_real_account_attestation(tmp_path) -> None:
@@ -575,3 +578,215 @@ def test_api_routes_register_under_the_sol_namespace() -> None:
     assert preview.get_json()["error"] == "SPREAD_TOO_WIDE"
     assert "/api/sol/signals/<signal_id>/execute" in rules
     assert "/api/sol/replay" in rules
+    assert "/api/sol/accounts" in rules
+
+
+def test_demo_is_default_when_executor_mode_is_demo(tmp_path) -> None:
+    signal = _ready_signal()
+    coordinator = _coordinator(tmp_path, [signal], _Gateway(_passing_quote(signal)))
+
+    capabilities = coordinator.capabilities()
+
+    assert capabilities["globalExecutorMode"] == "demo"
+    assert capabilities["defaultMode"] == "demo"
+    assert capabilities["modes"]["demo"]["enabled"] is True
+    assert capabilities["modes"]["paper"]["enabled"] is True
+
+
+def test_opposing_ltf_does_not_inflate_h4_long_score() -> None:
+    snapshot = _ready_snapshot()
+    axis = 300.0
+
+    def mirror(candle: Candle) -> Candle:
+        return Candle(
+            candle.time,
+            axis - candle.open,
+            axis - candle.low,
+            axis - candle.high,
+            axis - candle.close,
+            candle.volume,
+            candle.volume_source,
+        )
+
+    snapshot.frames["M15"] = [mirror(row) for row in snapshot.frames["M15"]]
+    snapshot.frames["M5"] = [mirror(row) for row in snapshot.frames["M5"]]
+    signal = evaluate_snapshot(snapshot, load_sol_config(), generated_at_epoch=NOW)
+    liquidity = next(item for item in signal["components"] if item["name"] == "liquidity_event")
+    displacement = next(item for item in signal["components"] if item["name"] == "displacement")
+
+    assert signal["direction"] == "LONG"
+    assert liquidity["score"] == 0
+    assert displacement["score"] == 0
+    assert "LIQUIDITY_EVENT_NOT_ALIGNED" in signal["blockingReasons"]
+    assert signal["decision"] != "READY"
+
+
+def test_nearby_m15_wick_does_not_clip_ready_rr() -> None:
+    snapshot = _ready_snapshot()
+    victim = snapshot.frames["M15"][-10]
+    snapshot.frames["M15"][-10] = Candle(
+        victim.time,
+        victim.open,
+        victim.high + 0.004,
+        victim.low,
+        victim.close,
+        victim.volume,
+        victim.volume_source,
+    )
+    signal = evaluate_snapshot(snapshot, load_sol_config(), generated_at_epoch=NOW)
+
+    assert signal["decision"] == "READY"
+    assert signal["rr"] >= float(load_sol_config().levels["minimum_rr"])
+
+
+def test_h1_discount_pullback_is_not_a_value_conflict() -> None:
+    from sol_engine.scoring import _value_conflict
+
+    pullback = {"available": True, "direction": -1, "quality": 0.80, "z": -0.40}
+    distribution = {"available": True, "direction": -1, "quality": 0.80, "z": 1.20}
+
+    assert _value_conflict(pullback, 1, extension_z=0.85) is False
+    assert _value_conflict(distribution, 1, extension_z=0.85) is True
+
+
+def test_watch_preview_still_returns_live_quote(tmp_path) -> None:
+    signal = _ready_signal()
+    signal["decision"] = "WATCH"
+    signal["blockingReasons"] = ["LIQUIDITY_EVENT_NOT_ALIGNED"]
+    gateway = _Gateway(_passing_quote(signal))
+    coordinator = _coordinator(tmp_path, [signal], gateway)
+
+    preview = coordinator.preview(signal)
+
+    assert preview["executable"] is False
+    assert preview["error"] == "SIGNAL_NOT_READY"
+    assert gateway.quote_calls == 1
+    assert preview["quote"]["ask"] > 0
+    assert preview["executableEntry"] > 0
+
+
+def test_sol_risk_policy_stays_fail_closed_and_not_engine_a() -> None:
+    from tp_sl_rr_gate_policy import engine_ab_profitability_gates_enforced, resolve_profitability_gate_engine
+
+    signal = {"engine": "SOL", "solExecution": True, "source": "sol_engine"}
+    assert resolve_profitability_gate_engine(signal) is None
+    assert (
+        engine_ab_profitability_gates_enforced(
+            {"ENGINE_AB_PROFITABILITY_GATES_ENFORCED": False},
+            signal=signal,
+            engine="sol",
+        )
+        is True
+    )
+
+
+def test_killzone_gate_blocks_ready_outside_session() -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from sol_engine.sessions import classify_session
+
+    config = load_sol_config()
+    lunch = datetime(2027, 1, 15, 12, 45, tzinfo=ZoneInfo("America/New_York")).timestamp()
+    clock = classify_session(lunch, config)
+    lunch_snapshot = _ready_snapshot()
+    delta = lunch - NOW
+    for timeframe, rows in list(lunch_snapshot.frames.items()):
+        shifted = []
+        for candle in rows:
+            shifted.append(
+                Candle(
+                    candle.time + delta,
+                    candle.open,
+                    candle.high,
+                    candle.low,
+                    candle.close,
+                    candle.volume,
+                    candle.volume_source,
+                )
+            )
+        lunch_snapshot.frames[timeframe] = shifted
+    lunch_snapshot.as_of_epoch = lunch
+    signal = evaluate_snapshot(lunch_snapshot, config, generated_at_epoch=lunch)
+
+    assert clock["quality"] < float(config.scoring["minimum_killzone_quality"])
+    assert clock["inWindow"] is False or clock["primaryKind"] == "dead"
+    assert any(gate["name"] == "killzone_window" and gate["passed"] is False for gate in signal["gates"])
+    assert signal["decision"] != "READY"
+    assert "OUTSIDE_KILLZONE" in signal["blockingReasons"]
+
+
+def test_watch_signal_cannot_execute_paper_or_demo(tmp_path) -> None:
+    signal = _ready_signal()
+    signal["decision"] = "WATCH"
+    signal["blockingReasons"] = ["LIQUIDITY_EVENT_NOT_ALIGNED"]
+    gateway = _Gateway(_passing_quote(signal))
+    coordinator = _coordinator(tmp_path, [signal], gateway)
+
+    paper = coordinator.execute(signal, mode="paper", idempotency_key="watch-paper")
+    demo = coordinator.execute(signal, mode="demo", idempotency_key="watch-demo")
+
+    assert paper["status"] == "REJECTED"
+    assert paper["result"]["error"] == "SIGNAL_NOT_READY"
+    assert demo["status"] == "REJECTED"
+    assert demo["result"]["error"] == "SIGNAL_NOT_READY"
+    assert gateway.execute_calls == 0
+
+
+def test_quote_drift_reference_is_scan_close_not_pool_limit(tmp_path) -> None:
+    signal = _ready_signal()
+    atr = float(signal["atr"])
+    pool = float(signal["entry"])
+    signal["entry"] = pool
+    signal["scanClose"] = pool + atr * 2.5
+    signal["stop"] = pool - atr * 0.6
+    signal["target"] = pool + atr * 5.0
+    mid = pool + atr * 0.25
+    gateway = _Gateway(Quote("mt5", signal["symbol"], mid - 0.002, mid + 0.002, NOW, "test_tick"))
+    coordinator = _coordinator(tmp_path, [signal], gateway, database="drift-ref.db")
+
+    preview = coordinator.preview(signal)
+    drift_gate = next(gate for gate in preview["gates"] if gate["name"] == "quote_drift")
+
+    assert preview["executable"] is False
+    assert preview["error"] == "QUOTE_DRIFT_EXCEEDS_LIMIT"
+    assert drift_gate["reference"] == "scan_close_mid_adverse"
+    assert drift_gate["driftRef"] == pytest.approx(signal["scanClose"])
+    assert drift_gate["driftAtr"] > float(coordinator.config.execution["max_quote_drift_atr"])
+    assert gateway.execute_calls == 0
+
+
+def test_live_geometry_rejects_through_target_and_keeps_stop(tmp_path) -> None:
+    signal = _ready_signal()
+    ask = float(signal["target"]) + float(signal["atr"]) * 0.15
+    gateway = _Gateway(Quote("mt5", signal["symbol"], ask - 0.002, ask, NOW, "test_tick"))
+    coordinator = _coordinator(tmp_path, [signal], gateway, database="through-tp.db")
+
+    preview = coordinator.preview(signal)
+
+    assert preview["executable"] is False
+    assert preview["error"] == "LIVE_GEOMETRY_INVALID"
+    assert preview["liveStop"] == signal["stop"]
+    assert gateway.execute_calls == 0
+
+
+def test_live_target_rebase_still_respects_opposing_pool(tmp_path) -> None:
+    signal = _ready_signal()
+    atr = float(signal["atr"])
+    entry = float(signal["entry"])
+    signal["stop"] = entry - atr
+    signal["target"] = entry + atr * 0.4
+    signal["scanClose"] = entry
+    signal["opposingLiquidity"] = entry + atr * 0.55
+    mid = entry + atr * 0.05
+    gateway = _Gateway(Quote("mt5", signal["symbol"], mid - 0.002, mid + 0.002, NOW, "test_tick"))
+    coordinator = _coordinator(tmp_path, [signal], gateway, database="rebase-clip.db")
+
+    preview = coordinator.preview(signal)
+    geometry = next(gate for gate in preview["gates"] if gate["name"] == "live_geometry")
+
+    assert preview["executable"] is False
+    assert preview["error"] == "LIVE_GEOMETRY_INVALID"
+    assert geometry["rebasedTarget"] is True
+    assert geometry["liveRr"] < geometry["minimumRr"]
+    assert preview["liveStop"] == signal["stop"]

@@ -1,6 +1,68 @@
 version: sol.v1
 enabled: true
 
+sessions:
+  timezone: America/New_York
+  display_timezone: Africa/Johannesburg
+  fallback_utc_offset_hours: -4.0
+  display_fallback_utc_offset_hours: 2.0
+  weekend_close_weekday: 4
+  weekend_close_hour: 17
+  weekend_open_weekday: 6
+  weekend_open_hour: 17
+  apply_weekend_gate_to:
+    - forex
+    - index
+    - commodity
+  apply_killzone_gate_to:
+    - forex
+    - index
+    - commodity
+  windows:
+    asia_range:
+      start_minute: 1200
+      end_minute: 1440
+      kind: range
+      quality: 0.22
+    london_killzone:
+      start_minute: 120
+      end_minute: 300
+      kind: killzone
+      quality: 0.84
+    london_silver_bullet:
+      start_minute: 180
+      end_minute: 240
+      kind: silver_bullet
+      quality: 1.0
+    ny_am_killzone:
+      start_minute: 420
+      end_minute: 600
+      kind: killzone
+      quality: 0.86
+    ny_am_silver_bullet:
+      start_minute: 600
+      end_minute: 660
+      kind: silver_bullet
+      quality: 1.0
+    ny_lunch:
+      start_minute: 720
+      end_minute: 780
+      kind: dead
+      quality: 0.08
+    ny_pm_silver_bullet:
+      start_minute: 840
+      end_minute: 900
+      kind: silver_bullet
+      quality: 0.96
+    london_close:
+      start_minute: 600
+      end_minute: 720
+      kind: killzone
+      quality: 0.78
+  adjacent_minutes: 30
+  adjacent_quality: 0.42
+  off_session_quality: 0.12
+
 scan:
   max_workers: 6
   max_errors_returned: 50
@@ -31,11 +93,12 @@ indicators:
   orbit_lookback: 32
   orbit_slope_window: 8
   liquidity_lookback: 20
-  liquidity_recent_bars: 4
+  liquidity_recent_bars: 12
   compression_short_window: 6
   compression_baseline_window: 30
   compression_ratio_max: 0.72
-  sweep_excursion_atr_min: 0.04
+  sweep_excursion_atr_min: 0.08
+  session_lookback_bars: 16
   trigger_window: 3
   trigger_break_lookback: 6
   participation_recent_window: 3
@@ -47,6 +110,8 @@ scoring:
   watch_threshold: 58.0
   minimum_trigger_strength: 0.38
   maximum_value_extension_z: 2.25
+  minimum_killzone_quality: 0.70
+  value_conflict_extension_z: 0.85
   weights:
     regime_orbit: 20.0
     value_location: 15.0
@@ -62,9 +127,25 @@ levels:
   target_rr: 2.20
   minimum_rr: 1.80
   opposing_liquidity_buffer_atr: 0.05
+  by_asset_type:
+    forex:
+      maximum_stop_atr: 2.20
+    crypto:
+      maximum_stop_atr: 2.60
+    commodity:
+      maximum_stop_atr: 2.60
+    index:
+      maximum_stop_atr: 2.40
+    stock:
+      maximum_stop_atr: 2.40
+    etf:
+      maximum_stop_atr: 2.40
+    etf_bond:
+      maximum_stop_atr: 2.40
 
 execution:
   default_mode: paper
+  follow_global_executor_mode: true
   paper_enabled: true
   demo_enabled: true
   live_enabled: false
@@ -74,7 +155,7 @@ execution:
   risk_fraction: 0.0025
   max_signal_age_sec: 600
   maximum_clock_skew_sec: 2.0
-  max_quote_drift_atr: 0.25
+  max_quote_drift_atr: 1.0
   maximum_quote_age_sec:
     forex: 15.0
     crypto: 10.0

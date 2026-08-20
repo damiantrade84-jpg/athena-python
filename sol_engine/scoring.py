@@ -17,6 +17,7 @@ from .indicators import (
     wilder_atr,
 )
 from .models import Candle, MarketSnapshot, TIMEFRAME_SECONDS, utc_iso
+from .sessions import classify_session, market_is_open, session_pools
 
 
 def _round(value: float | None, digits: int = 6) -> float | None:
@@ -100,18 +101,49 @@ def _value_quality(orbit: dict[str, Any], direction: int, maximum_extension: flo
     return quality, location_ok
 
 
+def _value_conflict(
+    orbit: dict[str, Any],
+    direction: int,
+    *,
+    extension_z: float,
+) -> bool:
+    """True only when H1 has flipped against H4 *and* price is still extended with H4.
+
+    A discount pullback (H1 slope opposite, z still mean-reverting into the H4
+    direction) is the entry location, not a veto.
+    """
+    if not orbit.get("available") or direction == 0:
+        return False
+    opposing = int(orbit.get("direction") or 0) == -direction and float(orbit.get("quality") or 0.0) >= 0.68
+    if not opposing:
+        return False
+    return float(orbit.get("z") or 0.0) * direction > float(extension_z)
+
+
 def _execution_geometry(
     setup_candles: list[Candle],
     trigger_candles: list[Candle],
     event: dict[str, Any],
     direction: int,
     config: SolConfig,
+    *,
+    pools: dict[str, Any] | None = None,
+    asset_type: str = "unknown",
 ) -> dict[str, Any]:
-    levels = config.levels
+    levels = config.levels_for(asset_type)
     atr = float(event.get("atr") or wilder_atr(setup_candles, int(config.indicators["atr_period"])))
     if not setup_candles or not trigger_candles or atr <= 0 or direction == 0:
         return {"valid": False, "reason": "GEOMETRY_INPUT_UNAVAILABLE", "quality": 0.0}
-    entry = float(trigger_candles[-1].close)
+    if int(event.get("direction") or 0) not in (0, direction) and event.get("kind") not in (None, "NONE"):
+        return {"valid": False, "reason": "GEOMETRY_COUNTER_SETUP", "quality": 0.0, "atr": atr}
+    last_close = float(trigger_candles[-1].close)
+    boundary = event.get("boundary")
+    limit_entry = float(boundary) if isinstance(boundary, (int, float)) and float(boundary) > 0 else None
+    # Executable reference is the last closed trigger close (live bid/ask
+    # replace it at attest). The pool is diagnostic limit context only —
+    # using it as the drift origin made through-pool chases look like zero
+    # adverse displacement.
+    entry = last_close
     buffer_distance = atr * float(levels["stop_atr_buffer"])
     recent_setup = setup_candles[-8:]
     event_extreme = float(event.get("extreme") or entry)
@@ -121,40 +153,67 @@ def _execution_geometry(
         stop = max(event_extreme, max(row.high for row in recent_setup)) + buffer_distance
     risk = abs(entry - stop)
     if entry <= 0 or stop <= 0 or risk <= 0:
-        return {"valid": False, "reason": "INVALID_STOP_GEOMETRY", "quality": 0.0}
+        return {"valid": False, "reason": "INVALID_STOP_GEOMETRY", "quality": 0.0, "entry": entry, "stop": stop, "atr": atr}
     stop_atr = risk / atr
+    max_stop_atr = float(levels["maximum_stop_atr"])
+    if stop_atr > max_stop_atr:
+        capped = entry - direction * max_stop_atr * atr
+        covers_event = (direction > 0 and capped <= event_extreme) or (
+            direction < 0 and capped >= event_extreme
+        )
+        on_side = (direction > 0 and capped < entry) or (direction < 0 and capped > entry)
+        if covers_event and on_side:
+            stop = capped
+            risk = abs(entry - stop)
+            stop_atr = max_stop_atr
     if stop_atr < float(levels["minimum_stop_atr"]):
-        return {"valid": False, "reason": "STOP_TOO_TIGHT", "quality": 0.0, "stopAtr": stop_atr}
-    if stop_atr > float(levels["maximum_stop_atr"]):
-        return {"valid": False, "reason": "STOP_TOO_WIDE", "quality": 0.0, "stopAtr": stop_atr}
+        return {
+            "valid": False,
+            "reason": "STOP_TOO_TIGHT",
+            "quality": 0.0,
+            "entry": entry,
+            "stop": stop,
+            "atr": atr,
+            "stopAtr": stop_atr,
+        }
+    if stop_atr > max_stop_atr + 1e-9:
+        return {
+            "valid": False,
+            "reason": "STOP_TOO_WIDE",
+            "quality": 0.0,
+            "entry": entry,
+            "stop": stop,
+            "atr": atr,
+            "stopAtr": stop_atr,
+        }
 
     target_rr = float(levels["target_rr"])
     target = entry + direction * target_rr * risk
     opposing_buffer = atr * float(levels["opposing_liquidity_buffer_atr"])
-    historical = setup_candles[-40:-3] if len(setup_candles) >= 43 else setup_candles[:-3]
+    pool_map = pools or {}
+    if direction > 0:
+        opposing = pool_map.get("asiaHigh") or pool_map.get("priorDayHigh")
+    else:
+        opposing = pool_map.get("asiaLow") or pool_map.get("priorDayLow")
     wall = None
-    if historical:
-        if direction > 0:
-            walls = [row.high for row in historical if row.high > entry + opposing_buffer]
-            wall = min(walls) if walls else None
-            if wall is not None:
-                target = min(target, wall - opposing_buffer)
-        else:
-            walls = [row.low for row in historical if row.low < entry - opposing_buffer]
-            wall = max(walls) if walls else None
-            if wall is not None:
-                target = max(target, wall + opposing_buffer)
+    if isinstance(opposing, (int, float)):
+        if direction > 0 and opposing > entry + opposing_buffer:
+            wall = float(opposing)
+            target = min(target, wall - opposing_buffer)
+        elif direction < 0 and opposing < entry - opposing_buffer:
+            wall = float(opposing)
+            target = max(target, wall + opposing_buffer)
     reward = direction * (target - entry)
     rr = reward / risk if risk > 0 else 0.0
     minimum_rr = float(levels["minimum_rr"])
     valid_side = stop < entry < target if direction > 0 else target < entry < stop
-    valid = valid_side and rr >= minimum_rr
     if not valid_side:
         reason = "LEVELS_WRONG_SIDE"
     elif rr < minimum_rr:
         reason = "OPPOSING_LIQUIDITY_LIMITS_RR"
     else:
         reason = None
+    valid = reason is None
     rr_quality = clamp((rr - minimum_rr + 0.45) / max(target_rr - minimum_rr + 0.45, 1e-9))
     stop_quality = clamp(1.0 - abs(stop_atr - 0.95) / 1.55)
     quality = 0.62 * rr_quality + 0.38 * stop_quality if valid else 0.0
@@ -171,6 +230,8 @@ def _execution_geometry(
         "atr": atr,
         "stopAtr": stop_atr,
         "opposingLiquidity": wall,
+        "scanClose": last_close,
+        "limitEntry": limit_entry,
     }
 
 
@@ -191,7 +252,18 @@ def evaluate_snapshot(
     frames = snapshot.frames
     freshness_gates, data_failures = _freshness(snapshot, config)
     indicators = config.indicators
+    scoring = config.scoring_for(snapshot.asset_type)
     weights = config.scoring["weights"]
+    clock = classify_session(snapshot.as_of_epoch, config)
+    session_open = market_is_open(snapshot.as_of_epoch, config, snapshot.asset_type)
+    killzone_assets = {
+        str(item).strip().lower() for item in (config.sessions.get("apply_killzone_gate_to") or [])
+    }
+    killzone_required = snapshot.asset_type in killzone_assets
+    killzone_ok = (not killzone_required) or (
+        float(clock.get("quality") or 0.0) >= float(scoring["minimum_killzone_quality"]) and session_open
+    )
+    pools = session_pools(frames.get("M15") or [], snapshot.as_of_epoch, config)
 
     context = robust_orbit(
         frames.get("H4") or [],
@@ -214,6 +286,8 @@ def evaluate_snapshot(
         compression_short_window=int(indicators["compression_short_window"]),
         compression_baseline_window=int(indicators["compression_baseline_window"]),
         compression_ratio_max=float(indicators["compression_ratio_max"]),
+        session_pools=pools,
+        session_lookback_bars=int(indicators["session_lookback_bars"]),
     )
     trigger = displacement_pulse(
         frames.get("M5") or [],
@@ -232,22 +306,29 @@ def evaluate_snapshot(
     trigger_direction = int(trigger.get("direction") or 0)
     direction_value = context_direction
     direction = "LONG" if direction_value > 0 else "SHORT" if direction_value < 0 else "NONE"
+    setup_aligned = setup_direction != 0 and setup_direction == direction_value
+    trigger_aligned = (
+        trigger_direction == direction_value
+        and float(trigger.get("strength") or 0.0) >= float(scoring["minimum_trigger_strength"])
+    )
     value_quality, location_ok = _value_quality(
         value,
         direction_value,
-        float(config.scoring["maximum_value_extension_z"]),
+        float(scoring["maximum_value_extension_z"]),
     )
-    value_conflict = (
-        bool(value.get("available"))
-        and int(value.get("direction") or 0) == -direction_value
-        and float(value.get("quality") or 0.0) >= 0.68
+    value_conflict = _value_conflict(
+        value,
+        direction_value,
+        extension_z=float(scoring["value_conflict_extension_z"]),
     )
     geometry = _execution_geometry(
         frames.get("M15") or [],
         frames.get("M5") or [],
-        setup,
+        setup if setup_aligned else {"atr": setup.get("atr"), "kind": "NONE", "direction": 0},
         direction_value,
         config,
+        pools=pools,
+        asset_type=snapshot.asset_type,
     )
 
     components = [
@@ -273,25 +354,27 @@ def evaluate_snapshot(
         ),
         _component(
             "liquidity_event",
-            float(setup.get("strength") or 0.0),
+            float(setup.get("strength") or 0.0) if setup_aligned else 0.0,
             float(weights["liquidity_event"]),
             {
                 "kind": setup.get("kind"),
                 "eventAgeBars": setup.get("eventAgeBars"),
-                "boundary": _round(setup.get("boundary")),
-                "extreme": _round(setup.get("extreme")),
-                "compressionRatio": _round(setup.get("compressionRatio")),
-                "excursionAtr": _round(setup.get("excursionAtr")),
+                "boundary": _round(setup.get("boundary") if isinstance(setup.get("boundary"), (int, float)) else None),
+                "extreme": _round(setup.get("extreme") if isinstance(setup.get("extreme"), (int, float)) else None),
+                "compressionRatio": _round(setup.get("compressionRatio") if isinstance(setup.get("compressionRatio"), (int, float)) else None),
+                "excursionAtr": _round(setup.get("excursionAtr") if isinstance(setup.get("excursionAtr"), (int, float)) else None),
+                "aligned": setup_aligned,
             },
         ),
         _component(
             "displacement",
-            float(trigger.get("strength") or 0.0),
+            float(trigger.get("strength") or 0.0) if trigger_direction == direction_value else 0.0,
             float(weights["displacement"]),
             {
-                "efficiency": _round(trigger.get("efficiency")),
-                "bodyFraction": _round(trigger.get("bodyFraction")),
+                "efficiency": _round(trigger.get("efficiency") if isinstance(trigger.get("efficiency"), (int, float)) else None),
+                "bodyFraction": _round(trigger.get("bodyFraction") if isinstance(trigger.get("bodyFraction"), (int, float)) else None),
                 "microBreak": trigger.get("microBreak"),
+                "aligned": trigger_direction == direction_value,
             },
         ),
         _component(
@@ -323,6 +406,16 @@ def evaluate_snapshot(
     hard_gates.extend(
         [
             {
+                "name": "session_open",
+                "passed": session_open,
+                "reason": None if session_open else "SESSION_CLOSED",
+            },
+            {
+                "name": "killzone_window",
+                "passed": killzone_ok,
+                "reason": None if killzone_ok else "OUTSIDE_KILLZONE",
+            },
+            {
                 "name": "context_direction",
                 "passed": context_direction != 0,
                 "reason": None if context_direction else "CONTEXT_DIRECTION_UNRESOLVED",
@@ -339,21 +432,13 @@ def evaluate_snapshot(
             },
             {
                 "name": "liquidity_event_aligned",
-                "passed": setup_direction != 0 and setup_direction == direction_value,
-                "reason": None if setup_direction != 0 and setup_direction == direction_value else "LIQUIDITY_EVENT_NOT_ALIGNED",
+                "passed": setup_aligned,
+                "reason": None if setup_aligned else "LIQUIDITY_EVENT_NOT_ALIGNED",
             },
             {
                 "name": "trigger_displacement_aligned",
-                "passed": (
-                    trigger_direction == direction_value
-                    and float(trigger.get("strength") or 0.0) >= float(config.scoring["minimum_trigger_strength"])
-                ),
-                "reason": None
-                if (
-                    trigger_direction == direction_value
-                    and float(trigger.get("strength") or 0.0) >= float(config.scoring["minimum_trigger_strength"])
-                )
-                else "TRIGGER_DISPLACEMENT_NOT_CONFIRMED",
+                "passed": trigger_aligned,
+                "reason": None if trigger_aligned else "TRIGGER_DISPLACEMENT_NOT_CONFIRMED",
             },
             {
                 "name": "execution_geometry",
@@ -366,8 +451,8 @@ def evaluate_snapshot(
     blockers.extend(str(gate["reason"]) for gate in hard_gates if not gate.get("passed") and gate.get("reason"))
     blockers = list(dict.fromkeys(blockers))
     hard_pass = not blockers
-    ready_threshold = float(config.scoring["ready_threshold"])
-    watch_threshold = float(config.scoring["watch_threshold"])
+    ready_threshold = float(scoring["ready_threshold"])
+    watch_threshold = float(scoring["watch_threshold"])
     if hard_pass and score >= ready_threshold:
         decision = "READY"
         decision_reason = "All deterministic gates passed; broker quote attestation is still required."
@@ -415,9 +500,15 @@ def evaluate_snapshot(
         "target": _round(geometry.get("target")),
         "rr": _round(geometry.get("rr")),
         "atr": _round(geometry.get("atr")),
+        "scanClose": _round(geometry.get("scanClose") if isinstance(geometry.get("scanClose"), (int, float)) else None),
+        "limitEntry": _round(geometry.get("limitEntry") if isinstance(geometry.get("limitEntry"), (int, float)) else None),
+        "opposingLiquidity": _round(
+            geometry.get("opposingLiquidity") if isinstance(geometry.get("opposingLiquidity"), (int, float)) else None
+        ),
         "components": components,
         "gates": hard_gates,
         "blockingReasons": blockers,
+        "sessionClock": clock,
         "indicatorState": {
             "contextOrbit": {key: _round(value) if isinstance(value, float) else value for key, value in context.items()},
             "valueOrbit": {key: _round(value) if isinstance(value, float) else value for key, value in value.items()},
@@ -430,5 +521,6 @@ def evaluate_snapshot(
             "quoteAttested": False,
             "executable": False,
             "mode": str(config.execution["default_mode"]),
+            "followGlobalExecutorMode": bool(config.execution.get("follow_global_executor_mode", True)),
         },
     }

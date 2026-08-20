@@ -1718,6 +1718,12 @@ def bybit_execute(signal: dict, approval: "RiskApproval") -> dict:  # noqa: F821
         # Rebase levels when the scanned price is materially stale versus the live fill price.
         elif signal_price > 0 and sl and tp1 and _executable_drift_pct is not None:
             if _executable_drift_pct > 0.01:
+                if signal.get("solExecution") is True:
+                    return {
+                        "success": False,
+                        "error": "SOL_SEND_DRIFT_TOO_LARGE",
+                        "drift": _executable_drift_pct,
+                    }
                 sl_offset = float(sl) - signal_price
                 tp_offset = float(tp1) - signal_price
                 _pre_rebase_sl = float(sl)

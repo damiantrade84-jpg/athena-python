@@ -184,6 +184,79 @@ def _sweep_candidates(
     return results
 
 
+def _session_raid_candidates(
+    candles: list[Candle],
+    *,
+    atr: float,
+    pools: dict,
+    lookback: int,
+    recent_bars: int,
+    excursion_atr_min: float,
+) -> list[dict]:
+    results: list[dict] = []
+    if not pools or atr <= 0 or len(candles) < 6:
+        return results
+    sample = candles[-max(8, lookback) :]
+    pool_lows = [
+        value
+        for value in (pools.get("asiaLow"), pools.get("priorDayLow"))
+        if isinstance(value, (int, float))
+    ]
+    pool_highs = [
+        value
+        for value in (pools.get("asiaHigh"), pools.get("priorDayHigh"))
+        if isinstance(value, (int, float))
+    ]
+    for offset, candle in enumerate(sample):
+        age = len(sample) - 1 - offset
+        if age > max(1, recent_bars):
+            continue
+        index = len(candles) - len(sample) + offset
+        for pool in pool_lows:
+            if candle.low < pool <= candle.close:
+                excursion = (pool - candle.low) / max(atr, 1e-12)
+                if excursion < excursion_atr_min:
+                    continue
+                reclaim = clamp((candle.close - pool) / max(atr * 0.35, 1e-12))
+                recency = clamp(1.0 - age / max(recent_bars, 1))
+                strength = clamp(0.48 * clamp(excursion / 0.45) + 0.32 * reclaim + 0.20 * recency)
+                results.append(
+                    {
+                        "kind": "SESSION_SWEEP",
+                        "direction": 1,
+                        "strength": clamp(strength),
+                        "eventIndex": index,
+                        "eventAgeBars": age,
+                        "extreme": candle.low,
+                        "boundary": pool,
+                        "excursionAtr": excursion,
+                        "pool": pool,
+                    }
+                )
+        for pool in pool_highs:
+            if candle.high > pool >= candle.close:
+                excursion = (candle.high - pool) / max(atr, 1e-12)
+                if excursion < excursion_atr_min:
+                    continue
+                reclaim = clamp((pool - candle.close) / max(atr * 0.35, 1e-12))
+                recency = clamp(1.0 - age / max(recent_bars, 1))
+                strength = clamp(0.48 * clamp(excursion / 0.45) + 0.32 * reclaim + 0.20 * recency)
+                results.append(
+                    {
+                        "kind": "SESSION_SWEEP",
+                        "direction": -1,
+                        "strength": clamp(strength),
+                        "eventIndex": index,
+                        "eventAgeBars": age,
+                        "extreme": candle.high,
+                        "boundary": pool,
+                        "excursionAtr": excursion,
+                        "pool": pool,
+                    }
+                )
+    return results
+
+
 def _compression_candidates(
     candles: list[Candle],
     *,
@@ -191,10 +264,12 @@ def _compression_candidates(
     short_window: int,
     baseline_window: int,
     ratio_max: float,
+    recent_bars: int = 8,
 ) -> list[dict]:
     results: list[dict] = []
     ranges = true_ranges(candles)
-    for index in range(max(baseline_window + short_window + 12, len(candles) - 2), len(candles)):
+    start = max(baseline_window + short_window + 12, len(candles) - max(2, recent_bars))
+    for index in range(start, len(candles)):
         candle = candles[index]
         if candle.range <= 0:
             continue
@@ -265,6 +340,8 @@ def liquidity_event(
     compression_short_window: int = 6,
     compression_baseline_window: int = 30,
     compression_ratio_max: float = 0.72,
+    session_pools: dict | None = None,
+    session_lookback_bars: int = 16,
 ) -> dict:
     required = max(lookback + recent_bars, compression_short_window + compression_baseline_window + 14)
     if len(candles) < required:
@@ -286,6 +363,17 @@ def liquidity_event(
             short_window=compression_short_window,
             baseline_window=compression_baseline_window,
             ratio_max=compression_ratio_max,
+            recent_bars=recent_bars,
+        )
+    )
+    candidates.extend(
+        _session_raid_candidates(
+            candles,
+            atr=atr,
+            pools=session_pools or {},
+            lookback=session_lookback_bars,
+            recent_bars=recent_bars,
+            excursion_atr_min=excursion_atr_min,
         )
     )
     if not candidates:

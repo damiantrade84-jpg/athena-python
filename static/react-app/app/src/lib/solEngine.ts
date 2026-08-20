@@ -1,5 +1,6 @@
 export type SolDecision = 'READY' | 'WATCH' | 'BLOCKED';
 export type SolExecutionMode = 'paper' | 'demo' | 'live';
+export type SolSetup = 'SWEEP_RECLAIM' | 'COMPRESSION_RELEASE' | 'SESSION_SWEEP' | 'NONE';
 
 export interface SolComponent {
   name: string;
@@ -24,7 +25,15 @@ export interface SolSignal {
   assetType: string;
   venue: 'mt5' | 'bybit';
   direction: 'LONG' | 'SHORT' | 'NONE';
-  setup: 'SWEEP_RECLAIM' | 'COMPRESSION_RELEASE' | 'NONE';
+  setup: SolSetup;
+  sessionClock?: {
+    localClock?: string;
+    displayClock?: string;
+    primaryWindow?: string | null;
+    primaryKind?: string;
+    quality?: number;
+    inWindow?: boolean;
+  };
   decision: SolDecision;
   decisionReason: string;
   score: number;
@@ -75,7 +84,27 @@ export interface SolCapabilities {
   defaultMode: SolExecutionMode;
   globalExecutorMode: string;
   researchStatus: string;
+  followGlobalExecutorMode?: boolean;
   modes: Record<SolExecutionMode, SolModeCapability>;
+}
+
+export interface SolVenueAccount {
+  venue: string;
+  connected: boolean;
+  environment?: string;
+  demo?: boolean;
+  testnet?: boolean;
+  login?: string | number;
+  server?: string;
+  equity?: number;
+  currency?: string;
+  error?: string;
+}
+
+export interface SolAccounts {
+  success: boolean;
+  venues: Record<string, SolVenueAccount>;
+  brokerCapabilities: SolCapabilities;
 }
 
 export interface SolHealth {
@@ -95,6 +124,8 @@ export interface SolPreview {
   detail?: string;
   executableEntry?: number;
   liveRr?: number;
+  liveStop?: number | null;
+  liveTarget?: number | null;
   quote?: {
     venue: string;
     symbol: string;
@@ -160,8 +191,19 @@ export function solDecisionClass(decision: SolDecision): string {
 
 export function solSetupLabel(setup: SolSignal['setup']): string {
   if (setup === 'SWEEP_RECLAIM') return 'Sweep → reclaim';
+  if (setup === 'SESSION_SWEEP') return 'Session sweep → reclaim';
   if (setup === 'COMPRESSION_RELEASE') return 'Compression → release';
   return 'No active setup';
+}
+
+export function solCanAttest(decision: SolDecision | undefined): boolean {
+  return decision === 'READY' || decision === 'WATCH';
+}
+
+export function solPreferredMode(capabilities: SolCapabilities | null | undefined): SolExecutionMode {
+  if (!capabilities) return 'paper';
+  const order: SolExecutionMode[] = [capabilities.defaultMode, 'demo', 'paper', 'live'];
+  return order.find((mode) => capabilities.modes[mode]?.enabled) ?? 'paper';
 }
 
 export function solScanProgress(scan: SolScanState | null): number {
