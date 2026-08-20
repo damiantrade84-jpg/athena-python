@@ -399,6 +399,26 @@ select { cursor: pointer; }
 .chev { color: var(--faint); font-size: 10px; transition: transform .16s; flex: none; }
 .sig.open .chev { transform: rotate(90deg); }
 
+/* Execution rejection — deliberately loud and persistent. */
+.sig-error {
+  display: flex; align-items: baseline; gap: 8px;
+  margin: 0 12px 8px; padding: 6px 9px;
+  background: hsl(358 78% 61% / .10);
+  border: 1px solid hsl(358 78% 61% / .38);
+  border-radius: var(--radius-sm); font-size: 11px;
+}
+.sig-error-tag { font-size: 8.5px; font-weight: 700; letter-spacing: .1em;
+                 color: var(--short); flex: none; }
+.sig-error-venue { font-size: 9px; color: var(--faint); flex: none; }
+.sig-error-msg { color: hsl(358 60% 78%); flex: 1; min-width: 0; word-break: break-word; }
+.sig-error-at { font-size: 9px; color: var(--faint); flex: none; }
+.sig-error-x {
+  background: none; border: 0; color: var(--faint); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 0 2px; flex: none;
+}
+.sig-error-x:hover { color: var(--fg); }
+.evt-type.reject { color: var(--short); background: hsl(358 78% 61% / .14); }
+
 .sig-detail { display: none; padding: 2px 12px 12px 12px; }
 .sig.open .sig-detail { display: block; }
 /* The expanded view always carries the full level set, so the row is free to

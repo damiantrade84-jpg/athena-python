@@ -30,6 +30,13 @@ const view = {
   railTab: "positions",
 };
 
+/* Rejections, keyed by signal id. The button that was clicked is destroyed by
+ * the very next render (SSE ticks every 3s), so an error written onto it was
+ * unreadable in practice. Holding it here means it survives re-render and
+ * stays on the row until dismissed or aged out. */
+const execErrors = new Map();
+const EXEC_ERROR_TTL_MS = 10 * 60 * 1000;
+
 const $ = (id) => document.getElementById(id);
 const fmt = (n, d = 2) => n === null || n === undefined || !Number.isFinite(Number(n)) ? "—" :
   Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -288,6 +295,22 @@ function execButtons(s) {
   return out.join("");
 }
 
+/* A rejection stays on its row until dismissed — a failed order is exactly the
+ * thing an operator must not miss because a 3s refresh painted over it. */
+function rejectHtml(id) {
+  const e = execErrors.get(id);
+  if (!e) return "";
+  if (Date.now() - e.at > EXEC_ERROR_TTL_MS) { execErrors.delete(id); return ""; }
+  const when = new Date(e.at).toISOString().slice(11, 19);
+  return `<div class="sig-error">
+    <span class="sig-error-tag">REJECTED</span>
+    <span class="sig-error-venue mono">${esc(String(e.venue).toUpperCase())}</span>
+    <span class="sig-error-msg">${esc(e.error)}</span>
+    <span class="sig-error-at mono">${when}Z</span>
+    <button class="sig-error-x" data-dismiss="${esc(id)}" title="Dismiss">×</button>
+  </div>`;
+}
+
 function renderSignals() {
   const el = $("signals");
   const min = Number(state.minScore) || 0;
@@ -343,6 +366,7 @@ function renderSignals() {
         <span class="sig-actions">${execButtons(s)}</span>
         <span class="chev">▶</span>
       </div>
+      ${rejectHtml(s.id)}
       <div class="sig-detail">
         <div class="detail-levels">
           <span class="lvl"><span class="lk">Entry</span><span class="lv">${fmtPx(s.entry)}</span></span>
@@ -369,8 +393,16 @@ function renderSignals() {
     b.disabled = true; b.textContent = "…";
     const r = await fetch(`${BASE}/api/execute`, { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: b.dataset.exec, venue: b.dataset.venue }) }).then(x => x.json());
-    if (!r.ok) { b.textContent = "✕ " + (r.error || "failed"); setTimeout(render, 2500); }
+    if (r.ok) execErrors.delete(b.dataset.exec);
+    else execErrors.set(b.dataset.exec, {
+      error: r.error || "failed", venue: b.dataset.venue, at: Date.now(),
+    });
     refresh();
+  });
+  el.querySelectorAll("[data-dismiss]").forEach(b => b.onclick = (ev) => {
+    ev.stopPropagation();
+    execErrors.delete(b.dataset.dismiss);
+    renderSignals();
   });
 }
 
@@ -432,12 +464,14 @@ function renderEvents() {
   const es = (state.events || []).slice(0, 40);
   $("n-events").textContent = (state.events || []).length;
   $("events").innerHTML = es.map(e => {
-    const money = e.pnl !== undefined ? `<b class="mono ${e.pnl >= 0 ? "pos" : "neg"}">${signed(e.pnl)}</b>` :
+    const money = e.error !== undefined ? `<b class="mono neg">${esc(e.error)}</b>` :
+      e.pnl !== undefined ? `<b class="mono ${e.pnl >= 0 ? "pos" : "neg"}">${signed(e.pnl)}</b>` :
       e.qty !== undefined ? `<b class="mono dim">qty ${fmt(e.qty, 5)}</b>` : "";
     const t = e.t || e.closedAt;
     const dir = e.side || e.direction || "";
     return `<div class="evt">
-      <span class="evt-type ${String(e.type).toLowerCase() === "close" ? "close" : ""}">${esc(e.type)}</span>
+      <span class="evt-type ${String(e.type).toLowerCase() === "close" ? "close" :
+        String(e.type).toLowerCase() === "reject" ? "reject" : ""}">${esc(e.type)}</span>
       <span class="evt-body">
         ${e.symbol ? `<b>${dispSym(e.symbol)}</b>` : ""}
         ${dir ? `<span class="${dir === "LONG" ? "pos" : "neg"}" style="font-size:10px;font-weight:700">${esc(dir)}</span>` : ""}

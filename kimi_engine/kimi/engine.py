@@ -223,6 +223,33 @@ class Engine:
 
     # ------------------------------------------------------------------
     def execute(self, signal_id: str, venue: str = "auto") -> dict:
+        """Execute a signal, and make any rejection visible.
+
+        Every failure path returns {"ok": False, "error": ...} to the caller,
+        but nothing used to record it. The reason reached only the button that
+        was clicked and died with the next re-render, so a rejected order left
+        no trace in the snapshot, the Errors rail, or any log — the operator
+        saw a button flicker and nothing else. Recording it here covers all
+        venues (host, bybit, paper) from one place; it does not alter any gate.
+        """
+        with self.lock:
+            sig = self.signals.get(signal_id)
+            symbol = sig.symbol if sig is not None else signal_id
+        out = self._execute(signal_id, venue)
+        if not out.get("ok"):
+            reason = str(out.get("error") or "failed")
+            with self.lock:
+                self.errors.append(
+                    f"{time.strftime('%H:%M:%S')} EXEC {symbol} [{venue}]: {reason}")
+                self.errors = self.errors[-20:]
+                self.events.append({
+                    "type": "REJECT", "symbol": symbol, "venue": venue,
+                    "error": reason, "t": time.time(), "signalId": signal_id,
+                })
+                self.events = self.events[-100:]
+        return out
+
+    def _execute(self, signal_id: str, venue: str = "auto") -> dict:
         # Host pipeline first: real broker orders through Athena's audited
         # path (freshness → demo gate → guardian → risk engine → managed
         # execution). Broker IO is slow, so it runs outside the engine lock.
