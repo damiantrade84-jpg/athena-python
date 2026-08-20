@@ -4,105 +4,218 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KIMI ENGINE — Intraday Quant Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap">
 <link rel="stylesheet" href="styles.css">
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
+
+<!-- ═══ TOP BAR ═══════════════════════════════════════════════════════ -->
 <header id="topbar">
   <div class="brand">
-    <span class="logo">◈</span>
-    <span class="word">KIMI&nbsp;ENGINE</span>
+    <span class="mark">◈</span>
+    <div>
+      <span class="brand-name">KIMI</span>
+      <span class="brand-sub">Intraday Quant Engine</span>
+    </div>
     <span class="ver">v1.0</span>
   </div>
-  <div class="status">
-    <span id="scan-pill" class="pill dim">BOOT</span>
-    <span id="clock" class="mono">--:--:-- UTC</span>
+
+  <div class="topbar-status">
+    <span id="scan-pill" class="pill"><i class="dot"></i><span id="scan-pill-text">BOOT</span></span>
+    <span id="scan-meta" class="meta mono scan">—</span>
+    <span id="clock" class="meta mono">--:--:-- UTC</span>
   </div>
-  <div class="controls">
-    <span id="broker-chip" class="pill dim">PAPER</span>
-    <label class="ctl">min score <input id="min-score" type="number" value="75" min="50" max="95" step="1"></label>
-    <label class="ctl">auto A+ <input id="auto-trade" type="checkbox"></label>
+
+  <div class="topbar-controls">
+    <span id="host-chip" class="pill" title="Athena host execution pipeline">HOST —</span>
+    <span id="broker-chip" class="pill" title="native Bybit adapter">PAPER ONLY</span>
+    <label class="field label" title="Signals and watchlist rows below this KIMI Score are hidden">
+      MIN SCORE <input id="min-score" type="number" value="75" min="50" max="95" step="1">
+    </label>
+    <label class="switch label" title="Auto-execute A+ signals">
+      AUTO A+ <input id="auto-trade" type="checkbox"><span class="track"></span>
+    </label>
     <button id="kill" class="btn kill">KILL SWITCH</button>
   </div>
 </header>
 
+<!-- ═══ METRICS ═══════════════════════════════════════════════════════ -->
+<section id="metrics">
+  <div class="mgroup">
+    <span class="label">Capital</span>
+    <div class="venues">
+      <div class="venue">
+        <span class="venue-name" id="mt5-name">MT5</span>
+        <span class="venue-val" id="mt5-val">—<span class="venue-cur"></span></span>
+        <span class="venue-sub" id="mt5-sub">not connected</span>
+      </div>
+      <div class="venue">
+        <span class="venue-name">BYBIT</span>
+        <span class="venue-val" id="bybit-val">—<span class="venue-cur"></span></span>
+        <span class="venue-sub" id="bybit-sub">not connected</span>
+      </div>
+      <div class="venue">
+        <span class="venue-name">PAPER</span>
+        <span class="venue-val" id="paper-val">—<span class="venue-cur">USD</span></span>
+        <span class="venue-sub" id="paper-sub">—</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="mgroup">
+    <span class="label">Daily loss vs cap</span>
+    <div class="meter-val">
+      <b id="dloss-val">—</b>
+      <span class="cap" id="dloss-cap">/ —</span>
+    </div>
+    <div class="meter"><i id="dloss-bar" class="ok" style="width:0%"></i></div>
+    <div class="meter-note" id="dloss-note">—</div>
+  </div>
+
+  <div class="mgroup">
+    <span class="label">Activity</span>
+    <div class="counters">
+      <div class="counter"><div class="cval" id="c-signals">—</div><div class="clab">Signals</div></div>
+      <div class="counter"><div class="cval" id="c-open">—</div><div class="clab">Open</div></div>
+      <div class="counter"><div class="cval" id="c-scanned">—</div><div class="clab">Scanned</div></div>
+    </div>
+  </div>
+
+  <div class="mgroup curve">
+    <div class="curve-head">
+      <span class="label">Paper equity curve</span>
+      <b id="curve-val">—</b>
+    </div>
+    <canvas id="spark" height="38"></canvas>
+  </div>
+</section>
+
+<!-- ═══ WORKSPACE ═════════════════════════════════════════════════════ -->
+<main id="workspace">
+
+  <!-- ── watchlist ── -->
+  <section id="watch" class="panel">
+    <div class="panel-head">
+      <span class="panel-title">Watchlist</span>
+      <span id="watch-count" class="count-chip">—</span>
+      <span style="flex:1"></span>
+      <button id="scan-now" class="btn mini ghost" title="Force a scan now">⟳ SCAN</button>
+      <button id="pairs-open" class="btn mini ghost" title="Edit the scan universe">PAIRS</button>
+    </div>
+    <div class="panel-tools">
+      <input id="watch-search" type="text" placeholder="filter symbol…" class="mono">
+      <select id="watch-sort" title="Sort order">
+        <option value="score">Score</option>
+        <option value="symbol">A–Z</option>
+        <option value="change">Change %</option>
+      </select>
+    </div>
+    <div class="panel-tools">
+      <div class="seg" id="watch-side">
+        <button data-side="all" class="on">BOTH</button>
+        <button data-side="long">LONG</button>
+        <button data-side="short">SHORT</button>
+      </div>
+    </div>
+    <div id="watchlist" class="panel-body"></div>
+  </section>
+
+  <!-- ── chart + signals ── -->
+  <section id="center">
+    <div class="panel">
+      <div id="chart-head">
+        <span id="chart-symbol">—</span>
+        <span id="chart-tf">—</span>
+        <span class="quote-block">
+          <span id="chart-live-price" class="mono">—</span>
+          <span id="chart-live-source">no current quote</span>
+        </span>
+        <span id="chart-meta"></span>
+        <span class="seg" id="tf-switch">
+          <button class="tfbtn" data-tf="5m">5m</button>
+          <button class="tfbtn on" data-tf="15m">15m</button>
+          <button class="tfbtn" data-tf="1h">1h</button>
+        </span>
+      </div>
+      <div id="chart"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Active signals</span>
+        <span id="sig-count" class="count-chip">—</span>
+        <span style="flex:1"></span>
+        <div class="seg" id="sig-dir">
+          <button data-dir="all" class="on">ALL</button>
+          <button data-dir="LONG">LONG</button>
+          <button data-dir="SHORT">SHORT</button>
+        </div>
+        <div class="seg" id="sig-grade">
+          <button data-grade="all" class="on">ANY</button>
+          <button data-grade="A+">A+</button>
+          <button data-grade="A">A+/A</button>
+        </div>
+        <select id="sig-sort" title="Sort order">
+          <option value="score">Score</option>
+          <option value="ttl">Expiring</option>
+          <option value="new">Newest</option>
+          <option value="symbol">A–Z</option>
+        </select>
+      </div>
+      <div id="signals" class="panel-body"></div>
+    </div>
+  </section>
+
+  <!-- ── positions / trades / events / errors ── -->
+  <aside id="right" class="panel">
+    <div class="tabs" id="rail-tabs">
+      <button class="tab on" data-tab="positions">Positions <span class="n" id="n-positions">0</span></button>
+      <button class="tab" data-tab="trades">Trades <span class="n" id="n-trades">0</span></button>
+      <button class="tab" data-tab="events">Events <span class="n" id="n-events">0</span></button>
+      <button class="tab" data-tab="errors">Errors <span class="n" id="n-errors">0</span></button>
+    </div>
+    <div class="panel-body">
+      <div id="positions" class="rail-pane"></div>
+      <div id="trades" class="rail-pane" hidden></div>
+      <div id="events" class="rail-pane" hidden></div>
+      <div id="errlist" class="rail-pane" hidden></div>
+    </div>
+  </aside>
+</main>
+
+<!-- ═══ FOOTER ════════════════════════════════════════════════════════ -->
+<footer id="foot">
+  <span id="feed-status" class="mono">feed: —</span>
+  <span id="errors" class="mono"></span>
+  <span class="foot-note">execution via Athena pipeline (risk + guardian gates) · demo-first · paper fallback</span>
+</footer>
+
+<!-- ═══ PAIRS MODAL ═══════════════════════════════════════════════════ -->
 <div id="pairs-modal" class="modal hidden">
   <div class="modal-box">
     <div class="modal-head">
-      <b>SCAN UNIVERSE</b>
+      <span class="panel-title">Scan universe</span>
       <input id="pairs-filter" type="text" placeholder="filter…" class="mono">
     </div>
     <div class="modal-bar">
-      <button id="pairs-all-portfolio" class="btn" title="Athena's current active book (enabled pairs), not the exchange catalog">ALL ACTIVE</button>
-      <button id="pairs-all-shown" class="btn" title="Select the pairs currently listed — the active book, or filter matches">ALL SHOWN</button>
-      <button id="pairs-clear" class="btn">CLEAR</button>
-      <span style="flex:1"></span>
-      <span id="pairs-count" class="mono dim"></span>
+      <button id="pairs-all-portfolio" class="btn mini ghost" title="Athena's current active book (enabled pairs), not the exchange catalog">ALL ACTIVE</button>
+      <button id="pairs-all-shown" class="btn mini ghost" title="Select the pairs currently listed — the active book, or filter matches">ALL SHOWN</button>
+      <button id="pairs-clear" class="btn mini ghost">CLEAR</button>
+      <span id="pairs-count"></span>
     </div>
     <div id="pairs-list"></div>
     <div class="modal-foot">
       <input id="pairs-custom" type="text" placeholder="add symbol e.g. TONUSDT or GBPJPY" class="mono">
-      <button id="pairs-add" class="btn">ADD</button>
+      <button id="pairs-add" class="btn mini ghost">ADD</button>
       <span style="flex:1"></span>
-      <button id="pairs-cancel" class="btn">CANCEL</button>
-      <button id="pairs-save" class="btn exec">SAVE</button>
+      <button id="pairs-cancel" class="btn ghost">CANCEL</button>
+      <button id="pairs-save" class="btn primary">SAVE</button>
     </div>
   </div>
 </div>
-
-<section id="kpis">
-  <div class="kpi"><div class="k-label" id="k-equity-label">MT5 EQUITY</div><div id="k-equity" class="k-val mono">—</div><div id="k-equity-sub" class="k-sub mono dim">—</div></div>
-  <div class="kpi"><div class="k-label">BYBIT EQUITY</div><div id="k-bybit" class="k-val mono">—</div><div id="k-bybit-sub" class="k-sub mono dim">—</div></div>
-  <div class="kpi"><div class="k-label">PAPER EQUITY</div><div id="k-paper" class="k-val mono">—</div></div>
-  <div class="kpi"><div class="k-label">UNREALIZED</div><div id="k-upnl" class="k-val mono">—</div></div>
-  <div class="kpi"><div class="k-label">DAILY LOSS</div><div id="k-dloss" class="k-val mono">—</div></div>
-  <div class="kpi"><div class="k-label">OPEN</div><div id="k-open" class="k-val mono">—</div></div>
-  <div class="kpi"><div class="k-label">SIGNALS</div><div id="k-sigs" class="k-val mono">—</div></div>
-  <div class="kpi wide"><div class="k-label">EQUITY CURVE</div><canvas id="spark" height="34"></canvas></div>
-</section>
-
-<main id="grid">
-  <aside id="watch">
-    <div class="panel-title watch-head">WATCHLIST · KIMI SCORE
-      <span id="watch-count" class="mono dim"></span>
-      <span class="watch-btns">
-        <button id="scan-now" class="btn mini">⟳ SCAN</button>
-        <button id="pairs-open" class="btn mini">PAIRS</button>
-      </span>
-    </div>
-    <div id="watchlist"></div>
-    <div class="panel-title" style="margin-top:10px">EVENTS</div>
-    <div id="events"></div>
-  </aside>
-
-  <section id="center">
-    <div id="chart-head">
-      <span id="chart-symbol" class="mono">—</span>
-      <span id="chart-meta" class="dim mono"></span>
-      <span class="tf-switch">
-        <button class="tfbtn" data-tf="5m">5m</button>
-        <button class="tfbtn on" data-tf="15m">15m</button>
-        <button class="tfbtn" data-tf="1h">1h</button>
-      </span>
-    </div>
-    <div id="chart"></div>
-    <div class="panel-title">ACTIVE SIGNALS</div>
-    <div id="signals"></div>
-  </section>
-
-  <aside id="right">
-    <div class="panel-title">POSITIONS</div>
-    <div id="positions"></div>
-    <div class="panel-title" style="margin-top:10px">TRADE LOG</div>
-    <div id="trades"></div>
-  </aside>
-</main>
-
-<footer id="foot">
-  <span id="feed-status" class="dim mono">feed: —</span>
-  <span id="errors" class="err mono"></span>
-  <span class="dim">execution via Athena pipeline (risk + guardian gates) · demo-first · paper fallback</span>
-</footer>
 
 <script>window.KIMI_BASE = window.KIMI_BASE || "";</script>
 <script src="app.js"></script>

@@ -25,8 +25,11 @@ chart = eng.chart("BTCUSDT", "15m")
     encoding="utf-8")
 
 html = (WEB / "index.html").read_text(encoding="utf-8")
-html = html.replace('href="/styles.css"', 'href="./styles.css"')
-html = html.replace('src="/app.js"', 'src="./_snapshot_stub.js"></script><script src="./app.js"')
+# index.html ships relative asset paths (the Athena bridge only serves
+# app.js / styles.css). Point them at ./ and inject the API stub ahead of
+# app.js so the page runs from file:// with no server.
+html = html.replace('href="styles.css"', 'href="./styles.css"')
+html = html.replace('src="app.js"', 'src="./_snapshot_stub.js"></script><script src="./app.js"')
 stub = """
 window.EventSource = class {
   constructor() {
