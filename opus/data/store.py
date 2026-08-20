@@ -220,6 +220,32 @@ class Store:
 
     # -- reads ------------------------------------------------------------
 
+    def get_signal(self, signal_id: str) -> Signal | None:
+        """The signal this engine recorded under `signal_id`, or None.
+
+        Execute uses this when a fresh rescore no longer emits the same id.
+        Reconstruction is fail-closed: a corrupt or partial payload is treated
+        as missing rather than as a tradeable card.
+        """
+        key = str(signal_id or "").strip()
+        if not key:
+            return None
+        with self._cursor() as conn:
+            row = conn.execute(
+                "SELECT payload FROM signals WHERE signal_id = ? AND score_model = ?",
+                (key, SCORE_MODEL_VERSION),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload"])
+        except (ValueError, TypeError):
+            return None
+        try:
+            return Signal.from_dict(payload)
+        except (TypeError, ValueError, KeyError):
+            return None
+
     def recent_signals(self, limit: int = 100, decision: str | None = None) -> list[dict]:
         sql = "SELECT payload FROM signals"
         args: list = []

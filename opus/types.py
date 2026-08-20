@@ -304,6 +304,129 @@ class Signal:
             "createdTs": self.created_ts,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict) -> "Signal":
+        """Rehydrate a signal that this engine previously serialised.
+
+        Used by execute so a TRADE card can be submitted from the store when
+        a fresh rescore no longer emits the same signal_id. Missing required
+        fields raise rather than inventing geometry or readiness.
+        """
+        if not isinstance(payload, dict):
+            raise ValueError("signal payload is not an object")
+        signal_id = str(payload.get("signalId") or "").strip()
+        symbol = str(payload.get("symbol") or "").strip()
+        if not signal_id or not symbol:
+            raise ValueError("signal payload missing signalId or symbol")
+
+        levels_raw = payload.get("levels")
+        if not isinstance(levels_raw, dict):
+            raise ValueError("signal payload missing levels")
+        try:
+            entry = float(levels_raw["entry"])
+            stop = float(levels_raw["stop"])
+            targets = [float(t) for t in (levels_raw.get("targets") or [])]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("signal payload has unusable levels") from exc
+        if not targets:
+            raise ValueError("signal payload missing targets")
+        if not (
+            np.isfinite(entry) and np.isfinite(stop)
+            and all(np.isfinite(t) for t in targets)
+        ):
+            raise ValueError("signal payload has non-finite levels")
+
+        quote = None
+        quote_raw = payload.get("quote")
+        if isinstance(quote_raw, dict):
+            try:
+                quote = Quote(
+                    symbol=symbol,
+                    bid=float(quote_raw["bid"]),
+                    ask=float(quote_raw["ask"]),
+                    ts=float(quote_raw.get("ts") or 0.0),
+                    source=str(quote_raw.get("source") or "unknown"),
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("signal payload has unusable quote") from exc
+
+        gates_raw = payload.get("gates")
+        if not isinstance(gates_raw, list) or not gates_raw:
+            raise ValueError("signal payload missing gates")
+        gates: list[GateResult] = []
+        for raw in gates_raw:
+            if not isinstance(raw, dict):
+                raise ValueError("signal payload has malformed gates")
+            gates.append(GateResult(
+                name=str(raw.get("name") or ""),
+                passed=bool(raw.get("passed")),
+                hard=bool(raw.get("hard", True)),
+                detail=str(raw.get("detail") or ""),
+                observed=raw.get("observed"),
+                limit=raw.get("limit"),
+            ))
+
+        readings: list[IndicatorReading] = []
+        for raw in payload.get("readings") or []:
+            if not isinstance(raw, dict):
+                continue
+            detail = raw.get("detail")
+            readings.append(IndicatorReading(
+                name=str(raw.get("name") or ""),
+                value=float(raw.get("value") or 0.0),
+                confidence=float(raw.get("confidence") or 0.0),
+                detail=dict(detail) if isinstance(detail, dict) else {},
+            ))
+
+        try:
+            direction = Direction(str(payload["direction"]))
+            archetype = Archetype(str(payload["archetype"]))
+            decision = Decision(str(payload["decision"]))
+            readiness = Readiness(str(payload["readiness"]))
+        except (KeyError, ValueError) as exc:
+            raise ValueError("signal payload missing decision fields") from exc
+
+        regime_raw = payload.get("regime") or Regime.DORMANT.value
+        try:
+            regime = Regime(str(regime_raw))
+        except ValueError as exc:
+            raise ValueError("signal payload has unknown regime") from exc
+
+        return cls(
+            symbol=symbol,
+            display=str(payload.get("display") or symbol),
+            asset_class=str(payload.get("assetClass") or ""),
+            direction=direction,
+            archetype=archetype,
+            regime=regime,
+            decision=decision,
+            readiness=readiness,
+            conviction=float(payload.get("conviction") or 0.0),
+            coherence=float(payload.get("coherence") or 0.0),
+            probability=float(payload.get("probability") or 0.0),
+            expectancy_r=float(payload.get("expectancyR") or 0.0),
+            cost_r=float(payload.get("costR") or 0.0),
+            levels=Levels(
+                entry=entry,
+                stop=stop,
+                targets=targets,
+                entry_kind=str(levels_raw.get("entryKind") or "limit"),
+                stop_basis=str(levels_raw.get("stopBasis") or ""),
+                target_basis=[str(b) for b in (levels_raw.get("targetBasis") or [])],
+            ),
+            readings=readings,
+            gates=gates,
+            size_units=float(payload.get("sizeUnits") or 0.0),
+            risk_pct=float(payload.get("riskPct") or 0.0),
+            kelly_fraction=float(payload.get("kellyFraction") or 0.0),
+            quote=quote,
+            timeframes=dict(payload.get("timeframes") or {}),
+            provenance=dict(payload.get("provenance") or {}),
+            notes=[str(n) for n in (payload.get("notes") or [])],
+            created_ts=float(payload.get("createdTs") or 0.0),
+            signal_id=signal_id,
+        )
+
 
 def rnd(value: Any, digits: int = 4) -> Any:
     try:

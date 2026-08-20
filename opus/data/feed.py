@@ -79,6 +79,14 @@ class DataBundle:
     timeframes: dict = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     fetched_ts: float = 0.0
+    # LOCAL wall clock at the instant the quote was captured. The scan pins one
+    # `now` for the whole sweep so every symbol is scored against the same
+    # clock, but a quote fetched thirty seconds into that sweep carries a venue
+    # timestamp LATER than the pinned `now` - and the freshness gate then read
+    # an honest, one-second-old quote as "dated 30s in the FUTURE" and blocked
+    # it. Quote freshness is the one measurement that must be taken against the
+    # clock at capture, not against the analysis clock.
+    quote_captured_ts: float = 0.0
 
     @property
     def usable(self) -> bool:
@@ -242,8 +250,10 @@ def fetch_bundle(spec: dict, *, now: float | None = None) -> DataBundle:
     trigger = _get("trigger", "trigger_fetch")
 
     quote = None
+    quote_captured_ts = 0.0
     try:
         quote = feed.quote(symbol)
+        quote_captured_ts = time.time()
     except Exception as exc:  # noqa: BLE001
         errors.append(f"quote: {exc}")
 
@@ -266,6 +276,7 @@ def fetch_bundle(spec: dict, *, now: float | None = None) -> DataBundle:
         timeframes=dict(tfs),
         errors=errors,
         fetched_ts=now,
+        quote_captured_ts=quote_captured_ts,
     )
 
 

@@ -73,6 +73,91 @@ def _error(message: str, status: int = 400, **extra):
     return jsonify(body), status
 
 
+def _norm_symbol(value: str) -> str:
+    return str(value or "").strip().upper().replace("/", "").replace(" ", "")
+
+
+def _stored_signal_for_execute(store, signal_id: str, symbol: str, fresh):
+    """The scan-recorded signal, with a live quote, or a refusal reason.
+
+    Returns (signal, None) or (None, reason). The client cannot invent this:
+    it has to already be in our store under the same id and symbol. Age and
+    an opposite live TRADE refuse the fallback so a rolled bar-id is not
+    treated as proof the setup is still valid.
+    """
+    missing = (
+        "signal is no longer present on a fresh scan; it has expired "
+        "or the setup has changed"
+    )
+    if store is None:
+        return None, missing
+    try:
+        stored = store.get_signal(signal_id)
+    except Exception:  # noqa: BLE001
+        return None, missing
+    if stored is None:
+        return None, missing
+
+    wanted = _norm_symbol(symbol)
+    aliases = {_norm_symbol(stored.symbol), _norm_symbol(stored.display)}
+    if wanted not in aliases:
+        return None, missing
+
+    max_age = float(config.require("EXECUTION.stored_signal_max_age_sec") or 0.0)
+    if max_age <= 0:
+        return None, missing
+    now = time.time()
+    created_age = now - float(stored.created_ts or 0.0)
+    bar_ts = float((stored.provenance or {}).get("barTs") or 0.0)
+    bar_age = (now - bar_ts) if bar_ts > 0 else created_age
+    age = max(created_age, bar_age)
+    if age > max_age:
+        return None, (
+            f"stored signal is {age:.0f}s old (limit {max_age:.0f}s); "
+            "rescan and execute a current card"
+        )
+
+    for other in fresh.signals or []:
+        if _norm_symbol(getattr(other, "symbol", "")) != wanted:
+            continue
+        decision = getattr(getattr(other, "decision", None), "value", None) or str(
+            getattr(other, "decision", "") or ""
+        )
+        readiness = getattr(getattr(other, "readiness", None), "value", None) or str(
+            getattr(other, "readiness", "") or ""
+        )
+        direction = getattr(getattr(other, "direction", None), "value", None) or str(
+            getattr(other, "direction", "") or ""
+        )
+        stored_dir = stored.direction.value
+        if decision == "TRADE" and readiness == "READY" and direction and direction != stored_dir:
+            return None, (
+                "fresh scan has a TRADE in the opposite direction; "
+                "refusing the stored card"
+            )
+
+    quote = next(
+        (
+            s.quote for s in (fresh.signals or [])
+            if s.quote and _norm_symbol(getattr(s, "symbol", "")) == wanted
+        ),
+        None,
+    )
+    if quote is None:
+        spec = (
+            config.universe_map().get(stored.symbol)
+            or config.universe_map().get(symbol.upper())
+        )
+        if spec is not None:
+            try:
+                quote = fetch_bundle(spec).quote
+            except Exception:  # noqa: BLE001 - revalidate will refuse a stale quote
+                quote = None
+    if quote is not None:
+        stored.quote = quote
+    return stored, None
+
+
 def create_opus_blueprint() -> Blueprint:
     bp = Blueprint("opus", __name__, url_prefix="/api/opus")
 
@@ -168,9 +253,11 @@ def create_opus_blueprint() -> Blueprint:
         except (TypeError, ValueError):
             return _error("'units' must be numeric")
 
-        # Re-derive the signal from a FRESH scan of that symbol rather than
-        # trusting a client-supplied payload. A stored signal carries a stale
-        # quote, and a client-supplied one could carry anything at all.
+        # Never trust a client-supplied payload for levels or readiness.
+        # Prefer a FRESH rescore of the same signal_id; if that id is gone
+        # (bar rolled, ranking shuffled) fall back to the store copy this
+        # engine recorded, with its quote replaced by a live one. Router
+        # revalidation and the order-plan rest rules still have to pass.
         symbol = str(body.get("symbol") or "").strip()
         if not symbol:
             return _error("'symbol' is required so the signal can be re-derived")
@@ -187,21 +274,32 @@ def create_opus_blueprint() -> Blueprint:
 
         match = next((s for s in fresh.signals if s.signal_id == signal_id), None)
         if match is None:
-            return _error(
-                "signal is no longer present on a fresh scan; it has expired "
-                "or the setup has changed",
-                409,
-                availableSignalIds=[s.signal_id for s in fresh.signals],
-            )
+            match, why = _stored_signal_for_execute(store, signal_id, symbol, fresh)
+            if match is None:
+                return _error(
+                    why or (
+                        "signal is no longer present on a fresh scan; it has expired "
+                        "or the setup has changed"
+                    ),
+                    409,
+                    availableSignalIds=[s.signal_id for s in fresh.signals],
+                )
 
         result = router.submit(
             match, request_live=request_live, units=units, store=store
         )
-        return jsonify({
+        body = {
             "ok": bool(result.ok),
             "order": result.as_dict(),
             "signal": match.as_dict(),
-        }), (200 if result.ok else 422)
+        }
+        if not result.ok:
+            # A non-2xx body without an `error` key reaches the client as the
+            # bare string "HTTP 422": the actual refusal - the gate, the limit,
+            # the broker's own words - is lost exactly when it is needed. Every
+            # rejection here is a deliberate refusal and must be readable.
+            body["error"] = result.message or "execution rejected"
+        return jsonify(body), (200 if result.ok else 422)
 
     @bp.post("/reconcile")
     def reconcile_orders():

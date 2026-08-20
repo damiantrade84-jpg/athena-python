@@ -7,6 +7,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { useApiPoll, useApiPost } from '@/hooks/useApiData';
+import { apiClient } from '@/lib/apiClient';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -77,6 +78,7 @@ interface ScanResponse {
   errors: { symbol: string; error: string }[];
   scanned: number;
   elapsedSec: number;
+  startedTs?: number;
   engineVersion?: string;
   error?: string;
 }
@@ -109,6 +111,31 @@ interface AccountResponse {
   requireDemoAccount: boolean;
   accounts: AccountRow[];
 }
+interface OpusOrderRow {
+  order_id?: string;
+  orderId?: string;
+  signal_id?: string;
+  signalId?: string;
+  submitted_ts?: number;
+  submittedTs?: number;
+  mode?: string;
+  broker?: string;
+  symbol?: string;
+  direction?: string;
+  order_type?: string;
+  orderType?: string;
+  units?: number;
+  entry?: number;
+  stop?: number;
+  target?: number;
+  status?: string;
+  message?: string;
+}
+interface OrdersResponse {
+  ok: boolean;
+  orders: OpusOrderRow[];
+  count: number;
+}
 
 const INDICATOR_LABEL: Record<string, string> = {
   LDI: 'Liquidity Displacement',
@@ -137,6 +164,16 @@ function price(v: any): string {
   const abs = Math.abs(f);
   const digits = abs >= 1000 ? 2 : abs >= 10 ? 3 : 5;
   return f.toFixed(digits);
+}
+
+// A card can only be executed while the trigger bar it was derived from is
+// still the current one, so how OLD the scan is decides whether Execute can
+// work at all - a more useful number on screen than how long the scan took.
+function ageLabel(ts: any): string {
+  const f = Number(ts);
+  if (!Number.isFinite(f) || f <= 0) return '—';
+  const secs = Math.max(0, Math.round(Date.now() / 1000 - f));
+  return secs < 90 ? `${secs}s ago` : `${Math.round(secs / 60)}m ago`;
 }
 
 function decisionClass(d: string): string {
@@ -407,6 +444,8 @@ export default function OpusEnginePanel() {
     useApiPoll<StatusResponse>('/api/opus/status', 30000);
   const { data: accountData, refresh: refreshAccounts } =
     useApiPoll<AccountResponse>('/api/opus/account', 60000);
+  const { data: ordersData, refresh: refreshOrders } =
+    useApiPoll<OrdersResponse>('/api/opus/orders', 15000);
   const { post, loading: posting } = useApiPost<any>();
 
   const [scan, setScan] = useState<ScanResponse | null>(null);
@@ -415,7 +454,10 @@ export default function OpusEnginePanel() {
   const [executingId, setExecutingId] = useState<string | null>(null);
   const [lastOrder, setLastOrder] = useState<any>(null);
   const [onlyTradeable, setOnlyTradeable] = useState(false);
-  const [routeToBroker, setRouteToBroker] = useState(false);
+  // OPUS follows the application's broker-capable demo contract by default.
+  // `routeLive` below still fails closed until the server is armed, a live
+  // adapter is available, and (when required) the account is confirmed demo.
+  const [routeToBroker, setRouteToBroker] = useState(true);
 
   // The broker account that live routing would actually reach.
   const brokerAccount = useMemo(
@@ -449,12 +491,17 @@ export default function OpusEnginePanel() {
     }
   }, [post, refreshStatus]);
 
+  // `apiClient.post` is used directly rather than the `useApiPost` helper: that
+  // helper CATCHES the non-2xx throw, files the message in its own state and
+  // returns null, so `res?.ok === false` never fired and every refusal - a
+  // blocking gate, a portfolio limit, a broker rejection, an expired card -
+  // arrived as a click that visibly did nothing at all.
   const execute = useCallback(
     async (s: OpusSignal) => {
       setExecutingId(s.signalId);
       setError(null);
       try {
-        const res = await post('/api/opus/execute', {
+        const res = await apiClient.post<any>('/api/opus/execute', {
           signalId: s.signalId,
           symbol: s.symbol,
           live: routeLive,
@@ -464,13 +511,18 @@ export default function OpusEnginePanel() {
           setError(res?.order?.message || res?.error || 'Execution rejected');
         }
         refreshAccounts();
+        refreshStatus();
+        refreshOrders();
       } catch (e: any) {
-        setError(e?.message || 'Execution failed');
+        const message = e?.message || 'Execution failed';
+        setError(message);
+        setLastOrder(null);
+        refreshOrders();
       } finally {
         setExecutingId(null);
       }
     },
-    [post, routeLive, refreshAccounts],
+    [routeLive, refreshAccounts, refreshStatus, refreshOrders],
   );
 
   const signals = useMemo(() => {
@@ -539,6 +591,54 @@ export default function OpusEnginePanel() {
         </Card>
       )}
 
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">OPUS orders</CardTitle>
+          <p className="text-[11px] text-muted-foreground">
+            Paper and demo fills live here. They are not the main Trades tab —
+            most OPUS entries rest as working limit/stop orders until price
+            trades the planned entry.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {(ordersData?.orders || []).length === 0 ? (
+            <div className="py-3 text-center text-[12px] text-muted-foreground">
+              No OPUS orders yet.
+            </div>
+          ) : (
+            (ordersData?.orders || []).slice(0, 12).map((o) => {
+              const status = String(o.status || '').toLowerCase();
+              const id = o.order_id || o.orderId || '';
+              return (
+                <div
+                  key={id}
+                  className="flex flex-wrap items-center gap-2 rounded-md border px-2 py-1.5 text-[11px]"
+                >
+                  <Badge
+                    className={
+                      status === 'filled'
+                        ? 'badge-long'
+                        : status === 'working'
+                          ? 'badge-neutral'
+                          : 'badge-short'
+                    }
+                  >
+                    {(o.status || '—').toUpperCase()}
+                  </Badge>
+                  <span className="font-medium">{o.symbol}</span>
+                  <span className="font-mono text-muted-foreground">
+                    {o.direction} {o.order_type || o.orderType} {num(o.units, 2)} @ {price(o.entry)}
+                  </span>
+                  <span className="ml-auto font-mono text-muted-foreground">
+                    {o.mode} · {o.broker}
+                  </span>
+                </div>
+              );
+            })
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
         {[
           { label: 'Universe', value: status?.universe?.length ?? '—', icon: Layers },
@@ -550,8 +650,8 @@ export default function OpusEnginePanel() {
           // screen to say so. This is that count.
           { label: 'Resting', value: status?.store?.working ?? '—', icon: Timer },
           {
-            label: 'Scan time',
-            value: scan ? `${num(scan.elapsedSec, 2)}s` : '—',
+            label: 'Scan age',
+            value: scan ? ageLabel(scan.startedTs) : '—',
             icon: RefreshCw,
           },
         ].map((s) => (
