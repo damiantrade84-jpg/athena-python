@@ -326,7 +326,7 @@ function renderSignals() {
 
     return `<div class="sig ${open ? "open" : ""}" data-sig="${esc(s.id)}">
       <div class="sig-row" data-toggle="${esc(s.id)}">
-        <span class="dir ${s.direction.toLowerCase()}">${s.direction === "LONG" ? "▲" : "▼"} ${s.direction}</span>
+        <span class="dir ${s.direction.toLowerCase()}" title="${s.direction}">${s.direction === "LONG" ? "▲" : "▼"} <span class="dirword">${s.direction}</span></span>
         <span class="sig-sym">${dispSym(s.symbol)}</span>
         <span class="sig-score">
           <span class="grade-chip ${gradeClass(s.grade)}">${esc(s.grade)} ${fmt(s.score, 1)}</span>
@@ -344,6 +344,12 @@ function renderSignals() {
         <span class="chev">▶</span>
       </div>
       <div class="sig-detail">
+        <div class="detail-levels">
+          <span class="lvl"><span class="lk">Entry</span><span class="lv">${fmtPx(s.entry)}</span></span>
+          <span class="lvl sl"><span class="lk">SL</span><span class="lv">${fmtPx(s.sl)}</span></span>
+          <span class="lvl tp"><span class="lk">TP1</span><span class="lv">${fmtPx(s.tp1)}</span></span>
+          <span class="lvl tp"><span class="lk">TP2</span><span class="lv">${fmtPx(s.tp2)}</span></span>
+        </div>
         <div class="comps">${comps}</div>
         <div class="reasons">${(s.reasons || []).map(r => `<span class="reason">${esc(r)}</span>`).join("")}</div>
       </div>

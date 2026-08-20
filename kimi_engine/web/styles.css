@@ -376,8 +376,14 @@ select { cursor: pointer; }
            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sig-score { display: flex; align-items: center; gap: 7px; width: 124px; flex: none; }
 .sig-score .track2 > i { background: linear-gradient(90deg, var(--primary), var(--cyan)); }
-.levels { display: flex; gap: 12px; flex: 1; min-width: 0; }
-.lvl { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+/* Price columns are content-sized and MUST NOT shrink: a squeezed .lvl let the
+   value overflow its box and paint over the next column (ETH entry 2,276.8
+   needed 48px in a 28px box and ran into the SL). Prices are never clipped or
+   ellipsised either — a half-rendered price is a misreadable price — so when
+   the row runs out of width the group wraps instead. */
+.levels { display: flex; gap: 2px 11px; flex: 1 1 auto; min-width: 0; flex-wrap: wrap; }
+.lvl { display: flex; flex-direction: column; line-height: 1.25;
+       flex: 0 0 auto; white-space: nowrap; }
 .lvl .lk { font-size: 8.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); }
 .lvl .lv { font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .lvl.sl .lv { color: var(--short); }
@@ -395,6 +401,13 @@ select { cursor: pointer; }
 
 .sig-detail { display: none; padding: 2px 12px 12px 12px; }
 .sig.open .sig-detail { display: block; }
+/* The expanded view always carries the full level set, so the row is free to
+   drop TP2/TP1 when it runs short of width without the numbers becoming
+   unreachable. */
+.detail-levels {
+  display: flex; gap: 4px 20px; flex-wrap: wrap; margin: 4px 0 10px;
+  padding-bottom: 9px; border-bottom: 1px solid hsl(220 16% 14% / .8);
+}
 .comps { display: grid; grid-template-columns: repeat(auto-fill, minmax(94px, 1fr)); gap: 7px 12px; }
 .comp .cl { display: flex; justify-content: space-between; align-items: baseline;
             font-size: 9px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
@@ -505,22 +518,41 @@ select { cursor: pointer; }
   :root { --rail-l: 268px; --rail-r: 306px; }
   .sig-live { display: none; }
 }
-@media (max-width: 1320px) {
+@media (max-width: 1460px) {
   #metrics { grid-template-columns: minmax(300px, 1.4fr) minmax(170px, 1fr) minmax(170px, 1fr); }
   #metrics .mgroup.curve { display: none; }
-  .lvl.tp2 { display: none; }
+  .sig-row .lvl.tp2 { display: none; }
   .brand-sub { display: none; }
 }
 /* Embedded-panel band (~1000–1180px): the rails carry positions, trades,
    events and errors, so squeeze them rather than dropping them. */
-@media (max-width: 1180px) {
+@media (max-width: 1300px) {
   :root { --rail-l: 228px; --rail-r: 250px; }
   .brand .ver { display: none; }
   .topbar-status .meta.scan { display: none; }
   #workspace { padding-left: 10px; padding-right: 10px; }
   #metrics { padding-left: 10px; padding-right: 10px; }
   #topbar, #foot { padding-left: 10px; padding-right: 10px; }
-  .lvl.tp1 { display: none; }
+  .sig-score .track2 { display: none; }
+  .sig-score { width: auto; }
+}
+/* TP1 survives until the row genuinely cannot seat three price columns. */
+@media (max-width: 1240px) {
+  .sig-row .lvl.tp1 { display: none; }
+}
+/* Narrowest band the embedded panel hits (~1000–1140px, centre column ~500px).
+   Reclaim fixed width from the row chrome so the price columns still fit on
+   one line: the coloured ▲/▼ carries direction without the word, and the
+   symbol sizes to its own text. */
+@media (max-width: 1140px) {
+  .sig-row { gap: 7px; }
+  .dir { width: auto; }
+  .dir .dirword { display: none; }
+  .sig-sym { width: auto; max-width: 98px; }
+  /* shave the fixed chrome so the price columns keep their full digits */
+  .sig-row .grade-chip { padding: 1px 5px; font-size: 9.5px; }
+  .sig-row .btn.mini { padding: 3px 6px; font-size: 9.5px; }
+  .ttl { width: 32px; font-size: 10px; }
 }
 @media (max-width: 940px) {
   #workspace { grid-template-columns: var(--rail-l) minmax(0, 1fr); }
