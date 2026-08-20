@@ -20,7 +20,7 @@ npm run dev                 # same thing, Kimi Work preview entry
 
 | Layer | File | Contents |
 |---|---|---|
-| Data | `kimi/datafeed.py` | Binance public klines/tickers, Bybit fallback, MT5 terminal attach (suffix resolver, tick + D1 change), Yahoo fallback, TTL caches |
+| Data | `kimi/datafeed.py` | Bybit-first crypto live quotes, Binance crypto candles/fallback quotes, MT5 terminal attach (suffix resolver, tick + D1 change), Yahoo fallback, TTL caches |
 | Indicators | `kimi/indicators.py` | Tide (trend), Pulse (momentum), Pressure (signed relvol), Flow (taker imbalance), Vol regime, session VWAP |
 | Structure | `kimi/structure.py` | swings, liquidity sweeps, displacements, FVGs |
 | Scoring | `kimi/scoring.py` | KIMI Score 0–100, 8 weighted components, grades A+/A/B |
@@ -33,7 +33,7 @@ npm run dev                 # same thing, Kimi Work preview entry
 
 ## Data rules
 
-- Crypto (`*USDT`) prices/klines come from Binance, Bybit fallback.
+- Crypto (`*USDT`) live prices come from Bybit linear tickers, with an explicitly labeled Binance fallback. Crypto candles retain Binance-first routing for taker-flow scoring, with Bybit fallback.
 - Everything else resolves through the running MetaTrader 5 terminal first,
   then Yahoo. MT5 volume is tick volume; taker-flow scores neutral there.
 - The ticker batch is split by asset class — a non-Binance symbol can never

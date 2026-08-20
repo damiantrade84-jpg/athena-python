@@ -1,6 +1,7 @@
 """Market data layer: multi-asset, multi-source.
 
-  crypto (BTCUSDT-style)  → Binance public REST (primary) + Bybit fallback
+  crypto quotes           → Bybit linear public ticker + Binance fallback
+  crypto candles          → Binance public REST (primary) + Bybit fallback
   MT5 symbols (EURUSD, XAUUSD, US30…) → running MetaTrader 5 terminal
                                         (user's demo broker) via MetaTrader5 pkg
   anything else           → Yahoo Finance v8 chart API (fallback, delayed-ish)
@@ -394,6 +395,43 @@ class DataFeed:
             self.last_error = f"ticker: {exc}"
             return {}
 
+    def _bybit_tickers(self, symbols: list[str]) -> dict[str, dict]:
+        """Batch public USDT-linear quotes from KIMI's execution venue."""
+        if not symbols:
+            return {}
+        wanted = set(symbols)
+        try:
+            raw = self._get(
+                Config.BYBIT_PUBLIC_BASE,
+                "/v5/market/tickers",
+                {"category": "linear"},
+            )
+            if not isinstance(raw, dict) or int(raw.get("retCode", -1)) != 0:
+                raise ValueError("invalid Bybit ticker response")
+            rows = (raw.get("result") or {}).get("list") or []
+            out = {}
+            for row in rows:
+                symbol = str(row.get("symbol") or "").upper()
+                if symbol not in wanted:
+                    continue
+                price = float(row.get("lastPrice") or 0)
+                if price <= 0:
+                    continue
+                out[symbol] = {
+                    "price": price,
+                    "bid": float(row.get("bid1Price") or 0) or None,
+                    "ask": float(row.get("ask1Price") or 0) or None,
+                    "changePct24h": float(row.get("price24hPcnt") or 0) * 100.0,
+                    "quoteVol24h": float(row.get("turnover24h") or 0) or None,
+                    "high24h": float(row.get("highPrice24h") or 0) or None,
+                    "low24h": float(row.get("lowPrice24h") or 0) or None,
+                    "source": "bybit",
+                }
+            return out
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = f"bybit ticker: {exc}"
+            return {}
+
     def _alt_ticker(self, symbol: str) -> dict | None:
         """Price a non-crypto symbol: MT5 tick first, Yahoo last."""
         tk = self.mt5_tick(symbol)
@@ -455,23 +493,31 @@ class DataFeed:
     def tickers(self, symbols: list[str]) -> dict[str, dict]:
         """{symbol: {price, changePct24h, ...}} for a mixed universe.
 
-        Crypto goes to Binance in one batch; non-crypto symbols are priced
+        Crypto goes to Bybit first, with a Binance fallback for symbols absent
+        from the linear catalog. Non-crypto symbols are priced
         individually from MT5/Yahoo. Splitting matters: one non-Binance
         symbol in the batch call fails it for every crypto symbol too.
         Failed symbols keep their last-known tick.
         """
+        requested = list(dict.fromkeys(symbols))
         if time.time() - self._tick_ts < Config.TICK_POLL_SEC and self._tick_cache:
-            return self._tick_cache
+            return {s: self._tick_cache[s] for s in requested if s in self._tick_cache}
         now = time.time()
         out: dict[str, dict] = {}
-        crypto = [s for s in symbols if is_crypto(s)]
+        crypto = [s for s in requested if is_crypto(s)]
         if crypto:
-            out.update(self._binance_tickers(crypto))
+            out.update(self._bybit_tickers(crypto))
+            missing = [s for s in crypto if s not in out]
+            if missing:
+                fallback = self._binance_tickers(missing)
+                for tk in fallback.values():
+                    tk["source"] = "binance_fallback"
+                out.update(fallback)
 
         # Non-crypto symbols are priced one at a time (MT5 IPC, or Yahoo as a
         # last resort). Serially that is a hundred round trips on a portfolio-
         # sized universe, so the per-symbol calls run in a small pool.
-        alts = [s for s in symbols if not is_crypto(s)]
+        alts = [s for s in requested if not is_crypto(s)]
         if alts:
             workers = max(1, min(int(Config.SCAN_WORKERS), len(alts)))
             if workers > 1 and len(alts) > 1:
@@ -501,4 +547,4 @@ class DataFeed:
             }
             self._tick_ts = now
             self.last_error = None
-        return self._tick_cache
+        return {s: self._tick_cache[s] for s in requested if s in self._tick_cache}

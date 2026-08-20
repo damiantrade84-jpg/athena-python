@@ -154,6 +154,12 @@ class Engine:
             evaluated = [_evaluate(sym) for sym in universe]
 
         for sym, payload, exc in evaluated:
+            # A pair-picker Save can replace the universe while network reads
+            # from the previous scan are still in flight. Never let that old
+            # scan repopulate a symbol that set_symbols() already removed.
+            with self.lock:
+                if sym not in self.symbols:
+                    continue
             if exc is not None:
                 with self.lock:
                     self.errors.append(f"{time.strftime('%H:%M:%S')} {sym}: {exc}")
@@ -463,6 +469,7 @@ class Engine:
                            "maxPositions": Config.MAX_POSITIONS,
                            "maxDailyLossPct": Config.MAX_DAILY_LOSS_PCT,
                            "takerFeeBps": Config.TAKER_FEE_BPS,
+                           "tickStaleSec": Config.TICK_STALE_SEC,
                            "tfEntry": Config.TF_ENTRY, "tfContext": Config.TF_CONTEXT,
                            "tfBias": Config.TF_BIAS},
             }
