@@ -6857,3 +6857,36 @@ GROK_ENGINE:
     demo_enabled: true
     live_enabled: false
     research_status: UNVALIDATED
+
+# OX Alpha Engine - standalone intraday kinetic-liquidity engine (own
+# indicators, own group-aware scoring profiles, own gates). It consumes the
+# shared candle cache, timeframe policy, and demo-gated execution primitives;
+# it shares no scoring logic with any other engine. Execution is demo/paper
+# only via the shared demo gate -> guardian -> risk_check -> broker chain.
+OX_ALPHA_ENGINE:
+  enabled: true
+
+  # Composite score thresholds. Per-score-group overrides live in
+  # ox_alpha.profiles; entries here win when present.
+  TRADE_THRESHOLD: 64
+  WATCH_THRESHOLD: 50
+  THRESHOLD_OVERRIDES:
+    crypto_other: {trade: 68, watch: 54}
+    forex_exotics: {trade: 68, watch: 54}
+
+  # Data minimums (fail-closed below these).
+  MIN_BARS_M15: 60
+  MIN_BARS_H1: 40
+  CANDLE_LIMIT_M15: 300
+  CANDLE_LIMIT_H1: 200
+
+  # ATR sanity window on M15 (ATR/close per bar).
+  ATR_PCT_MIN: 0.0004
+  ATR_PCT_MAX: 0.03
+
+  # Risk shape defaults (profiles refine per group).
+  SL_BUFFER_ATR: 0.18
+  TP2_RR_EXTENSION: 1.6
+
+  SCAN_WORKERS: 8
+  VOLUME_LOOKBACK: 48

@@ -34,6 +34,7 @@ import OpusEnginePanel from '@/components/panels/OpusEnginePanel';
 import SolEnginePanel from '@/components/panels/SolEnginePanel';
 import KimiEnginePanel from '@/components/panels/KimiEnginePanel';
 import GrokEnginePanel from '@/components/panels/GrokEnginePanel';
+import OxAlphaPanel from '@/components/panels/OxAlphaPanel';
 
 const panels: Record<string, React.ComponentType> = {
   dashboard: DashboardPanel,
@@ -70,6 +71,7 @@ const panels: Record<string, React.ComponentType> = {
   solEngine: SolEnginePanel,
   kimiEngine: KimiEnginePanel,
   grokEngine: GrokEnginePanel,
+  oxAlpha: OxAlphaPanel,
 };
 
 export default function Home() {

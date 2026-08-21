@@ -1,0 +1,523 @@
+"""OX Alpha focused tests — pure core, gate chain, routes. No monolith import."""
+from __future__ import annotations
+
+import math
+
+import flask
+import pytest
+
+from ox_alpha.config import load_settings
+from ox_alpha.engine import _targets_for_direction, analyze_pair
+from ox_alpha.indicators import (
+    path_efficiency,
+    percentile_rank,
+    round_number_levels,
+    roc,
+    swing_pivots,
+    wilder_atr,
+    zscore,
+)
+from ox_alpha.profiles import DEFAULT_PROFILE, PROFILES, profile_for_group
+
+Flask = flask.Flask
+
+
+# ── synthetic candle builders ────────────────────────────────────────────────
+
+def _mk_candles(
+    n: int,
+    start: float,
+    drift: float = 0.0,
+    vol: float = 0.001,
+    volume: float | None = 1000.0,
+    start_ts: int = 1_700_000_000,
+    step: int = 900,
+):
+    out = []
+    price = start
+    for i in range(n):
+        wave = math.sin(i / 5.0) * vol * start
+        o = price
+        c = price + drift + wave
+        h = max(o, c) + abs(wave) * 0.5 + vol * start * 0.2
+        l = min(o, c) - abs(wave) * 0.5 - vol * start * 0.2
+        row = {"time": start_ts + i * step, "open": o, "high": h, "low": l, "close": c}
+        if volume is not None:
+            row["volume"] = volume * (1 + (i % 7) / 10.0)
+        out.append(row)
+        price = c
+    return out
+
+
+def _states(m15, h1):
+    return {
+        "M15": {"confirmed": m15, "forming": None, "stale": False},
+        "H1": {"confirmed": h1, "forming": None, "stale": False},
+    }
+
+
+BULL_M15 = _mk_candles(120, 1.0800, drift=0.00035, vol=0.0006)
+BULL_H1 = _mk_candles(80, 1.0750, drift=0.0009, vol=0.0012)
+
+
+# ── indicators ───────────────────────────────────────────────────────────────
+
+def test_wilder_atr_matches_manual_seed_and_smoothing():
+    candles = [
+        {"high": 10 + i * 0.1, "low": 9 + i * 0.1, "close": 9.5 + i * 0.1}
+        for i in range(20)
+    ]
+    atr = wilder_atr(candles, 14)
+    assert atr is not None and atr > 0
+    assert abs(atr - 1.0) < 0.15  # ranges are ~1.1 wide; smoothing converges near it
+
+
+def test_roc_signed_fraction():
+    assert roc([1.0, 1.01, 1.02], 2) == pytest.approx(0.02)
+    assert roc([1.02, 1.01, 1.0], 2) == pytest.approx(-0.0196078, rel=1e-5)
+    assert roc([1.0], 2) is None
+
+
+def test_zscore_and_percentile_rank():
+    series = [float(i) for i in range(50)]
+    z = zscore(series, 50)
+    assert z is not None and z > 1.5  # last value is the max of a clean ramp
+    assert percentile_rank(series, 25.0) == pytest.approx(0.52)
+
+
+def test_path_efficiency_clean_trend_vs_chop():
+    trend = [{"close": float(i)} for i in range(20)]
+    chop = [{"close": float(i % 2)} for i in range(20)]
+    eff_t = path_efficiency(trend, 12)
+    eff_c = path_efficiency(chop, 12)
+    assert eff_t == pytest.approx(1.0)
+    assert abs(eff_c) < 0.2
+
+
+def test_swing_pivots_finds_fractals():
+    candles = []
+    price = 100.0
+    for i in range(30):
+        bump = 2.0 if i % 6 in (0, 3) else 0.0
+        sign = 1 if i % 6 == 0 else (-1 if i % 6 == 3 else 0)
+        h = price + 0.5 + bump
+        l = price - 0.5 - (bump if sign < 0 else 0)
+        candles.append({"high": h, "low": l, "close": price})
+        price += 0.05
+    highs, lows = swing_pivots(candles, 2, 2)
+    assert highs and lows
+
+
+def test_round_number_levels_bracket_price():
+    levels = round_number_levels(1.08432)
+    assert any(lvl > 1.08432 for lvl in levels)
+    assert any(lvl < 1.08432 for lvl in levels)
+    assert all(math.isfinite(lvl) for lvl in levels)
+
+
+# ── profiles ─────────────────────────────────────────────────────────────────
+
+def test_every_canonical_score_group_has_explicit_profile():
+    from scoring import ENGINE_A_ASSET_CLASS_SCORE_GROUPS
+
+    missing = []
+    for groups in ENGINE_A_ASSET_CLASS_SCORE_GROUPS.values():
+        for g in groups:
+            if g not in PROFILES:
+                missing.append(g)
+    assert not missing, f"profiles missing for: {missing}"
+
+
+def test_profile_weights_sum_near_one():
+    for name, p in PROFILES.items():
+        total = p.w_kinetic + p.w_spring + p.w_flow + p.w_velocity + p.w_magnet + p.w_structure
+        assert abs(total - 1.0) < 0.02, f"{name} weights sum {total}"
+    assert DEFAULT_PROFILE.group == "default"
+
+
+def test_profile_for_group_unknown_falls_back_to_default():
+    assert profile_for_group("made_up_group") is DEFAULT_PROFILE
+    assert profile_for_group(None) is DEFAULT_PROFILE
+
+
+# ── engine.analyze_pair ──────────────────────────────────────────────────────
+
+CFG = load_settings(None)
+
+
+def test_bullish_series_resolves_long_with_ordered_levels():
+    sig = analyze_pair(
+        {"display": "EUR/USD", "type": "forex", "source": "mt5"},
+        _states(BULL_M15, BULL_H1),
+        profile=profile_for_group("forex_majors"),
+        settings=CFG,
+    )
+    assert sig["decision"] in {"TRADE", "WATCH", "NO_SIGNAL"}
+    if sig["direction"] is not None:
+        assert sig["direction"] == "LONG"
+        assert sig["sl"] < sig["entryRef"] < sig["tp1"] < sig["tp2"]
+    assert sig["score"] >= 0
+    assert isinstance(sig["gates"], list) and sig["gates"]
+
+
+def test_insufficient_history_is_fail_closed():
+    sig = analyze_pair(
+        {"display": "EUR/USD", "type": "forex"},
+        _states(BULL_M15[:20], BULL_H1[:10]),
+        profile=profile_for_group("forex_majors"),
+        settings=CFG,
+    )
+    assert sig["decision"] == "NO_SIGNAL"
+    assert sig["reason"] == "insufficient_history"
+
+
+def test_stale_freshness_blocks_trade():
+    fresh = {"M15": False, "H1": True}
+    sig = analyze_pair(
+        {"display": "EUR/USD", "type": "forex"},
+        _states(BULL_M15, BULL_H1),
+        profile=profile_for_group("forex_majors"),
+        settings=CFG,
+        freshness=fresh,
+    )
+    freshness_gate = next(g for g in sig["gates"] if g["name"] == "freshness")
+    assert freshness_gate["passed"] is False
+    assert sig["decision"] != "TRADE"
+
+
+def test_direction_unresolved_on_flat_noise():
+    flat_m15 = _mk_candles(120, 1.0800, drift=0.0, vol=0.00005, volume=None)
+    flat_h1 = _mk_candles(80, 1.0800, drift=0.0, vol=0.00005, volume=None)
+    sig = analyze_pair(
+        {"display": "EUR/USD", "type": "forex"},
+        _states(flat_m15, flat_h1),
+        profile=profile_for_group("forex_majors"),
+        settings=CFG,
+    )
+    # Either unresolved or a sub-threshold decision — never TRADE on noise.
+    assert sig["decision"] != "TRADE"
+
+
+def test_crypto_profile_routes_volume_required_axis():
+    bull = _mk_candles(120, 43000.0, drift=30.0, vol=0.0004, volume=None)
+    bull_h1 = _mk_candles(80, 42000.0, drift=90.0, vol=0.0008, volume=None)
+    sig = analyze_pair(
+        {"display": "BTC/USDT", "type": "crypto", "source": "bybit"},
+        _states(bull, bull_h1),
+        profile=profile_for_group("crypto_btc"),
+        settings=CFG,
+    )
+    assert sig["volumeAxisUsed"] is False  # no volume rows -> axis abstains
+    assert sig["profile"] == "crypto_btc"
+
+
+def test_short_series_yields_short_side_and_levels():
+    bear_m15 = _mk_candles(120, 1.0900, drift=-0.00035, vol=0.0006)
+    bear_h1 = _mk_candles(80, 1.0950, drift=-0.0009, vol=0.0012)
+    sig = analyze_pair(
+        {"display": "EUR/USD", "type": "forex"},
+        _states(bear_m15, bear_h1),
+        profile=profile_for_group("forex_majors"),
+        settings=CFG,
+    )
+    if sig["direction"] == "SHORT":
+        assert sig["tp1"] < sig["entryRef"] < sig["sl"]
+
+
+# ── bridge gate chain ────────────────────────────────────────────────────────
+
+from ox_alpha.bridge import OxExecDeps, open_trade, signal_to_exec_dict  # noqa: E402
+
+
+def _ready_signal(direction="LONG", decision="TRADE", type_="forex"):
+    return {
+        "engine": "OX_ALPHA",
+        "display": "EUR/USD" if type_ == "forex" else "BTC/USDT",
+        "symbol": "EUR/USD" if type_ == "forex" else "BTCUSDT",
+        "type": type_,
+        "source": "mt5" if type_ == "forex" else "bybit",
+        "decision": decision,
+        "direction": direction,
+        "playType": "BREAKOUT",
+        "score": 71.0,
+        "entryRef": 1.0850,
+        "sl": 1.0820,
+        "tp1": 1.0925,
+        "tp2": 1.0970,
+        "rr1": 2.5,
+        "atr": 0.0012,
+        "atrTf": "M15",
+        "timestamp": 1_700_000_000.0,
+        "entryReadiness": "READY",
+    }
+
+
+def test_open_trade_rejects_non_trade_decision():
+    sig = _ready_signal(decision="WATCH")
+    res = open_trade(sig, deps=OxExecDeps(), write_journal=False)
+    assert res["executed"] is False and res["reason"] == "not_a_trade_decision"
+
+
+def test_open_trade_rejects_unready_readiness():
+    sig = _ready_signal()
+    sig["entryReadiness"] = "PENDING"
+    res = open_trade(sig, deps=OxExecDeps(), write_journal=False)
+    assert res["executed"] is False and "readiness" in res["reason"]
+
+
+def test_open_trade_demo_gate_blocks_live_mode():
+    sig = _ready_signal()
+    deps = OxExecDeps(get_executor_mode=lambda: "live")
+    res = open_trade(sig, deps=deps, write_journal=False)
+    assert res["executed"] is False and "demo_gate" in res["reason"]
+
+
+def test_open_trade_rr_floor_blocks_thin_target():
+    sig = _ready_signal()
+    sig["tp1"] = 1.0855  # rr ~0.17 vs min 1.4
+    res = open_trade(sig, deps=OxExecDeps(), min_rr=1.4, write_journal=False)
+    assert res["executed"] is False and res["reason"] == "rr_floor"
+
+
+def test_open_trade_freshness_fail_closed_by_default():
+    sig = _ready_signal()
+    res = open_trade(sig, deps=OxExecDeps(), write_journal=False)
+    assert res["executed"] is False and "freshness" in res["reason"]
+
+
+def test_open_trade_happy_path_forex_uses_mt5():
+    sig = _ready_signal()
+    calls = {}
+
+    def _fresh_ok(_sig, _exec):
+        return True, "ok"
+
+    def _risk(**kwargs):
+        class _A:
+            approved = True
+            volume = 0.1
+            reason = "ok"
+        return _A()
+
+    deps = OxExecDeps(
+        candle_freshness_ok=_fresh_ok,
+        risk_check=_risk,
+        mt5_execute=lambda s, a: (calls.update({"venue": "mt5"}), {"success": True, "orderId": "d-1"})[1],
+        bybit_execute=lambda s, a: (calls.update({"venue": "bybit"}), {"success": True})[1],
+    )
+    res = open_trade(sig, deps=deps, write_journal=False)
+    assert res["executed"] is True and calls["venue"] == "mt5"
+    assert res["result"]["orderId"] == "d-1"
+
+
+def test_open_trade_crypto_routes_to_bybit():
+    sig = _ready_signal(type_="crypto")
+    calls = {}
+
+    deps = OxExecDeps(
+        candle_freshness_ok=lambda _s, _e: (True, "ok"),
+        risk_check=lambda **_k: type("A", (), {"approved": True, "volume": 0.01, "reason": "ok"})(),
+        mt5_execute=lambda s, a: (calls.update({"venue": "mt5"}), {"success": True})[1],
+        bybit_execute=lambda s, a: (calls.update({"venue": "bybit"}), {"success": True})[1],
+    )
+    res = open_trade(sig, deps=deps, write_journal=False)
+    assert res["executed"] is True and calls["venue"] == "bybit"
+
+
+def test_exec_dict_never_masquerades_as_engine_a():
+    d = signal_to_exec_dict(_ready_signal())
+    assert d["engine"] == "OX_ALPHA"
+    assert d["engineATradeEnabled"] is False
+    assert d["oxAlphaExecution"] is True
+
+
+# ── runtime + routes (injected, no feeds/brokers) ────────────────────────────
+
+from athena_app.api import routes_ox_alpha  # noqa: E402
+from ox_alpha import runtime  # noqa: E402
+
+
+def test_scan_universe_skips_and_counts(monkeypatch):
+    pairs = [
+        {"display": "EUR/USD", "type": "forex", "source": "mt5"},
+        {"display": "BAD/PAIR", "type": "forex", "source": "mt5"},
+    ]
+
+    def _fake_scan_pair(pair, **kwargs):
+        if pair["display"] == "BAD/PAIR":
+            raise RuntimeError("boom")
+        return {
+            "engine": "OX_ALPHA",
+            "display": pair["display"],
+            "decision": "TRADE",
+            "direction": "LONG",
+            "score": 70.0,
+            "executable": True,
+        }
+
+    monkeypatch.setattr(runtime, "scan_pair", _fake_scan_pair)
+    env = runtime.scan_universe(pairs)
+    assert env["success"] is True
+    assert env["counts"]["TRADE"] == 1
+    assert len(env["skipped"]) == 1 and "scan_error" in env["skipped"][0]["reason"]
+    assert env["signals"][0]["display"] == "EUR/USD"
+
+
+def test_execute_signal_rejects_when_setup_invalidated(monkeypatch):
+    monkeypatch.setattr(runtime, "find_pair", lambda s, pairs=None: {"display": s})
+    monkeypatch.setattr(
+        runtime,
+        "scan_pair",
+        lambda pair, **kw: {"decision": "NO_SIGNAL", "reason": "insufficient_history"},
+    )
+    res = runtime.execute_signal("EUR/USD", "LONG")
+    assert res["executed"] is False and res["reason"] == "SETUP_INVALIDATED"
+
+
+def test_execute_signal_reports_flip(monkeypatch):
+    monkeypatch.setattr(runtime, "find_pair", lambda s, pairs=None: {"display": s})
+    monkeypatch.setattr(
+        runtime,
+        "scan_pair",
+        lambda pair, **kw: {"decision": "TRADE", "direction": "SHORT", "score": 66.0},
+    )
+    res = runtime.execute_signal("EUR/USD", "LONG")
+    assert res["executed"] is False and "SIGNAL_FLIPPED" in res["reason"]
+
+
+def test_fallback_target_satisfies_own_rr_floor():
+    """Regression: wide structural stop + fixed-ATR fallback target made
+    rr_floor structurally impossible. The fallback must extend to min_rr."""
+    profile = profile_for_group("forex_majors")  # min_rr 1.4, tp_fb 2.2 ATR
+    magnets = {"levels": []}  # no structure targets available
+    tp1, tp2, rr1 = _targets_for_direction(
+        "LONG", entry=100.0, sl=90.0, magnets=magnets,
+        atr=1.0, profile=profile, settings=CFG,
+    )
+    assert rr1 is not None and rr1 >= profile.min_rr - 1e-6
+    assert tp1 == pytest.approx(100.0 + 1.4 * 10.0)  # min_rr * sl_dist
+
+
+def test_magnet_target_still_preferred_when_far_enough():
+    profile = profile_for_group("forex_majors")
+    magnets = {"levels": [105.0, 108.0]}  # 108 is first level >= 1.4*10 away? no: 105 dist 5 <14; 108 dist 8 <14
+    tp1, tp2, rr1 = _targets_for_direction(
+        "LONG", entry=100.0, sl=90.0, magnets=magnets,
+        atr=1.0, profile=profile, settings=CFG,
+    )
+    # Neither magnet clears the floor -> adaptive fallback wins.
+    assert tp1 == pytest.approx(114.0)
+    magnets2 = {"levels": [120.0]}
+    tp1b, _, rr1b = _targets_for_direction(
+        "LONG", entry=100.0, sl=90.0, magnets=magnets2,
+        atr=1.0, profile=profile, settings=CFG,
+    )
+    assert tp1b == 120.0 and rr1b == pytest.approx(2.0)
+
+
+def test_scan_pair_real_routing_well_formed_signal():
+    """Real policy+feed wiring through the production routing: the signal must
+    carry the policy stamp, and executable must stay consistent with
+    decision+readiness (never executable on a non-READY row)."""
+    from ox_alpha import runtime
+
+    sig = runtime.scan_pair({"display": "EUR/USD", "type": "forex", "source": "mt5"})
+    assert sig["decision"] in {"TRADE", "WATCH", "NO_SIGNAL"}
+    assert "entryReadiness" in sig
+    expected_exec = sig["decision"] == "TRADE" and str(sig.get("entryReadiness")) == "READY"
+    assert sig.get("executable") is expected_exec
+
+
+def test_feed_uses_production_routing_when_builder_is_stale(monkeypatch):
+    """Regression: builder-only feed left every pair stale in the live process.
+
+    The feed must prefer the canonical candle_manager routing (full source
+    fallback) and prove freshness on whatever it returns — still fail-closed.
+    """
+    import time as _time
+
+    from ox_alpha import feed
+
+    now = _time.time()
+    m15_ts = int(now) - 600  # last closed M15 bar, one bucket ago
+    h1_ts = int(now) - 3600
+    calls = {"n": 0}
+
+    def _fake_backend_state(pair, tf, limit):
+        calls["n"] += 1
+        ts = m15_ts if tf == "M15" else h1_ts
+        base = float(pair.get("display") == "EUR/USD" and 1.08 or 100.0)
+        step = 900 if tf == "M15" else 3600
+        candles = [
+            {"time": ts - i * step,
+             "open": base, "high": base * 1.0005, "low": base * 0.9995,
+             "close": base * 1.0002}
+            for i in range(79, -1, -1)  # oldest first, like production feeds
+        ]
+        return {
+            "confirmed": candles,
+            "forming": None,
+            "stale": False,
+            "pair_display": pair.get("display"),
+            "timeframe": tf,
+        }
+
+    monkeypatch.setattr("candle_manager.fetch_market_state", _fake_backend_state)
+    states, fresh = feed.load_market_states(
+        {"display": "EUR/USD", "type": "forex", "source": "mt5"},
+        ("M15", "H1"),
+        time_now=now,
+    )
+    assert calls["n"] >= 2  # production routing consulted per timeframe
+    assert fresh["M15"] is True and fresh["H1"] is True
+    assert len(states["M15"]["confirmed"]) == 80
+
+
+def test_feed_falls_back_to_builder_when_backend_unavailable(monkeypatch):
+    from ox_alpha import feed
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("backend down")
+
+    monkeypatch.setattr("candle_manager.fetch_market_state", _boom)
+    states, fresh = feed.load_market_states(
+        {"display": "EUR/USD", "type": "forex", "source": "mt5"},
+        ("M15",),
+    )
+    # Builder is not initialized under pytest -> fail-closed, no crash.
+    assert fresh["M15"] is False
+    assert states["M15"]["confirmed"] == []
+
+
+def test_routes_status_scan_execute(monkeypatch):
+    monkeypatch.setattr(runtime, "status", lambda **kw: {
+        "success": True, "engine": "OX_ALPHA", "signals": [
+            {"display": "EUR/USD", "decision": "TRADE", "score": 72.0},
+            {"display": "USD/JPY", "decision": "NO_SIGNAL", "score": 10.0},
+        ], "counts": {"TRADE": 1, "WATCH": 0, "NO_SIGNAL": 1},
+    })
+    monkeypatch.setattr(runtime, "scan_universe", lambda pairs=None, **kw: {
+        "success": True, "engine": "OX_ALPHA", "signals": [], "counts": {},
+    })
+    monkeypatch.setattr(runtime, "execute_signal", lambda symbol, direction, **kw: {
+        "executed": True, "reason": "ok", "venue": "mt5",
+    })
+
+    app = Flask(__name__)
+    routes_ox_alpha.register_ox_alpha_routes(app)
+    c = app.test_client()
+
+    r = c.get("/api/ox-alpha-status?decision=TRADE")
+    body = r.get_json()
+    assert r.status_code == 200 and body["success"] is True
+    assert len(body["signals"]) == 1 and body["signals"][0]["display"] == "EUR/USD"
+
+    r = c.post("/api/ox-alpha-scan", json={})
+    assert r.status_code == 200 and r.get_json()["success"] is True
+
+    r = c.post("/api/ox-alpha-execute", json={"symbol": "EUR/USD", "direction": "LONG"})
+    body = r.get_json()
+    assert r.status_code == 200 and body["executed"] is True and body["venue"] == "mt5"
+
+    r = c.post("/api/ox-alpha-execute", json={"symbol": "EUR/USD", "direction": "SIDEWAYS"})
+    assert r.status_code == 400

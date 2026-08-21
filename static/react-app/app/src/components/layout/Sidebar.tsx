@@ -13,7 +13,7 @@ import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
   Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut, Workflow, Cpu, Radar, Landmark, Sparkles,
-  Ghost, Orbit, Waves, Timer,
+  Ghost, Orbit, Waves, Timer, Gem,
 } from 'lucide-react';
 
 type NavItem = { id: PanelId; label: string; icon: ElementType; badge?: string; title?: string };
@@ -59,6 +59,13 @@ const navSections: NavSection[] = [
         title: 'KIMI — intraday quant engine: KIMI Score composite, sweep/displacement structure, paper-first execution',
         icon: Sparkles,
         badge: 'KIMI',
+      },
+      {
+        id: 'oxAlpha',
+        label: 'OX Alpha',
+        title: 'OX Alpha — intraday kinetic-liquidity engine: six-axis scoring per score group, demo-gated execution',
+        icon: Gem,
+        badge: 'OX',
       },
     ],
   },

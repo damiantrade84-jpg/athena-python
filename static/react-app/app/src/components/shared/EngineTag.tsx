@@ -18,6 +18,8 @@ const ENGINE_HUE: Record<string, string> = {
   d: 'var(--chart-2)',
   scalp: 'var(--chart-2)',
   lottery: 'var(--chart-4)',
+  ox_alpha: 'var(--chart-5)',
+  oxalpha: 'var(--chart-5)',
 };
 
 function hueFor(engine: string): string | null {

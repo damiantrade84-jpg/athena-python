@@ -19109,6 +19109,16 @@ register_tsmom_routes(app)
 register_macro_routes(app)
 register_forex_factor_routes(app)
 
+# OX Alpha — standalone intraday kinetic-liquidity engine. The pair provider
+# hands over the enabled registry so the engine never imports this monolith.
+from athena_app.api.routes_ox_alpha import register_ox_alpha_routes  # noqa: E402
+from ox_alpha import runtime as _ox_alpha_runtime  # noqa: E402
+
+_ox_alpha_runtime.set_pair_provider(
+    lambda: [p for p in ALL_PAIRS if p.get("enabled", True)]
+)
+register_ox_alpha_routes(app)
+
 # Engine A/B Backtesting Platform v2. Provider functions are injected so the
 # isolated package never imports this application monolith or a legacy runner.
 from athena_backtesting_v2.api import register_backtesting_v2_routes  # noqa: E402
