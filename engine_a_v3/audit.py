@@ -556,3 +556,57 @@ def run_audit_brief(
             "legacy_threshold_only": "scoring.get_score_threshold (V3 disabled path only)",
         },
     }
+
+
+def threshold_distribution_drift(
+    observed_scores_by_group: dict[str, list[float]],
+    configured_thresholds: dict[str, float],
+    *,
+    percentile: float = 0.70,
+    tolerance_pct: float = 0.10,
+) -> list[dict[str, Any]]:
+    """Compare configured trade bars against the live score distribution.
+
+    The 2026-08-08 ``ENGINE_A_SCORE_GROUP_THRESHOLDS`` bars were set to the
+    measured p70 of the live confluence distribution ("admit roughly the top
+    ~30%"), explicitly NOT outcome-backed. Score distributions drift, so a bar
+    calibrated as p70 silently admits fewer or more names than intended. This
+    pure helper quantifies that drift per group:
+
+    - ``observedP70``: the percentile of the supplied scores
+    - ``driftPct``: ``(bar - observed) / observed`` — positive means the bar
+      now sits ABOVE the calibration percentile (admitting less than top-30%)
+    - ``driftFlag``: True when |drift| exceeds ``tolerance_pct`` or the group
+      has no usable data
+
+    Pure function; no CONFIG access, no I/O. Feed it per-group confluence
+    scores from scan telemetry or funnel rows and the resolved threshold map.
+    """
+    if not 0.0 < percentile < 1.0:
+        raise ValueError("percentile must be in (0, 1)")
+    default_bar = configured_thresholds.get("default")
+    rows: list[dict[str, Any]] = []
+    for group in sorted(observed_scores_by_group):
+        raw = observed_scores_by_group.get(group) or []
+        scores = sorted(float(value) for value in raw if float(value) >= 0)
+        bar = configured_thresholds.get(group, default_bar)
+        row: dict[str, Any] = {
+            "group": group,
+            "sampleSize": len(scores),
+            "configuredBar": None if bar is None else round(float(bar), 4),
+        }
+        if not scores or bar is None:
+            row["observedPercentile"] = None
+            row["driftPct"] = None
+            row["driftFlag"] = True
+            row["reason"] = "no_scores" if not scores else "no_configured_bar"
+            rows.append(row)
+            continue
+        observed = scores[min(len(scores) - 1, int(percentile * len(scores)))]
+        drift = ((float(bar) - observed) / observed) if observed > 0 else None
+        row["observedPercentile"] = round(observed, 4)
+        row["driftPct"] = None if drift is None else round(drift, 4)
+        row["driftFlag"] = True if drift is None else abs(drift) > tolerance_pct
+        row["reason"] = "degenerate_distribution" if drift is None else None
+        rows.append(row)
+    return rows

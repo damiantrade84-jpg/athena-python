@@ -1984,12 +1984,26 @@ CONFIG: dict = {
     "ENGINE_A_V3_SETUP_UPGRADE": {
         "ENABLED": True,
         "MIN_CONFLUENCE_FRAC": 0.75,
-        # Mean-reversion upgrades are exempt from the trend-side confluence floor:
-        # the fade only exists in ranging regimes where the trend-aligned quant
-        # score is structurally near zero. Opposition stays guarded by
-        # ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD.
-        "MR_MIN_CONFLUENCE_FRAC": 0.0,
+        # Mean-reversion upgrades previously bypassed the trend-side confluence
+        # floor entirely (0.0): the fade only exists in ranging regimes where
+        # the trend-aligned quant score is structurally near zero. 0.25 requires
+        # a quarter of the trade threshold of quant corroboration so an MR
+        # setup cannot promote WATCH -> TRADE with zero quant support.
+        # Opposition stays guarded by ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD.
+        "MR_MIN_CONFLUENCE_FRAC": 0.25,
     },
+    # Setup trigger lookback (Engine B parity): specialists evaluate their
+    # trigger pattern on each of the last N closed bars, newest first.
+    # BARS=1 / ENABLED=False restore legacy last-bar-only behaviour.
+    "ENGINE_A_V3_SETUP_LOOKBACK_ENABLED": True,
+    "ENGINE_A_V3_SETUP_LOOKBACK_BARS": 3,
+    # Blocking trigger confirmation: an OPPOSED policy-trigger evidence demotes
+    # TRADE -> WATCH. Missing/unavailable trigger evidence stays advisory.
+    "ENGINE_A_V3_TRIGGER_CONFIRM_REQUIRED": True,
+    # DST-aware US cash-session window for setup session gates (tracks
+    # America/New_York offset per bar date; falls back to fixed UTC when the
+    # timezone database is unavailable).
+    "ENGINE_A_V3_SESSION_DST_AWARE": True,
     "ENGINE_A_V3_XAU_INTRADAY_PULLBACK_ENABLED": True,
     "ENGINE_A_V3_INTRADAY_PULLBACK_OVERLAY": {
         "ENABLED": True,

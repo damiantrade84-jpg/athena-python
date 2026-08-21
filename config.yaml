@@ -270,9 +270,12 @@ ENGINE_A_V3_CROSS_SECTIONAL:
   APPLY_IN_LIVE_SCAN: true
   APPLY_IN_BACKTEST: true
   TIE_BREAKERS:
-    - conviction
+    # conviction == score_norm == the primary ranking key, so leading with it
+    # was collinear and broke no ties. direction_confidence (trend signal x
+    # quality) is the first independent discriminator (2026-08-21).
     - direction_confidence
     - location_quality
+    - conviction
 
 # Run the pre-policy V3 evaluation as a shadow alongside the policy-authoritative
 # evaluation. The shadow feeds legacyScore/legacyDirection (rollback diagnostics in
@@ -297,15 +300,29 @@ ENGINE_A_V3_FOREX_MR_OVERLAY_ENABLED: true
 # OPPOSITE direction of the quant scorer, fall back to the quant path instead of
 # flipping direction (rejection reason: setup_direction_conflicts_quant).
 ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD: true
+# Setup trigger lookback (Engine B parity, 2026-08-21): specialists evaluate
+# their trigger pattern on each of the last N closed bars (newest first)
+# instead of only the newest one; a valid pattern one or two bars old is no
+# longer invisible. EMA/ATR/session anchors are re-pointed at the trigger bar.
+# BARS: 1 restores legacy last-bar-only behaviour exactly.
+ENGINE_A_V3_SETUP_LOOKBACK_ENABLED: true
+ENGINE_A_V3_SETUP_LOOKBACK_BARS: 3
+# Blocking trigger confirmation (Engine B parity): when the policy trigger
+# rung's evidence actively OPPOSES the signal direction, TRADE demotes to
+# WATCH (rejection reason: trigger_direction_opposed). Missing/unavailable
+# trigger evidence stays advisory — only explicit opposition blocks.
+ENGINE_A_V3_TRIGGER_CONFIRM_REQUIRED: true
 ENGINE_A_V3_SETUP_UPGRADE:
   ENABLED: true
   MIN_CONFLUENCE_FRAC: 0.75
-  # Mean-reversion upgrades are exempt from the quant confluence floor (2026-07-28):
-  # the fade only exists in ranging regimes, where the trend-aligned quant score
-  # is structurally near zero, so a trend-side floor can never be met. Directional
-  # opposition is still blocked by ENGINE_A_V3_SETUP_QUANT_CONFLICT_GUARD.
-  # Raise toward 0.75 to re-tighten without a code change.
-  MR_MIN_CONFLUENCE_FRAC: 0.0
+  # Mean-reversion upgrades previously bypassed the quant confluence floor
+  # entirely (0.0): the fade only exists in ranging regimes where the
+  # trend-aligned quant score is structurally near zero, so a trend-side floor
+  # can never be met. But 0.0 let an MR setup promote WATCH -> TRADE with NO
+  # quant corroboration at all. 0.25 requires a quarter of the trade threshold
+  # of directional confluence (2026-08-21, judgment value — not outcome-backed;
+  # raise toward 0.5 to tighten further, back to 0.0 to restore the bypass).
+  MR_MIN_CONFLUENCE_FRAC: 0.25
 # Precious-metals alias for the family overlay below. Reversible: false
 # restores XAU/XAG breakout-only without touching other commodities.
 ENGINE_A_V3_XAU_INTRADAY_PULLBACK_ENABLED: true

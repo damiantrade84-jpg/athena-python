@@ -142,7 +142,7 @@ def resolve_cross_sectional_config(
             require_qualified=True,
             apply_in_live_scan=True,
             apply_in_backtest=True,
-            tie_breakers=("conviction", "direction_confidence", "location_quality"),
+            tie_breakers=("direction_confidence", "location_quality", "conviction"),
             valid=False,
             invalid_reason="config_not_a_mapping",
         )
@@ -208,7 +208,7 @@ def resolve_cross_sectional_config(
     raw_breakers = raw.get("TIE_BREAKERS")
     tie_breakers: list[str] = []
     if raw_breakers is None:
-        tie_breakers = ["conviction", "direction_confidence", "location_quality"]
+        tie_breakers = ["direction_confidence", "location_quality", "conviction"]
     elif isinstance(raw_breakers, (list, tuple)):
         for item in raw_breakers:
             key = str(item or "").strip().lower()
@@ -216,7 +216,7 @@ def resolve_cross_sectional_config(
                 tie_breakers.append(key)
     else:
         invalid.append("tie_breakers_invalid")
-        tie_breakers = ["conviction", "direction_confidence", "location_quality"]
+        tie_breakers = ["direction_confidence", "location_quality", "conviction"]
 
     valid = not invalid
     if enabled and not valid:

@@ -27,6 +27,19 @@ _SETUP_CONTEXT_TF: dict[str, str] = {
     "H4": "D1",
     "D1": "D1",
 }
+# Levels-ATR fallback ladder for the no-policy path (v1 backtests): the stop
+# geometry anchors ONE rung above entry, unlike the setup-context table above
+# which jumps straight to the H4 structural bias. The two ladders are
+# deliberately different; both live here so no consumer carries its own
+# private copy (the evaluator previously did — M15/M30 resolved differently
+# depending on which table a code path hit).
+_LEVELS_STRUCTURE_FALLBACK_TF: dict[str, str] = {
+    "M15": "H1",
+    "M30": "H1",
+    "H1": "H4",
+    "H4": "D1",
+}
+_LEVELS_STRUCTURE_FALLBACK_DEFAULT = "H1"
 _TF_SLOWER_TO_FASTER: tuple[str, ...] = ("D1", "H4", "H1", "M30", "M15", "M5", "M1")
 
 

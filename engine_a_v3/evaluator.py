@@ -27,6 +27,8 @@ from engine_a_v3.routing import route_specialist
 from engine_a_v3.session_scoring import session_score_passes
 from engine_a_v3.setups import SetupCandidate, SetupSeriesCache, detect_setup
 from engine_a_v3.timeframes import (
+    _LEVELS_STRUCTURE_FALLBACK_DEFAULT,
+    _LEVELS_STRUCTURE_FALLBACK_TF,
     resolve_diagnostic_v3_entry_timeframe,
     resolve_v3_entry_timeframe,
 )
@@ -771,6 +773,7 @@ def evaluate_engine_a_v3(
             "setupDirection": setup.direction,
             "setupLevelStyle": setup.level_style,
             "setupPredicateCount": len(setup.predicates),
+            "setupBarAge": getattr(setup, "trigger_bar_age", None),
         }
     except Exception as setup_exc:
         setup = None
@@ -890,6 +893,18 @@ def evaluate_engine_a_v3(
         # MR regimes (and flips level_style to "trend" when its opposition
         # guard blocks the fade), so re-deriving it here was a proven no-op.
 
+    # Trigger confirmation against the FINAL direction (setup overlay may have
+    # upgraded it). Computed once here; stamped into diagnostics below and,
+    # when ENGINE_A_V3_TRIGGER_CONFIRM_REQUIRED is on, an OPPOSED trigger
+    # demotes TRADE -> WATCH. Missing/unavailable trigger evidence stays
+    # advisory: the quant score already gates those rows, and hard-blocking on
+    # a feed gap would zero out policy-driven flow.
+    trigger_confirmed, trigger_confirmation = _evaluate_trigger_confirmation(
+        quant.factor_diagnostics,
+        direction,
+        policy_confirmation_tf,
+    )
+
     levels = None
     atr_pct = quant.factor_diagnostics.get("atrPct") if quant.factor_diagnostics else None
     period_map = dict(profile.indicator_periods)
@@ -907,15 +922,14 @@ def evaluate_engine_a_v3(
                 or ""
             ).upper()
             if not structure_tf:
-                # Legacy / no-policy path (v1 backtests): structure ladder step
-                # above entry. Reachable only when a policy dict is absent; the
-                # policy path always supplies an explicit structure rung above.
-                structure_tf = {
-                    "M15": "H1",
-                    "M30": "H1",
-                    "H1": "H4",
-                    "H4": "D1",
-                }.get(str(primary_tf or "").upper(), "H1")
+                # Legacy / no-policy path (v1 backtests): the shared
+                # levels-ATR ladder from engine_a_v3.timeframes (one rung
+                # above entry — deliberately different from the setup-context
+                # ladder; see the comment there).
+                structure_tf = _LEVELS_STRUCTURE_FALLBACK_TF.get(
+                    str(primary_tf or "").upper(),
+                    _LEVELS_STRUCTURE_FALLBACK_DEFAULT,
+                )
             structure_rows = candles.get(structure_tf) or []
             if len(structure_rows) >= 20:
                 atr_candles = structure_rows
@@ -1118,6 +1132,26 @@ def evaluate_engine_a_v3(
         rejection_reasons.append("active_entry_candle_required")
         setup_diagnostics["activeEntryGateBlocked"] = True
 
+    # Blocking trigger confirmation (Engine B parity): when the policy trigger
+    # rung's evidence actively OPPOSES the signal direction, the entry is
+    # fighting live lower-TF flow — demote TRADE -> WATCH. Only an explicit
+    # opposition blocks; missing/unavailable evidence stays advisory (see the
+    # computation site above). Reversible via ENGINE_A_V3_TRIGGER_CONFIRM_REQUIRED=false.
+    if decision == "TRADE" and trigger_confirmation.get("reason") == "trigger_direction_opposed":
+        trigger_required = True
+        try:
+            from config import CONFIG
+
+            trigger_required = bool(
+                CONFIG.get("ENGINE_A_V3_TRIGGER_CONFIRM_REQUIRED", True)
+            )
+        except Exception:
+            trigger_required = True
+        if trigger_required:
+            decision = "WATCH"
+            rejection_reasons.append("trigger_direction_opposed")
+            setup_diagnostics["triggerConfirmBlocked"] = True
+
     # Recompute after late demotions (blocked trend / equity volume / crypto deriv).
     qualified = decision == "TRADE" and promotion_execution_allowed and levels is not None
 
@@ -1173,11 +1207,6 @@ def evaluate_engine_a_v3(
             predicates = predicates + setup.predicates
 
     compact_unqualified = compact_replay and not qualified
-    trigger_confirmed, trigger_confirmation = _evaluate_trigger_confirmation(
-        quant.factor_diagnostics,
-        direction,
-        policy_confirmation_tf,
-    )
     factor_diagnostics = None
     if not compact_unqualified:
         factor_diagnostics = dict(quant.factor_diagnostics or {})

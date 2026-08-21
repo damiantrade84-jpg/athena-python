@@ -24,6 +24,30 @@ class SetupCandidate:
     predicates: tuple[PredicateResult, ...]
     rejection_reasons: tuple[str, ...]
     level_style: str = "trend"  # "trend" | "mean_reversion" | "london_open"
+    # Bars back from the newest confirmed bar at which the triggering pattern
+    # fired (0 = newest). None when the candidate did not fire inside the
+    # lookback window or lookback is disabled.
+    trigger_bar_age: int | None = None
+
+
+def _setup_trigger_offsets(primary_len: int) -> tuple[int, ...]:
+    """Bar ages to scan for setup triggers, newest -> oldest.
+
+    Mirrors the Engine B trigger lookback (market_structure._price_action_
+    trigger): a valid pattern on any of the last N closed bars counts, not
+    only the newest one. ENGINE_A_V3_SETUP_LOOKBACK_BARS = 1 restores the
+    legacy last-bar-only behaviour exactly.
+    """
+    try:
+        from config import CONFIG
+
+        if not bool(CONFIG.get("ENGINE_A_V3_SETUP_LOOKBACK_ENABLED", True)):
+            return (0,)
+        bars = int(CONFIG.get("ENGINE_A_V3_SETUP_LOOKBACK_BARS", 3) or 3)
+    except Exception:
+        bars = 3
+    bars = max(1, min(bars, 10))
+    return tuple(age for age in range(bars) if primary_len - age >= 2) or (0,)
 
 
 @dataclass(frozen=True)
@@ -399,27 +423,93 @@ def _parse_time(value: Any) -> datetime | None:
     )
 
 
+def _dst_shifted_utc_window(
+    start_hour: int,
+    end_hour: int,
+    on_time: "datetime | None",
+    tz_name: str,
+    base_offset_hours: float,
+) -> tuple[float, float] | None:
+    """Shift a fixed-UTC session window to the venue's local offset on a date.
+
+    The fixed tables below were calibrated against one DST regime (US windows
+    against America/New_York EDT, UTC-4). Around DST transitions the exchange's
+    real cash session moves in UTC while the table does not, so the setup gate
+    and the quant scorer's calendar-based gate disagree for weeks. When the bar
+    time and the timezone database are available, re-express the window at the
+    venue's actual offset for that date. Returns None when it cannot (caller
+    keeps the fixed window) — never guesses.
+    """
+    if on_time is None:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+
+        local = on_time.astimezone(ZoneInfo(tz_name))
+        offset = local.utcoffset()
+        if offset is None:
+            return None
+        delta = offset.total_seconds() / 3600.0 - base_offset_hours
+        shifted_start = start_hour + delta
+        shifted_end = end_hour + delta
+        if not (0 <= shifted_start < 24 and 0 < shifted_end <= 24):
+            return None
+        return shifted_start, shifted_end
+    except Exception:
+        return None
+
+
 def _session_window(
-    route: SpecialistRoute, display: str | None = None
-) -> tuple[int, int, str]:
+    route: SpecialistRoute,
+    display: str | None = None,
+    on_time: "datetime | None" = None,
+) -> tuple[float, float, str]:
+    """(start_hour, end_hour, label) UTC window for the route's cash session.
+
+    ``on_time`` (the trigger bar's timestamp) enables DST tracking where the
+    local-hours mapping is unambiguous. Only the US cash session qualifies
+    today (13:00-21:00 UTC == 09:00-17:00 America/New_York at UTC-4); the EU /
+    Asian / JSE windows stay fixed-UTC approximations — their original local
+    calibration is ambiguous, so shifting them would be a guess, and the quant
+    scorer discloses the same approximation for eu_indices (XETRA proxy).
+    """
     if route.family == "forex":
         return 6, 21, "London/NY 06:00-21:00 UTC"
     if route.subclass in {"xau", "precious"}:
         return 6, 21, "London/NY 06:00-21:00 UTC"
-    if route.subclass in {"us_indices", "us_stock_single", "bond_tlt", "smallcap_em_etf"}:
-        return 13, 21, "US cash session 13:00-21:00 UTC"
+    us_session = route.subclass in {
+        "us_indices",
+        "us_stock_single",
+        "bond_tlt",
+        "smallcap_em_etf",
+    } or str(display or "").strip().upper() in {
+        "US2000",
+        "US 2000",
+        "RUSSELL 2000",
+        "RUSSELL",
+    }
+    if us_session:
+        start, end, label = 13, 21, "US cash session 13:00-21:00 UTC"
+        try:
+            from config import CONFIG
+
+            dst_aware = bool(CONFIG.get("ENGINE_A_V3_SESSION_DST_AWARE", True))
+        except Exception:
+            dst_aware = True
+        if dst_aware:
+            shifted = _dst_shifted_utc_window(
+                start, end, on_time, "America/New_York", -4.0
+            )
+            if shifted is not None:
+                return shifted[0], shifted[1], label
+        return start, end, label
     if route.subclass == "eu_indices":
         return 7, 17, "European cash session 07:00-17:00 UTC"
     if route.subclass == "asian_indices":
         return 0, 9, "Asian cash session 00:00-09:00 UTC"
     if route.subclass == "jse_equity":
+        # SAST is UTC+2 year-round (no DST): the fixed window cannot drift.
         return 7, 16, "JSE cash session 07:00-16:00 UTC"
-    # US2000 routes to the index_other catch-all subclass but trades the US
-    # cash session like the other US indices; subclass alone loses that.
-    if str(display or "").strip().upper() in {
-        "US2000", "US 2000", "RUSSELL 2000", "RUSSELL",
-    }:
-        return 13, 21, "US cash session 13:00-21:00 UTC"
     return 6, 18, "regional cash session 06:00-18:00 UTC"
 
 
@@ -429,8 +519,8 @@ def _with_session_gate(
     route: SpecialistRoute,
     display: str | None = None,
 ) -> SetupCandidate:
-    start_hour, end_hour, label = _session_window(route, display)
     current_time = _parse_time(primary[-1].get("time") or primary[-1].get("datetime"))
+    start_hour, end_hour, label = _session_window(route, display, on_time=current_time)
     active = current_time is not None and start_hour <= current_time.hour < end_hour
     predicates = candidate.predicates + (
         _predicate(
@@ -447,6 +537,8 @@ def _with_session_gate(
             candidate.direction,
             predicates,
             candidate.rejection_reasons,
+            level_style=candidate.level_style,
+            trigger_bar_age=candidate.trigger_bar_age,
         )
     return SetupCandidate(
         candidate.setup_id,
@@ -454,6 +546,8 @@ def _with_session_gate(
         candidate.direction,
         predicates,
         tuple(dict.fromkeys(candidate.rejection_reasons + ("outside_active_session_utc",))),
+        level_style=candidate.level_style,
+        trigger_bar_age=candidate.trigger_bar_age,
     )
 
 
@@ -584,62 +678,101 @@ def _pullback_candidate(
         reasons = ["trend_context_not_directional"] if direction is None else ["insufficient_primary_history"]
         return SetupCandidate(setup_id, "NO_SIGNAL", direction, context_predicates, tuple(reasons))
 
-    previous = primary[-2]
-    current = primary[-1]
-    touched = (
-        float(previous["low"]) <= ema_now + touch_distance_atr * atr
-        if direction == "LONG"
-        else float(previous["high"]) >= ema_now - touch_distance_atr * atr
-    )
-    confirmed = (
-        float(current["close"]) > ema_now and float(current["close"]) > float(current["open"])
-        if direction == "LONG"
-        else float(current["close"]) < ema_now and float(current["close"]) < float(current["open"])
-    )
-    extension = abs(float(current["close"]) - ema_now) <= max_extension_atr * atr
     reject_required, wick_min = _pullback_rejection_required(family)
-    rejected = (not reject_required) or _rejection_wick_ok(previous, direction, wick_min)
-    predicates = context_predicates + (
-        _predicate(
-            "pullback_touched_ema20",
-            touched,
-            previous["low"] if direction == "LONG" else previous["high"],
-            f"touch EMA{periods.ema_trend} within {touch_distance_atr:.2f} ATR",
-        ),
-        _predicate("confirmation_close", confirmed, current["close"], f"{direction} confirmation"),
-        _predicate(
-            "entry_not_extended",
-            extension,
-            round(abs(float(current["close"]) - ema_now) / atr, 4),
-            f"<= {max_extension_atr:.2f} ATR",
-        ),
-    )
-    if reject_required:
-        predicates = predicates + (
+    watch_fallback: SetupCandidate | None = None
+    no_signal_fallback: SetupCandidate | None = None
+    # Trigger lookback: evaluate the touch/confirm pair on each of the last N
+    # closed bars (newest first). EMA/ATR are re-anchored per offset so an
+    # older trigger is judged against the mean it actually pulled back to.
+    for age in _setup_trigger_offsets(len(primary)):
+        scan = primary[: len(primary) - age]
+        previous = scan[-2]
+        current = scan[-1]
+        if age == 0:
+            ema_at_bar = ema_now
+            atr_at_bar = atr
+        else:
+            ema_at_bar = None
+            if (
+                series_cache is not None
+                and primary_tf is not None
+                and series_cache.matches(primary_tf, scan)
+            ):
+                ema_at_bar = series_cache.ema_at(primary_tf, len(scan), periods.ema_trend)
+            if ema_at_bar is None:
+                ema_at_bar = _ema_last(
+                    [float(candle["close"]) for candle in scan], periods.ema_trend
+                )
+            atr_at_bar = _atr(scan, periods.atr)
+            if atr_at_bar <= 0:
+                continue
+        touched = (
+            float(previous["low"]) <= ema_at_bar + touch_distance_atr * atr_at_bar
+            if direction == "LONG"
+            else float(previous["high"]) >= ema_at_bar - touch_distance_atr * atr_at_bar
+        )
+        confirmed = (
+            float(current["close"]) > ema_at_bar and float(current["close"]) > float(current["open"])
+            if direction == "LONG"
+            else float(current["close"]) < ema_at_bar and float(current["close"]) < float(current["open"])
+        )
+        extension = abs(float(current["close"]) - ema_at_bar) <= max_extension_atr * atr_at_bar
+        rejected = (not reject_required) or _rejection_wick_ok(previous, direction, wick_min)
+        predicates = context_predicates + (
             _predicate(
-                "pullback_rejection_wick",
-                rejected,
+                "pullback_touched_ema20",
+                touched,
                 previous["low"] if direction == "LONG" else previous["high"],
-                f"touch-bar rejection wick >= {wick_min:.2f}x body",
+                f"touch EMA{periods.ema_trend} within {touch_distance_atr:.2f} ATR",
+            ),
+            _predicate("confirmation_close", confirmed, current["close"], f"{direction} confirmation"),
+            _predicate(
+                "entry_not_extended",
+                extension,
+                round(abs(float(current["close"]) - ema_at_bar) / atr_at_bar, 4),
+                f"<= {max_extension_atr:.2f} ATR",
             ),
         )
-    if touched and confirmed and extension and rejected:
-        return SetupCandidate(setup_id, "TRADE", direction, predicates, ())
-    if touched and extension:
-        reasons = []
-        if not confirmed:
-            reasons.append("confirmation_close_missing")
-        if reject_required and not rejected:
-            reasons.append("pullback_rejection_missing")
-        return SetupCandidate(
-            setup_id,
-            "WATCH",
-            direction,
-            predicates,
-            tuple(reasons) or ("confirmation_close_missing",),
-        )
-    reasons = tuple(predicate.name for predicate in predicates if not predicate.passed)
-    return SetupCandidate(setup_id, "NO_SIGNAL", direction, predicates, reasons)
+        if reject_required:
+            predicates = predicates + (
+                _predicate(
+                    "pullback_rejection_wick",
+                    rejected,
+                    previous["low"] if direction == "LONG" else previous["high"],
+                    f"touch-bar rejection wick >= {wick_min:.2f}x body",
+                ),
+            )
+        if touched and confirmed and extension and rejected:
+            return SetupCandidate(setup_id, "TRADE", direction, predicates, (), trigger_bar_age=age)
+        if touched and extension:
+            reasons = []
+            if not confirmed:
+                reasons.append("confirmation_close_missing")
+            if reject_required and not rejected:
+                reasons.append("pullback_rejection_missing")
+            fallback = SetupCandidate(
+                setup_id,
+                "WATCH",
+                direction,
+                predicates,
+                tuple(reasons) or ("confirmation_close_missing",),
+                trigger_bar_age=age,
+            )
+            if watch_fallback is None:
+                watch_fallback = fallback
+        if no_signal_fallback is None:
+            reasons = tuple(predicate.name for predicate in predicates if not predicate.passed)
+            no_signal_fallback = SetupCandidate(
+                setup_id, "NO_SIGNAL", direction, predicates, reasons
+            )
+    if watch_fallback is not None:
+        return watch_fallback
+    if no_signal_fallback is not None:
+        return no_signal_fallback
+    reasons = tuple(
+        predicate.name for predicate in context_predicates if not predicate.passed
+    )
+    return SetupCandidate(setup_id, "NO_SIGNAL", direction, context_predicates, reasons)
 
 
 def _breakout_retest_candidate(
@@ -666,7 +799,6 @@ def _breakout_retest_candidate(
             ("trend_context_not_directional",),
         )
     effective_lookback = max(int(lookback), 1)
-    swing_anchor = False
     try:
         from config import CONFIG
 
@@ -674,48 +806,34 @@ def _breakout_retest_candidate(
         # reference (breakout level) beyond the fixed window. When enabled, widen
         # the reference window in such regimes (bounded by an absolute cap).
         # Default off so detection is unchanged until the operator opts in.
-        if bool(CONFIG.get("ENGINE_A_V3_ADAPTIVE_STRUCTURE_WINDOW_ENABLED", False)):
-            swing_anchor = True
-            max_extra = int(CONFIG.get("ENGINE_A_V3_STRUCTURE_WINDOW_MAX_EXTRA_BARS", 8) or 8)
-            compress_ratio = float(CONFIG.get("ENGINE_A_V3_STRUCTURE_WINDOW_COMPRESS_RATIO", 0.7) or 0.7)
-            _atr_anchor = _atr(primary[:-2], periods.atr)
-            effective_lookback = min(
-                max(1, len(primary) - 2),
-                effective_lookback
-                + _quiet_window_extra_bars(
-                    primary[:-2],
-                    _atr_anchor,
-                    base=effective_lookback,
-                    max_extra=max_extra,
-                    compress_ratio=compress_ratio,
-                ),
-            )
+        adaptive_structure = bool(
+            CONFIG.get("ENGINE_A_V3_ADAPTIVE_STRUCTURE_WINDOW_ENABLED", False)
+        )
+        max_extra = int(CONFIG.get("ENGINE_A_V3_STRUCTURE_WINDOW_MAX_EXTRA_BARS", 8) or 8)
+        compress_ratio = float(CONFIG.get("ENGINE_A_V3_STRUCTURE_WINDOW_COMPRESS_RATIO", 0.7) or 0.7)
     except Exception:
-        pass
+        adaptive_structure = False
+        max_extra = 8
+        compress_ratio = 0.7
     # Breakout/retest window. The pattern used to be pinned to exactly two bars
     # (breakout == primary[-2], retest == primary[-1]), so it only ever fired
     # when a level was broken and retested on consecutive bars — a real retest
     # normally takes several. The breakout bar is now searched back over
-    # ENGINE_A_V3_BREAKOUT_RETEST_MAX_BARS, with the latest bar still acting as
-    # the retest/acceptance bar and the level required to have held for every bar
-    # in between (no close back through it). MAX_BARS = 1 restores the legacy
-    # two-bar behaviour exactly.
+    # ENGINE_A_V3_BREAKOUT_RETEST_MAX_BARS, with the retest/acceptance bar
+    # itself scanned over the trigger lookback window (newest first), and the
+    # level required to have held for every bar in between (no close back
+    # through it). MAX_BARS = 1 plus lookback 1 restores the legacy two-bar
+    # behaviour exactly.
     try:
         from config import CONFIG
 
         retest_max_bars = int(CONFIG.get("ENGINE_A_V3_BREAKOUT_RETEST_MAX_BARS", 5) or 5)
     except Exception:
         retest_max_bars = 5
-    retest_max_bars = max(1, min(retest_max_bars, max(1, len(primary) - effective_lookback - 1)))
-
-    retest = primary[-1]
-
-    def _window_for(offset: int) -> tuple[list, dict]:
-        """(prior window, breakout bar) for a breakout `offset` bars back."""
-        end = -(offset + 1)
-        return primary[-(effective_lookback + offset + 1):end], primary[end]
 
     is_long = direction == "LONG"
+    watch_fallback: SetupCandidate | None = None
+    no_signal_fallback: SetupCandidate | None = None
 
     def _broken_swing(prior_rows: list, breakout_row: dict) -> float | None:
         # F2: anchor the reference on the highest (LONG) / lowest (SHORT) local
@@ -737,95 +855,144 @@ def _breakout_retest_candidate(
                 return lvl
         return None
 
-    def _levels_for(prior_rows: list, breakout_row: dict) -> tuple[float, float]:
-        hi = max(float(candle["high"]) for candle in prior_rows)
-        lo = min(float(candle["low"]) for candle in prior_rows)
-        if swing_anchor:
-            ref = _broken_swing(prior_rows, breakout_row)
-            if ref is not None:
-                if is_long:
-                    hi = ref
-                else:
-                    lo = ref
-        return hi, lo
-
-    def _level_held(breakout_offset: int, lvl: float) -> bool:
-        """No close back through the level between the break and the retest bar."""
-        start = len(primary) - breakout_offset  # first bar after the breakout
-        for row in primary[start:-1]:
-            close_v = float(row["close"])
-            if (close_v < lvl) if is_long else (close_v > lvl):
-                return False
-        return True
-
-    prior, breakout = _window_for(1)
-    high_level, low_level = _levels_for(prior, breakout)
-    level = high_level if is_long else low_level
-    broke = (
-        float(breakout["close"]) > high_level
-        if is_long
-        else float(breakout["close"]) < low_level
-    )
-    breakout_bars_ago = 1
-    if not broke:
-        for _offset in range(2, retest_max_bars + 1):
-            if len(primary) < effective_lookback + _offset + 2:
-                break
-            _prior, _breakout = _window_for(_offset)
-            if len(_prior) < 3:
-                break
-            _hi, _lo = _levels_for(_prior, _breakout)
-            _lvl = _hi if is_long else _lo
-            _broke = (
-                float(_breakout["close"]) > _hi
-                if is_long
-                else float(_breakout["close"]) < _lo
-            )
-            if not _broke or not _level_held(_offset, _lvl):
-                continue
-            prior, breakout = _prior, _breakout
-            high_level, low_level, level = _hi, _lo, _lvl
-            broke = True
-            breakout_bars_ago = _offset
+    for age in _setup_trigger_offsets(len(primary)):
+        scan = primary[: len(primary) - age]
+        if len(scan) < 60:
             break
-    retested = (
-        float(retest["low"]) <= level <= float(retest["close"])
-        if is_long
-        else float(retest["high"]) >= level >= float(retest["close"])
-    )
-    accepted = (
-        float(retest["close"]) > float(retest["open"])
-        if direction == "LONG"
-        else float(retest["close"]) < float(retest["open"])
-    )
-    recent_ranges = [float(candle["high"]) - float(candle["low"]) for candle in primary[-12:-2]]
-    baseline_ranges = [float(candle["high"]) - float(candle["low"]) for candle in primary[-42:-12]]
-    contraction = (
-        fmean(recent_ranges) < 0.8 * fmean(baseline_ranges)
-        if recent_ranges and baseline_ranges and fmean(baseline_ranges) > 0
-        else False
-    )
-    predicates = context_predicates + (
-        _predicate(
-            "breakout_close",
-            broke,
-            breakout["close"],
-            f"{lookback}-bar close beyond {level} ({breakout_bars_ago} bar(s) ago)",
-        ),
-        _predicate("level_retest", retested, retest["close"], f"retest {level}"),
-        _predicate("retest_acceptance", accepted, retest["close"], f"{direction} close"),
-    )
-    if require_contraction:
-        predicates += (
-            _predicate("volatility_contraction", contraction, contraction, "recent range < 80% baseline"),
+        eff_lookback = effective_lookback
+        swing_anchor = False
+        if adaptive_structure:
+            swing_anchor = True
+            _atr_anchor = _atr(scan[:-2], periods.atr)
+            eff_lookback = min(
+                max(1, len(scan) - 2),
+                eff_lookback
+                + _quiet_window_extra_bars(
+                    scan[:-2],
+                    _atr_anchor,
+                    base=eff_lookback,
+                    max_extra=max_extra,
+                    compress_ratio=compress_ratio,
+                ),
+            )
+        rbars = max(1, min(retest_max_bars, max(1, len(scan) - eff_lookback - 1)))
+        retest = scan[-1]
+
+        def _window_for(offset: int) -> tuple[list, dict]:
+            """(prior window, breakout bar) for a breakout `offset` bars back."""
+            end = -(offset + 1)
+            return scan[-(eff_lookback + offset + 1):end], scan[end]
+
+        def _levels_for(prior_rows: list, breakout_row: dict) -> tuple[float, float]:
+            hi = max(float(candle["high"]) for candle in prior_rows)
+            lo = min(float(candle["low"]) for candle in prior_rows)
+            if swing_anchor:
+                ref = _broken_swing(prior_rows, breakout_row)
+                if ref is not None:
+                    if is_long:
+                        hi = ref
+                    else:
+                        lo = ref
+            return hi, lo
+
+        def _level_held(breakout_offset: int, lvl: float) -> bool:
+            """No close back through the level between the break and the retest bar."""
+            start = len(scan) - breakout_offset  # first bar after the breakout
+            for row in scan[start:-1]:
+                close_v = float(row["close"])
+                if (close_v < lvl) if is_long else (close_v > lvl):
+                    return False
+            return True
+
+        prior, breakout = _window_for(1)
+        high_level, low_level = _levels_for(prior, breakout)
+        level = high_level if is_long else low_level
+        broke = (
+            float(breakout["close"]) > high_level
+            if is_long
+            else float(breakout["close"]) < low_level
         )
-    required = broke and retested and accepted and (contraction or not require_contraction)
-    if required:
-        return SetupCandidate(setup_id, "TRADE", direction, predicates, ())
-    if broke and (contraction or not require_contraction):
-        return SetupCandidate(setup_id, "WATCH", direction, predicates, ("retest_not_confirmed",))
-    reasons = tuple(predicate.name for predicate in predicates if not predicate.passed)
-    return SetupCandidate(setup_id, "NO_SIGNAL", direction, predicates, reasons)
+        breakout_bars_ago = 1
+        if not broke:
+            for _offset in range(2, rbars + 1):
+                if len(scan) < eff_lookback + _offset + 2:
+                    break
+                _prior, _breakout = _window_for(_offset)
+                if len(_prior) < 3:
+                    break
+                _hi, _lo = _levels_for(_prior, _breakout)
+                _lvl = _hi if is_long else _lo
+                _broke = (
+                    float(_breakout["close"]) > _hi
+                    if is_long
+                    else float(_breakout["close"]) < _lo
+                )
+                if not _broke or not _level_held(_offset, _lvl):
+                    continue
+                prior, breakout = _prior, _breakout
+                high_level, low_level, level = _hi, _lo, _lvl
+                broke = True
+                breakout_bars_ago = _offset
+                break
+        retested = (
+            float(retest["low"]) <= level <= float(retest["close"])
+            if is_long
+            else float(retest["high"]) >= level >= float(retest["close"])
+        )
+        accepted = (
+            float(retest["close"]) > float(retest["open"])
+            if direction == "LONG"
+            else float(retest["close"]) < float(retest["open"])
+        )
+        recent_ranges = [float(candle["high"]) - float(candle["low"]) for candle in scan[-12:-2]]
+        baseline_ranges = [float(candle["high"]) - float(candle["low"]) for candle in scan[-42:-12]]
+        contraction = (
+            fmean(recent_ranges) < 0.8 * fmean(baseline_ranges)
+            if recent_ranges and baseline_ranges and fmean(baseline_ranges) > 0
+            else False
+        )
+        predicates = context_predicates + (
+            _predicate(
+                "breakout_close",
+                broke,
+                breakout["close"],
+                f"{lookback}-bar close beyond {level} ({breakout_bars_ago} bar(s) ago)",
+            ),
+            _predicate("level_retest", retested, retest["close"], f"retest {level}"),
+            _predicate("retest_acceptance", accepted, retest["close"], f"{direction} close"),
+        )
+        if require_contraction:
+            predicates += (
+                _predicate("volatility_contraction", contraction, contraction, "recent range < 80% baseline"),
+            )
+        required = broke and retested and accepted and (contraction or not require_contraction)
+        if required:
+            return SetupCandidate(
+                setup_id, "TRADE", direction, predicates, (), trigger_bar_age=age
+            )
+        if broke and (contraction or not require_contraction):
+            if watch_fallback is None:
+                watch_fallback = SetupCandidate(
+                    setup_id,
+                    "WATCH",
+                    direction,
+                    predicates,
+                    ("retest_not_confirmed",),
+                    trigger_bar_age=age,
+                )
+        if no_signal_fallback is None:
+            reasons = tuple(predicate.name for predicate in predicates if not predicate.passed)
+            no_signal_fallback = SetupCandidate(
+                setup_id, "NO_SIGNAL", direction, predicates, reasons
+            )
+    if watch_fallback is not None:
+        return watch_fallback
+    if no_signal_fallback is not None:
+        return no_signal_fallback
+    reasons = tuple(
+        predicate.name for predicate in context_predicates if not predicate.passed
+    )
+    return SetupCandidate(setup_id, "NO_SIGNAL", direction, context_predicates, reasons)
 
 
 def _opening_range_gap_candidate(
@@ -845,8 +1012,6 @@ def _opening_range_gap_candidate(
     direction, context_predicates = _trend_direction(
         context, periods=periods, series_cache=series_cache, context_tf=context_tf
     )
-    start_hour, end_hour, label = _session_window(route, display)
-    current_time = _parse_time(primary[-1].get("time") or primary[-1].get("datetime"))
     # The setup was defined on the first two confirmed H1 cash-session bars.
     # Policy setup/entry adaptation may move ``primary`` to M15/M30, but it
     # must not silently shrink the structural opening range.
@@ -864,117 +1029,152 @@ def _opening_range_gap_candidate(
     # ~5 trading days even on the fastest realistic primary_tf (M15), far
     # more headroom than the "2 session bars + 1 prior close" this needs.
     recent_source = range_source[-500:]
-    session_rows: list[tuple[datetime, dict]] = []
-    if current_time is not None:
-        for candle in recent_source:
-            candle_time = _parse_time(candle.get("time") or candle.get("datetime"))
-            if (
-                candle_time is not None
-                and candle_time.date() == current_time.date()
-                and start_hour <= candle_time.hour < end_hour
-            ):
-                session_rows.append((candle_time, candle))
-    has_history = (
-        direction is not None
-        and len(primary) >= 60
-        and len(range_source) >= 60
-        and len(session_rows) >= 2
-    )
-    predicates = context_predicates + (
-        _predicate(
-            "opening_range_history",
-            has_history,
-            len(session_rows),
-            f"at least 2 confirmed H1 bars in {label}",
-        ),
-    )
-    if not has_history or current_time is None:
-        reasons = ["opening_range_history"] if direction is not None else ["trend_context_not_directional"]
-        return SetupCandidate(setup_id, "NO_SIGNAL", direction, predicates, tuple(reasons))
-
-    opening_rows = session_rows[:2]
-    opening_start = opening_rows[0][0]
-    prior_rows = [
-        candle
-        for candle in recent_source
-        if (_parse_time(candle.get("time") or candle.get("datetime")) or opening_start)
-        < opening_start
-    ]
-    if not prior_rows:
-        return SetupCandidate(
-            setup_id,
-            "NO_SIGNAL",
-            direction,
-            predicates
-            + (_predicate("prior_session_close", False, None, "confirmed close before cash open"),),
-            ("prior_session_close_missing",),
+    watch_fallback: SetupCandidate | None = None
+    no_signal_fallback: SetupCandidate | None = None
+    # Trigger lookback: the continuation close is judged on each of the last N
+    # closed bars (newest first), with the opening range and session window
+    # re-anchored to that bar's own date so an older trigger is measured
+    # against the session it actually traded in.
+    for age in _setup_trigger_offsets(len(primary)):
+        scan = primary[: len(primary) - age]
+        if len(scan) < 60:
+            break
+        current = scan[-1]
+        current_time = _parse_time(current.get("time") or current.get("datetime"))
+        start_hour, end_hour, label = _session_window(
+            route, display, on_time=current_time
         )
-
-    atr = _atr(
-        range_source,
-        periods.atr,
-        series_cache=series_cache,
-        timeframe=range_tf,
-    )
-    opening_high = max(float(candle["high"]) for _, candle in opening_rows)
-    opening_low = min(float(candle["low"]) for _, candle in opening_rows)
-    first_open = float(opening_rows[0][1]["open"])
-    prior_close = float(prior_rows[-1]["close"])
-    current = primary[-1]
-    current_close = float(current["close"])
-    gap = first_open - prior_close
-    gap_aligned = (
-        atr > 0
-        and abs(gap) >= 0.25 * atr
-        and ((direction == "LONG" and gap > 0) or (direction == "SHORT" and gap < 0))
-    )
-    broke_range = (
-        current_close > opening_high
-        if direction == "LONG"
-        else current_close < opening_low
-    )
-    accepted = (
-        current_close > float(current["open"])
-        if direction == "LONG"
-        else current_close < float(current["open"])
-    )
-    after_range = current_time > opening_rows[-1][0]
-    in_session = start_hour <= current_time.hour < end_hour
-    predicates += (
-        _predicate(
-            "opening_range_breakout",
-            broke_range,
-            current_close,
-            f"{direction} close beyond [{opening_low}, {opening_high}]",
-        ),
-        _predicate(
-            "aligned_opening_gap",
-            gap_aligned,
-            round(gap / atr, 4) if atr > 0 else None,
-            f"{direction} gap >= 0.25 ATR",
-        ),
-        _predicate(
-            "after_opening_range",
-            after_range,
-            current_time.isoformat(),
-            "after first 2 confirmed session bars",
-        ),
-        _predicate("continuation_close", accepted, current_close, f"{direction} candle"),
-        _predicate("active_session_utc", in_session, current_time.isoformat(), label),
-    )
-    continuation = (broke_range or gap_aligned) and after_range and in_session
-    if continuation and accepted:
-        return SetupCandidate(setup_id, "TRADE", direction, predicates, ())
-    if continuation:
-        return SetupCandidate(
-            setup_id,
-            "WATCH",
-            direction,
-            predicates,
-            ("continuation_close_missing",),
+        session_rows: list[tuple[datetime, dict]] = []
+        if current_time is not None:
+            for candle in recent_source:
+                candle_time = _parse_time(candle.get("time") or candle.get("datetime"))
+                if (
+                    candle_time is not None
+                    and candle_time.date() == current_time.date()
+                    and start_hour <= candle_time.hour < end_hour
+                ):
+                    session_rows.append((candle_time, candle))
+        has_history = (
+            direction is not None
+            and len(scan) >= 60
+            and len(range_source) >= 60
+            and len(session_rows) >= 2
         )
-    reasons = tuple(predicate.name for predicate in predicates if not predicate.passed)
-    return SetupCandidate(setup_id, "NO_SIGNAL", direction, predicates, reasons)
+        predicates = context_predicates + (
+            _predicate(
+                "opening_range_history",
+                has_history,
+                len(session_rows),
+                f"at least 2 confirmed H1 bars in {label}",
+            ),
+        )
+        if not has_history or current_time is None:
+            if no_signal_fallback is None:
+                reasons = ["opening_range_history"] if direction is not None else ["trend_context_not_directional"]
+                no_signal_fallback = SetupCandidate(
+                    setup_id, "NO_SIGNAL", direction, predicates, tuple(reasons)
+                )
+            continue
+
+        opening_rows = session_rows[:2]
+        opening_start = opening_rows[0][0]
+        prior_rows = [
+            candle
+            for candle in recent_source
+            if (_parse_time(candle.get("time") or candle.get("datetime")) or opening_start)
+            < opening_start
+        ]
+        if not prior_rows:
+            if no_signal_fallback is None:
+                no_signal_fallback = SetupCandidate(
+                    setup_id,
+                    "NO_SIGNAL",
+                    direction,
+                    predicates
+                    + (_predicate("prior_session_close", False, None, "confirmed close before cash open"),),
+                    ("prior_session_close_missing",),
+                )
+            continue
+
+        atr = _atr(
+            range_source,
+            periods.atr,
+            series_cache=series_cache,
+            timeframe=range_tf,
+        )
+        opening_high = max(float(candle["high"]) for _, candle in opening_rows)
+        opening_low = min(float(candle["low"]) for _, candle in opening_rows)
+        first_open = float(opening_rows[0][1]["open"])
+        prior_close = float(prior_rows[-1]["close"])
+        current_close = float(current["close"])
+        gap = first_open - prior_close
+        gap_aligned = (
+            atr > 0
+            and abs(gap) >= 0.25 * atr
+            and ((direction == "LONG" and gap > 0) or (direction == "SHORT" and gap < 0))
+        )
+        broke_range = (
+            current_close > opening_high
+            if direction == "LONG"
+            else current_close < opening_low
+        )
+        accepted = (
+            current_close > float(current["open"])
+            if direction == "LONG"
+            else current_close < float(current["open"])
+        )
+        after_range = current_time > opening_rows[-1][0]
+        in_session = start_hour <= current_time.hour < end_hour
+        predicates += (
+            _predicate(
+                "opening_range_breakout",
+                broke_range,
+                current_close,
+                f"{direction} close beyond [{opening_low}, {opening_high}]",
+            ),
+            _predicate(
+                "aligned_opening_gap",
+                gap_aligned,
+                round(gap / atr, 4) if atr > 0 else None,
+                f"{direction} gap >= 0.25 ATR",
+            ),
+            _predicate(
+                "after_opening_range",
+                after_range,
+                current_time.isoformat(),
+                "after first 2 confirmed session bars",
+            ),
+            _predicate("continuation_close", accepted, current_close, f"{direction} candle"),
+            _predicate("active_session_utc", in_session, current_time.isoformat(), label),
+        )
+        continuation = (broke_range or gap_aligned) and after_range and in_session
+        if continuation and accepted:
+            return SetupCandidate(
+                setup_id, "TRADE", direction, predicates, (), trigger_bar_age=age
+            )
+        if continuation:
+            if watch_fallback is None:
+                watch_fallback = SetupCandidate(
+                    setup_id,
+                    "WATCH",
+                    direction,
+                    predicates,
+                    ("continuation_close_missing",),
+                    trigger_bar_age=age,
+                )
+        if no_signal_fallback is None:
+            reasons = tuple(predicate.name for predicate in predicates if not predicate.passed)
+            no_signal_fallback = SetupCandidate(
+                setup_id, "NO_SIGNAL", direction, predicates, reasons
+            )
+    if watch_fallback is not None:
+        return watch_fallback
+    if no_signal_fallback is not None:
+        return no_signal_fallback
+    reasons = tuple(
+        predicate.name for predicate in context_predicates if not predicate.passed
+    )
+    return SetupCandidate(setup_id, "NO_SIGNAL", direction, context_predicates, reasons)
 
 
 def _efficiency_ratio(primary: list[dict], window: int = 20) -> tuple[float, float]:
@@ -1017,6 +1217,8 @@ def _with_relative_strength(
             candidate.direction,
             predicates,
             candidate.rejection_reasons,
+            level_style=candidate.level_style,
+            trigger_bar_age=candidate.trigger_bar_age,
         )
     return SetupCandidate(
         candidate.setup_id,
@@ -1028,6 +1230,8 @@ def _with_relative_strength(
                 candidate.rejection_reasons + ("relative_strength_efficiency_failed",)
             )
         ),
+        level_style=candidate.level_style,
+        trigger_bar_age=candidate.trigger_bar_age,
     )
 
 
@@ -1065,39 +1269,84 @@ def _mean_reversion_candidate(
             [float(candle["close"]) for candle in primary], periods.ema_trend
         )
     atr = _atr(primary, periods.atr, series_cache=series_cache, timeframe=primary_tf)
-    efficiency, _ = _efficiency_ratio(primary, lookback)
+    efficiency_latest, _ = _efficiency_ratio(primary, lookback)
     if atr <= 0:
         return SetupCandidate(
             setup_id, "NO_SIGNAL", None,
             (_predicate("atr_valid", False, atr, "> 0"),),
             ("atr_invalid",), "mean_reversion",
         )
-    current = primary[-1]
-    previous = primary[-2]
-    close = float(current["close"])
-    open_ = float(current["open"])
-    prev_close = float(previous["close"])
-    z = (close - mean) / atr
-    ranging = efficiency <= eff_max
-    direction = "SHORT" if z >= z_entry else "LONG" if z <= -z_entry else None
-    reversal = (
-        (direction == "SHORT" and close < open_ and close < prev_close)
-        or (direction == "LONG" and close > open_ and close > prev_close)
-    )
-    predicates = (
-        _predicate("ranging_regime", ranging, round(efficiency, 4), f"efficiency <= {eff_max:.2f}"),
-        _predicate("stretch_from_mean", direction is not None, round(z, 4), f"|z| >= {z_entry:.2f}"),
-        _predicate("reversal_confirmation", bool(reversal), close, "candle turns toward mean"),
-    )
-    if direction is not None and ranging and reversal:
-        return SetupCandidate(setup_id, "TRADE", direction, predicates, (), "mean_reversion")
-    if direction is not None and ranging:
-        return SetupCandidate(
-            setup_id, "WATCH", direction, predicates,
-            ("reversal_confirmation_missing",), "mean_reversion",
+    watch_fallback: SetupCandidate | None = None
+    no_signal_fallback: SetupCandidate | None = None
+    # Trigger lookback: the stretch (z) and the reversal candle are judged on
+    # each of the last N closed bars, newest first, with mean/ATR/efficiency
+    # re-anchored to that bar so an older reversal is measured against the
+    # regime it actually fired in.
+    for age in _setup_trigger_offsets(len(primary)):
+        scan = primary[: len(primary) - age]
+        if age == 0:
+            mean_at_bar = mean
+            atr_at_bar = atr
+            efficiency = efficiency_latest
+        else:
+            mean_at_bar = None
+            if (
+                series_cache is not None
+                and primary_tf is not None
+                and series_cache.matches(primary_tf, scan)
+            ):
+                mean_at_bar = series_cache.ema_at(primary_tf, len(scan), periods.ema_trend)
+            if mean_at_bar is None:
+                mean_at_bar = _ema_last(
+                    [float(candle["close"]) for candle in scan], periods.ema_trend
+                )
+            atr_at_bar = _atr(scan, periods.atr)
+            if atr_at_bar <= 0:
+                continue
+            efficiency, _ = _efficiency_ratio(scan, lookback)
+        current = scan[-1]
+        previous = scan[-2]
+        close = float(current["close"])
+        open_ = float(current["open"])
+        prev_close = float(previous["close"])
+        z = (close - mean_at_bar) / atr_at_bar
+        ranging = efficiency <= eff_max
+        direction_mr = "SHORT" if z >= z_entry else "LONG" if z <= -z_entry else None
+        reversal = (
+            (direction_mr == "SHORT" and close < open_ and close < prev_close)
+            or (direction_mr == "LONG" and close > open_ and close > prev_close)
         )
-    reasons = tuple(predicate.name for predicate in predicates if not predicate.passed)
-    return SetupCandidate(setup_id, "NO_SIGNAL", direction, predicates, reasons, "mean_reversion")
+        predicates = (
+            _predicate("ranging_regime", ranging, round(efficiency, 4), f"efficiency <= {eff_max:.2f}"),
+            _predicate("stretch_from_mean", direction_mr is not None, round(z, 4), f"|z| >= {z_entry:.2f}"),
+            _predicate("reversal_confirmation", bool(reversal), close, "candle turns toward mean"),
+        )
+        if direction_mr is not None and ranging and reversal:
+            return SetupCandidate(
+                setup_id, "TRADE", direction_mr, predicates, (), "mean_reversion",
+                trigger_bar_age=age,
+            )
+        if direction_mr is not None and ranging:
+            if watch_fallback is None:
+                watch_fallback = SetupCandidate(
+                    setup_id, "WATCH", direction_mr, predicates,
+                    ("reversal_confirmation_missing",), "mean_reversion",
+                    trigger_bar_age=age,
+                )
+        if no_signal_fallback is None:
+            reasons = tuple(predicate.name for predicate in predicates if not predicate.passed)
+            no_signal_fallback = SetupCandidate(
+                setup_id, "NO_SIGNAL", direction_mr, predicates, reasons, "mean_reversion"
+            )
+    if watch_fallback is not None:
+        return watch_fallback
+    if no_signal_fallback is not None:
+        return no_signal_fallback
+    return SetupCandidate(
+        setup_id, "NO_SIGNAL", None,
+        (_predicate("atr_valid", False, atr, "> 0"),),
+        ("atr_invalid",), "mean_reversion",
+    )
 
 
 def _london_open_breakout_candidate(
@@ -1106,7 +1355,13 @@ def _london_open_breakout_candidate(
     *,
     display: str | None = None,
 ) -> SetupCandidate:
-    """Asian range breakout during London open with tick-volume confirmation."""
+    """Asian range breakout during London open with tick-volume confirmation.
+
+    Deliberately NOT part of the trigger lookback window: the 07:00-08:30 UTC
+    entry window is 90 minutes wide, so a lookback of 3+ H1 bars reaches back
+    before the window opens — a "stale" break here is out-of-session by
+    definition and the session predicates already reject it.
+    """
     if len(primary) < 80:
         return SetupCandidate(
             setup_id,
@@ -1477,7 +1732,15 @@ def detect_setup(
             )
 
     priority = {"TRADE": 2, "WATCH": 1, "NO_SIGNAL": 0}
-    return max(candidates, key=lambda candidate: priority[candidate.decision])
+
+    def _rank(candidate: SetupCandidate) -> tuple[int, int]:
+        # Equal decisions tie-break on trigger freshness: a pattern that fired
+        # on the newest bar outranks an equally-good older one (max() is
+        # stable, so legacy first-listed order still wins true ties).
+        age = candidate.trigger_bar_age
+        return (priority[candidate.decision], -(age if age is not None else 10**6))
+
+    return max(candidates, key=_rank)
 
 
 def atr_for_levels(
