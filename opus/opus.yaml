@@ -402,6 +402,11 @@ OPUS:
     # reclaim and a void midpoint are limits, a break beyond a coil is a stop,
     # and a value fade is the one genuine market entry. See execution/orders.py.
     limit_expiry_sec: 900      # how long a resting entry stays live
+    # Execute may fall back to a scan-stored card when a fresh rescore no
+    # longer emits the same signal_id (the id is keyed on the trigger bar).
+    # That fallback is for bar-roll churn, not a stale thesis: a stored
+    # card older than this is refused. 0 disables the store fallback.
+    stored_signal_max_age_sec: 600
     attach_stop: true
     attach_target: true
     deviation_points: 20       # MT5 max price deviation on market orders

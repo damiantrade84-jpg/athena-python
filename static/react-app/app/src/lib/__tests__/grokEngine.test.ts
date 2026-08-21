@@ -78,11 +78,11 @@ describe('GROK UI helpers', () => {
   });
 
   it('does not treat a rejected quote preview as an attested fill', () => {
-    expect(grokPreviewNotice({ executable: true, gates: [] })).toEqual({
+    expect(grokPreviewNotice({ executable: true })).toEqual({
       tone: 'success',
       message: 'Broker quote attested; execution geometry is current',
     });
-    expect(grokPreviewNotice({ executable: false, error: 'SPREAD_TOO_WIDE', gates: [] })).toEqual({
+    expect(grokPreviewNotice({ executable: false, error: 'SPREAD_TOO_WIDE' })).toEqual({
       tone: 'error',
       message: 'Quote attestation rejected: SPREAD_TOO_WIDE',
     });

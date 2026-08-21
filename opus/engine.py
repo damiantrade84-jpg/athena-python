@@ -126,7 +126,15 @@ def evaluate(
     )
 
     data_gate_results = gate_mod.data_gates(ctx, bundle.timeframes)
-    quote_gate_results = gate_mod.quote_gates(bundle.quote, now)
+    # Quote freshness is measured against the clock at CAPTURE, never against
+    # the scan's pinned `now`. A sweep of the whole portfolio takes tens of
+    # seconds, so a quote fetched late in it is legitimately stamped after the
+    # instant the scan began; gating it on `now` reported every such quote as
+    # future-dated and blocked it. `max` keeps the aging defence intact: if the
+    # bundle is evaluated later than it was fetched, the later clock wins and
+    # the quote still ages out.
+    quote_now = max(now, float(getattr(bundle, "quote_captured_ts", 0.0) or 0.0))
+    quote_gate_results = gate_mod.quote_gates(bundle.quote, quote_now)
 
     signals: list[Signal] = []
     seen: set[tuple[str, str]] = set()

@@ -442,6 +442,67 @@ def test_quote_age_gate_still_passes_a_fresh_quote():
     assert results["quote_age"].passed is True
 
 
+def test_quote_freshness_is_measured_at_capture_not_at_scan_start(monkeypatch):
+    """A quote fetched late in a sweep is not "future-dated".
+
+    `scan()` pins one `now` for the whole portfolio so every symbol is scored
+    against the same clock. A sweep takes tens of seconds, so a quote fetched
+    late in it carries a venue timestamp LATER than that pinned instant, and
+    gating it on `now` reported a one-second-old quote as dated 30s in the
+    FUTURE - blocking every symbol after the first wave on quote_age.
+    """
+    import time as _time
+
+    from opus import engine
+
+    scan_start = _time.time() - 30.0        # the sweep began 30s ago
+    spec = dict(config.universe()[0])
+    bundle = feed_mod.fetch_bundle(spec, now=scan_start)
+    captured = _time.time()                 # this symbol came up just now
+    bundle.quote = Quote(bundle.symbol, bid=1.0, ask=1.0001, ts=captured - 0.4)
+    bundle.quote_captured_ts = captured
+
+    seen: dict = {}
+    real_quote_gates = gate_mod.quote_gates
+
+    def _spy(quote, now):
+        seen["now"] = now
+        return real_quote_gates(quote, now)
+
+    monkeypatch.setattr(engine.gate_mod, "quote_gates", _spy)
+    engine.evaluate(bundle, now=scan_start)
+
+    assert seen["now"] == pytest.approx(captured)
+    results = {g.name: g for g in real_quote_gates(bundle.quote, seen["now"])}
+    assert results["quote_age"].passed is True
+
+
+def test_a_quote_still_ages_out_when_the_bundle_is_evaluated_late(monkeypatch):
+    """Capture-clock gating must not disable the aging defence."""
+    import time as _time
+
+    from opus import engine
+
+    captured = _time.time() - 600.0
+    spec = dict(config.universe()[0])
+    bundle = feed_mod.fetch_bundle(spec, now=captured)
+    bundle.quote = Quote(bundle.symbol, bid=1.0, ask=1.0001, ts=captured)
+    bundle.quote_captured_ts = captured
+
+    seen: dict = {}
+    real_quote_gates = gate_mod.quote_gates
+
+    def _spy(quote, now):
+        seen["now"] = now
+        return real_quote_gates(quote, now)
+
+    monkeypatch.setattr(engine.gate_mod, "quote_gates", _spy)
+    engine.evaluate(bundle, now=_time.time())
+
+    results = {g.name: g for g in real_quote_gates(bundle.quote, seen["now"])}
+    assert results["quote_age"].passed is False
+
+
 def test_inverted_quote_is_rejected():
     inverted = Quote("T", bid=101.0, ask=100.0, ts=1000.0)
     results = {g.name: g for g in gate_mod.quote_gates(inverted, now=1000.0)}
@@ -563,6 +624,7 @@ def _make_signal(**overrides):
         readiness=Readiness.READY, conviction=0.6, coherence=0.7,
         probability=0.55, expectancy_r=0.3, cost_r=0.1,
         levels=Levels(entry=1.10, stop=1.0980, targets=[1.1040]),
+        gates=[GateResult(name="min_expectancy", passed=True, hard=True)],
         size_units=10_000.0, signal_id="opus_test_1",
         quote=Quote("EURUSD", 1.09995, 1.10005, ts=__import__("time").time(), source="MT5"),
         provenance={"venue": "mt5"},
@@ -847,11 +909,32 @@ def test_store_round_trip_and_stats(tmp_store):
 
     rows = store.recent_signals(limit=10)
     assert rows and rows[0]["signalId"] == signal.signal_id
+    loaded = store.get_signal(signal.signal_id)
+    assert loaded is not None
+    assert loaded.signal_id == signal.signal_id
+    assert loaded.levels.entry == pytest.approx(signal.levels.entry)
+    assert loaded.decision is signal.decision
 
     store.record_outcome(signal.signal_id, cal.Outcome(1, 1.8, "target", 6, 1.1040))
     x, y = store.labelled_samples(cal.bucket_key("SWEEP_RECLAIM", "forex"))
     assert x.size == 1 and y[0] == 1.0
     assert store.r_multiples(cal.bucket_key("SWEEP_RECLAIM", "forex"))[0] == 1.8
+
+
+def test_signal_from_dict_rejects_missing_gates_and_non_finite_levels():
+    from opus.types import Signal
+
+    payload = _make_signal().as_dict()
+    broken = dict(payload)
+    broken["gates"] = []
+    with pytest.raises(ValueError, match="gates"):
+        Signal.from_dict(broken)
+
+    nan_levels = dict(payload)
+    nan_levels["levels"] = dict(payload["levels"])
+    nan_levels["levels"]["stop"] = float("nan")
+    with pytest.raises(ValueError, match="finite"):
+        Signal.from_dict(nan_levels)
 
 
 # --------------------------------------------------------------------------
@@ -965,6 +1048,46 @@ def test_execute_rejects_an_unknown_signal(client):
         "/api/opus/execute", json={"signalId": "opus_nope", "symbol": "EURUSD"}
     )
     assert response.status_code == 409
+
+
+def test_every_execute_refusal_carries_a_readable_reason(client, monkeypatch):
+    """A refusal the client cannot read is a click that does nothing.
+
+    The browser turns a non-2xx body with no `error` key into the bare string
+    "HTTP 422", so the actual refusal - the gate, the limit, the broker's own
+    words - is lost exactly where the user needs it.
+    """
+    from opus import api as api_mod
+    from opus.execution.router import OrderResult
+
+    refusal = "revalidation failed: blocking gates: quote_age"
+
+    def _rejected(signal, **kwargs):
+        return OrderResult(
+            ok=False, order_id="opus_test", status="rejected", broker="paper",
+            mode="paper", symbol=signal.symbol, direction=signal.direction.value,
+            message=refusal, signal_id=signal.signal_id,
+        )
+
+    class _FakeSignal:
+        signal_id = "opus_fake"
+        symbol = "EURUSD"
+        direction = Direction.LONG
+
+        def as_dict(self):
+            return {"signalId": self.signal_id, "symbol": self.symbol}
+
+    class _FakeScan:
+        signals = [_FakeSignal()]
+
+    monkeypatch.setattr(api_mod.engine, "scan", lambda **kw: _FakeScan())
+    monkeypatch.setattr(api_mod.router, "submit", _rejected)
+    response = client.post("/api/opus/execute", json={
+        "signalId": "opus_fake", "symbol": "EURUSD",
+    })
+
+    assert response.status_code == 422
+    assert response.get_json()["error"] == refusal
 
 
 def test_indicators_endpoint_rejects_unknown_symbol(client):

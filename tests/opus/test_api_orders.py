@@ -111,3 +111,178 @@ def test_orders_endpoint_exposes_the_resting_price(api):
     assert row["status"] == "working"
     assert row["entry"] == pytest.approx(1.1000)
     assert row["detail"]["expiresTs"] > row["submitted_ts"]
+
+
+def _trade_signal(signal_id="opus_stored_trade", **overrides):
+    """A TRADE/READY limit that can rest against a quote above the entry."""
+    from opus.types import (
+        Archetype, Decision, Direction, GateResult, Levels, Quote,
+        Readiness, Regime, Signal,
+    )
+
+    now = time.time()
+    base = dict(
+        symbol="EURUSD", display="EUR/USD", asset_class="forex",
+        direction=Direction.LONG, archetype=Archetype.SWEEP_RECLAIM,
+        regime=Regime.VOLATILE_RANGE, decision=Decision.TRADE,
+        readiness=Readiness.READY, conviction=0.6, coherence=0.7,
+        probability=0.55, expectancy_r=0.3, cost_r=0.1,
+        levels=Levels(
+            entry=1.1000, stop=1.0960, targets=[1.1060], entry_kind="limit",
+        ),
+        gates=[GateResult(name="min_expectancy", passed=True, hard=True)],
+        size_units=10_000.0, risk_pct=0.5, signal_id=signal_id,
+        quote=Quote("EURUSD", 1.10195, 1.10205, ts=now, source="SYNTHETIC"),
+        provenance={"venue": "synthetic", "barTs": now},
+        created_ts=now,
+    )
+    base.update(overrides)
+    return Signal(**base)
+
+
+def test_execute_records_a_paper_order_when_a_fresh_scan_no_longer_emits_the_card(api, monkeypatch):
+    """The user-visible bug: Execute on a valid TRADE card does nothing.
+
+    /api/opus/execute re-scores the symbol and requires the exact signal_id to
+    come back. If the trigger bar rolled, or the ranking merely shuffled, the
+    API returns 409. The panel then auto-rescans, the card vanishes, and
+    GET /api/opus/orders stays empty. Paper/demo execution must instead submit
+    the stored signal (revalidated against a live quote) so a resting order
+    actually appears.
+    """
+    from opus import api as api_mod
+
+    client, store = api
+    signal = _trade_signal()
+    store.record_signals([signal])
+
+    class _Fresh:
+        signals = []
+
+    monkeypatch.setattr(api_mod.engine, "scan", lambda **kw: _Fresh())
+    monkeypatch.setattr(
+        api_mod, "fetch_bundle",
+        lambda spec, **kw: type("B", (), {"quote": signal.quote, "errors": []})(),
+    )
+
+    response = client.post("/api/opus/execute", json={
+        "signalId": signal.signal_id, "symbol": "EURUSD",
+    })
+    body = response.get_json()
+
+    assert response.status_code == 200, body
+    assert body["ok"] is True
+    assert body["order"]["status"] in {"working", "filled"}
+    assert body["order"]["mode"] == "paper"
+
+    orders = client.get("/api/opus/orders").get_json()["orders"]
+    assert any(o.get("signal_id") == signal.signal_id for o in orders)
+
+
+def test_execute_still_refuses_a_signal_that_was_never_scanned(api, monkeypatch):
+    from opus import api as api_mod
+
+    client, _store = api
+
+    class _Fresh:
+        signals = []
+
+    monkeypatch.setattr(api_mod.engine, "scan", lambda **kw: _Fresh())
+    response = client.post("/api/opus/execute", json={
+        "signalId": "opus_never_seen", "symbol": "EURUSD",
+    })
+    assert response.status_code == 409
+    assert "no longer present" in response.get_json()["error"]
+
+
+def test_execute_refuses_a_stored_signal_for_a_different_symbol(api, monkeypatch):
+    from opus import api as api_mod
+
+    client, store = api
+    signal = _trade_signal()
+    store.record_signals([signal])
+
+    class _Fresh:
+        signals = []
+
+    monkeypatch.setattr(api_mod.engine, "scan", lambda **kw: _Fresh())
+    response = client.post("/api/opus/execute", json={
+        "signalId": signal.signal_id, "symbol": "GBPUSD",
+    })
+    assert response.status_code == 409
+    assert client.get("/api/opus/orders").get_json()["orders"] == []
+
+
+def test_execute_refuses_a_stored_signal_when_the_quote_is_stale(api, monkeypatch):
+    """Store fallback must not skip submit-time quote freshness."""
+    from opus import api as api_mod
+    from opus.types import Quote
+
+    client, store = api
+    signal = _trade_signal()
+    signal.quote = Quote("EURUSD", 1.10195, 1.10205, ts=time.time() - 600.0, source="SYNTHETIC")
+    store.record_signals([signal])
+
+    class _Fresh:
+        signals = []
+
+    stale = Quote("EURUSD", 1.10195, 1.10205, ts=time.time() - 600.0, source="SYNTHETIC")
+    monkeypatch.setattr(api_mod.engine, "scan", lambda **kw: _Fresh())
+    monkeypatch.setattr(
+        api_mod, "fetch_bundle",
+        lambda spec, **kw: type("B", (), {"quote": stale, "errors": []})(),
+    )
+
+    response = client.post("/api/opus/execute", json={
+        "signalId": signal.signal_id, "symbol": "EURUSD",
+    })
+    body = response.get_json()
+    assert response.status_code == 422
+    assert "revalidation" in (body.get("error") or "").lower()
+    orders = client.get("/api/opus/orders").get_json()["orders"]
+    assert all(str(o.get("status", "")).lower() == "rejected" for o in orders)
+
+
+def test_execute_refuses_a_stored_signal_older_than_the_configured_window(api, monkeypatch):
+    """Store fallback is for bar-id churn, not a 21-minute-old card."""
+    from opus import api as api_mod
+
+    client, store = api
+    signal = _trade_signal(created_ts=time.time() - 10_000.0)
+    store.record_signals([signal])
+
+    class _Fresh:
+        signals = []
+
+    monkeypatch.setattr(api_mod.engine, "scan", lambda **kw: _Fresh())
+    response = client.post("/api/opus/execute", json={
+        "signalId": signal.signal_id, "symbol": "EURUSD",
+    })
+    body = response.get_json()
+    assert response.status_code == 409, body
+    assert "old" in (body.get("error") or "").lower()
+    assert client.get("/api/opus/orders").get_json()["orders"] == []
+
+
+def test_execute_refuses_stored_card_when_fresh_scan_has_opposite_trade(api, monkeypatch):
+    from opus import api as api_mod
+    from opus.types import Direction
+
+    client, store = api
+    stored = _trade_signal()
+    store.record_signals([stored])
+    opposite = _trade_signal(
+        signal_id="opus_fresh_short", direction=Direction.SHORT,
+    )
+
+    class _Fresh:
+        signals = [opposite]
+
+    monkeypatch.setattr(api_mod.engine, "scan", lambda **kw: _Fresh())
+    response = client.post("/api/opus/execute", json={
+        "signalId": stored.signal_id, "symbol": "EURUSD",
+    })
+    body = response.get_json()
+    assert response.status_code == 409, body
+    assert "opposite" in (body.get("error") or "").lower()
+    assert client.get("/api/opus/orders").get_json()["orders"] == []

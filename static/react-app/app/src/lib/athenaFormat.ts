@@ -77,6 +77,72 @@ export function fmtLiveQuoteMeta(ageSec: unknown, source?: unknown): string {
   return src ? `${fmtLiveQuoteAge(ageSec)} / ${src}` : fmtLiveQuoteAge(ageSec);
 }
 
+/** Display-only stale threshold for live quote chips. Not an execution gate. */
+export const LIVE_QUOTE_STALE_AFTER_SEC = 15;
+
+export type LiveQuoteView = {
+  price: number | null;
+  bid: number | null;
+  ask: number | null;
+  ageSec: number | null;
+  source: string | null;
+  priceLabel: string;
+  bidLabel: string;
+  askLabel: string;
+  meta: string;
+  available: boolean;
+  stale: boolean;
+};
+
+function positiveFinite(value: unknown): number | null {
+  const n = toNum(value, NaN);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function quoteType(type?: string): string | undefined {
+  const normalized = String(type || '').trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === 'fx' || normalized === 'forex') return 'forex';
+  if (normalized === 'crypto') return 'crypto';
+  if (normalized === 'stock' || normalized === 'equity' || normalized === 'equities' || normalized === 'etf' || normalized === 'etf_bond') return 'stock';
+  if (normalized === 'index' || normalized === 'indices') return 'index';
+  if (normalized === 'commodity' || normalized === 'commodities' || normalized === 'metal' || normalized === 'metals') return 'commodity';
+  return normalized;
+}
+
+/** Turn a /api/prices tick into the live readout used by GROK, SOL, and OPUS. */
+export function liveQuoteView(
+  entry: { price?: unknown; bid?: unknown; ask?: unknown; ageSec?: unknown; source?: unknown } | null | undefined,
+  pair?: string,
+  type?: string,
+  staleAfterSec = LIVE_QUOTE_STALE_AFTER_SEC,
+): LiveQuoteView {
+  const resolvedType = quoteType(type);
+  const price = positiveFinite(entry?.price);
+  const bid = positiveFinite(entry?.bid);
+  const ask = positiveFinite(entry?.ask);
+  const ageRaw = toNum(entry?.ageSec, NaN);
+  const ageSec = Number.isFinite(ageRaw) && ageRaw >= 0 ? ageRaw : null;
+  const source = typeof entry?.source === 'string' && entry.source.trim()
+    ? entry.source.trim()
+    : null;
+  const available = price != null;
+  const stale = !available || ageSec == null || ageSec > staleAfterSec;
+  return {
+    price,
+    bid,
+    ask,
+    ageSec,
+    source,
+    priceLabel: available ? fmtPrice(price, pair, resolvedType) : '—',
+    bidLabel: bid != null ? fmtPrice(bid, pair, resolvedType) : '—',
+    askLabel: ask != null ? fmtPrice(ask, pair, resolvedType) : '—',
+    meta: available ? fmtLiveQuoteMeta(ageSec, source) : 'no live quote',
+    available,
+    stale,
+  };
+}
+
 /** Render the meta line for the SignalsPanel ATR row.
  *
  *  Shows the timeframe, ATR age and (when CONFIG.ATR_FRESHNESS.ENABLED is true

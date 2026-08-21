@@ -7,6 +7,7 @@ import {
   engineAScoreBreakdown,
   engineAThreshold,
   engineBScoreBreakdown,
+  liveQuoteView,
   signalConviction,
   unifiedListSortKey,
 } from '../athenaFormat';
@@ -200,5 +201,26 @@ describe('engineAListScore', () => {
       intermarketEngineADelta: 0.18,
     } as EngineASignal;
     expect(engineAListScore(sig)).toBeCloseTo(2.2661, 4);
+  });
+});
+
+describe('liveQuoteView', () => {
+  it('formats a fresh MT5 tick as the live display quote', () => {
+    const view = liveQuoteView(
+      { price: 0.98418, bid: 0.98418, ask: 0.98448, ageSec: 1.3, source: 'mt5' },
+      'AUD/CAD',
+      'forex',
+    );
+    expect(view.available).toBe(true);
+    expect(view.stale).toBe(false);
+    expect(view.price).toBe(0.98418);
+    expect(view.priceLabel).toBe('0.98418');
+    expect(view.meta).toBe('1s ago / mt5');
+  });
+
+  it('does not treat a last-close or missing tick as a live quote', () => {
+    expect(liveQuoteView(undefined, 'AUD/CAD', 'forex').available).toBe(false);
+    expect(liveQuoteView({ price: 0 }, 'AUD/CAD', 'forex').available).toBe(false);
+    expect(liveQuoteView({ price: 0.98418, ageSec: 90, source: 'mt5' }, 'AUD/CAD', 'forex').stale).toBe(true);
   });
 });
