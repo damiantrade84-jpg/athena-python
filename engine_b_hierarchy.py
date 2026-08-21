@@ -37,7 +37,7 @@ Modes (``ENGINE_B_BIAS_MODE``):
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger(__name__)
 
@@ -61,8 +61,16 @@ DEFAULT_CONFIG = {
     "WEIGHT_SEQUENCE": 1.0,         # D1 swing sequence HH_HL / LH_LL (supporting only)
     "WEIGHT_WEEKLY": 2.0,           # swing mode: weekly sequence/BOS agreement
     # Minimum dominant-side points for a valid bias. Sized so a lone D1 sweep
-    # (3.0) qualifies but a bare sequence read (1.0) never does.
+    # (3.0) reaches the points bar but REQUIRE_EVIDENCE_CORROBORATION (below)
+    # still denies it validity without a second, independent narrative leg.
     "MIN_BIAS_SCORE": 3.0,
+    # A single evidence kind — however weighted — is a raid, not a narrative.
+    # ICT bias requires the sequence sweep -> displacement -> FVG/OB, so a
+    # valid bias must carry at least one displacement-class leg (BOS / FVG / OB)
+    # or two distinct evidence kinds on the dominant side. A lone D1 sweep
+    # downgrades to "unclear". Reversible:
+    # ENGINE_B_HIERARCHY.REQUIRE_EVIDENCE_CORROBORATION: false.
+    "REQUIRE_EVIDENCE_CORROBORATION": True,
     # Dominance ratio top/(bull+bear) required for a clean directional bias;
     # below it with both sides scoring, the narrative is "conflicting".
     "MIN_BIAS_STRENGTH": 0.6,
@@ -70,16 +78,23 @@ DEFAULT_CONFIG = {
     # the gap's middle candle), matching ENGINE_B_IMBALANCE BAG thresholds.
     "FVG_MIN_DISPLACEMENT_BODY_ATR": 0.8,
     # ── Soft-hierarchical outcomes ────────────────────────────────────────────
-    "UNCLEAR_SCORE_MULT": 0.75,     # Daily narrative missing -> confidence cut
+    # Penalty/reward symmetry: the applied scale is ~5-6 points, so the old
+    # pair (unclear x0.75 vs aligned+MTF +0.5 raw) made penalties ~3x the
+    # maximum reward and turned hierarchical mode into a downgrade machine.
+    # x0.90 (~-0.55 pts) vs +0.5 bonus is now roughly symmetric.
+    "UNCLEAR_SCORE_MULT": 0.90,     # Daily narrative missing -> confidence cut
     "CONFLICT_SCORE_MULT": 0.50,    # both-sided Daily evidence (when not blocking)
     "CONFLICT_BLOCKS": True,
     "COUNTER_BIAS_MODE": "block",   # "block" | "penalty": candidate vs valid Daily bias
     "COUNTER_BIAS_SCORE_MULT": 0.40,
-    "ALIGNED_NO_MTF_MULT": 0.90,    # HTF aligned but MTF reaction still missing
+    "ALIGNED_NO_MTF_MULT": 1.0,     # HTF aligned; MTF reaction still pending
     "MTF_CONFIRM_BONUS": 0.5,       # score bonus when HTF + MTF both align
     # ── Swing mode: Weekly+Daily. Weekly candles are resampled from D1. ──────
     "SWING_WEEKLY_ENABLED": True,
     "SWING_WEEKLY_MIN_BARS": 8,     # min resampled W1 bars before weekly counts
+    # The bucket containing the newest D1 candle is still forming; including it
+    # let W1 BOS/sequence flip intra-week and flicker scan to scan.
+    "SWING_WEEKLY_EXCLUDE_FORMING": True,
 }
 
 
@@ -117,16 +132,24 @@ def _parse_candle_time(value):
         return None
 
 
-def resample_d1_to_w1(d1_candles: list) -> list:
+def resample_d1_to_w1(d1_candles: list, *, exclude_forming: bool = False) -> list:
     """Aggregate D1 candle dicts into weekly (ISO week) candles.
 
     Used for the swing-style Weekly+Daily bias without changing any live fetch
     wiring. Candles without a parseable time are skipped; the result keeps
     chronological order. Returns [] when no usable timestamps exist (weekly
     evidence is then simply absent — the Daily still decides bias).
+
+    ``exclude_forming`` drops the bucket containing the newest D1 candle when
+    its ISO-week window extends beyond that candle's time: an in-progress week
+    must not flip W1 BOS/sequence intra-week (and unsorted input is sorted by
+    parsed time so bucket close/high/low cannot silently depend on input
+    order). Default False preserves the legacy aggregate-everything behaviour;
+    the hierarchy call site opts in via SWING_WEEKLY_EXCLUDE_FORMING.
     """
     buckets: dict = {}
     order: list = []
+    parsed: list = []
     for candle in d1_candles or []:
         if not isinstance(candle, dict):
             continue
@@ -141,6 +164,11 @@ def resample_d1_to_w1(d1_candles: list) -> list:
         except (KeyError, TypeError, ValueError):
             continue
         vol = float(candle.get("vol", 0) or 0)
+        parsed.append((dt, o, h, lo, cl, vol))
+    # Defensive sort: bucket OHLC aggregation must not depend on input order.
+    parsed.sort(key=lambda row: row[0])
+    newest_dt = parsed[-1][0] if parsed else None
+    for dt, o, h, lo, cl, vol in parsed:
         iso = dt.isocalendar()
         key = (iso[0], iso[1])
         if key not in buckets:
@@ -159,7 +187,25 @@ def resample_d1_to_w1(d1_candles: list) -> list:
             bucket["low"] = min(bucket["low"], lo)
             bucket["close"] = cl
             bucket["vol"] = bucket.get("vol", 0.0) + vol
-    return [buckets[key] for key in order]
+
+    def _bucket_week_end(key) -> datetime:
+        # Monday 00:00 UTC of the ISO week + 7 days == next Monday 00:00.
+        year, week = key
+        monday = datetime.fromisocalendar(year, week, 1).replace(tzinfo=timezone.utc)
+        return monday + timedelta(days=7)
+
+    out = []
+    for key in order:
+        bucket = buckets[key]
+        if (
+            exclude_forming
+            and key == order[-1]
+            and newest_dt is not None
+            and newest_dt < _bucket_week_end(key)
+        ):
+            continue  # still-forming current week — exclude from evidence
+        out.append(bucket)
+    return out
 
 
 def evaluate_htf_bias(
@@ -295,6 +341,34 @@ def evaluate_htf_bias(
         else:
             state, direction = "conflicting", None
 
+    # Corroboration: a lone weighted evidence kind is a raid, not a narrative.
+    # WEIGHT_SWEEP == MIN_BIAS_SCORE let a single D1 stop-raid wick print a
+    # valid bias with no displacement and no PD array — contradicting the
+    # sweep -> displacement -> FVG/OB sequence this module documents. A valid
+    # bias now needs a displacement-class leg (BOS / FVG / OB) or two distinct
+    # evidence kinds on the dominant side.
+    corroboration = {
+        "required": bool(cfg.get("REQUIRE_EVIDENCE_CORROBORATION", True)),
+        "satisfied": True,
+        "dominant_kinds": [],
+    }
+    if state == "valid" and corroboration["required"]:
+        _strong_kinds = {"d1_displacement_bos", "d1_fvg_narrative", "d1_order_block"}
+        _kinds = {e["name"] for e in evidence if e.get("direction") == direction}
+        corroboration["dominant_kinds"] = sorted(_kinds)
+        _satisfied = bool(_kinds & _strong_kinds) or len(_kinds) >= 2
+        corroboration["satisfied"] = _satisfied
+        if not _satisfied:
+            state, direction = "unclear", None
+            evidence.append(
+                {
+                    "name": "corroboration_denied",
+                    "direction": None,
+                    "weight": 0.0,
+                    "detail": "single_kind_no_displacement_leg",
+                }
+            )
+
     # Aligned PD-array "draw" levels for the dominant side (narrative context:
     # where price is drawn from/towards), nearest first, capped at 3.
     draws: list = []
@@ -329,6 +403,7 @@ def evaluate_htf_bias(
         "bear_score": round(bear, 3),
         "min_bias_score": min_score,
         "min_bias_strength": min_strength,
+        "corroboration": corroboration,
         "evidence": evidence,
         "draw_on_liquidity": draws,
         "weekly_used": any(e["name"] == "w1_alignment" for e in evidence),

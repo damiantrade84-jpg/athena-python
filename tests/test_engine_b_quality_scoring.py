@@ -39,6 +39,18 @@ def _base_res_long():
         "ob_at_zone": True,
         "order_blocks": [{"strength": 80}],
         "fvg_overlap": True,
+        # Real reaction-backed FVG context: the fallback (no-context) branch
+        # no longer awards half-credit pads, so fixtures must carry the
+        # evidence they claim.
+        "fvg_context": {
+            "direction": "LONG",
+            "reaction_confirmed": True,
+            "nearest": {
+                "gap_size_atr": 0.8,
+                "displacement_body_atr": 1.0,
+                "fill_fraction": 0.0,
+            },
+        },
         "nearest_support_zone": {"fvg_size_atr": 0.8},
         "active_zone_distance": 0.4,
         "distance_to_res": 3.0,

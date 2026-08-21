@@ -140,7 +140,17 @@ def _pullback_quality(
 def _sweep_quality(
     candles: list[dict[str, Any]], direction: str, atr: float, sweep_active: bool,
     session_quality: str, structural_overlap: bool,
+    direction_aligned: bool | None = None,
 ) -> dict[str, Any]:
+    """Grade sweep quality for the candidate direction.
+
+    ``direction_aligned`` carries the producer's sweep_direction check:
+    True/False when the raid direction is known, None when unknown. A known
+    OPPOSING raid is evidence against the candidate — it must not grade as
+    full-quality confluence for this side (structure gating elsewhere already
+    refuses opposing sweeps; this only stops the quality layer from paying
+    them). Unknown direction keeps neutral treatment.
+    """
     if not sweep_active or len(candles) < 2 or atr <= 0:
         return {"available": bool(sweep_active), "score": 0.0, "grade": "none"}
     last = candles[-1]
@@ -169,11 +179,16 @@ def _sweep_quality(
         + 0.15 * session_score
         + 0.15 * float(structural_overlap)
     )
+    misaligned = direction_aligned is False
+    if misaligned:
+        score *= 0.30
     grade = "strong" if score >= 0.75 else "moderate" if score >= 0.50 else "weak"
     return {
         "available": True,
         "score": round(_clamp01(score), 4),
         "grade": grade,
+        "direction_aligned": direction_aligned,
+        "direction_misaligned": bool(misaligned),
         "wick_atr": round(wick_atr, 4),
         "close_strength": round(_clamp01(close_strength), 4),
         "tests": int(tests),
@@ -224,8 +239,13 @@ def build_phase2_context(
     structural_overlap = bool(res.get("ob_at_zone") or res.get("fvg_overlap") or res.get("breaker_block"))
     volume = _volume_grade(res, asset_type=asset_type, aggtrade_available=aggtrade_available)
     pullback = _pullback_quality(candles, direction, atr, _number(anchor) if anchor is not None else None)
+    # Direction-resolve the raid: an opposing sweep must not grade as full
+    # confluence for this side. Unknown direction stays neutral.
+    _sweep_dir = str(res.get("sweep_direction") or "").upper() or None
+    _sweep_aligned = None if _sweep_dir is None else (_sweep_dir == str(direction or "").upper())
     sweep = _sweep_quality(
-        candles, direction, atr, bool(res.get("liquidity_sweep")), session_quality, structural_overlap
+        candles, direction, atr, bool(res.get("liquidity_sweep")), session_quality, structural_overlap,
+        direction_aligned=_sweep_aligned,
     )
     lifecycle = _freshness_score(active_zone)
     breakers = res.get("breaker_blocks") if isinstance(res.get("breaker_blocks"), list) else []

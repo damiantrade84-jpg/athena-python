@@ -168,15 +168,65 @@ def test_htf_bias_draw_on_liquidity_lists_aligned_arrays():
 
 
 def test_htf_bias_partial_config_merges_onto_defaults():
+    # Corroboration stays ON in this suite's defaults; disabled here so this
+    # test keeps exercising pure config-merge semantics with a bare sequence.
     bias = evaluate_htf_bias(
         style="intraday",
         d1_sequence={"state": "HH_HL"},
-        config={"MIN_BIAS_SCORE": 1.0},  # lowered floor: sequence now qualifies
+        config={
+            "MIN_BIAS_SCORE": 1.0,  # lowered floor: sequence now qualifies
+            "REQUIRE_EVIDENCE_CORROBORATION": False,
+        },
     )
     assert bias["state"] == "valid"
     assert bias["direction"] == "LONG"
     # Untouched keys keep their defaults.
     assert bias["min_bias_strength"] == DEFAULT_CONFIG["MIN_BIAS_STRENGTH"]
+
+
+def test_htf_bias_lone_sweep_is_not_a_valid_bias():
+    # WEIGHT_SWEEP == MIN_BIAS_SCORE used to let a single D1 stop-raid print a
+    # valid bias with no displacement and no PD array. Corroboration requires a
+    # displacement-class leg or a second distinct evidence kind.
+    bias = evaluate_htf_bias(style="intraday", d1_sweep=_bull_sweep())
+    assert bias["state"] == "unclear"
+    assert bias["direction"] is None
+    assert bias["corroboration"]["required"] is True
+    assert bias["corroboration"]["satisfied"] is False
+    assert bias["corroboration"]["dominant_kinds"] == ["d1_liquidity_sweep"]
+    # Reversible via config.
+    legacy = evaluate_htf_bias(
+        style="intraday",
+        d1_sweep=_bull_sweep(),
+        config={"REQUIRE_EVIDENCE_CORROBORATION": False},
+    )
+    assert legacy["state"] == "valid"
+    assert legacy["direction"] == "LONG"
+
+
+def test_htf_bias_lone_weekly_alignment_is_not_a_valid_bias():
+    # Weekly alignment is a weak (supporting) kind: with the points floor
+    # lowered it would qualify alone, but corroboration denies single-kind
+    # weak-evidence biases a "valid" stamp.
+    bias = evaluate_htf_bias(
+        style="swing",
+        w1_evidence={"sequence": "HH_HL", "bos_bull": False, "bos_bear": False, "bars": 10},
+        config={"MIN_BIAS_SCORE": 1.0},
+    )
+    assert bias["state"] == "unclear"
+    assert bias["corroboration"]["satisfied"] is False
+
+
+def test_htf_bias_sweep_plus_weekly_alignment_is_valid():
+    # Two distinct kinds satisfy corroboration even without a BOS/FVG/OB leg.
+    bias = evaluate_htf_bias(
+        style="swing",
+        d1_sweep=_bull_sweep(),
+        w1_evidence={"sequence": "HH_HL", "bos_bull": False, "bos_bear": False, "bars": 10},
+    )
+    assert bias["state"] == "valid"
+    assert bias["direction"] == "LONG"
+    assert bias["corroboration"]["satisfied"] is True
 
 
 # ── evaluate_directional_hierarchy ────────────────────────────────────────────
@@ -365,6 +415,28 @@ def test_resample_d1_to_w1_aggregates_iso_weeks():
 def test_resample_d1_to_w1_skips_untimed_candles():
     assert resample_d1_to_w1([{"open": 1, "high": 2, "low": 0.5, "close": 1.5}]) == []
     assert resample_d1_to_w1(None) == []
+
+
+def test_resample_d1_to_w1_excludes_forming_week_and_sorts_input():
+    # W30 complete (Mon+Fri), W31 still forming (Mon only). Input deliberately
+    # out of order: bucket OHLC must not depend on input order.
+    d1 = [
+        {"time": "2026-07-27T00:00:00Z", "open": 99, "high": 100, "low": 97, "close": 98, "vol": 5},
+        {"time": "2026-07-20T00:00:00Z", "open": 100, "high": 101, "low": 99, "close": 100.5, "vol": 10},
+        {"time": "2026-07-24T00:00:00Z", "open": 102, "high": 104, "low": 98, "close": 103, "vol": 6},
+        {"time": "2026-07-21T00:00:00Z", "open": 100.5, "high": 103, "low": 100, "close": 102, "vol": 12},
+        {"time": "2026-07-28T00:00:00Z", "open": 98, "high": 101, "low": 97.5, "close": 100.5, "vol": 7},
+    ]
+    legacy = resample_d1_to_w1(d1)
+    assert len(legacy) == 2  # default keeps the forming week
+    trimmed = resample_d1_to_w1(d1, exclude_forming=True)
+    assert len(trimmed) == 1
+    # Sorted aggregation regardless of input order.
+    assert trimmed[0]["open"] == 100
+    assert trimmed[0]["high"] == 104
+    assert trimmed[0]["low"] == 98
+    assert trimmed[0]["close"] == 103
+    assert trimmed[0]["vol"] == 28
 
 
 # ── calculate_confidence wiring ───────────────────────────────────────────────

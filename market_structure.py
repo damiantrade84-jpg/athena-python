@@ -4865,6 +4865,16 @@ class NakedEngine:
                         vol_ratio = vol / avg_vol if volume_available else 0.0
                         # Strength score: 60% displacement, 40% volume (capped 0-100)
                         strength = min(100, int((min(displacement / 2.0, 1.0) * 60) + (min(vol_ratio / 2.0, 1.0) * 40)))
+                        # Mitigation: a close through the block's far side after
+                        # formation means the level was consumed — it must stop
+                        # donating bias/confluence evidence forever. The
+                        # hardcoded False let months-old D1 blocks keep scoring
+                        # in the ICT hierarchy (evaluate_htf_bias filters on
+                        # this flag but never saw True).
+                        _mitigated = any(
+                            float(candles[j]["close"]) < ob_bottom
+                            for j in range(i + 1, len(candles))
+                        )
                         obs.append({
                             "type": "bullish",
                             "top": ob_top,
@@ -4873,7 +4883,7 @@ class NakedEngine:
                             "vol_ratio": round(vol_ratio, 2),
                             "volume_available": volume_available,
                             "strength": strength,
-                            "mitigated": False,
+                            "mitigated": bool(_mitigated),
                         })
                         break
 
@@ -4914,6 +4924,12 @@ class NakedEngine:
                         volume_available = bool(vol > 0 and avg_vol > 0)
                         vol_ratio = vol / avg_vol if volume_available else 0.0
                         strength = min(100, int((min(displacement / 2.0, 1.0) * 60) + (min(vol_ratio / 2.0, 1.0) * 40)))
+                        # Mitigation mirror of the bullish branch: a close
+                        # above the bearish block's far side consumes it.
+                        _mitigated = any(
+                            float(candles[j]["close"]) > ob_top
+                            for j in range(i + 1, len(candles))
+                        )
                         obs.append({
                             "type": "bearish",
                             "top": ob_top,
@@ -4922,7 +4938,7 @@ class NakedEngine:
                             "vol_ratio": round(vol_ratio, 2),
                             "volume_available": volume_available,
                             "strength": strength,
-                            "mitigated": False,
+                            "mitigated": bool(_mitigated),
                         })
                         break
         except Exception as _ob_err:
@@ -5282,7 +5298,86 @@ class NakedEngine:
         score_group: str | None = None,
         trigger_tf: str | None = None,
     ) -> dict:
-        if len(candles) < 3:
+        """Direction-aligned entry-trigger read over a bounded lookback window.
+
+        The legacy form evaluated ONLY the last confirmed bar, so a valid
+        sweep-at-zone setup armed two bars earlier was invisible at scan time —
+        the dominant funnel blocker (raw_trigger_missing). The window form scans
+        newest -> oldest across ``ENGINE_B_TRIGGER_LOOKBACK_BARS`` closed bars
+        (default 3) and accepts the FIRST bar that prints an aligned pattern;
+        ``bar_age``/``trigger_bar_time`` stamp which bar fired. Newest evidence
+        always wins: the search runs only when the newest bar has no aligned
+        trigger. Location coupling is unchanged — entry_ok still pairs the
+        trigger with a recognised location via the current-price proximity
+        gates (_trigger_at_location), so an old trigger far from the level
+        still fails. Reversible: ENGINE_B_TRIGGER_LOOKBACK_ENABLED: false.
+        """
+        ctx = self._price_action_trigger_at(
+            candles, -1, direction, atr, zone_hit, bos_confirmed,
+            is_trending=is_trending, asset_type=asset_type,
+            score_group=score_group, trigger_tf=trigger_tf,
+        )
+        _lookback_enabled = bool(config.CONFIG.get("ENGINE_B_TRIGGER_LOOKBACK_ENABLED", True))
+        try:
+            _lookback = int(config.CONFIG.get("ENGINE_B_TRIGGER_LOOKBACK_BARS", 3) or 1)
+        except (TypeError, ValueError):
+            _lookback = 3
+        _lookback = max(1, min(_lookback, 10))
+        if (
+            _lookback_enabled
+            and _lookback > 1
+            and not bool(ctx.get("trigger_ok"))
+            and isinstance(candles, list)
+        ):
+            for _age in range(1, _lookback):
+                if len(candles) < _age + 3:
+                    break
+                _cand = self._price_action_trigger_at(
+                    candles, -1 - _age, direction, atr, zone_hit, bos_confirmed,
+                    is_trending=is_trending, asset_type=asset_type,
+                    score_group=score_group, trigger_tf=trigger_tf,
+                )
+                if bool(_cand.get("trigger_ok")):
+                    _cand["bar_age"] = _age
+                    _bar = candles[-1 - _age]
+                    _cand["trigger_bar_time"] = (
+                        _bar.get("time")
+                        or _bar.get("timestamp")
+                        or _bar.get("datetime")
+                        or _bar.get("date")
+                    )
+                    return _cand
+        if bool(ctx.get("trigger_ok")):
+            ctx["bar_age"] = 0
+            _last_bar = candles[-1] if candles else {}
+            ctx["trigger_bar_time"] = (
+                _last_bar.get("time")
+                or _last_bar.get("timestamp")
+                or _last_bar.get("datetime")
+                or _last_bar.get("date")
+                if isinstance(_last_bar, dict)
+                else None
+            )
+        else:
+            ctx["bar_age"] = None
+            ctx["trigger_bar_time"] = None
+        return ctx
+
+    def _price_action_trigger_at(
+        self,
+        candles: list,
+        index: int,
+        direction: str,
+        atr: float,
+        zone_hit: bool,
+        bos_confirmed: bool,
+        is_trending: bool = False,
+        asset_type: str | None = "",
+        score_group: str | None = None,
+        trigger_tf: str | None = None,
+    ) -> dict:
+        """Evaluate the entry-trigger patterns at one bar index (pure slice)."""
+        if not isinstance(candles, list) or len(candles) < 3:
             return {
                 "pattern": "NONE",
                 "trigger_ok": False,
@@ -5291,10 +5386,19 @@ class NakedEngine:
                 "inside_break": False,
                 "strong_close": False,
             }
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            idx = -1
+        if idx >= 0:
+            idx = idx - len(candles) if idx < len(candles) else -1
+        min_idx = -len(candles)
+        if idx - 2 < min_idx:
+            idx = min_idx + 2
 
-        last = candles[-1]
-        prev = candles[-2]
-        prev2 = candles[-3]
+        last = candles[idx]
+        prev = candles[idx - 1]
+        prev2 = candles[idx - 2]
 
         open_ = float(last["open"])
         high = float(last["high"])
@@ -6121,7 +6225,13 @@ class NakedEngine:
             _d1_seq = self._determine_sequence(d1_highs, d1_lows, d1_atr, "LONG", swings=d1_swings)
             _w1_evidence = None
             if str(style or "").lower() == "swing" and bool(_hier_cfg.get("SWING_WEEKLY_ENABLED", True)):
-                _w1_candles = resample_d1_to_w1(d1_candles)
+                # The bucket holding the newest D1 candle is still forming;
+                # including it let W1 BOS/sequence flip intra-week. Reversible:
+                # ENGINE_B_HIERARCHY.SWING_WEEKLY_EXCLUDE_FORMING: false.
+                _w1_candles = resample_d1_to_w1(
+                    d1_candles,
+                    exclude_forming=bool(_hier_cfg.get("SWING_WEEKLY_EXCLUDE_FORMING", True)),
+                )
                 try:
                     _w1_min = int(_hier_cfg.get("SWING_WEEKLY_MIN_BARS", 8) or 8)
                 except (TypeError, ValueError):
@@ -7021,8 +7131,11 @@ class NakedEngine:
             "zone_touched": zone_ctx["zone_touched"],
             "trigger_pattern": trigger_ctx["pattern"],
             "trigger_ok": trigger_ctx["trigger_ok"],
+            "trigger_bar_age": trigger_ctx.get("bar_age"),
+            "trigger_bar_time": trigger_ctx.get("trigger_bar_time"),
             "opposing_trigger_pattern": _opposing_trigger_ctx.get("pattern"),
             "opposing_trigger_ok": bool(_opposing_trigger_ctx.get("trigger_ok")),
+            "opposing_trigger_bar_age": _opposing_trigger_ctx.get("bar_age"),
             "rejection_candle": trigger_ctx["rejection"],
             "engulfing_candle": trigger_ctx["engulfing"],
             "inside_break_candle": trigger_ctx["inside_break"],
@@ -8284,7 +8397,7 @@ class NakedEngine:
                 )
                 _regime_label = str(res.get("_adx_derived_regime") or "").upper()
                 _weighted_subscores = apply_regime_component_weights(
-                    _subscores, _regime_label, asset_type_lower
+                    _subscores, _regime_label, asset_type_lower, cfg=_ws_cfg
                 )
                 _quality_score, _quality_max_possible, _quality_components = aggregate_quality_score(
                     _weighted_subscores, _ws_cfg
@@ -9054,6 +9167,11 @@ class NakedEngine:
             if location_distance_atr is not None
             else None,
             "trigger_passed": trigger_ok,
+            "trigger_bar_age": res.get("trigger_bar_age"),
+            "trigger_bar_time": res.get("trigger_bar_time"),
+            "trigger_lookback_enabled": bool(
+                config.CONFIG.get("ENGINE_B_TRIGGER_LOOKBACK_ENABLED", True)
+            ),
             "trigger_timeframe": res.get("trigger_timeframe"),
             "trigger_timeframe_gate_required": trigger_timeframe_gate_required,
             "trigger_timeframe_gate_ok": trigger_timeframe_gate_ok,

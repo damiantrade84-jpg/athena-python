@@ -387,7 +387,12 @@ def _fvg_confluence_score(res: dict[str, Any], direction: str) -> float:
     size_atr = 0.0
     if zone is not None:
         size_atr = _float_mapping(zone.get("fvg_size_atr"), 0.0)
-    return round(_clamp01(0.5 + (size_atr / 2.0)), 4)
+    # Passive zone overlap with NO reaction context is weak evidence, not half
+    # confluence: the old `0.5 + size/2` base awarded 50% for absence of
+    # evidence and let a single large untested gap reach 1.0. UNVALIDATED
+    # judgment values (base 0.25, gap credit capped at +0.25); reversible by
+    # restoring the previous expression.
+    return round(_clamp01(0.25 + (min(size_atr, 1.0) / 4.0)), 4)
 
 
 def _bag_continuation_score(res: dict[str, Any], direction: str) -> float:
@@ -719,10 +724,19 @@ def apply_regime_component_weights(
     subscores: dict[str, float],
     regime: str | None,
     asset_type: str = "",
+    cfg: dict[str, Any] | None = None,
 ) -> dict[str, float]:
-    cfg = weighted_scoring_config()
+    """Apply REGIME_COMPONENT_MULT to subscores.
+
+    ``cfg`` lets the caller pass the SAME group-scoped weight table it resolved
+    for aggregation (market_structure resolves per-score-group config). Without
+    it the function re-read the global table, so a group override of
+    COMPONENT_WEIGHTS silently disagreed with the regime multipliers applied to
+    it.
+    """
+    scoring_cfg = cfg if isinstance(cfg, dict) else weighted_scoring_config()
     regime_key = str(regime or "").upper()
-    mults_raw = cfg.get("REGIME_COMPONENT_MULT") or {}
+    mults_raw = scoring_cfg.get("REGIME_COMPONENT_MULT") or {}
     regime_mults = mults_raw.get(regime_key, {}) if isinstance(mults_raw, dict) else {}
     if not isinstance(regime_mults, dict) or not regime_mults:
         return dict(subscores)

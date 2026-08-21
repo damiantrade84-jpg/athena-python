@@ -3068,17 +3068,25 @@ CONFIG: dict = {
         "WEIGHT_SEQUENCE": 1.0,
         "WEIGHT_WEEKLY": 2.0,
         "MIN_BIAS_SCORE": 3.0,
+        # A lone D1 sweep reaches the points bar but is not a narrative; a
+        # valid bias needs a displacement-class leg or two distinct kinds.
+        "REQUIRE_EVIDENCE_CORROBORATION": True,
         "MIN_BIAS_STRENGTH": 0.6,
         "FVG_MIN_DISPLACEMENT_BODY_ATR": 0.8,
-        "UNCLEAR_SCORE_MULT": 0.75,
+        # Penalty/reward symmetry: x0.90 cut vs +0.5 MTF bonus on a ~5-6 point
+        # applied scale (the old x0.75 made penalties ~3x the max reward).
+        "UNCLEAR_SCORE_MULT": 0.90,
         "CONFLICT_SCORE_MULT": 0.50,
         "CONFLICT_BLOCKS": True,
         "COUNTER_BIAS_MODE": "block",
         "COUNTER_BIAS_SCORE_MULT": 0.40,
-        "ALIGNED_NO_MTF_MULT": 0.90,
+        "ALIGNED_NO_MTF_MULT": 1.0,
         "MTF_CONFIRM_BONUS": 0.5,
         "SWING_WEEKLY_ENABLED": True,
         "SWING_WEEKLY_MIN_BARS": 8,
+        # Drop the still-forming W1 bucket so weekly BOS/sequence cannot flip
+        # intra-week.
+        "SWING_WEEKLY_EXCLUDE_FORMING": True,
     },
     "ENGINE_B_WEIGHTED_SCORING": {
         "ENABLED": True,
