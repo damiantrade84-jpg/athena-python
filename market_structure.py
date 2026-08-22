@@ -4990,7 +4990,7 @@ class NakedEngine:
                 ref_high = float(np.max(lookback_highs)) if len(lookback_highs) > 0 else float(highs[-6])
 
             try:
-                sweep_lookback = int(config.CONFIG.get("ENGINE_B_SWEEP_LOOKBACK_BARS", 5) or 5)
+                sweep_lookback = int(config.CONFIG.get("ENGINE_B_SWEEP_LOOKBACK_BARS", 8) or 8)
             except (TypeError, ValueError):
                 sweep_lookback = 5
             sweep_lookback = max(1, min(sweep_lookback, len(closes)))
@@ -6138,7 +6138,7 @@ class NakedEngine:
             )
             if _exclude_window:
                 try:
-                    _sweep_lb = int(config.CONFIG.get("ENGINE_B_SWEEP_LOOKBACK_BARS", 5) or 5)
+                    _sweep_lb = int(config.CONFIG.get("ENGINE_B_SWEEP_LOOKBACK_BARS", 8) or 8)
                 except (TypeError, ValueError):
                     _sweep_lb = 5
                 _window_start = len(struct_highs) - max(1, _sweep_lb)
@@ -6208,7 +6208,7 @@ class NakedEngine:
             _d1_sweep_swing_high = None
             _d1_sweep_swing_low = None
             try:
-                _d1_lb = int(config.CONFIG.get("ENGINE_B_SWEEP_LOOKBACK_BARS", 5) or 5)
+                _d1_lb = int(config.CONFIG.get("ENGINE_B_SWEEP_LOOKBACK_BARS", 8) or 8)
                 _d1_ws = len(d1_highs) - max(1, _d1_lb)
                 _d1_pk_pool = [int(p) for p in d1_swings.get("peak_idx", []) if int(p) < _d1_ws]
                 _d1_tr_pool = [int(t) for t in d1_swings.get("trough_idx", []) if int(t) < _d1_ws]

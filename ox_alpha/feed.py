@@ -11,8 +11,6 @@ from typing import Any, Mapping, Sequence
 
 log = logging.getLogger("ox_alpha.feed")
 
-_SEVERITY_PASS = {"fresh", "stale_1_bucket", "d1_calendar_gap_policy_ok"}
-
 
 def pair_dict(pair: Mapping[str, Any]) -> dict[str, Any]:
     return {
@@ -41,9 +39,19 @@ def _sort_confirmed_ascending(state: dict[str, Any]) -> None:
         pass
 
 
-def _severity_ok(severity: str | None) -> bool:
+def _severity_ok(severity: str | None, tf: str = "") -> bool:
+    """Freshness bar for an INTRADAY engine.
+
+    fresh / one-bucket lag only. The D1 calendar-gap pass is legal for D1
+    alone (a daily bar legitimately spans weekends); a blanket policy_ok
+    acceptance would let exchange-closed markets score trades.
+    """
     s = str(severity or "")
-    return s in _SEVERITY_PASS or "policy_ok" in s
+    if tf.strip().upper() == "D1" and (
+        s == "d1_calendar_gap_policy_ok" or "policy_ok" in s
+    ):
+        return True
+    return s in {"fresh", "stale_1_bucket"}
 
 
 def _state_from_production_routing(
@@ -163,8 +171,106 @@ def load_market_states(
             freshness[tf] = False
             continue
         states[tf] = state
-        freshness[tf] = _severity_ok(state.get("stalenessSeverity"))
+        freshness[tf] = _severity_ok(state.get("stalenessSeverity"), tf)
     return states, freshness
+
+
+def load_quote(
+    pair: Mapping[str, Any],
+    *,
+    max_age_sec: float = 30.0,
+    time_now: float | None = None,
+) -> dict[str, Any] | None:
+    """Live bid/ask for executable geometry. Missing/stale/malformed -> None."""
+    import time as _time
+
+    now = float(time_now if time_now is not None else _time.time())
+    try:
+        max_age = float(max_age_sec)
+    except (TypeError, ValueError):
+        return None
+    if max_age <= 0:
+        return None
+    try:
+        from config import CONFIG as _cfg
+
+        age_map = _cfg.get("LIVE_PRICE_MAX_AGE_SEC") or {}
+        if isinstance(age_map, dict):
+            asset_key = str(pair.get("type") or "default").lower()
+            platform_cap = age_map.get(asset_key, age_map.get("default"))
+            if platform_cap is not None:
+                max_age = min(max_age, float(platform_cap))
+    except Exception:
+        pass
+    pd = pair_dict(pair)
+    asset = str(pd.get("type") or "").lower()
+    source = str(pd.get("source") or "").lower()
+    symbol = str(pd.get("symbol") or pd.get("display") or "")
+    quote: dict[str, Any] | None = None
+    try:
+        if asset == "crypto" or source == "bybit":
+            from data_feeds import _fetch_bybit_ticker
+
+            raw = _fetch_bybit_ticker(symbol)
+            if isinstance(raw, dict):
+                ts_raw = raw.get("ts")
+                if ts_raw is None:
+                    return None
+                quote = {
+                    "bid": raw.get("bid"),
+                    "ask": raw.get("ask"),
+                    "ts": float(ts_raw),
+                    "source": str(raw.get("source") or "bybit"),
+                }
+        elif source == "mt5":
+            import MetaTrader5 as mt5  # type: ignore
+            from athena_app.services.mt5_time_alignment import (
+                normalize_mt5_tick_epoch_utc,
+            )
+            from config import CONFIG as _mt5_cfg
+
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is None and pd.get("display") and pd.get("display") != symbol:
+                tick = mt5.symbol_info_tick(str(pd.get("display")))
+            if tick is not None:
+                bid = float(getattr(tick, "bid", 0) or 0)
+                ask = float(getattr(tick, "ask", 0) or 0)
+                ts_msc = getattr(tick, "time_msc", None)
+                raw_ts = (
+                    float(ts_msc) / 1000.0
+                    if ts_msc
+                    else float(getattr(tick, "time", 0) or 0)
+                )
+                ts = normalize_mt5_tick_epoch_utc(
+                    raw_ts if raw_ts > 0 else None,
+                    now,
+                    int(_mt5_cfg.get("MT5_BROKER_UTC_OFFSET", 3)),
+                )
+                if ts is None:
+                    return None
+                quote = {
+                    "bid": bid if bid > 0 else None,
+                    "ask": ask if ask > 0 else None,
+                    "ts": float(ts),
+                    "source": "mt5_tick",
+                }
+    except Exception as exc:
+        log.debug("OX Alpha quote fetch failed %s: %s", pd.get("display"), exc)
+        return None
+    if not quote:
+        return None
+    ts = float(quote.get("ts") or 0)
+    if ts <= 0 or (now - ts) > max_age:
+        return None
+    try:
+        bid_f = float(quote.get("bid"))
+        ask_f = float(quote.get("ask"))
+    except (TypeError, ValueError):
+        return None
+    if bid_f <= 0 or ask_f < bid_f:
+        return None
+    quote["ageSec"] = round(max(0.0, now - ts), 3)
+    return quote
 
 
 def freshness_ok_for_exec(
@@ -175,11 +281,19 @@ def freshness_ok_for_exec(
     time_now: float | None = None,
 ) -> tuple[bool, str]:
     """Execute-time freshness proof — re-reads the cache and fails closed."""
-    _, fresh = load_market_states(pair, timeframes, time_now=time_now)
+    states, fresh = load_market_states(pair, timeframes, time_now=time_now)
     bad = sorted(tf for tf, ok in fresh.items() if not ok)
     if bad:
         return False, f"stale_timeframes:{','.join(bad)}"
-    exec_dict["candleFreshness"] = {
-        tf: {"fresh": ok} for tf, ok in fresh.items()
-    }
+    stamped: dict[str, Any] = {}
+    for tf in timeframes:
+        state = states.get(tf) if isinstance(states.get(tf), dict) else {}
+        diag = state.get("candleFreshness") if isinstance(state.get("candleFreshness"), dict) else {}
+        row = dict(diag)
+        if not row.get("stalenessSeverity"):
+            row["stalenessSeverity"] = state.get("stalenessSeverity")
+        if not row.get("stalenessSeverity"):
+            return False, f"freshness_evidence_missing:{tf}"
+        stamped[str(tf)] = row
+    exec_dict["candleFreshness"] = stamped
     return True, "ok"

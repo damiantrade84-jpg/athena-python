@@ -25,12 +25,38 @@ ENGINE_ID = "ox_alpha"
 ANALYTICAL_TFS = ("M15", "H1")
 
 _pair_provider: Callable[[], list[dict]] | None = None
+_market_open_checker: Callable[[Mapping[str, Any]], dict] | None = None
 
 
 def set_pair_provider(fn: Callable[[], list[dict]] | None) -> None:
     """Inject the app's pair registry (e.g. enabled ALL_PAIRS)."""
     global _pair_provider
     _pair_provider = fn
+
+
+def set_market_open_checker(fn: Callable[[Mapping[str, Any]], dict] | None) -> None:
+    """Override the market-open proof (tests / custom venue checks)."""
+    global _market_open_checker
+    _market_open_checker = fn
+
+
+def market_open_state(pair: Mapping[str, Any]) -> dict:
+    """Broker-truth proof that the pair's market is tradable right now.
+
+    crypto venues trade 24/7. MT5 pairs reuse the platform's canonical
+    tick-age/trade-mode check. Unknown sources have no broker-truth helper —
+    they are not claimed open; freshness gates still apply.
+    """
+    if str(pair.get("type") or "").lower() == "crypto":
+        return {"open": True, "reason": "crypto_24_7"}
+    if str(pair.get("source") or "").lower() == "mt5":
+        try:
+            from scalp_engine import mt5_market_open_state
+
+            return mt5_market_open_state(str(pair.get("symbol") or pair.get("display") or ""))
+        except Exception as exc:
+            return {"open": False, "reason": f"market_open_check_error:{exc}"}
+    return {"open": False, "reason": "no_broker_check_available"}
 
 
 def _pairs() -> list[dict]:
@@ -103,6 +129,10 @@ def scan_pair(
     pair_mutable = dict(pair)
     pair_mutable["score_group"] = group
 
+    # Broker-truth market-open proof BEFORE any scoring work: a closed market
+    # must never emit TRADE/WATCH, whatever its cached bars look like.
+    open_state = (_market_open_checker or market_open_state)(pair_mutable)
+
     tf_list, policy = _policy_timeframes(pair_mutable, group)
     limits = {
         "M15": cfg.candle_limit_m15,
@@ -112,14 +142,37 @@ def scan_pair(
         pair_mutable, tf_list, limits, time_now=time_now
     )
 
+    quote = feed.load_quote(
+        pair_mutable, max_age_sec=cfg.quote_max_age_sec, time_now=time_now
+    )
     signal = analyze_pair(
         pair_mutable,
         states,
         profile=profile,
         settings=cfg,
         freshness={tf: ok for tf, ok in freshness.items() if tf in tf_list},
+        quote=quote,
         time_now=time_now,
     )
+    signal["marketOpen"] = bool(open_state.get("open"))
+    signal["marketOpenReason"] = str(open_state.get("reason") or "")
+    gates = signal.setdefault("gates", [])
+    gates.insert(0, {
+        "name": "market_open",
+        "passed": bool(open_state.get("open")),
+        "detail": str(open_state.get("reason") or ""),
+        "hard": True,
+    })
+    if not open_state.get("open"):
+        signal["decision"] = "NO_SIGNAL"
+        signal["direction"] = None
+        signal["playType"] = None
+        signal["executable"] = False
+        signal["reason"] = "MARKET_CLOSED"
+        signal["entryReadiness"] = "UNAVAILABLE"
+        signal["entryReadinessReason"] = (
+            f"market_closed:{open_state.get('reason')}"
+        )
     signal["scoreGroup"] = group
     signal["requiredTimeframes"] = tf_list
 
@@ -140,9 +193,20 @@ def scan_pair(
         signal["entryReadiness"] = "UNAVAILABLE"
         signal["entryReadinessReason"] = f"policy_stamp_failed:{exc}"
 
+    if not open_state.get("open"):
+        signal["entryReadiness"] = "UNAVAILABLE"
+        signal["entryReadinessReason"] = (
+            f"market_closed:{open_state.get('reason')}"
+        )
+    elif quote is None and str(signal.get("entryReadiness") or "").upper() != "UNAVAILABLE":
+        signal["entryReadiness"] = "PENDING"
+        signal["entryReadinessReason"] = "quote_unavailable"
     signal["executable"] = bool(
         signal.get("decision") == "TRADE"
         and str(signal.get("entryReadiness") or "").upper() == "READY"
+        and bool(open_state.get("open"))
+        and quote is not None
+        and str(signal.get("priceSource") or "") == "live_quote_mid"
     )
     return signal
 

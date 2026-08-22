@@ -940,10 +940,10 @@ ENGINE_B_BIAS_MODE: legacy
 # ENGINE_B_HIERARCHY:
 #   MIN_BIAS_SCORE: 3.0        # dominant-side points for a valid Daily bias
 #   MIN_BIAS_STRENGTH: 0.6     # dominance ratio top/(bull+bear) for "valid"
-#   UNCLEAR_SCORE_MULT: 0.75   # hierarchical: Daily narrative missing
+#   UNCLEAR_SCORE_MULT: 0.90   # hierarchical: Daily narrative missing
 #   CONFLICT_BLOCKS: true      # hierarchical: both-sided Daily evidence blocks
 #   COUNTER_BIAS_MODE: block   # or penalty (COUNTER_BIAS_SCORE_MULT 0.40)
-#   ALIGNED_NO_MTF_MULT: 0.90  # HTF aligned, MTF reaction still missing
+#   ALIGNED_NO_MTF_MULT: 1.0   # HTF aligned, MTF reaction still missing
 #   MTF_CONFIRM_BONUS: 0.5     # HTF+MTF aligned score bonus
 #   SWING_WEEKLY_ENABLED: true # swing style adds Weekly (resampled from D1)
 
@@ -6890,3 +6890,6 @@ OX_ALPHA_ENGINE:
 
   SCAN_WORKERS: 8
   VOLUME_LOOKBACK: 48
+  # Live bid/ask max age for executable geometry. Missing/stale quotes fail
+  # closed at execute-time (scan may still score off the confirmed close).
+  QUOTE_MAX_AGE_SEC: 30

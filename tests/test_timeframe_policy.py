@@ -843,6 +843,19 @@ def test_engine_b_enforced_intraday_policy_uses_new_timeframes() -> None:
     assert engine_d.trigger_tf == Timeframe.M1
     assert engine_d.execution_tf == Timeframe.M1
     assert engine_d.execution_mode == ExecutionMode.LIVE_QUOTE
+    ox_alpha = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "intraday", engine_id="ox_alpha"
+    )
+    assert ox_alpha.engine_id == "ox_alpha"
+    assert ox_alpha.regime_tf == Timeframe.H1
+    assert ox_alpha.bias_tf == Timeframe.H1
+    assert ox_alpha.structure_tf == Timeframe.H1
+    assert ox_alpha.setup_tf == Timeframe.M15
+    assert ox_alpha.trigger_tf == Timeframe.M15
+    assert ox_alpha.execution_tf == Timeframe.M15
+    assert ox_alpha.execution_mode == ExecutionMode.LIVE_QUOTE
+    assert ox_alpha.m5_policy == M5Policy.DISABLED
+    assert {tf.value for tf in ox_alpha.required_closed_tfs} == {"H1", "M15"}
 
     eng_a_intra = resolve_timeframe_policy(
         "EUR/USD", "forex", "forex_majors", "intraday", engine_id="engine_a"

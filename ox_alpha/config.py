@@ -23,6 +23,7 @@ class OxSettings:
     candle_limit_m15: int = 300
     candle_limit_h1: int = 200
     volume_lookback: int = 48
+    quote_max_age_sec: float = 30.0
     enabled: bool = True
     extra: dict = field(default_factory=dict)
 
@@ -69,6 +70,7 @@ def load_settings(config: dict | None) -> OxSettings:
         candle_limit_m15=_i("CANDLE_LIMIT_M15", _DEFAULTS.candle_limit_m15),
         candle_limit_h1=_i("CANDLE_LIMIT_H1", _DEFAULTS.candle_limit_h1),
         volume_lookback=_i("VOLUME_LOOKBACK", _DEFAULTS.volume_lookback),
+        quote_max_age_sec=_f("QUOTE_MAX_AGE_SEC", _DEFAULTS.quote_max_age_sec),
         enabled=_b("ENABLED", _DEFAULTS.enabled),
         extra=raw if isinstance(raw, dict) else {},
     )

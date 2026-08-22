@@ -253,7 +253,7 @@ export default function OxAlphaPanel() {
   const [filter, setFilter] = useState<'ALL' | 'TRADE' | 'WATCH'>('ALL');
   const { data, loading, error, refresh } = useApiPoll<OxEnvelope>(
     '/api/ox-alpha-status',
-    60_000,
+    0,
   );
 
   const signals = useMemo(() => {

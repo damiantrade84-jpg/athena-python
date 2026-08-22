@@ -202,6 +202,8 @@ def volumes(candles: Sequence[Candle]) -> list[float]:
     out = []
     for c in candles:
         v = _f(c.get("volume"))
+        if v is None:
+            v = _f(c.get("vol"))
         if v is not None and v > 0:
             out.append(v)
     return out

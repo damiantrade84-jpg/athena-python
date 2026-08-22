@@ -449,7 +449,12 @@ def _dst_shifted_utc_window(
         offset = local.utcoffset()
         if offset is None:
             return None
-        delta = offset.total_seconds() / 3600.0 - base_offset_hours
+        # Keep the same local-clock window (09:00-17:00 NY) when the UTC
+        # offset moves. original_utc + (base_offset - actual_offset):
+        # EST (UTC-5) vs the EDT-calibrated table (UTC-4) adds +1h UTC, so
+        # 13:00-21:00 becomes 14:00-22:00, not 12:00-20:00.
+        actual_offset_hours = offset.total_seconds() / 3600.0
+        delta = base_offset_hours - actual_offset_hours
         shifted_start = start_hour + delta
         shifted_end = end_hour + delta
         if not (0 <= shifted_start < 24 and 0 < shifted_end <= 24):

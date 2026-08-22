@@ -1375,7 +1375,7 @@ CONFIG: dict = {
     "ENGINE_B_CRYPTO_AGGTRADE_MODE": "degraded",
     "ENGINE_B_CRYPTO_AGGTRADE_TRUSTED_MODE": "required",
     "ENGINE_B_CRYPTO_AGGTRADE_MISSING_PENALTY": 0.5,
-    "ENGINE_B_SWEEP_LOOKBACK_BARS": 5,
+    "ENGINE_B_SWEEP_LOOKBACK_BARS": 8,
     # Defaults True: synthetic-RR TP fallback rescues otherwise-valid Engine B
     # signals whose structural target falls short of min_rr (or whose structural
     # TP is missing/wrong-side). Code defaults must agree with config.yaml so

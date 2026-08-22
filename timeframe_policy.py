@@ -1051,6 +1051,8 @@ def _normalize_policy_identity(engine_id: str, style: str) -> tuple[str, str]:
         engine = "engine_b"
     elif engine in {"d", "scalp", "engined"}:
         engine = "engine_d"
+    elif engine in {"ox_alpha", "oxalpha", "ox-alpha"}:
+        engine = "ox_alpha"
     if normalized_style == "auto":
         normalized_style = "intraday"
     return engine, normalized_style
@@ -1396,6 +1398,24 @@ def _apply_engine_b_hierarchical(
 
 
 def _engine_template(base: _Template, engine_id: str, style: str) -> _Template:
+    if engine_id == "ox_alpha":
+        # OX Alpha native intraday contract: H1 context/bias/structure, M15
+        # setup+trigger. Execution is live-quote based; M5 is not a role.
+        # Engine A/B D1/H4 rungs are never inherited.
+        return _Template(
+            profile="OX_ALPHA_NATIVE",
+            regime=Timeframe.H1,
+            bias=Timeframe.H1,
+            structure=Timeframe.H1,
+            setup=Timeframe.M15,
+            trigger=Timeframe.M15,
+            execution=Timeframe.M15,
+            m5_role=M5Role.DISABLED,
+            m5_policy=M5Policy.DISABLED,
+            execution_mode=ExecutionMode.LIVE_QUOTE,
+            baseline_speed=base.baseline_speed,
+            m15_confirmation_required_for_m5=False,
+        )
     if engine_id == "engine_d":
         # Engine D native scalp contract: H1 context/regime, M15 confirmed
         # structure/bias, M5 setup, M1 trigger. Execution is live-quote based;
@@ -1521,7 +1541,7 @@ def resolve_timeframe_policy(
     selected = _engine_template(base, resolved_engine, resolved_style)
     role_override_applied = False
     role_override_patched_roles: tuple[str, ...] = ()
-    if resolved_engine != "engine_d" and not config_conflict:
+    if resolved_engine not in {"engine_d", "ox_alpha"} and not config_conflict:
         (
             selected,
             role_override_applied,
@@ -1598,7 +1618,7 @@ def resolve_timeframe_policy(
 
     if (
         _trigger_speed_adaptation_enabled()
-        and resolved_engine != "engine_d"
+        and resolved_engine not in {"engine_d", "ox_alpha"}
         and trigger == Timeframe.M15
     ):
         demote = False

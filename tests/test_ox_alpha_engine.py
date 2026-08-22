@@ -324,11 +324,29 @@ def test_open_trade_crypto_routes_to_bybit():
     assert res["executed"] is True and calls["venue"] == "bybit"
 
 
-def test_exec_dict_never_masquerades_as_engine_a():
+def test_exec_data_gate_blocks_closed_market(monkeypatch):
+    """Execute-time defense: fresh bars on a closed market still reject."""
+    from ox_alpha import bridge as ox_bridge
+
+    monkeypatch.setattr(
+        "ox_alpha.feed.freshness_ok_for_exec",
+        lambda sig, d: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        "ox_alpha.runtime.market_open_state",
+        lambda sig: {"open": False, "reason": "MARKET_CLOSED_STALE_TICK"},
+    )
+    ok, reason = ox_bridge.exec_data_gate({"display": "NRG", "type": "stock", "source": "mt5"}, {})
+    assert ok is False and reason.startswith("market_closed:")
+
+
+def test_exec_dict_standalone_trade_enabled_never_masquerades_as_engine_a():
+    """OX Alpha identity is engine + oxAlphaExecution. risk_check only rejects
+    engineATradeEnabled is False, so the Engine A flag must not be asserted."""
     d = signal_to_exec_dict(_ready_signal())
     assert d["engine"] == "OX_ALPHA"
-    assert d["engineATradeEnabled"] is False
     assert d["oxAlphaExecution"] is True
+    assert d.get("engineATradeEnabled") is not True
 
 
 # ── runtime + routes (injected, no feeds/brokers) ────────────────────────────
@@ -413,6 +431,49 @@ def test_magnet_target_still_preferred_when_far_enough():
         atr=1.0, profile=profile, settings=CFG,
     )
     assert tp1b == 120.0 and rr1b == pytest.approx(2.0)
+
+
+def test_severity_gate_rejects_closed_market_gaps():
+    """Regression: blanket policy_ok acceptance let exchange-closed staleness
+    score TRADEs. Intraday TFs allow only fresh/one-bucket lag; the D1 calendar
+    pass stays legal for D1 only."""
+    from ox_alpha.feed import _severity_ok
+
+    assert _severity_ok("fresh", "M15") is True
+    assert _severity_ok("stale_1_bucket", "H1") is True
+    assert _severity_ok("stale_multi_bucket", "M15") is False
+    assert _severity_ok("missing_current_bucket", "M15") is False
+    assert _severity_ok("d1_calendar_gap_policy_ok", "D1") is True
+    assert _severity_ok("d1_calendar_gap_policy_ok", "H1") is False
+
+
+def test_scan_pair_marks_closed_mt5_market_no_signal(monkeypatch):
+    """Regression: closed-market pairs must never emit TRADE/WATCH."""
+    from ox_alpha import runtime
+
+    monkeypatch.setattr(runtime, "_score_group", lambda pair: "us_stock_single")
+    monkeypatch.setattr(
+        runtime, "market_open_state",
+        lambda pair: {"open": False, "reason": "MARKET_CLOSED_STALE_TICK"},
+    )
+    monkeypatch.setattr(runtime.feed, "load_market_states", lambda *a, **k: (
+        {
+            "M15": {"confirmed": [
+                {"time": 1700000000 + i * 900, "open": 100, "high": 101,
+                 "low": 99, "close": 100.5} for i in range(80)
+            ], "forming": None, "stale": False},
+            "H1": {"confirmed": [
+                {"time": 1700000000 + i * 3600, "open": 100, "high": 101,
+                 "low": 99, "close": 100.5} for i in range(60)
+            ], "forming": None, "stale": False},
+        },
+        {"M15": True, "H1": True},
+    ))
+    sig = runtime.scan_pair({"display": "NRG", "type": "stock", "source": "mt5"})
+    assert sig["decision"] == "NO_SIGNAL"
+    assert sig.get("reason") == "MARKET_CLOSED"
+    mg = next(g for g in sig["gates"] if g["name"] == "market_open")
+    assert mg["passed"] is False
 
 
 def test_scan_pair_real_routing_well_formed_signal():
@@ -521,3 +582,217 @@ def test_routes_status_scan_execute(monkeypatch):
 
     r = c.post("/api/ox-alpha-execute", json={"symbol": "EUR/USD", "direction": "SIDEWAYS"})
     assert r.status_code == 400
+
+
+# ── 2026-08-22 audit fixes ───────────────────────────────────────────────────
+
+from ox_alpha.engine import _stop_for_direction  # noqa: E402
+from ox_alpha.indicators import volumes  # noqa: E402
+from ox_alpha.runtime import market_open_state  # noqa: E402
+
+
+def test_volumes_reads_production_vol_key():
+    rows = [{"volume": 10.0}, {"vol": 20.0}, {"vol": 0.0, "volume": 30.0}]
+    assert volumes(rows) == [10.0, 20.0, 30.0]
+
+
+def test_unknown_source_market_is_not_claimed_open():
+    state = market_open_state({"display": "FOO", "type": "stock", "source": "yahoo"})
+    assert state["open"] is False
+    assert "no_broker_check_available" in str(state.get("reason") or "")
+
+
+def test_crypto_market_stays_open_24_7():
+    state = market_open_state({"display": "BTC/USDT", "type": "crypto", "source": "bybit"})
+    assert state["open"] is True
+
+
+def test_ox_alpha_role_override_does_not_rewrite_native_ladder(monkeypatch):
+    from config import CONFIG
+    from timeframe_policy import Timeframe, resolve_timeframe_policy
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_TF_ROLE_OVERRIDES",
+        {
+            "ENABLED": True,
+            "BY_GROUP": {
+                "forex_majors": {
+                    "intraday": {"structure": "D1", "setup": "H4", "trigger": "H1"},
+                },
+            },
+        },
+    )
+    policy = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "intraday", engine_id="ox_alpha"
+    )
+    assert policy.structure_tf == Timeframe.H1
+    assert policy.setup_tf == Timeframe.M15
+    assert policy.trigger_tf == Timeframe.M15
+    assert policy.diagnostics.role_override_applied is False
+
+
+def test_ox_alpha_policy_is_h1_m15_not_engine_a_ladder():
+    from timeframe_policy import Timeframe, resolve_timeframe_policy
+
+    ox = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "intraday", engine_id="ox_alpha"
+    )
+    assert ox.engine_id == "ox_alpha"
+    assert ox.regime_tf == Timeframe.H1
+    assert ox.bias_tf == Timeframe.H1
+    assert ox.structure_tf == Timeframe.H1
+    assert ox.setup_tf == Timeframe.M15
+    assert ox.trigger_tf == Timeframe.M15
+    assert set(tf.value for tf in ox.required_closed_tfs) == {"H1", "M15"}
+    engine_a = resolve_timeframe_policy(
+        "EUR/USD", "forex", "forex_majors", "intraday", engine_id="engine_a"
+    )
+    assert engine_a.regime_tf == Timeframe.D1
+    assert engine_a.structure_tf == Timeframe.H4
+
+
+def test_trade_requires_trigger_confirmation():
+    """A last-bar doji must not promote TRADE even if the trend is clean."""
+    m15 = [dict(row) for row in BULL_M15]
+    last = dict(m15[-1])
+    mid = (float(last["high"]) + float(last["low"])) / 2.0
+    last.update({"open": mid, "close": mid + 1e-6, "high": mid + 0.0002, "low": mid - 0.0002})
+    m15[-1] = last
+    sig = analyze_pair(
+        {"display": "EUR/USD", "type": "forex", "source": "mt5"},
+        _states(m15, BULL_H1),
+        profile=profile_for_group("forex_majors"),
+        settings=CFG,
+        freshness={"M15": True, "H1": True},
+    )
+    assert sig.get("triggerConfirmed") is False
+    assert sig["decision"] != "TRADE"
+
+
+def test_stop_uses_nearest_swing_not_extreme_lookback():
+    """Oldest swing low at 90 must not beat a nearer swing low at 98."""
+    from dataclasses import replace
+
+    candles = []
+    price = 100.0
+    for i in range(80):
+        candles.append(
+            {"open": price, "high": price + 0.4, "low": price - 0.4, "close": price, "time": 1_700_000_000 + i * 900}
+        )
+    candles[10].update({"low": 90.0, "high": 100.2, "open": 100.0, "close": 99.8})
+    candles[8].update({"low": 99.5})
+    candles[9].update({"low": 99.4})
+    candles[11].update({"low": 99.5})
+    candles[12].update({"low": 99.6})
+    candles[70].update({"low": 98.0, "high": 100.3, "open": 100.0, "close": 99.9})
+    candles[68].update({"low": 99.4})
+    candles[69].update({"low": 99.3})
+    candles[71].update({"low": 99.4})
+    candles[72].update({"low": 99.5})
+    candles[-1].update({"close": 100.0, "open": 99.9, "high": 100.4, "low": 99.8})
+    profile = replace(profile_for_group("forex_majors"), sl_atr_max=12.0, sl_atr_min=0.3)
+    stop = _stop_for_direction("LONG", candles, atr=1.0, profile=profile, settings=CFG)
+    assert stop is not None
+    # Nearest ~98; the 90 extreme would survive a 12-ATR cap.
+    assert 96.5 < stop < 99.5
+
+
+def test_live_quote_rebases_entry_ref():
+    sig = analyze_pair(
+        {"display": "EUR/USD", "type": "forex", "source": "mt5"},
+        _states(BULL_M15, BULL_H1),
+        profile=profile_for_group("forex_majors"),
+        settings=CFG,
+        quote={"bid": 1.1010, "ask": 1.1012, "ts": 1_700_000_000.0},
+    )
+    assert sig["priceSource"] == "live_quote_mid"
+    assert sig["entryRef"] == pytest.approx(1.1011)
+
+
+def test_exec_data_gate_requires_live_quote(monkeypatch):
+    from ox_alpha import bridge as ox_bridge
+
+    monkeypatch.setattr("ox_alpha.feed.freshness_ok_for_exec", lambda sig, d: (True, "ok"))
+    monkeypatch.setattr(
+        "ox_alpha.runtime.market_open_state",
+        lambda sig: {"open": True, "reason": "crypto_24_7"},
+    )
+    monkeypatch.setattr("ox_alpha.feed.load_quote", lambda pair, **kw: None)
+    ok, reason = ox_bridge.exec_data_gate(
+        {"display": "BTC/USDT", "type": "crypto", "source": "bybit"}, {}
+    )
+    assert ok is False
+    assert "quote" in reason
+
+
+def test_load_quote_rejects_missing_timestamp(monkeypatch):
+    from ox_alpha import feed
+
+    monkeypatch.setattr(
+        "data_feeds._fetch_bybit_ticker",
+        lambda symbol, **kw: {"bid": 1.0, "ask": 1.1, "price": 1.05},
+    )
+    assert feed.load_quote({"type": "crypto", "source": "bybit", "symbol": "BTCUSDT"}) is None
+
+
+def test_load_quote_rejects_last_only(monkeypatch):
+    import time as _time
+    from ox_alpha import feed
+
+    monkeypatch.setattr(
+        "data_feeds._fetch_bybit_ticker",
+        lambda symbol, **kw: {"bid": None, "ask": None, "price": 1.05, "ts": _time.time()},
+    )
+    assert feed.load_quote({"type": "crypto", "source": "bybit", "symbol": "BTCUSDT"}) is None
+
+
+def test_load_quote_rejects_non_positive_max_age():
+    from ox_alpha import feed
+
+    assert feed.load_quote({"type": "crypto", "source": "bybit", "symbol": "BTCUSDT"}, max_age_sec=0) is None
+
+
+def test_scan_pair_not_executable_without_live_quote(monkeypatch):
+    from ox_alpha import runtime as ox_runtime
+
+    monkeypatch.setattr(
+        ox_runtime, "market_open_state", lambda pair: {"open": True, "reason": "crypto_24_7"}
+    )
+    monkeypatch.setattr(ox_runtime.feed, "load_quote", lambda *a, **k: None)
+    monkeypatch.setattr(
+        ox_runtime.feed,
+        "load_market_states",
+        lambda *a, **k: (
+            {
+                "M15": {"confirmed": BULL_M15, "forming": None, "stale": False, "stalenessSeverity": "fresh"},
+                "H1": {"confirmed": BULL_H1, "forming": None, "stale": False, "stalenessSeverity": "fresh"},
+            },
+            {"M15": True, "H1": True},
+        ),
+    )
+    monkeypatch.setattr(
+        ox_runtime,
+        "analyze_pair",
+        lambda *a, **k: {
+            "engine": "OX_ALPHA",
+            "display": "BTC/USDT",
+            "decision": "TRADE",
+            "direction": "LONG",
+            "score": 70.0,
+            "entryReadiness": "READY",
+            "priceSource": "confirmed_close",
+            "gates": [],
+        },
+    )
+    sig = ox_runtime.scan_pair({"display": "BTC/USDT", "type": "crypto", "source": "bybit"})
+    assert sig["executable"] is False
+    assert sig["entryReadiness"] == "PENDING"
+    assert sig["entryReadinessReason"] == "quote_unavailable"
+
+
+def test_exec_dict_does_not_set_engine_a_trade_enabled():
+    d = signal_to_exec_dict(_ready_signal())
+    assert d["engine"] == "OX_ALPHA"
+    assert d["oxAlphaExecution"] is True
+    assert d.get("engineATradeEnabled") is not True

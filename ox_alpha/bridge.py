@@ -75,7 +75,6 @@ def signal_to_exec_dict(signal: dict[str, Any]) -> dict[str, Any]:
         "scoreNorm": round(min(1.0, max(0.0, float(signal.get("score") or 0.0) / 100.0)), 4),
         "engine": "OX_ALPHA",
         "oxAlphaExecution": True,
-        "engineATradeEnabled": False,  # never masquerades as Engine A
         "source": signal.get("source"),
         "reason": f"ox_alpha:{signal.get('playType') or 'setup'}",
         "rr1": signal.get("rr1"),
@@ -148,6 +147,37 @@ def open_trade(
     if not fresh_ok:
         return _reject("freshness", fresh_reason)
 
+    live = exec_dict.get("liveQuote") if isinstance(exec_dict.get("liveQuote"), dict) else {}
+    try:
+        bid = float(live.get("bid"))
+        ask = float(live.get("ask"))
+    except (TypeError, ValueError):
+        bid = ask = 0.0
+    direction = str(exec_dict.get("direction") or "").upper()
+    side_px = ask if direction == "LONG" else bid if direction == "SHORT" else 0.0
+    if side_px > 0:
+        try:
+            old_px = float(exec_dict.get("price"))
+            sl = float(exec_dict.get("sl"))
+            tp = float(exec_dict.get("tp1"))
+            atr = float(signal.get("atr") or 0.0)
+        except (TypeError, ValueError):
+            return _reject("quote", "levels_unusable")
+        delta = side_px - old_px
+        if atr > 0 and abs(delta) > 0.5 * atr:
+            return _reject("quote", "quote_drift")
+        exec_dict["price"] = side_px
+        exec_dict["sl"] = sl + delta
+        exec_dict["tp"] = tp + delta
+        exec_dict["tp1"] = tp + delta
+        if exec_dict.get("tp2") is not None:
+            try:
+                exec_dict["tp2"] = float(exec_dict["tp2"]) + delta
+            except (TypeError, ValueError):
+                pass
+        if not _rr_floor_ok(exec_dict, min_rr):
+            return _reject("", "rr_floor")
+
     venue = _venue_for(signal)
     if write_journal:
         journal.append({"kind": "open_signal", "engine": "OX_ALPHA", "venue": venue, "signal": exec_dict})
@@ -196,16 +226,44 @@ def open_trade(
     }
 
 
+def exec_data_gate(signal: dict[str, Any], exec_dict: dict[str, Any]) -> tuple[bool, str]:
+    """Execute-time data proof: fresh intraday bars AND an open market."""
+    from ox_alpha import feed
+
+    fresh_ok, fresh_reason = feed.freshness_ok_for_exec(signal, exec_dict)
+    if not fresh_ok:
+        return False, fresh_reason
+    from ox_alpha import runtime
+    from ox_alpha.config import load_settings
+
+    open_state = runtime.market_open_state(signal)
+    if not open_state.get("open"):
+        return False, f"market_closed:{open_state.get('reason')}"
+    try:
+        from config import CONFIG as _cfg
+
+        settings = load_settings(_cfg)
+    except Exception:
+        settings = load_settings(None)
+    quote = feed.load_quote(signal, max_age_sec=settings.quote_max_age_sec)
+    if not quote:
+        return False, "quote_unavailable"
+    exec_dict["liveQuote"] = {
+        k: quote.get(k) for k in ("bid", "ask", "ts", "source", "ageSec") if k in quote
+    }
+    exec_dict["quoteTimestamp"] = quote.get("ts")
+    exec_dict["quoteAgeSec"] = quote.get("ageSec")
+    return True, "ok"
+
+
 def default_deps() -> OxExecDeps:
     """Production wiring to the real repo safety/broker modules (lazy imports).
 
-    Freshness is a real intraday-bar proof (ox_alpha.feed.freshness_ok_for_exec);
-    it fails closed on missing/stale data, so no demo order fires without fresh
-    confirmed M15/H1 bars.
+    Freshness is a real intraday-bar proof plus a broker-truth market-open
+    check (ox_alpha.bridge.exec_data_gate); it fails closed on missing/stale
+    data or a closed market, so no demo order fires without both.
     """
     from config import CONFIG
-
-    from ox_alpha import feed
 
     def _mode() -> str:
         return str(CONFIG.get("EXECUTOR_MODE", "paper")).lower()
@@ -293,5 +351,5 @@ def default_deps() -> OxExecDeps:
         risk_check=_risk_check,
         mt5_execute=_mt5_execute,
         bybit_execute=_bybit_execute,
-        candle_freshness_ok=lambda sig, exec_dict: feed.freshness_ok_for_exec(sig, exec_dict),
+        candle_freshness_ok=exec_data_gate,
     )

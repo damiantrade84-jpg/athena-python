@@ -1521,9 +1521,27 @@ def risk_check(
         elif _is_engine_b_execution_signal(signal):
             _policy_engine = "engine_b"
         elif (
-            execution_context in {"ase_bridge", "fx_factor_bridge", "grok_engine", "sol_engine"}
+            execution_context in {
+                "ase_bridge",
+                "fx_factor_bridge",
+                "grok_engine",
+                "sol_engine",
+                "ox_alpha_bridge",
+            }
             or _raw_profitability_engine
-            in {"c", "engine_c", "engine_c_consensus", "consensus", "d", "engine_d", "scalp", "scalp_vp", "grok", "sol"}
+            in {
+                "c",
+                "engine_c",
+                "engine_c_consensus",
+                "consensus",
+                "d",
+                "engine_d",
+                "scalp",
+                "scalp_vp",
+                "grok",
+                "sol",
+                "ox_alpha",
+            }
         ):
             _policy_engine = _raw_profitability_engine or None
         else:

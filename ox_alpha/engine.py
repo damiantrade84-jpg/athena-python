@@ -138,7 +138,7 @@ def _component_velocity(
     hour = int((float(ts) // 3600) % 24)
     expected_hourly = profile.get(hour)
     if not expected_hourly or expected_hourly <= 0:
-        return 0.35  # known-quiet hour for this pair's own fingerprint
+        return None
     # Baseline is per-H1-bar travel; normalize to the M15 bucket scale.
     expected = expected_hourly * 0.25
     recent = m15[-4:]
@@ -156,53 +156,104 @@ def _component_velocity(
     return clamp01(actual / (expected * 1.25))
 
 
+def _in_session_window(epoch: float, asset_type: str) -> bool:
+    """Venue cash window. Crypto is 24/7; unknown types use a regional UTC band."""
+    hour = int((float(epoch) // 3600) % 24)
+    kind = str(asset_type or "").lower()
+    if kind == "crypto":
+        return True
+    if kind in {"index", "stock", "etf", "etf_bond"}:
+        try:
+            from datetime import datetime, timezone
+            from zoneinfo import ZoneInfo
+
+            local = datetime.fromtimestamp(float(epoch), tz=timezone.utc).astimezone(
+                ZoneInfo("America/New_York")
+            )
+            return 9 <= local.hour < 17
+        except Exception:
+            return 13 <= hour < 21
+    if kind in {"forex", "commodity"}:
+        return 6 <= hour < 21
+    return 6 <= hour < 18
+
+
+def _session_bucket_key(epoch: float, asset_type: str):
+    kind = str(asset_type or "").lower()
+    if kind in {"index", "stock", "etf", "etf_bond"}:
+        try:
+            from datetime import datetime, timezone
+            from zoneinfo import ZoneInfo
+
+            local = datetime.fromtimestamp(float(epoch), tz=timezone.utc).astimezone(
+                ZoneInfo("America/New_York")
+            )
+            return (local.date().isoformat(), "us_cash")
+        except Exception:
+            return (int(float(epoch) // 86400), "us_cash_utc")
+    return (int(float(epoch) // 86400), kind or "utc")
+
+
+def _extrema(rows: list[Candle]) -> tuple[float | None, float | None, float | None]:
+    hi, lo, close = -math.inf, math.inf, None
+    for c in rows:
+        h = _f(c.get("high"))
+        l = _f(c.get("low"))
+        cl = _f(c.get("close"))
+        if h is not None:
+            hi = max(hi, h)
+        if l is not None:
+            lo = min(lo, l)
+        if cl is not None:
+            close = cl
+    return (
+        hi if hi != -math.inf else None,
+        lo if lo != math.inf else None,
+        close,
+    )
+
+
 def _session_magnets(
-    m15: list[Candle], price: float, atr: float | None
+    m15: list[Candle],
+    price: float,
+    atr: float | None,
+    asset_type: str = "",
 ) -> dict[str, Any]:
-    """Session range extremes, prior-day extremes, and round numbers."""
-    day_key = lambda ts: int(float(ts) // 86400)
-    current_day = day_key(_f(m15[-1].get("time")) or 0)
-    session_hi = -math.inf
-    session_lo = math.inf
-    per_day: dict[int, list[Candle]] = {}
+    """Session range extremes, prior-session extremes, and round numbers."""
+    buckets: dict[tuple, list[Candle]] = {}
+    order: list[tuple] = []
     for c in m15[-576:]:
         ts = _f(c.get("time"))
-        if ts is None:
+        if ts is None or not _in_session_window(ts, asset_type):
             continue
-        per_day.setdefault(day_key(ts), []).append(c)
-        if day_key(ts) == current_day:
-            h = _f(c.get("high"))
-            l = _f(c.get("low"))
-            if h is not None:
-                session_hi = max(session_hi, h)
-            if l is not None:
-                session_lo = min(session_lo, l)
+        key = _session_bucket_key(ts, asset_type)
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(c)
+    last_ts = _f(m15[-1].get("time")) if m15 else None
+    if last_ts is not None and _in_session_window(last_ts, asset_type):
+        current_key = _session_bucket_key(last_ts, asset_type)
+    else:
+        current_key = order[-1] if order else None
+    session_hi = session_lo = None
+    if current_key and current_key in buckets:
+        session_hi, session_lo, _ = _extrema(buckets[current_key])
     prior_hi = prior_lo = prior_close = None
-    prior_days = sorted(d for d in per_day if d < current_day)
-    if prior_days:
-        latest_prior = prior_days[-1]
-        ph, pl = -math.inf, math.inf
-        pc = None
-        for c in per_day[latest_prior]:
-            h = _f(c.get("high"))
-            l = _f(c.get("low"))
-            cl = _f(c.get("close"))
-            if h is not None:
-                ph = max(ph, h)
-            if l is not None:
-                pl = min(pl, l)
-            if cl is not None:
-                pc = cl
-        prior_hi = ph if ph != -math.inf else None
-        prior_lo = pl if pl != math.inf else None
-        prior_close = pc
-    levels = [x for x in (session_hi, session_lo, prior_hi, prior_lo, prior_close)
-              if x is not None and math.isfinite(x)]
+    if current_key in order:
+        idx = order.index(current_key)
+        if idx > 0:
+            prior_hi, prior_lo, prior_close = _extrema(buckets[order[idx - 1]])
+    levels = [
+        x
+        for x in (session_hi, session_lo, prior_hi, prior_lo, prior_close)
+        if x is not None and math.isfinite(x)
+    ]
     if price > 0 and (atr is None or atr > 0):
         levels.extend(round_number_levels(price))
     return {
-        "sessionHigh": session_hi if session_hi != -math.inf else None,
-        "sessionLow": session_lo if session_lo != math.inf else None,
+        "sessionHigh": session_hi,
+        "sessionLow": session_lo,
         "priorDayHigh": prior_hi,
         "priorDayLow": prior_lo,
         "priorDayClose": prior_close,
@@ -323,22 +374,25 @@ def _stop_for_direction(
     atr: float,
     profile: OxProfile,
     settings: OxSettings,
+    entry: float | None = None,
 ) -> float | None:
     cl = closes(m15)
     if not cl:
         return None
-    entry = cl[-1]
-    _, lows_piv = swing_pivots(m15[-60:], 2, 2)
-    highs_piv = swing_pivots(m15[-60:], 2, 2)[0]
+    if entry is None or entry <= 0:
+        entry = cl[-1]
+    highs_piv, lows_piv = swing_pivots(m15[-60:], 2, 2)
     buffer = settings.sl_buffer_atr * atr
     if direction == "LONG":
-        swing = min((p for _, p in lows_piv), default=None)
-        raw = swing if swing is not None and swing < entry else entry - profile.sl_atr_min * atr
+        below = [p for _, p in lows_piv if p < entry]
+        swing = max(below) if below else None
+        raw = swing if swing is not None else entry - profile.sl_atr_min * atr
         dist = entry - raw + buffer
         dist = max(profile.sl_atr_min * atr, min(dist, profile.sl_atr_max * atr))
         return entry - dist
-    swing = max((p for _, p in highs_piv), default=None)
-    raw = swing if swing is not None and swing > entry else entry + profile.sl_atr_min * atr
+    above = [p for _, p in highs_piv if p > entry]
+    swing = min(above) if above else None
+    raw = swing if swing is not None else entry + profile.sl_atr_min * atr
     dist = raw - entry + buffer
     dist = max(profile.sl_atr_min * atr, min(dist, profile.sl_atr_max * atr))
     return entry + dist
@@ -418,14 +472,15 @@ def analyze_pair(
     if isinstance(quote, Mapping):
         bid = _f(quote.get("bid"))
         ask = _f(quote.get("ask"))
-        last = _f(quote.get("last") or quote.get("price"))
         if bid and ask and ask >= bid:
             quote_price = (bid + ask) / 2.0
-        elif last and last > 0:
-            quote_price = last
     entry_ref = quote_price or closes(m15)[-1]
+    signal["entryRef"] = round(entry_ref, 10)
+    signal["priceSource"] = "live_quote_mid" if quote_price else "confirmed_close"
 
-    magnets = _session_magnets(m15, entry_ref, atr_m15)
+    magnets = _session_magnets(
+        m15, entry_ref, atr_m15, asset_type=str(pair.get("type") or "")
+    )
     magnet = _component_magnet(magnets, entry_ref)
     structure = _component_structure(m15)
 
@@ -448,10 +503,13 @@ def analyze_pair(
         "structure": profile.w_structure,
     }
     if flow is None:
-        forfeit = weights.pop("flow", 0.0)
-        if forfeit > 0:
-            weights["kinetic"] += forfeit * 0.6
-            weights["structure"] += forfeit * 0.4
+        if profile.volume_axis == "required":
+            _gate("volume_required", False, "volume_series_missing")
+        else:
+            forfeit = weights.pop("flow", 0.0)
+            if forfeit > 0:
+                weights["kinetic"] += forfeit * 0.6
+                weights["structure"] += forfeit * 0.4
     weight_total = sum(weights.values())
     if weight_total <= 0:
         signal["reason"] = "no_usable_components"
@@ -467,6 +525,7 @@ def analyze_pair(
     if direction is None:
         signal["components"] = {k: (None if v is None else round(v, 4)) for k, v in components.items()}
         signal["reason"] = "direction_unresolved"
+        signal["triggerConfirmed"] = False
         return signal
 
     side = 1.0 if direction == "LONG" else -1.0
@@ -507,7 +566,9 @@ def analyze_pair(
     signal["components"] = {k: (None if v is None else round(v, 4)) for k, v in components.items()}
     signal["volumeAxisUsed"] = bool(volume_used)
 
-    sl = _stop_for_direction(direction, m15, atr_m15, profile, settings)
+    sl = _stop_for_direction(
+        direction, m15, atr_m15, profile, settings, entry=entry_ref
+    )
     if sl is None or sl == entry_ref:
         signal["reason"] = "stop_unavailable"
         return signal
@@ -558,7 +619,11 @@ def analyze_pair(
     soft_ok = all(g["passed"] for g in gates if not g.get("hard"))
 
     if hard_ok and session_ok and score >= trade_threshold:
-        decision = "TRADE"
+        if trigger_confirmed:
+            decision = "TRADE"
+        else:
+            decision = "WATCH"
+            reasons.append("trigger_pending")
     elif hard_ok and score >= watch_threshold:
         decision = "WATCH"
         if not soft_ok:
