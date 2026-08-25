@@ -47,7 +47,13 @@ def _series(timeframe: str, count: int, price_at, *, as_of: float = NOW, wick: f
     return rows
 
 
-def _ready_snapshot(*, mirrored: bool = False, display: str = "EURUSD", as_of: float = NOW) -> MarketSnapshot:
+def _ready_snapshot(
+    *,
+    mirrored: bool = False,
+    display: str = "EURUSD",
+    asset_type: str = "forex",
+    as_of: float = NOW,
+) -> MarketSnapshot:
     asia_low = 1.09840
     asia_high = 1.10220
     raid_low = 1.09790
@@ -136,7 +142,7 @@ def _ready_snapshot(*, mirrored: bool = False, display: str = "EURUSD", as_of: f
         frames = {timeframe: [mirror(candle) for candle in rows] for timeframe, rows in frames.items()}
 
     return MarketSnapshot(
-        pair={"display": display, "symbol": display, "type": "forex"},
+        pair={"display": display, "symbol": display, "type": asset_type},
         frames=frames,
         provenance={
             timeframe: {"provider": "synthetic", "bars": len(rows)}
@@ -146,12 +152,16 @@ def _ready_snapshot(*, mirrored: bool = False, display: str = "EURUSD", as_of: f
     )
 
 
-def _ready_signal(*, mirrored: bool = False, display: str = "EURUSD") -> dict:
+def _ready_signal(*, mirrored: bool = False, display: str = "EURUSD", asset_type: str = "forex") -> dict:
     return evaluate_snapshot(
-        _ready_snapshot(mirrored=mirrored, display=display),
+        _ready_snapshot(mirrored=mirrored, display=display, asset_type=asset_type),
         load_grok_config(),
         generated_at_epoch=NOW,
     )
+
+
+def _component_max(signal: dict, name: str) -> float:
+    return float(next(item["maxScore"] for item in signal["components"] if item["name"] == name))
 
 
 def _store_signals(repository: GrokRepository, signals: list[dict]) -> None:
@@ -279,6 +289,97 @@ def test_sast_display_clock_does_not_move_ny_killzones() -> None:
     assert ny_am["displayStart"] == "13:00" and ny_am["displayEnd"] == "16:00"
 
 
+def test_forex_crypto_and_stock_use_distinct_scoring_profiles() -> None:
+    forex = _ready_signal(display="EUR/USD", asset_type="forex")
+    crypto = evaluate_snapshot(
+        _ready_snapshot(display="BTC/USDT", asset_type="crypto"),
+        load_grok_config(),
+        generated_at_epoch=NOW,
+    )
+    stock = evaluate_snapshot(
+        _ready_snapshot(display="AAPL", asset_type="stock"),
+        load_grok_config(),
+        generated_at_epoch=NOW,
+    )
+    assert forex["scoreGroup"] == "forex_majors"
+    assert crypto["scoreGroup"] == "crypto_btc"
+    assert stock["scoreGroup"] == "us_stock_single"
+    assert forex["grokProfile"]["sessionMode"] == "ict_killzone"
+    assert crypto["grokProfile"]["sessionMode"] == "ict_killzone"
+    assert stock["grokProfile"]["sessionMode"] == "cash_rth"
+    assert forex["readyThreshold"] < crypto["readyThreshold"]
+    assert forex["readyThreshold"] < stock["readyThreshold"]
+    assert _component_max(forex, "killzone_clock") != _component_max(crypto, "killzone_clock")
+    assert _component_max(forex, "geometry") != _component_max(stock, "geometry")
+    assert forex["grokProfile"]["family"] != crypto["grokProfile"]["family"]
+    assert crypto["grokProfile"]["family"] != stock["grokProfile"]["family"]
+
+
+def test_stock_is_closed_during_london_silver_bullet_while_forex_is_open() -> None:
+    london_sb = datetime(2026, 3, 17, 7, 30, tzinfo=timezone.utc).timestamp()
+    forex = evaluate_snapshot(
+        _ready_snapshot(display="EUR/USD", asset_type="forex", as_of=london_sb),
+        load_grok_config(),
+        generated_at_epoch=london_sb,
+    )
+    stock = evaluate_snapshot(
+        _ready_snapshot(display="AAPL", asset_type="stock", as_of=london_sb),
+        load_grok_config(),
+        generated_at_epoch=london_sb,
+    )
+    assert "SESSION_CLOSED" not in forex["blockingReasons"]
+    assert stock["decision"] != "READY"
+    assert "SESSION_CLOSED" in stock["blockingReasons"]
+    assert stock["sessionClock"]["primaryWindow"] != forex["sessionClock"]["primaryWindow"]
+
+
+def test_crypto_other_is_stricter_than_forex_majors() -> None:
+    forex = _ready_signal(display="EUR/USD", asset_type="forex")
+    thin = evaluate_snapshot(
+        _ready_snapshot(display="ETC/USDT", asset_type="crypto"),
+        load_grok_config(),
+        generated_at_epoch=NOW,
+    )
+    assert thin["scoreGroup"] == "crypto_other"
+    assert thin["readyThreshold"] > forex["readyThreshold"]
+    assert thin["grokProfile"]["minimumStopAtr"] > forex["grokProfile"]["minimumStopAtr"]
+    assert thin["grokProfile"]["raidMinExcursionAtr"] > forex["grokProfile"]["raidMinExcursionAtr"]
+
+
+def test_pair_profile_override_applies_only_to_that_symbol() -> None:
+    config = load_grok_config(
+        {
+            "GROK_ENGINE": {
+                "profiles": {
+                    "pairs": {
+                        "EUR/USD": {"scoring": {"ready_threshold": 91.0, "watch_threshold": 70.0}},
+                    }
+                }
+            }
+        }
+    )
+    eurusd = evaluate_snapshot(
+        _ready_snapshot(display="EUR/USD", asset_type="forex"),
+        config,
+        generated_at_epoch=NOW,
+    )
+    gbpusd = evaluate_snapshot(
+        _ready_snapshot(display="GBP/USD", asset_type="forex"),
+        config,
+        generated_at_epoch=NOW,
+    )
+    assert eurusd["readyThreshold"] == 91.0
+    assert gbpusd["readyThreshold"] == load_grok_config().scoring["ready_threshold"]
+
+
+def test_score_group_field_on_pair_is_honoured() -> None:
+    snapshot = _ready_snapshot(display="EUR/USD", asset_type="forex")
+    snapshot.pair["score_group"] = "forex_exotics"
+    signal = evaluate_snapshot(snapshot, load_grok_config(), generated_at_epoch=NOW)
+    assert signal["scoreGroup"] == "forex_exotics"
+    assert signal["readyThreshold"] > load_grok_config().scoring["ready_threshold"]
+
+
 def test_post_as_of_bar_is_dropped_without_false_future_error() -> None:
     rows = [
         {"open_time": NOW - 600, "open": 1.10, "high": 1.12, "low": 1.09, "close": 1.11},
@@ -311,6 +412,23 @@ def test_candle_normalization_drops_forming_future_and_malformed_rows() -> None:
     assert any(error.startswith("FUTURE_CANDLES:M5:1") for error in errors)
 
 
+def _snapshot_with_raid_moved(age_bars: int) -> MarketSnapshot:
+    snapshot = _ready_snapshot()
+    m15 = list(snapshot.frames["M15"])
+    recent_index = len(m15) - 6
+    stale_index = len(m15) - 1 - age_bars
+    assert 0 <= stale_index < recent_index
+    raid = m15[recent_index]
+    stale = m15[stale_index]
+    m15[stale_index] = _candle(stale.time, raid.open, raid.high, raid.low, raid.close, raid.volume or 420)
+    for index in range(recent_index, len(m15)):
+        candle = m15[index]
+        m15[index] = _candle(candle.time, 1.09940, 1.09970, 1.09912, 1.09920, candle.volume or 240)
+    frames = dict(snapshot.frames)
+    frames["M15"] = m15
+    return MarketSnapshot(snapshot.pair, frames, snapshot.provenance, snapshot.as_of_epoch)
+
+
 def test_raid_and_void_indicators_are_directional() -> None:
     snapshot = _ready_snapshot()
     atr = wilder_atr(snapshot.frames["M15"], 14)
@@ -329,6 +447,33 @@ def test_raid_and_void_indicators_are_directional() -> None:
     assert void["available"] is True
     assert void["direction"] == 1
     assert void["open"] is True
+
+
+def test_raid_outside_recent_window_is_unavailable() -> None:
+    snapshot = _snapshot_with_raid_moved(age_bars=11)
+    atr = wilder_atr(snapshot.frames["M15"], 14)
+    raid = raid_signature(
+        snapshot.frames["M15"],
+        {"asiaLow": 1.09840, "asiaHigh": 1.10220},
+        {"pdl": 1.09420, "pdh": 1.10580},
+        atr=atr,
+        lookback=16,
+        recent_bars=6,
+        min_excursion_atr=0.08,
+    )
+    assert raid["available"] is False
+    assert raid["reason"] == "RAID_NOT_RECENT"
+    assert raid["eventAgeBars"] == 11
+
+
+def test_stale_raid_cannot_promote_ready() -> None:
+    signal = evaluate_snapshot(
+        _snapshot_with_raid_moved(age_bars=11),
+        load_grok_config(),
+        generated_at_epoch=NOW,
+    )
+    assert signal["decision"] != "READY"
+    assert any("RAID_NOT_RECENT" in reason for reason in signal["blockingReasons"])
 
 
 @pytest.mark.parametrize(("mirrored", "direction"), [(False, "LONG"), (True, "SHORT")])

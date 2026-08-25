@@ -8,6 +8,7 @@ import math
 from typing import Any
 
 from .config import GrokConfig
+from .profiles import resolve_grok_profile
 from .indicators import (
     cisd_state,
     clamp,
@@ -131,10 +132,10 @@ def _execution_geometry(
     raid: dict[str, Any],
     external: dict[str, Any],
     direction: int,
-    config: GrokConfig,
+    levels: dict[str, Any],
+    atr_period: int,
 ) -> dict[str, Any]:
-    levels = config.levels
-    atr = wilder_atr(setup_candles, int(config.indicators["atr_period"]))
+    atr = wilder_atr(setup_candles, int(atr_period))
     if not setup_candles or not trigger_candles or atr <= 0 or direction == 0:
         return {"valid": False, "reason": "GEOMETRY_INPUT_UNAVAILABLE", "quality": 0.0, "atr": atr}
     entry = float(trigger_candles[-1].close)
@@ -227,8 +228,11 @@ def evaluate_snapshot(
     generated_at = generated_at_epoch if generated_at_epoch is not None else datetime.now(timezone.utc).timestamp()
     frames = snapshot.frames
     freshness_gates, data_failures = _freshness(snapshot, config)
-    indicators = config.indicators
-    weights = config.scoring["weights"]
+    profile = resolve_grok_profile(snapshot.pair, config)
+    indicators = profile.indicators
+    weights = profile.scoring["weights"]
+    scoring = profile.scoring
+    levels = profile.levels
 
     d1 = frames.get("D1") or []
     h1 = frames.get("H1") or []
@@ -236,8 +240,13 @@ def evaluate_snapshot(
     m5 = frames.get("M5") or []
     session_source = m15 if str(indicators["session_source_timeframe"]).upper() == "M15" else h1
     atr = wilder_atr(m15, int(indicators["atr_period"]))
-    clock = classify_session(snapshot.as_of_epoch, config)
-    session_open = market_is_open(snapshot.as_of_epoch, config, snapshot.asset_type)
+    clock = classify_session(snapshot.as_of_epoch, config, session_mode=profile.session_mode)
+    session_open = market_is_open(
+        snapshot.as_of_epoch,
+        config,
+        snapshot.asset_type,
+        session_mode=profile.session_mode,
+    )
     pools = session_pools(session_source, snapshot.as_of_epoch, config)
     external = external_liquidity(d1)
     raid = raid_signature(
@@ -278,7 +287,15 @@ def evaluate_snapshot(
     if impulse.get("available") and raid.get("available") and int(impulse.get("direction") or 0) != int(raid.get("direction") or 0):
         direction_value = int(raid.get("direction") or 0)
     direction = "LONG" if direction_value > 0 else "SHORT" if direction_value < 0 else "NONE"
-    geometry = _execution_geometry(m15, m5, raid, external, direction_value, config)
+    geometry = _execution_geometry(
+        m15,
+        m5,
+        raid,
+        external,
+        direction_value,
+        levels,
+        int(indicators["atr_period"]),
+    )
     setup_kind = _classify_setup(clock, raid, void, cisd, dealing)
     narrative = _narrative(raid, impulse, void, cisd)
     location_quality = dealing_quality(dealing, direction_value)
@@ -373,24 +390,24 @@ def evaluate_snapshot(
     score = round(sum(float(item["score"]) for item in components), 2)
 
     position = float(dealing.get("position") or 0.5) if dealing.get("available") else 0.5
-    long_location_ok = direction_value <= 0 or position <= float(config.scoring["maximum_premium_for_long"])
-    short_location_ok = direction_value >= 0 or position >= float(config.scoring["minimum_discount_for_short"])
+    long_location_ok = direction_value <= 0 or position <= float(scoring["maximum_premium_for_long"])
+    short_location_ok = direction_value >= 0 or position >= float(scoring["minimum_discount_for_short"])
     trigger_aligned = int(trigger.get("direction") or 0) == direction_value and float(trigger.get("strength") or 0.0) >= float(
-        config.scoring["minimum_impulse_strength"]
+        scoring["minimum_impulse_strength"]
     )
     confirmation_ok = bool(cisd.get("confirmed")) or trigger_aligned
     void_ok = bool(void.get("available") and void.get("open") and int(void.get("direction") or 0) == direction_value)
     raid_ok = (
         bool(raid.get("available"))
         and int(raid.get("direction") or 0) == direction_value
-        and float(raid.get("strength") or 0.0) >= float(config.scoring["minimum_raid_strength"])
+        and float(raid.get("strength") or 0.0) >= float(scoring["minimum_raid_strength"])
     )
     impulse_ok = (
         bool(impulse.get("available"))
         and int(impulse.get("direction") or 0) == direction_value
-        and float(impulse.get("strength") or 0.0) >= float(config.scoring["minimum_impulse_strength"])
+        and float(impulse.get("strength") or 0.0) >= float(scoring["minimum_impulse_strength"])
     )
-    clock_ok = clock_quality >= float(config.scoring["minimum_killzone_quality"]) and session_open
+    clock_ok = clock_quality >= float(scoring["minimum_killzone_quality"]) and session_open
 
     hard_gates = list(freshness_gates)
     hard_gates.extend(
@@ -413,7 +430,7 @@ def evaluate_snapshot(
             {
                 "name": "liquidity_raid_aligned",
                 "passed": raid_ok,
-                "reason": None if raid_ok else "LIQUIDITY_RAID_NOT_CONFIRMED",
+                "reason": None if raid_ok else (raid.get("reason") or "LIQUIDITY_RAID_NOT_CONFIRMED"),
             },
             {
                 "name": "displacement_aligned",
@@ -446,8 +463,8 @@ def evaluate_snapshot(
     blockers.extend(str(gate["reason"]) for gate in hard_gates if not gate.get("passed") and gate.get("reason"))
     blockers = list(dict.fromkeys(blockers))
     hard_pass = not blockers
-    ready_threshold = float(config.scoring["ready_threshold"])
-    watch_threshold = float(config.scoring["watch_threshold"])
+    ready_threshold = float(scoring["ready_threshold"])
+    watch_threshold = float(scoring["watch_threshold"])
     if hard_pass and score >= ready_threshold:
         decision = "READY"
         decision_reason = "All deterministic GROK gates passed; broker quote attestation is still required."
@@ -471,6 +488,9 @@ def evaluate_snapshot(
         "pair": snapshot.display,
         "symbol": str(snapshot.pair.get("symbol") or snapshot.display),
         "assetType": snapshot.asset_type,
+        "scoreGroup": profile.group,
+        "profileFamily": profile.family,
+        "grokProfile": profile.public_dict(),
         "venue": snapshot.venue,
         "direction": direction,
         "setup": setup_kind,

@@ -41,12 +41,17 @@ def _hm(local: datetime) -> str:
     return local.strftime("%H:%M")
 
 
-def _window_schedule(epoch: float, config: GrokConfig) -> list[dict[str, Any]]:
+def _window_schedule(
+    epoch: float,
+    config: GrokConfig,
+    windows: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     ny_now = ny_datetime(epoch, config)
     ny_midnight = ny_now.replace(hour=0, minute=0, second=0, microsecond=0)
     display_zone = _display_zone(config)
     rows: list[dict[str, Any]] = []
-    for name, window in config.sessions["windows"].items():
+    source = windows if windows is not None else config.sessions["windows"]
+    for name, window in source.items():
         start_minute = int(window["start_minute"])
         end_minute = int(window["end_minute"])
         start_ny = ny_midnight + timedelta(minutes=start_minute)
@@ -92,7 +97,23 @@ def _window_distance(minute: int, start: int, end: int) -> int:
     return min(before_start, after_end)
 
 
-def market_is_open(epoch: float, config: GrokConfig, asset_type: str) -> bool:
+def market_is_open(
+    epoch: float,
+    config: GrokConfig,
+    asset_type: str,
+    *,
+    session_mode: str | None = None,
+) -> bool:
+    mode = str(session_mode or "").strip().lower()
+    if mode == "cash_rth":
+        local = ny_datetime(epoch, config)
+        if local.weekday() >= 5:
+            return False
+        cash = config.sessions.get("cash_rth") or {}
+        start = int(cash.get("start_minute") or 570)
+        end = int(cash.get("end_minute") or 960)
+        minute = local.hour * 60 + local.minute
+        return start <= minute < end
     gated = {str(item).strip().lower() for item in (config.sessions.get("apply_weekend_gate_to") or [])}
     if str(asset_type or "").strip().lower() not in gated:
         return True
@@ -115,10 +136,20 @@ def market_is_open(epoch: float, config: GrokConfig, asset_type: str) -> bool:
     return True
 
 
-def classify_session(epoch: float, config: GrokConfig) -> dict[str, Any]:
+def classify_session(
+    epoch: float,
+    config: GrokConfig,
+    *,
+    session_mode: str | None = None,
+) -> dict[str, Any]:
     local = ny_datetime(epoch, config)
     minute = _minute_of_day(local)
-    windows = config.sessions["windows"]
+    mode = str(session_mode or "").strip().lower()
+    if mode == "cash_rth":
+        cash = dict(config.sessions.get("cash_rth") or {})
+        windows = {"cash_rth": cash}
+    else:
+        windows = config.sessions["windows"]
     active: list[dict[str, Any]] = []
     nearest_name = None
     nearest_kind = "off"
@@ -171,7 +202,7 @@ def classify_session(epoch: float, config: GrokConfig) -> dict[str, Any]:
         "distanceMinutes": nearest_distance if nearest_distance < 10_000 else None,
         "quality": round(float(nearest_quality), 4),
         "clock": utc_iso(epoch),
-        "windowSchedule": _window_schedule(epoch, config),
+        "windowSchedule": _window_schedule(epoch, config, windows),
     }
 
 

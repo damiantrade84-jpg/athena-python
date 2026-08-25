@@ -83,6 +83,12 @@ sessions:
   adjacent_minutes: 30
   adjacent_quality: 0.42
   off_session_quality: 0.12
+  # US cash regular hours (NY). Used when a profile sets session_mode: cash_rth.
+  cash_rth:
+    start_minute: 570
+    end_minute: 960
+    kind: killzone
+    quality: 1.0
 
 indicators:
   atr_period: 14
@@ -124,6 +130,115 @@ levels:
   target_rr: 2.10
   minimum_rr: 1.80
   opposing_pool_buffer_atr: 0.05
+
+# GROK-native overlays. Resolution is pair > score_group > asset family > base.
+# Unknown groups inherit the family overlay, never another family's numbers.
+profiles:
+  families:
+    forex:
+      session_mode: ict_killzone
+    crypto:
+      session_mode: ict_killzone
+      scoring:
+        ready_threshold: 80.0
+        watch_threshold: 62.0
+        minimum_raid_strength: 0.40
+        minimum_impulse_strength: 0.42
+        weights:
+          killzone_clock: 8.0
+          liquidity_raid: 24.0
+          impulse_vector: 18.0
+          void_alignment: 16.0
+          dealing_range: 12.0
+          cisd_state: 10.0
+          geometry: 12.0
+      indicators:
+        raid_min_excursion_atr: 0.14
+        raid_recent_bars: 4
+      levels:
+        minimum_stop_atr: 0.35
+        maximum_stop_atr: 2.80
+    stock:
+      session_mode: cash_rth
+      scoring:
+        ready_threshold: 80.0
+        watch_threshold: 62.0
+        weights:
+          killzone_clock: 10.0
+          liquidity_raid: 20.0
+          impulse_vector: 14.0
+          void_alignment: 14.0
+          dealing_range: 16.0
+          cisd_state: 10.0
+          geometry: 16.0
+      indicators:
+        raid_min_excursion_atr: 0.12
+    etf:
+      session_mode: cash_rth
+      scoring:
+        ready_threshold: 80.0
+        watch_threshold: 62.0
+        weights:
+          killzone_clock: 10.0
+          liquidity_raid: 20.0
+          impulse_vector: 14.0
+          void_alignment: 14.0
+          dealing_range: 16.0
+          cisd_state: 10.0
+          geometry: 16.0
+      indicators:
+        raid_min_excursion_atr: 0.12
+    etf_bond:
+      session_mode: cash_rth
+      scoring:
+        ready_threshold: 82.0
+        watch_threshold: 64.0
+    index:
+      session_mode: ict_killzone
+      scoring:
+        ready_threshold: 78.0
+        watch_threshold: 60.0
+    commodity:
+      session_mode: ict_killzone
+      scoring:
+        ready_threshold: 78.0
+        watch_threshold: 60.0
+  groups:
+    forex_exotics:
+      scoring:
+        ready_threshold: 80.0
+        watch_threshold: 62.0
+      indicators:
+        raid_min_excursion_atr: 0.12
+      levels:
+        minimum_stop_atr: 0.30
+        maximum_stop_atr: 2.60
+    forex_other:
+      scoring:
+        ready_threshold: 80.0
+        watch_threshold: 62.0
+    crypto_other:
+      scoring:
+        ready_threshold: 82.0
+        watch_threshold: 64.0
+      indicators:
+        raid_min_excursion_atr: 0.18
+        raid_recent_bars: 4
+      levels:
+        minimum_stop_atr: 0.45
+        maximum_stop_atr: 3.00
+    crypto_doge:
+      scoring:
+        ready_threshold: 82.0
+        watch_threshold: 64.0
+    nat_gas:
+      scoring:
+        ready_threshold: 82.0
+        watch_threshold: 64.0
+      levels:
+        minimum_stop_atr: 0.40
+        maximum_stop_atr: 3.00
+  pairs: {}
 
 execution:
   default_mode: paper

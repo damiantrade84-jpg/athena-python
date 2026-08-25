@@ -133,9 +133,19 @@ def raid_signature(
                 )
     if not candidates:
         return {"available": False, "direction": 0, "strength": 0.0, "reason": "NO_RAID"}
-    recent = [item for item in candidates if int(item[2]["eventAgeBars"]) <= max(1, recent_bars)]
+    max_age = max(1, recent_bars)
+    recent = [item for item in candidates if int(item[2]["eventAgeBars"]) <= max_age]
+    if not recent:
+        oldest = max(candidates, key=lambda item: int(item[2]["eventAgeBars"]))
+        return {
+            "available": False,
+            "direction": 0,
+            "strength": 0.0,
+            "reason": "RAID_NOT_RECENT",
+            "eventAgeBars": int(oldest[2]["eventAgeBars"]),
+        }
     strength, direction, evidence = max(
-        recent or candidates,
+        recent,
         key=lambda item: (-int(item[2]["eventAgeBars"]), item[0]),
     )
     return {"available": True, "direction": direction, "strength": strength, **evidence}

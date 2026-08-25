@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from .config import GrokConfig
 from .models import TIMEFRAME_SECONDS, Quote
 from .persistence import GrokRepository
+from .profiles import SESSION_MODES, GrokResolvedProfile, profile_from_signal
 from .sessions import classify_session, market_is_open
 
 
@@ -187,14 +188,49 @@ class GrokExecutionCoordinator:
             )
         return gates
 
+    def _profile(self, signal: dict[str, Any]) -> GrokResolvedProfile:
+        return profile_from_signal(signal, self.config)
+
+    def _stamped_profile_map(self, signal: dict[str, Any]) -> dict[str, Any]:
+        payload = signal.get("grokProfile")
+        return payload if isinstance(payload, dict) else {}
+
+    def _session_mode(self, signal: dict[str, Any]) -> str:
+        mode = str(self._stamped_profile_map(signal).get("sessionMode") or "").strip().lower()
+        if mode in SESSION_MODES:
+            return mode
+        return self._profile(signal).session_mode
+
+    def _ready_threshold(self, signal: dict[str, Any]) -> float:
+        stamped = signal.get("readyThreshold")
+        if isinstance(stamped, (int, float)) and not isinstance(stamped, bool) and math.isfinite(float(stamped)):
+            return float(stamped)
+        return float(self._profile(signal).scoring["ready_threshold"])
+
+    def _levels(self, signal: dict[str, Any]) -> dict[str, Any]:
+        levels = dict(self._profile(signal).levels)
+        stamped = self._stamped_profile_map(signal)
+        if stamped.get("minimumRr") is not None:
+            levels["minimum_rr"] = float(stamped["minimumRr"])
+        if stamped.get("targetRr") is not None:
+            levels["target_rr"] = float(stamped["targetRr"])
+        return levels
+
     def _live_session_gates(self, signal: dict[str, Any]) -> list[dict[str, Any]]:
         now_epoch = float(self.now_fn())
         asset_type = str(signal.get("assetType") or "").strip().lower()
-        session_open = market_is_open(now_epoch, self.config, asset_type)
-        clock = classify_session(now_epoch, self.config)
-        clock_ok = session_open and float(clock.get("quality") or 0.0) >= float(
-            self.config.scoring["minimum_killzone_quality"]
+        session_mode = self._session_mode(signal)
+        session_open = market_is_open(
+            now_epoch,
+            self.config,
+            asset_type,
+            session_mode=session_mode,
         )
+        clock = classify_session(now_epoch, self.config, session_mode=session_mode)
+        min_quality = self._stamped_profile_map(signal).get("minimumKillzoneQuality")
+        if min_quality is None:
+            min_quality = self._profile(signal).scoring["minimum_killzone_quality"]
+        clock_ok = session_open and float(clock.get("quality") or 0.0) >= float(min_quality)
         return [
             {
                 "name": "live_session_open",
@@ -240,7 +276,7 @@ class GrokExecutionCoordinator:
             isinstance(score, (int, float))
             and not isinstance(score, bool)
             and math.isfinite(float(score))
-            and float(score) >= float(self.config.scoring["ready_threshold"])
+            and float(score) >= float(self._ready_threshold(signal))
         )
         deterministic_gates = signal.get("gates")
         deterministic_gate_proof = (
@@ -434,8 +470,9 @@ class GrokExecutionCoordinator:
         else:
             in_channel = target < entry < stop
             live_rr = (entry - target) / (stop - entry) if in_channel else 0.0
-        minimum_rr = float(self.config.levels["minimum_rr"])
-        target_rr = float(self.config.levels["target_rr"])
+        levels = self._levels(signal)
+        minimum_rr = float(levels["minimum_rr"])
+        target_rr = float(levels["target_rr"])
         live_target = target
         rebased_target = False
         risk = abs(entry - stop)

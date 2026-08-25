@@ -14,6 +14,17 @@ class GrokConfigError(ValueError):
     pass
 
 
+_GROK_WEIGHTS = {
+    "killzone_clock",
+    "liquidity_raid",
+    "impulse_vector",
+    "void_alignment",
+    "dealing_range",
+    "cisd_state",
+    "geometry",
+}
+
+
 def _merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
     merged = deepcopy(base)
     for key, value in overrides.items():
@@ -83,6 +94,11 @@ class GrokConfig:
     def replay(self) -> dict[str, Any]:
         return self.raw["replay"]
 
+    @property
+    def profiles(self) -> dict[str, Any]:
+        payload = self.raw.get("profiles")
+        return payload if isinstance(payload, dict) else {}
+
     def public_dict(self) -> dict[str, Any]:
         return deepcopy(self.raw)
 
@@ -96,6 +112,7 @@ def _validate(raw: dict[str, Any]) -> None:
         "levels",
         "execution",
         "replay",
+        "profiles",
     )
     for section in required_sections:
         if not isinstance(raw.get(section), dict):
@@ -149,6 +166,14 @@ def _validate(raw: dict[str, Any]) -> None:
     _integer(sessions.get("adjacent_minutes"), "sessions.adjacent_minutes", minimum=0)
     _number(sessions.get("adjacent_quality"), "sessions.adjacent_quality", minimum=0.0)
     _number(sessions.get("off_session_quality"), "sessions.off_session_quality", minimum=0.0)
+    cash_rth = sessions.get("cash_rth")
+    if not isinstance(cash_rth, dict):
+        raise GrokConfigError("sessions.cash_rth must be a mapping")
+    cash_start = _integer(cash_rth.get("start_minute"), "sessions.cash_rth.start_minute", minimum=0)
+    cash_end = _integer(cash_rth.get("end_minute"), "sessions.cash_rth.end_minute", minimum=1)
+    if cash_start >= cash_end or cash_end > 1440:
+        raise GrokConfigError("sessions.cash_rth has an invalid minute range")
+    _number(cash_rth.get("quality"), "sessions.cash_rth.quality", minimum=0.0)
     windows = sessions.get("windows")
     if not isinstance(windows, dict) or not windows:
         raise GrokConfigError("sessions.windows must be a non-empty mapping")
@@ -193,16 +218,7 @@ def _validate(raw: dict[str, Any]) -> None:
         raise GrokConfigError("indicators.session_source_timeframe must be H1 or M15")
 
     weights = raw["scoring"].get("weights") or {}
-    expected_weights = {
-        "killzone_clock",
-        "liquidity_raid",
-        "impulse_vector",
-        "void_alignment",
-        "dealing_range",
-        "cisd_state",
-        "geometry",
-    }
-    if set(weights) != expected_weights:
+    if set(weights) != _GROK_WEIGHTS:
         raise GrokConfigError("scoring.weights does not match the GROK component contract")
     total_weight = sum(_number(value, f"scoring.weights.{key}", minimum=0.0) for key, value in weights.items())
     if abs(total_weight - 100.0) > 1e-9:
@@ -264,6 +280,73 @@ def _validate(raw: dict[str, Any]) -> None:
         raise GrokConfigError("replay.default_bars cannot exceed replay.maximum_bars")
     _integer(replay.get("outcome_horizon_m5_bars"), "replay.outcome_horizon_m5_bars")
     _integer(replay.get("minimum_trades_for_evidence"), "replay.minimum_trades_for_evidence")
+
+    profiles = raw.get("profiles")
+    if not isinstance(profiles, dict):
+        raise GrokConfigError("profiles must be a mapping")
+    for section in ("families", "groups", "pairs"):
+        mapping = profiles.get(section)
+        if mapping is None:
+            continue
+        if not isinstance(mapping, dict):
+            raise GrokConfigError(f"profiles.{section} must be a mapping")
+        for name, overlay in mapping.items():
+            if not isinstance(overlay, dict):
+                raise GrokConfigError(f"profiles.{section}.{name} must be a mapping")
+            _validate_profile_overlay(overlay, f"profiles.{section}.{name}")
+
+
+def _validate_profile_overlay(overlay: dict[str, Any], label: str) -> None:
+    if "session_mode" in overlay:
+        mode = str(overlay.get("session_mode") or "").strip().lower()
+        if mode not in {"ict_killzone", "cash_rth"}:
+            raise GrokConfigError(f"{label}.session_mode must be ict_killzone or cash_rth")
+    scoring = overlay.get("scoring")
+    if scoring is not None:
+        if not isinstance(scoring, dict):
+            raise GrokConfigError(f"{label}.scoring must be a mapping")
+        weights = scoring.get("weights")
+        if weights is not None:
+            if not isinstance(weights, dict) or set(weights) != _GROK_WEIGHTS:
+                raise GrokConfigError(f"{label}.scoring.weights does not match the GROK component contract")
+            total = sum(_number(value, f"{label}.scoring.weights.{key}", minimum=0.0) for key, value in weights.items())
+            if abs(total - 100.0) > 1e-9:
+                raise GrokConfigError(f"{label}.scoring.weights must sum to 100")
+        for key in (
+            "ready_threshold",
+            "watch_threshold",
+            "minimum_killzone_quality",
+            "minimum_raid_strength",
+            "minimum_impulse_strength",
+            "maximum_premium_for_long",
+            "minimum_discount_for_short",
+        ):
+            if key in scoring:
+                _number(scoring.get(key), f"{label}.scoring.{key}", minimum=0.0)
+    levels = overlay.get("levels")
+    if levels is not None:
+        if not isinstance(levels, dict):
+            raise GrokConfigError(f"{label}.levels must be a mapping")
+        for key in (
+            "stop_atr_buffer",
+            "minimum_stop_atr",
+            "maximum_stop_atr",
+            "target_rr",
+            "minimum_rr",
+            "opposing_pool_buffer_atr",
+        ):
+            if key in levels:
+                _number(levels.get(key), f"{label}.levels.{key}", minimum=0.0)
+    indicators = overlay.get("indicators")
+    if indicators is not None:
+        if not isinstance(indicators, dict):
+            raise GrokConfigError(f"{label}.indicators must be a mapping")
+        for key in ("raid_lookback_bars", "raid_recent_bars", "impulse_min_run", "void_lookback", "dealing_lookback", "cisd_lookback", "atr_period"):
+            if key in indicators:
+                _integer(indicators.get(key), f"{label}.indicators.{key}")
+        for key in ("raid_min_excursion_atr", "impulse_body_fraction", "impulse_range_atr", "impulse_single_range_atr"):
+            if key in indicators:
+                _number(indicators.get(key), f"{label}.indicators.{key}", minimum=0.0)
 
 
 def load_grok_config(root_config: dict[str, Any] | None = None) -> GrokConfig:
