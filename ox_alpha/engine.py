@@ -4,18 +4,35 @@ Inputs are market states (per-timeframe confirmed/forming candle splits), an
 optional live quote, the group profile, and settings. Output is a complete
 signal dict. No config import, no feed access, no broker access.
 
-The composite blends six orthogonal axes:
+The composite blends seven orthogonal axes:
 
   kinetic   signed  volatility-normalized momentum cascade (M15 x H1)
-  spring    0..1    compression depth + expansion ignition
-  flow      signed  effort-vs-result: volume thrust x path efficiency
+  spring    0..1    coiled range window + expansion ignition
+  flow      signed  effort-vs-result: direction-signed volume thrust x efficiency
   velocity  0..1    session-hour travel vs the pair's own hourly baseline
   magnet    signed  location vs session/round-number liquidity magnets
   structure signed  M15 pivot sequence + last break direction
+  sweep     signed  liquidity sweep + reclaim against magnet levels
 
 Conviction (direction quality) and opportunity (environment quality) are
 weighted by the group profile, combined into one 0..100 score, then passed
 through deterministic fail-closed gates.
+
+v1.1.0 corrections over 1.0.0:
+- spring rewards a coiled *window* that then fires; it no longer scores dead,
+  quiet markets above expanding ones;
+- flow thrust is signed by the confirmed bar's direction, so a volume spike on
+  a dump bar can no longer vote LONG;
+- conviction maps neutral alignment to 0 (the old formula granted every
+  direction a 0.5 chance baseline and let noise cross WATCH thresholds);
+- targets must stay reachable: TP1 is capped at TP_ATR_MAX ATRs from entry and
+  an RR floor unreachable within that ceiling fails closed;
+- a structural stop farther than SL_ATR_MAX rejects the trade instead of
+  clamping the stop inside the swing it claims to respect;
+- liquidity sweep/reclaim evidence is detected and scored explicitly;
+- round-number magnets scale to ~2x M15 ATR so FX grids are intraday-relevant;
+- live-quote spread vs SL distance is stamped always and gated when
+  MAX_SPREAD_TO_SL_RATIO > 0 (default 0 = disabled, matching platform stance).
 """
 from __future__ import annotations
 
@@ -27,11 +44,12 @@ from ox_alpha.config import OxSettings
 from ox_alpha.indicators import (
     clamp01,
     closes,
+    detect_sweep,
     hour_of_day_range_profile,
     path_efficiency,
-    percentile_rank,
     round_number_levels,
     roc,
+    squeeze_percentile,
     swing_pivots,
     tanh_scale,
     true_ranges,
@@ -90,25 +108,35 @@ def _component_kinetic(m15: list[Candle], h1: list[Candle]) -> float | None:
 
 
 def _component_spring(m15: list[Candle]) -> float | None:
+    """Coiled-window compression that then fires — not raw quietness.
+
+    Compression measures the recent *window's* width percentile (a coiled
+    tape), ignition the current bar expanding out of it. A dead market scores
+    compression but zero ignition; a genuine release scores both.
+    """
     trs = true_ranges(m15)
     atr = wilder_atr(m15, 14)
     if atr is None or atr <= 0 or len(trs) < 30:
         return None
-    window = trs[-96:]
-    ratios = [tr / atr for tr in window]
-    last_ratio = ratios[-1]
-    rank = percentile_rank(ratios[:-1], last_ratio)
-    if rank is None:
+    squeeze = squeeze_percentile(m15, window=24)
+    if squeeze is None:
         return None
-    compression = clamp01(1.0 - rank)
-    ignition = 1.0 if last_ratio >= 1.3 else 0.0
-    return clamp01(0.7 * compression + 0.3 * ignition)
+    compression = clamp01(1.0 - squeeze)
+    last_ratio = trs[-1] / atr
+    ignition = clamp01((last_ratio - 1.0) / 0.8)
+    return clamp01(0.65 * compression + 0.35 * ignition)
 
 
 def _component_flow(
     m15: list[Candle], lookback: int, volume_axis: str
 ) -> tuple[float | None, bool]:
-    """Returns (flow, volume_used). flow is None only when data is unusable."""
+    """Returns (flow, volume_used). flow is None only when data is unusable.
+
+    Effort-vs-result: only ABOVE-average participation amplifies the signed
+    path efficiency; below-average volume abstains toward zero instead of
+    voting against the travel direction (the 1.0.0 formula multiplied a signed
+    volume-z by signed efficiency, so quiet trends voted backwards).
+    """
     eff = path_efficiency(m15, 12)
     if eff is None:
         return None, False
@@ -116,7 +144,7 @@ def _component_flow(
     if len(vols) >= lookback // 2:
         vz = zscore(vols, lookback)
         if vz is not None:
-            thrust = tanh_scale(vz / 2.5, 1.0)
+            thrust = max(0.0, min(1.0, tanh_scale(vz / 2.5, 1.0)))
             return max(-1.0, min(1.0, thrust * eff)), True
     if volume_axis == "required":
         # Volume promised by profile but absent: axis abstains rather than
@@ -250,7 +278,9 @@ def _session_magnets(
         if x is not None and math.isfinite(x)
     ]
     if price > 0 and (atr is None or atr > 0):
-        levels.extend(round_number_levels(price))
+        # Scale the round-number grid to the pair's own volatility: a fixed
+        # magnitude grid put FX magnets 100 pips apart — useless for M15.
+        levels.extend(round_number_levels(price, step_hint=2.0 * atr if atr else None))
     return {
         "sessionHigh": session_hi,
         "sessionLow": session_lo,
@@ -298,13 +328,20 @@ def _component_structure(m15: list[Candle]) -> float | None:
 
 def _resolve_direction(
     components: dict[str, float | None], profile: OxProfile
-) -> tuple[str | None, float]:
-    signed_axes = ("kinetic", "flow", "structure", "magnet")
+) -> tuple[str | None, float, float]:
+    """Weighted vote over the signed axes.
+
+    Returns (direction, agreement_share, evidence_weight). A direction needs
+    BOTH the agreement share AND a minimum mass of participating axes — one
+    lonely axis screaming must not steer the trade.
+    """
+    signed_axes = ("kinetic", "flow", "structure", "magnet", "sweep")
     weights = {
         "kinetic": profile.w_kinetic,
         "flow": profile.w_flow,
         "structure": profile.w_structure,
         "magnet": profile.w_magnet * 0.5,  # location is context, not a vote equal to trend
+        "sweep": profile.w_structure * 0.5,  # sweep/reclaim is structure-grade reversal proof
     }
     net = 0.0
     total = 0.0
@@ -316,12 +353,14 @@ def _resolve_direction(
         net += weight * value
         total += weight
     if total <= 0:
-        return None, 0.0
+        return None, 0.0, total
     share = abs(net) / total
     direction = "LONG" if net > 0 else "SHORT" if net < 0 else None
+    if total < 0.30:
+        return None, share, total
     if share < profile.direction_agreement:
-        return None, share
-    return direction, share
+        return None, share, total
+    return direction, share, total
 
 
 def _targets_for_direction(
@@ -333,29 +372,29 @@ def _targets_for_direction(
     profile: OxProfile,
     settings: OxSettings,
 ) -> tuple[float | None, float | None, float | None]:
+    """TP1 within reach: nearest magnet level in [min_rr*SL, tp_atr_max*ATR].
+
+    A target the intraday tape cannot plausibly travel is fantasy RR — if even
+    the minimum-RR distance exceeds the ATR reachability ceiling the setup
+    structurally fails (returns None) instead of quoting an unfilledable rr1.
+    """
     sl_dist = abs(entry - sl)
     if sl_dist <= 0 or entry <= 0:
         return None, None, None
     sign = 1.0 if direction == "LONG" else -1.0
+    needed = profile.min_rr * sl_dist
+    reach = settings.tp_atr_max * atr
+    if needed > reach:
+        return None, None, None
     candidates = [
         lvl for lvl in magnets.get("levels") or []
-        if (lvl - entry) * sign > 0
+        if needed <= abs(lvl - entry) <= reach and (lvl - entry) * sign > 0
     ]
-    tp1 = None
-    for lvl in candidates:
-        dist = abs(lvl - entry)
-        if dist >= profile.min_rr * sl_dist:
-            tp1 = lvl
-            break
-    fallback_dist = max(
-        profile.tp_atr_fallback * atr,
-        profile.min_rr * sl_dist,
-    )
-    fallback_tp = entry + sign * fallback_dist
+    tp1 = min(candidates, key=lambda lvl: abs(lvl - entry)) if candidates else None
     if tp1 is None:
-        tp1 = fallback_tp
+        tp1 = entry + sign * needed
     tp1_dist = abs(tp1 - entry)
-    tp2_dist = tp1_dist * settings.tp2_rr_extension
+    tp2_dist = min(tp1_dist * settings.tp2_rr_extension, reach)
     beyond = [lvl for lvl in candidates if abs(lvl - entry) > tp1_dist]
     tp2 = None
     for lvl in beyond:
@@ -376,6 +415,12 @@ def _stop_for_direction(
     settings: OxSettings,
     entry: float | None = None,
 ) -> float | None:
+    """Structure stop beyond the swing, buffered; None when unreachable.
+
+    If the defending swing sits farther than SL_ATR_MAX, the trade is
+    untradeable at honest risk — returning None rejects it rather than pulling
+    the stop inside the very structure that defines invalidation.
+    """
     cl = closes(m15)
     if not cl:
         return None
@@ -383,19 +428,23 @@ def _stop_for_direction(
         entry = cl[-1]
     highs_piv, lows_piv = swing_pivots(m15[-60:], 2, 2)
     buffer = settings.sl_buffer_atr * atr
+    max_dist = profile.sl_atr_max * atr
+    min_dist = profile.sl_atr_min * atr
     if direction == "LONG":
         below = [p for _, p in lows_piv if p < entry]
         swing = max(below) if below else None
+        if swing is not None and (entry - swing + buffer) > max_dist:
+            return None
         raw = swing if swing is not None else entry - profile.sl_atr_min * atr
         dist = entry - raw + buffer
-        dist = max(profile.sl_atr_min * atr, min(dist, profile.sl_atr_max * atr))
-        return entry - dist
+        return entry - max(min_dist, min(dist, max_dist))
     above = [p for _, p in highs_piv if p > entry]
     swing = min(above) if above else None
+    if swing is not None and (swing - entry + buffer) > max_dist:
+        return None
     raw = swing if swing is not None else entry + profile.sl_atr_min * atr
     dist = raw - entry + buffer
-    dist = max(profile.sl_atr_min * atr, min(dist, profile.sl_atr_max * atr))
-    return entry + dist
+    return entry + max(min_dist, min(dist, max_dist))
 
 
 def analyze_pair(
@@ -414,7 +463,7 @@ def analyze_pair(
     signal: dict[str, Any] = {
         "engine": "OX_ALPHA",
         "engineLabel": "OX Alpha",
-        "oxVersion": "1.0.0",
+        "oxVersion": "1.1.0",
         "symbol": pair.get("symbol") or display,
         "display": display,
         "type": pair.get("type"),
@@ -484,6 +533,20 @@ def analyze_pair(
     magnet = _component_magnet(magnets, entry_ref)
     structure = _component_structure(m15)
 
+    # Liquidity sweep / reclaim against the session + round-number levels.
+    sweep_map = detect_sweep(
+        m15,
+        magnets.get("levels") or [],
+        atr_m15,
+        lookback=max(2, settings.sweep_lookback),
+        max_penetration_atr=max(0.05, settings.sweep_max_atr),
+    )
+    sweep = None
+    if sweep_map:
+        long_s = sweep_map.get("LONG") or 0.0
+        short_s = sweep_map.get("SHORT") or 0.0
+        sweep = long_s - short_s if max(long_s, short_s) >= 0.35 else 0.0
+
     components: dict[str, float | None] = {
         "kinetic": kinetic,
         "spring": spring,
@@ -491,6 +554,7 @@ def analyze_pair(
         "velocity": velocity,
         "magnet": magnet,
         "structure": structure,
+        "sweep": sweep,
     }
 
     # Reweight when the flow axis cannot speak for this group.
@@ -515,12 +579,16 @@ def analyze_pair(
         signal["reason"] = "no_usable_components"
         return signal
 
-    direction, agreement_share = _resolve_direction(components, profile)
+    direction, agreement_share, evidence_weight = _resolve_direction(components, profile)
     signal["directionAgreement"] = round(agreement_share, 3)
+    signal["directionEvidenceWeight"] = round(evidence_weight, 3)
     dir_gate_passed = _gate(
         "direction_resolved",
         direction is not None,
-        f"share={agreement_share:.2f} need={profile.direction_agreement:.2f}",
+        (
+            f"share={agreement_share:.2f} need={profile.direction_agreement:.2f} "
+            f"mass={evidence_weight:.2f}"
+        ),
     )
     if direction is None:
         signal["components"] = {k: (None if v is None else round(v, 4)) for k, v in components.items()}
@@ -529,14 +597,22 @@ def analyze_pair(
         return signal
 
     side = 1.0 if direction == "LONG" else -1.0
+    # Direction quality: aligned evidence counts toward 1, neutral toward 0.
+    # The 1.0.0 formula ((v*side)/2 + 0.5) granted every direction a 0.5
+    # chance baseline, so noise scored ~50 conviction and crossed WATCH gates.
     conviction_num = 0.0
     conviction_den = 0.0
     for axis in ("kinetic", "flow", "structure"):
         value = components.get(axis)
         if value is None or axis not in weights:
             continue
-        conviction_num += weights[axis] * clamp01((value * side) / 2.0 + 0.5)
+        conviction_num += weights[axis] * clamp01(value * side)
         conviction_den += weights[axis]
+    sweep_value = components.get("sweep")
+    if sweep_value is not None and sweep_value != 0.0:
+        w_sweep = profile.w_structure * 0.5
+        conviction_num += w_sweep * clamp01(sweep_value * side)
+        conviction_den += w_sweep
     conviction = conviction_num / conviction_den if conviction_den > 0 else 0.0
 
     opportunity_num = 0.0
@@ -579,6 +655,28 @@ def analyze_pair(
         signal["reason"] = "targets_unavailable"
         return signal
     _gate("rr_floor", rr1 >= profile.min_rr, f"rr1={rr1:.2f} min={profile.min_rr:.2f}")
+
+    # Spread vs stop distance: stamped whenever a live quote exists; gated
+    # only when MAX_SPREAD_TO_SL_RATIO > 0 (default 0 = disabled, mirroring
+    # the platform-wide gate's current stance).
+    if isinstance(quote, Mapping):
+        bid_s = _f(quote.get("bid"))
+        ask_s = _f(quote.get("ask"))
+        if bid_s and ask_s and ask_s >= bid_s:
+            spread = ask_s - bid_s
+            sl_dist_live = abs(entry_ref - sl)
+            spread_ratio = spread / sl_dist_live if sl_dist_live > 0 else None
+            signal["spread"] = round(spread, 10)
+            signal["spreadToSl"] = (
+                round(spread_ratio, 4) if spread_ratio is not None else None
+            )
+            cap = settings.max_spread_to_sl_ratio
+            if cap > 0:
+                _gate(
+                    "spread_sl",
+                    spread_ratio is not None and spread_ratio <= cap,
+                    f"ratio={spread_ratio if spread_ratio is not None else 'n/a'} cap={cap}",
+                )
 
     trigger_confirmed = False
     if len(m15) >= 2:
@@ -636,7 +734,10 @@ def analyze_pair(
         loc = magnet if magnet is not None else 0.0
         spr = spring if spring is not None else 0.0
         stc = structure if structure is not None else 0.0
-        if spr >= 0.55 and abs(loc) >= 0.7 and loc * side > 0 and stc * side > 0:
+        swp = sweep_value if sweep_value is not None else 0.0
+        if swp * side >= 0.35:
+            play_type = "SWEEP_REVERSAL"
+        elif spr >= 0.55 and abs(loc) >= 0.7 and loc * side > 0 and stc * side > 0:
             play_type = "BREAKOUT"
         elif loc * side < -0.75 and kinetic is not None and kinetic * side < 0:
             play_type = "FADE"

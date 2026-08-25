@@ -118,6 +118,85 @@ def path_efficiency(candles: Sequence[Candle], lookback: int) -> float | None:
     return max(-1.0, min(1.0, net / traveled))
 
 
+def squeeze_percentile(candles: Sequence[Candle], window: int = 24) -> float | None:
+    """Percentile (0..1) of the current bar-range width vs the trailing window.
+
+    Low values = the tape is coiled relative to its recent self. Uses true
+    range / ATR ratios so the measure is volatility-normalized, and compares
+    the *window's* width (not just the last bar) against its own history, so a
+    single quiet bar cannot fake compression.
+    """
+    trs = true_ranges(candles)
+    if len(trs) < window + 10:
+        return None
+    atr = wilder_atr(candles, 14)
+    if atr is None or atr <= 0:
+        return None
+    widths = [sum(trs[i - window:i]) / (window * atr) for i in range(window, len(trs) + 1)]
+    if len(widths) < 2:
+        return None
+    # Midpoint tie handling: a perfectly uniform tape ranks 0.5 (no contrast),
+    # not 1.0 — ties-as-below made every flat series look "expanded".
+    x = widths[-1]
+    hist = widths[:-1]
+    below = sum(1 for v in hist if v < x)
+    equal = sum(1 for v in hist if v == x)
+    return (below + equal / 2.0) / len(hist)
+
+
+def detect_sweep(
+    candles: Sequence[Candle],
+    levels: Sequence[float],
+    atr: float,
+    *,
+    lookback: int = 8,
+    max_penetration_atr: float = 0.5,
+) -> dict[str, float] | None:
+    """Liquidity-sweep / reclaim detection against given magnet levels.
+
+    A sweep takes out resting stops beyond a level and then closes back through
+    it — the classic failed-breakout reversal evidence. Scans the last
+    ``lookback`` confirmed bars; returns {'LONG': strength, 'SHORT': strength}
+    with strengths in 0..1 (deeper reclaim body = stronger), or None when no
+    sweep fired.
+    """
+    if atr <= 0 or not levels or len(candles) < 3:
+        return None
+    out = {"LONG": 0.0, "SHORT": 0.0}
+    n = len(candles)
+    pen = max_penetration_atr * atr
+    clean_levels = [v for v in (_f(lvl) for lvl in levels) if v is not None and v > 0]
+    for i in range(max(1, n - lookback), n):
+        c = candles[i]
+        p = candles[i - 1]
+        lo = _f(c.get("low"))
+        hi = _f(c.get("high"))
+        o = _f(c.get("open"))
+        cl = _f(c.get("close"))
+        pc = _f(p.get("close"))
+        if lo is None or hi is None or o is None or cl is None or pc is None:
+            continue
+        body = abs(cl - o)
+        for lv in clean_levels:
+            # Sweep BELOW a support: price was holding strictly above the
+            # level, pierces under it by <= pen, then closes back above —
+            # resting stops taken, buyers reclaimed. Without the prior-side
+            # guard every bar straddling the level would fake a sweep.
+            if pc > lv and lo < lv <= cl:
+                depth = min(pen, lv - lo)
+                strength = clamp01((depth / pen) * 0.5 + (body / (2.0 * atr)) * 0.5)
+                out["LONG"] = max(out["LONG"], strength)
+            # Sweep ABOVE a resistance: price was holding strictly below,
+            # pokes over the level, closes back under it.
+            if pc < lv and hi > lv >= cl:
+                depth = min(pen, hi - lv)
+                strength = clamp01((depth / pen) * 0.5 + (body / (2.0 * atr)) * 0.5)
+                out["SHORT"] = max(out["SHORT"], strength)
+    if out["LONG"] <= 0.0 and out["SHORT"] <= 0.0:
+        return None
+    return out
+
+
 def swing_pivots(
     candles: Sequence[Candle], left: int = 2, right: int = 2
 ) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
@@ -147,22 +226,32 @@ def swing_pivots(
     return highs, lows
 
 
-def round_number_levels(price: float, count: int = 4) -> list[float]:
+def round_number_levels(
+    price: float, count: int = 4, step_hint: float | None = None
+) -> list[float]:
     """Human round-number magnet levels above and below ``price``.
 
-    Step adapts to magnitude (0-step for FX sub-pips handled by caller scale).
-    Returns alternating above/below levels nearest first.
+    ``step_hint`` scales the grid to the instrument's own volatility (pass
+    ~2*ATR so levels stay intraday-relevant; e.g. EUR/USD gets a 10-pip grid,
+    not a 100-pip one). Without a hint the grid falls back to a magnitude-
+    derived step. Returns sorted unique levels.
     """
     if price <= 0 or not math.isfinite(price):
         return []
-    mag = math.floor(math.log10(price))
-    step = 10.0 ** (mag - 2)
-    # FX majors live around 1e0..1e2; a 1% step is too wide for intraday, so
-    # refine: choose step so that price/step lands between 50 and 500.
-    while price / step > 500:
-        step *= 10.0
-    while price / step < 50 and step > 1e-6:
-        step /= 10.0
+    hint = step_hint if (step_hint is not None and math.isfinite(step_hint) and step_hint > 0) else None
+    if hint is not None:
+        # Nearest decade step to the hint (log distance), floored at 1e-6.
+        mag = math.floor(math.log10(hint))
+        candidates = [10.0 ** (mag - 1 + k) for k in range(3)]
+        best = min(candidates, key=lambda s: abs(math.log10(s) - math.log10(hint)))
+        step = max(best, 1e-6)
+    else:
+        mag = math.floor(math.log10(price))
+        step = 10.0 ** (mag - 2)
+        while price / step > 500:
+            step *= 10.0
+        while price / step < 50 and step > 1e-6:
+            step /= 10.0
     base = math.floor(price / step) * step
     levels: list[float] = []
     up = base + step

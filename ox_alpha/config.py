@@ -19,6 +19,10 @@ class OxSettings:
     atr_pct_max: float = 0.03       # chaos ceiling
     sl_buffer_atr: float = 0.18
     tp2_rr_extension: float = 1.6   # TP2 distance as multiple of TP1 distance
+    tp_atr_max: float = 6.0         # reachability ceiling: no target beyond this many M15 ATRs
+    sweep_lookback: int = 8         # confirmed bars scanned for liquidity sweeps
+    sweep_max_atr: float = 0.5      # max stop-run penetration depth vs ATR
+    max_spread_to_sl_ratio: float = 0.0  # OX-scoped spread guard; 0 disables (platform stance)
     scan_workers: int = 8
     candle_limit_m15: int = 300
     candle_limit_h1: int = 200
@@ -66,6 +70,12 @@ def load_settings(config: dict | None) -> OxSettings:
         atr_pct_max=_f("ATR_PCT_MAX", _DEFAULTS.atr_pct_max),
         sl_buffer_atr=_f("SL_BUFFER_ATR", _DEFAULTS.sl_buffer_atr),
         tp2_rr_extension=_f("TP2_RR_EXTENSION", _DEFAULTS.tp2_rr_extension),
+        tp_atr_max=_f("TP_ATR_MAX", _DEFAULTS.tp_atr_max),
+        sweep_lookback=_i("SWEEP_LOOKBACK", _DEFAULTS.sweep_lookback),
+        sweep_max_atr=_f("SWEEP_MAX_ATR", _DEFAULTS.sweep_max_atr),
+        max_spread_to_sl_ratio=_f(
+            "MAX_SPREAD_TO_SL_RATIO", _DEFAULTS.max_spread_to_sl_ratio
+        ),
         scan_workers=max(1, _i("SCAN_WORKERS", _DEFAULTS.scan_workers)),
         candle_limit_m15=_i("CANDLE_LIMIT_M15", _DEFAULTS.candle_limit_m15),
         candle_limit_h1=_i("CANDLE_LIMIT_H1", _DEFAULTS.candle_limit_h1),

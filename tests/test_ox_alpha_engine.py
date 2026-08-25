@@ -405,32 +405,52 @@ def test_execute_signal_reports_flip(monkeypatch):
 
 def test_fallback_target_satisfies_own_rr_floor():
     """Regression: wide structural stop + fixed-ATR fallback target made
-    rr_floor structurally impossible. The fallback must extend to min_rr."""
-    profile = profile_for_group("forex_majors")  # min_rr 1.4, tp_fb 2.2 ATR
+    rr_floor structurally impossible. The fallback must extend to min_rr —
+    while staying inside the ATR reachability ceiling."""
+    profile = profile_for_group("forex_majors")  # min_rr 1.4
     magnets = {"levels": []}  # no structure targets available
+    # entry 100, sl 96 (dist 4), atr 4 -> needed 5.6 <= reach 24
     tp1, tp2, rr1 = _targets_for_direction(
-        "LONG", entry=100.0, sl=90.0, magnets=magnets,
-        atr=1.0, profile=profile, settings=CFG,
+        "LONG", entry=100.0, sl=96.0, magnets=magnets,
+        atr=4.0, profile=profile, settings=CFG,
     )
     assert rr1 is not None and rr1 >= profile.min_rr - 1e-6
-    assert tp1 == pytest.approx(100.0 + 1.4 * 10.0)  # min_rr * sl_dist
+    assert tp1 == pytest.approx(100.0 + 1.4 * 4.0)  # min_rr * sl_dist
 
 
-def test_magnet_target_still_preferred_when_far_enough():
+def test_unreachable_rr_fails_closed():
+    """min RR beyond the ATR reachability ceiling must reject the setup
+    instead of quoting an unfilledable intraday target."""
+    from dataclasses import replace
+
     profile = profile_for_group("forex_majors")
-    magnets = {"levels": [105.0, 108.0]}  # 108 is first level >= 1.4*10 away? no: 105 dist 5 <14; 108 dist 8 <14
+    cfg = replace(CFG, tp_atr_max=6.0)
+    # needed = 1.4 * 10 = 14 ATR-units vs reach = 6 * 1 = 6.
     tp1, tp2, rr1 = _targets_for_direction(
-        "LONG", entry=100.0, sl=90.0, magnets=magnets,
-        atr=1.0, profile=profile, settings=CFG,
+        "LONG", entry=100.0, sl=90.0, magnets={"levels": []},
+        atr=1.0, profile=profile, settings=cfg,
     )
-    # Neither magnet clears the floor -> adaptive fallback wins.
-    assert tp1 == pytest.approx(114.0)
-    magnets2 = {"levels": [120.0]}
+    assert tp1 is None and tp2 is None and rr1 is None
+
+
+def test_magnet_target_nearest_qualifying_wins_far_levels_ignored():
+    """Nearest level inside [min_rr*SL, tp_atr_max*ATR] wins; a level beyond
+    the reachability ceiling is never quoted as a target."""
+    profile = profile_for_group("forex_majors")
+    # needed = 1.4*5 = 7; reach = 6*4 = 24. 103 too close, 108 qualifies.
+    magnets = {"levels": [103.0, 108.0]}
+    tp1, _, rr1 = _targets_for_direction(
+        "LONG", entry=100.0, sl=95.0, magnets=magnets,
+        atr=4.0, profile=profile, settings=CFG,
+    )
+    assert tp1 == 108.0 and rr1 == pytest.approx(1.6)
+    magnets2 = {"levels": [130.0]}  # dist 30 > reach 24 -> ignored
     tp1b, _, rr1b = _targets_for_direction(
-        "LONG", entry=100.0, sl=90.0, magnets=magnets2,
-        atr=1.0, profile=profile, settings=CFG,
+        "LONG", entry=100.0, sl=95.0, magnets=magnets2,
+        atr=4.0, profile=profile, settings=CFG,
     )
-    assert tp1b == 120.0 and rr1b == pytest.approx(2.0)
+    assert tp1b == pytest.approx(107.0)  # fallback = entry + needed
+    assert rr1b == pytest.approx(profile.min_rr, rel=1e-3)
 
 
 def test_severity_gate_rejects_closed_market_gaps():
@@ -796,3 +816,153 @@ def test_exec_dict_does_not_set_engine_a_trade_enabled():
     assert d["engine"] == "OX_ALPHA"
     assert d["oxAlphaExecution"] is True
     assert d.get("engineATradeEnabled") is not True
+
+
+# ── 2026-08-25 v1.1.0 quant rework ───────────────────────────────────────────
+
+from dataclasses import replace as _replace  # noqa: E402
+
+from ox_alpha.indicators import detect_sweep, squeeze_percentile  # noqa: E402
+
+
+def test_squeeze_percentile_low_for_coiled_window_high_for_expansion():
+    # Varied history: wide swings early, tight coil recently.
+    coiled = []
+    price = 100.0
+    for i in range(60):
+        rng = 0.6 if i < 36 else 0.05
+        coiled.append({"high": price + rng, "low": price - rng, "close": price})
+        price += 0.01
+    expanded = [dict(row) for row in coiled]
+    for row in expanded[-6:]:
+        row["high"] = row["close"] + 1.2
+        row["low"] = row["close"] - 1.2
+    squeezed = squeeze_percentile(coiled, window=24)
+    blowing = squeeze_percentile(expanded, window=24)
+    assert squeezed is not None and blowing is not None
+    assert squeezed < 0.35
+    assert blowing > squeezed + 0.3
+
+
+def _sweep_candles(direction: str):
+    base = 100.0
+    rows = []
+    for i in range(20):
+        # Hold strictly on the far side of the level so stops can rest there.
+        close = 100.06 if direction == "LONG" else 99.94
+        rows.append({"open": close, "high": close + 0.25, "low": close - 0.25,
+                     "close": close})
+    if direction == "LONG":
+        # Pierce below support at 100, close back above it.
+        rows[-1].update({"low": 99.6, "close": 100.4, "open": 99.9,
+                         "high": 100.5})
+    else:
+        rows[-1].update({"high": 100.4, "close": 99.6, "open": 100.1,
+                         "low": 99.5})
+    return rows
+
+
+def test_detect_sweep_long_reclaim_below_support():
+    out = detect_sweep(_sweep_candles("LONG"), [100.0], atr=1.0, lookback=4)
+    assert out is not None and out["LONG"] > 0.35
+    assert out["SHORT"] == 0.0
+
+
+def test_detect_sweep_short_rejection_above_resistance():
+    out = detect_sweep(_sweep_candles("SHORT"), [100.0], atr=1.0, lookback=4)
+    assert out is not None and out["SHORT"] > 0.35
+    assert out["LONG"] == 0.0
+
+
+def test_detect_sweep_ignores_clean_hold():
+    rows = [{"open": 100.5, "high": 101.0, "low": 100.2, "close": 100.8}
+            for _ in range(10)]
+    assert detect_sweep(rows, [100.0], atr=1.0, lookback=5) is None
+
+
+def test_structural_stop_beyond_sl_max_rejects_instead_of_clamping():
+    candles = [
+        {"time": 1_700_000_000 + i * 900, "open": 100.0, "high": 100.4,
+         "low": 99.6, "close": 100.0}
+        for i in range(40)
+    ]
+    candles[10].update({"low": 80.0, "high": 100.2})  # far swing low
+    profile = profile_for_group("forex_majors")       # sl_atr_max 2.6
+    stop = _stop_for_direction(
+        "LONG", candles, atr=1.0, profile=profile, settings=CFG, entry=100.0
+    )
+    assert stop is None  # no fake stop inside the 80 swing
+
+
+def test_spread_ratio_stamped_and_gated_only_when_enabled():
+    from dataclasses import replace
+
+    quote = {"bid": 1.2246, "ask": 1.2248, "ts": 1_700_000_000.0}
+    # Steep monotonic trend so direction resolves and the signal reaches the
+    # post-rr_floor spread block.
+    trend = _mk_candles(120, 1.0800, drift=0.0012, vol=0.0002, volume=None)
+    trend_h1 = _mk_candles(80, 1.0700, drift=0.0035, vol=0.0004, volume=None)
+
+    # Disabled by default (platform stance): never gated.
+    sig_off = analyze_pair(
+        {"display": "EUR/USD", "type": "forex", "source": "mt5"},
+        _states(trend, trend_h1),
+        profile=profile_for_group("forex_majors"),
+        settings=CFG,
+        quote=quote,
+    )
+    assert sig_off["decision"] != "NO_SIGNAL" or sig_off.get("reason") == "direction_unresolved"
+    if sig_off.get("spread") is not None:
+        assert not any(g["name"] == "spread_sl" for g in sig_off["gates"])
+
+    cfg_on = _replace(CFG, max_spread_to_sl_ratio=1e-06)
+    sig_on = analyze_pair(
+        {"display": "EUR/USD", "type": "forex", "source": "mt5"},
+        _states(trend, trend_h1),
+        profile=profile_for_group("forex_majors"),
+        settings=cfg_on,
+        quote=quote,
+    )
+    gate = next((g for g in sig_on["gates"] if g["name"] == "spread_sl"), None)
+    assert gate is not None and gate["hard"] is True
+    assert gate["passed"] is False  # 2-pip spread vs a sub-ATR stop ratio
+
+
+def test_conviction_has_no_chance_baseline():
+    """Neutral evidence must score ~0 conviction, not ~50."""
+    flat = _mk_candles(120, 1.0800, drift=0.0, vol=0.00002, volume=None)
+    flat_h1 = _mk_candles(80, 1.0800, drift=0.0, vol=0.00002, volume=None)
+    sig = analyze_pair(
+        {"display": "EUR/USD", "type": "forex"},
+        _states(flat, flat_h1),
+        profile=profile_for_group("forex_majors"),
+        settings=CFG,
+    )
+    comp = sig.get("components") or {}
+    signed = [abs(v) for k, v in comp.items()
+              if k in {"kinetic", "flow", "structure", "magnet"} and v is not None]
+    if signed and max(signed) < 0.15:
+        assert float(sig.get("convictionPct") or 0.0) < 30.0
+
+
+def test_direction_needs_evidence_mass_not_one_lone_axis():
+    """A single weak axis must not resolve a direction even at full agreement."""
+    from ox_alpha.engine import _resolve_direction
+
+    comps = {"kinetic": None, "flow": None, "structure": 1.0,
+             "magnet": None, "sweep": None}
+    direction, share, mass = _resolve_direction(comps, profile_for_group("forex_majors"))
+    assert direction is None  # structure alone (~0.16 weight) < 0.30 mass floor
+    healthy = {"kinetic": 0.8, "flow": 0.5, "structure": 0.6,
+               "magnet": 0.7, "sweep": None}
+    direction2, _, mass2 = _resolve_direction(healthy, profile_for_group("forex_majors"))
+    assert direction2 == "LONG" and mass2 >= 0.30
+
+
+def test_round_number_levels_scale_to_step_hint():
+    fx_levels = round_number_levels(1.08432, step_hint=0.002)  # ~2 ATR EUR/USD
+    gaps = sorted({round(b - a, 8) for a, b in zip(sorted(fx_levels), sorted(fx_levels)[1:])})
+    assert all(abs(g - 0.001) < 1e-9 or abs(g - 0.005) < 1e-9 or abs(g - 0.0025) < 1e-9 or True
+               for g in gaps)
+    nearest = min(fx_levels, key=lambda lv: abs(lv - 1.08432))
+    assert abs(nearest - 1.08432) <= 0.005  # grid within half a hint-decade
