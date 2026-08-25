@@ -106,12 +106,46 @@ def compute_decision(
     now_ms = now_ms or int(time.time() * 1000)
     n = len(df)
 
-    def _flat(reason: str) -> LiveDecision:
-        return LiveDecision("NONE", reason, "NONE", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                            0.0, 0.0, 0.0, now_ms, cfg.instrument)
+    def _last_bar_ms() -> int:
+        if n > 0 and "time" in df:
+            try:
+                return int(pd.Timestamp(df["time"].iloc[-1]).value // 1_000_000)
+            except (TypeError, ValueError, OverflowError):
+                pass
+        return now_ms
+
+    def _flat(
+        reason: str,
+        *,
+        entry_ref: float = 0.0,
+        atr_value: float = 0.0,
+        ema_fast_value: float = 0.0,
+        ema_slow_value: float = 0.0,
+        bar_time_ms: int | None = None,
+    ) -> LiveDecision:
+        return LiveDecision(
+            "NONE",
+            reason,
+            "NONE",
+            entry_ref,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            entry_ref,
+            atr_value,
+            ema_fast_value,
+            ema_slow_value,
+            bar_time_ms if bar_time_ms is not None else _last_bar_ms(),
+            cfg.instrument,
+        )
 
     if n < warmup_bars(cfg):
-        return _flat("insufficient_bars")
+        try:
+            last_close = float(df["close"].iloc[-1]) if n > 0 else 0.0
+        except (KeyError, TypeError, ValueError):
+            last_close = 0.0
+        return _flat("insufficient_bars", entry_ref=last_close)
 
     des = _desired(df, cfg)
     atr = _atr_wilder(df, cfg.atr_n).to_numpy()
@@ -124,7 +158,7 @@ def compute_decision(
     flip = des_now != des_prev
     close_now, low_now, atr_now = float(close[-1]), float(low[-1]), float(atr[-1])
     ef_now, es_now = float(ef[-1]), float(es[-1])
-    bar_ms = int(pd.Timestamp(df["time"].iloc[-1]).value // 1_000_000) if "time" in df else now_ms
+    bar_ms = _last_bar_ms()
     risk = cfg.atr_mult * atr_now
 
     if state is None or state.direction == 0:
@@ -134,7 +168,14 @@ def compute_decision(
             return LiveDecision("OPEN_LONG", "regime_flip_long", "LONG", entry, sl,
                                 entry + cfg.rr_target * risk, entry + (cfg.rr_target + 1.0) * risk,
                                 sl, entry, atr_now, ef_now, es_now, bar_ms, cfg.instrument)
-        return _flat("no_long_flip" if des_now != 1 else "no_flip")
+        return _flat(
+            "no_long_flip" if des_now != 1 else "no_flip",
+            entry_ref=close_now,
+            atr_value=atr_now,
+            ema_fast_value=ef_now,
+            ema_slow_value=es_now,
+            bar_time_ms=bar_ms,
+        )
 
     # in a long position
     extreme = max(state.extreme, close_now)

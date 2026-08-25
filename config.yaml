@@ -5568,14 +5568,17 @@ ASE_MAX_LIVE_BAR_AGE_HOURS:
   swing: 168
 
 # ── OX Book (evidence-first daily trend book) ──────────────────────────────
-# Standalone paper/research engine built from the surviving-strategy evidence base
+# Standalone TSMOM-style daily engine built from the surviving-strategy evidence base
 # (docs/research/what_surviving_strategies_do_differently.md + athena_research/tsmom_engine/RESULTS.md).
 # Slow-horizon long-only D1 trend; small curated book of independent low-correlation
 # markets; every evaluation logged to an append-only trial registry; promotion claims
-# require a t-stat above the multiple-testing hurdle. ADVISORY OUTPUT ONLY - no
-# execution path, no live order routing, independent of Engines A/B/C/D and ASE.
+# require a t-stat above the multiple-testing hurdle. Scanning is explicitly read-only;
+# execution is available only as a user-confirmed DEMO action from the current scan.
+# There is no scheduler or auto-execution path. Independent of Engines A/B/C/D and ASE.
 OX_BOOK:
-  ENABLED: false
+  ENABLED: true
+  AUTO_EXECUTE: false             # fixed safety contract; scan never routes an order
+  EXECUTION_MODE: "MANUAL_DEMO_ONLY"
   SIGNAL_TIMEFRAME: "D1"       # fixed by design - slow horizons survive, fast decay
   EMA_FAST: 15                 # plateau centre from 25-yr deep validation (15/60)
   EMA_SLOW: 60
@@ -5600,7 +5603,8 @@ OX_BOOK:
   T_STAT_HURDLE: 3.0           # Harvey-Liu-Zhu multiple-testing bar for promotion claims
   DECAY_HAIRCUT: 0.58          # McLean-Pontiff post-publication decline; sizing uses 1-x of backtest edge
   TRIAL_LOG_PATH: "data/ox_book_trials.jsonl"
-  # Instruments authorized for gated DEMO execution via /api/ox-book-run.
+  # Instruments scanned via /api/ox-book-scan and eligible for a separately clicked,
+  # scan-bound DEMO action via /api/ox-book-execute.
   # Each must (a) have passed the ox_book evidence gates on deep history
   # (2026-08-25 run: gold q=0.290 sqn100=2.39; nasdaq q=0.363 sqn100=2.79;
   # brent FAILED cost-stress -> stays excluded) and (b) exist in tsmom_live

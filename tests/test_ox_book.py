@@ -192,7 +192,9 @@ def test_config_yaml_parses_with_ox_book_block():
     assert isinstance(ox, dict)
     assert ox["EMA_FAST"] == 15
     assert ox["EMA_SLOW"] == 60
-    assert ox["ENABLED"] is False
+    assert ox["ENABLED"] is True
+    assert ox["AUTO_EXECUTE"] is False
+    assert ox["EXECUTION_MODE"] == "MANUAL_DEMO_ONLY"
     assert ox["SIGNAL_TIMEFRAME"] == "D1"
     assert ox["DECAY_HAIRCUT"] == 0.58
 

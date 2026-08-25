@@ -5,6 +5,9 @@ ratchets/clears trail state correctly, and that the freshness gate accepts only 
 closed-bar-healthy D1 state (fresh / one-bucket lag / calendar-gap policy)."""
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import tsmom_live.runtime as runtime_mod
 from tsmom_live.bridge import TsmomExecDeps
 from tsmom_live.feed import _severity_ok
 from tsmom_live.runtime import route_decision
@@ -102,3 +105,101 @@ def test_freshness_severity_mapping():
     assert not _severity_ok("stale_multi_bucket")
     assert not _severity_ok("missing_current_bucket")
     assert not _severity_ok(None)
+
+
+def test_manual_execute_rejects_when_decision_bar_changed(monkeypatch):
+    calls: list = []
+    monkeypatch.setattr(
+        runtime_mod.feed,
+        "load_daily_bars",
+        lambda _cfg, **_kwargs: SimpleNamespace(
+            frame=[1], freshness_ok=True, freshness_reason="fresh", error=None
+        ),
+    )
+    monkeypatch.setattr(runtime_mod.state_store, "load_state", lambda _cfg: None)
+    monkeypatch.setattr(runtime_mod, "compute_decision", lambda *_a, **_k: _open_decision())
+    monkeypatch.setattr(
+        runtime_mod,
+        "route_decision",
+        lambda *_a, **_k: calls.append("route") or {"status": "opened"},
+    )
+
+    result = runtime_mod.execute_manual(
+        GOLD,
+        expected_action="OPEN_LONG",
+        expected_bar_time_ms=_open_decision().bar_time_ms + 1,
+    )
+
+    assert result == {
+        "status": "rejected",
+        "executed": False,
+        "reason": "decision_bar_changed",
+    }
+    assert calls == []
+
+
+def test_manual_execute_rejects_when_scanned_action_changed(monkeypatch):
+    calls: list = []
+    monkeypatch.setattr(
+        runtime_mod.feed,
+        "load_daily_bars",
+        lambda _cfg, **_kwargs: SimpleNamespace(
+            frame=[1], freshness_ok=True, freshness_reason="fresh", error=None
+        ),
+    )
+    monkeypatch.setattr(runtime_mod.state_store, "load_state", lambda _cfg: None)
+    monkeypatch.setattr(runtime_mod, "compute_decision", lambda *_a, **_k: _close_decision())
+    monkeypatch.setattr(
+        runtime_mod,
+        "route_decision",
+        lambda *_a, **_k: calls.append("route") or {"status": "closed"},
+    )
+
+    result = runtime_mod.execute_manual(
+        GOLD,
+        expected_action="OPEN_LONG",
+        expected_bar_time_ms=_close_decision().bar_time_ms,
+    )
+
+    assert result == {
+        "status": "rejected",
+        "executed": False,
+        "reason": "decision_action_changed:OPEN_LONG->CLOSE",
+    }
+    assert calls == []
+
+
+def test_manual_execute_revalidates_then_routes_exact_scanned_action(monkeypatch):
+    calls: list = []
+    monkeypatch.setattr(
+        runtime_mod.feed,
+        "load_daily_bars",
+        lambda _cfg, **_kwargs: SimpleNamespace(
+            frame=[1], freshness_ok=True, freshness_reason="fresh", error=None
+        ),
+    )
+    monkeypatch.setattr(runtime_mod.state_store, "load_state", lambda _cfg: None)
+    monkeypatch.setattr(runtime_mod, "compute_decision", lambda *_a, **_k: _open_decision())
+    monkeypatch.setattr(
+        runtime_mod.state_store,
+        "save_state",
+        lambda instrument, state: calls.append(("save", instrument, state)),
+    )
+    monkeypatch.setattr(
+        runtime_mod,
+        "route_decision",
+        lambda decision, state, cfg, deps=None: calls.append(("route", decision.action, state, cfg.instrument))
+        or {"status": "opened", "executed": True, "state": {"ticket": "demo-1"}},
+    )
+
+    result = runtime_mod.execute_manual(
+        GOLD,
+        expected_action="OPEN_LONG",
+        expected_bar_time_ms=_open_decision().bar_time_ms,
+        deps=_exec_deps([]),
+    )
+
+    assert result["status"] == "opened"
+    assert result["executed"] is True
+    assert calls[0] == ("route", "OPEN_LONG", None, "gold")
+    assert calls[1][0:2] == ("save", "gold")

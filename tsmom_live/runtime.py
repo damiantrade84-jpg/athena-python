@@ -1,8 +1,8 @@
-"""Daily TSMOM runner: load closed D1 bars -> compute decision -> route through the
-gated bridge -> persist the trail state. Run once per instrument after each daily close.
+"""Daily TSMOM scanner and explicitly invoked demo execution runtime.
 
 `route_decision` is pure routing (no IO) so it is unit-testable with injected deps;
-`run_once` adds the feed + state persistence around it."""
+`status` only scans, while `execute_manual` revalidates an exact scanned action/bar
+before it can touch the gated bridge. There is no scheduler or auto-execute loop."""
 from __future__ import annotations
 
 import logging
@@ -64,31 +64,127 @@ def status(cfg: TsmomConfig | None = None, *, time_now: float | None = None, df=
     """Read-only snapshot for the UI panel — current decision, position, freshness.
     Computes the signal but executes NOTHING."""
     cfg = cfg or INSTRUMENTS["gold"]
-    if df is None:
-        df = feed.load_closed_daily_bars(cfg, time_now=time_now)
     base = {"instrument": cfg.instrument, "display": cfg.display, "brokerSymbol": cfg.broker_symbol,
             "config": {"fast": cfg.fast, "slow": cfg.slow, "atrMult": cfg.atr_mult}}
+    if df is None:
+        daily = feed.load_daily_bars(cfg, time_now=time_now)
+        df = daily.frame
+        data_source = daily.source
+        fresh_ok = daily.freshness_ok
+        fresh_reason = daily.freshness_reason
+        diagnostic = daily.freshness
+        data_error = daily.error
+    else:
+        data_source = "injected"
+        diagnostic_holder: dict[str, Any] = {}
+        fresh_ok, fresh_reason = feed.freshness_ok(cfg, diagnostic_holder, time_now=time_now)
+        diagnostic = (diagnostic_holder.get("candleFreshness") or {}).get("D1") or {}
+        data_error = None
     if df is None or len(df) == 0:
-        return {**base, "hasData": False, "status": "no_bars"}
+        return {
+            **base,
+            "hasData": False,
+            "status": "no_bars",
+            "dataSource": data_source,
+            "freshness": {"ok": False, "reason": fresh_reason, "diagnostic": diagnostic},
+            "error": data_error,
+        }
 
     raw = state_store.load_state(cfg.instrument)
     position = _dict_to_state(raw) if raw else None
     dec = compute_decision(df, position, cfg, now_ms=int(time_now * 1000) if time_now else None)
-    fresh_ok, fresh_reason = feed.freshness_ok(cfg, {}, time_now=time_now)
     return {
         **base,
         "hasData": True,
+        "dataSource": data_source,
         "bars": int(len(df)),
         "lastBarTimeMs": dec.bar_time_ms,
         "inPosition": position is not None,
         "position": raw,
-        "freshness": {"ok": bool(fresh_ok), "reason": fresh_reason},
+        "freshness": {
+            "ok": bool(fresh_ok),
+            "reason": fresh_reason,
+            "diagnostic": diagnostic,
+        },
         "decision": {
             "action": dec.action, "reason": dec.reason, "direction": dec.direction,
             "entryRef": dec.entry_ref, "sl": dec.sl, "tp1": dec.tp1, "trailStop": dec.trail_stop,
             "atr": dec.atr, "emaFast": dec.ema_fast, "emaSlow": dec.ema_slow,
         },
     }
+
+
+def _route_refusal_reason(out: dict[str, Any]) -> str:
+    direct = out.get("reason")
+    if direct:
+        return str(direct)
+    nested = out.get("result")
+    if isinstance(nested, dict) and nested.get("reason"):
+        return str(nested["reason"])
+    return str(out.get("status") or "execution_rejected")
+
+
+def execute_manual(
+    cfg: TsmomConfig,
+    *,
+    expected_action: str,
+    expected_bar_time_ms: int,
+    deps: bridge.TsmomExecDeps | None = None,
+    time_now: float | None = None,
+) -> dict[str, Any]:
+    """Revalidate and manually route one exact scan action through demo gates.
+
+    Only actionable entry/exit decisions are accepted. HOLD is deliberately not
+    exposed here: a scan button must never silently mutate a broker stop.
+    """
+
+    def reject(reason: str) -> dict[str, Any]:
+        return {"status": "rejected", "executed": False, "reason": reason}
+
+    expected = str(expected_action or "").strip().upper()
+    if expected not in {"OPEN_LONG", "CLOSE"}:
+        return reject(f"manual_action_not_allowed:{expected or 'NONE'}")
+    try:
+        expected_bar = int(expected_bar_time_ms)
+    except (TypeError, ValueError):
+        return reject("invalid_scan_bar")
+
+    daily = feed.load_daily_bars(cfg, time_now=time_now)
+    if daily.frame is None or len(daily.frame) == 0:
+        return reject(f"data:{daily.error or 'no_bars'}")
+    if not daily.freshness_ok:
+        return reject(f"freshness:{daily.freshness_reason}")
+
+    raw = state_store.load_state(cfg.instrument)
+    position = _dict_to_state(raw) if raw else None
+    decision = compute_decision(
+        daily.frame,
+        position,
+        cfg,
+        now_ms=int(time_now * 1000) if time_now else None,
+    )
+    if int(decision.bar_time_ms) != expected_bar:
+        return reject("decision_bar_changed")
+    if decision.action != expected:
+        return reject(f"decision_action_changed:{expected}->{decision.action}")
+
+    out = route_decision(decision, position, cfg, deps or bridge.default_deps())
+    if out.get("clear"):
+        state_store.clear_state(cfg.instrument)
+    elif out.get("state"):
+        state_store.save_state(cfg.instrument, out["state"])
+
+    executed = str(out.get("status") or "") in {"opened", "closed"}
+    out["executed"] = executed
+    out["instrument"] = cfg.instrument
+    out["decision"] = {
+        "action": decision.action,
+        "reason": decision.reason,
+        "bar_time_ms": decision.bar_time_ms,
+    }
+    if not executed:
+        out["reason"] = _route_refusal_reason(out)
+    return out
 
 
 def run_once(
