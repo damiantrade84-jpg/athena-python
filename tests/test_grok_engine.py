@@ -16,7 +16,7 @@ from grok_engine.market_data import normalize_closed_candles
 from grok_engine.models import Candle, MarketSnapshot, Quote, TIMEFRAME_SECONDS
 from grok_engine.persistence import GrokRepository
 from grok_engine.replay import _outcome
-from grok_engine.scoring import evaluate_snapshot
+from grok_engine.scoring import _execution_geometry, evaluate_snapshot
 from grok_engine.sessions import classify_session, market_is_open
 
 
@@ -532,6 +532,39 @@ def test_structural_stop_is_capped_to_max_atr_when_raid_still_fits() -> None:
     assert stop_atr <= 1.50 + 1e-6
 
 
+def test_raid_stop_does_not_expand_to_unrelated_recent_wick() -> None:
+    """Gold-style M15 wicks below the raid must not become the stop.
+
+    Live XAU/USD on 2026-08-20 14:11 passed every GROK setup gate, then failed
+    OPPOSING_LIQUIDITY_LIMITS_RR because the stop used min(raid, last-6-bar low)
+    and was then widened to maximum_stop_atr. The ICT invalidation is the raid
+    extreme. An unrelated later wick is not a new stop.
+    """
+    snapshot = _ready_snapshot(display="XAU/USD", asset_type="commodity")
+    m15 = list(snapshot.frames["M15"])
+    m5 = list(snapshot.frames["M5"])
+    raid_extreme = 1.09790
+    extra_low = 1.05000
+    victim = m15[-2]
+    m15[-2] = _candle(victim.time, victim.open, victim.high, extra_low, victim.close, victim.volume or 230)
+    config = load_grok_config()
+    geometry = _execution_geometry(
+        m15,
+        m5,
+        {"extreme": raid_extreme, "direction": 1},
+        {"pdh": 1.10580, "pdl": 1.09420},
+        1,
+        config.levels,
+        int(config.indicators["atr_period"]),
+    )
+    assert geometry["valid"] is True, geometry
+    assert geometry["reason"] is None
+    assert geometry["stop"] > extra_low + 0.02
+    assert geometry["stop"] < raid_extreme
+    assert float(geometry["rr"]) >= float(config.levels["minimum_rr"]) - 1e-9
+    assert float(geometry["stopAtr"]) <= float(config.levels["maximum_stop_atr"]) + 1e-9
+
+
 def test_failed_stop_width_still_stamps_entry_stop_and_target() -> None:
     config = load_grok_config(
         {"GROK_ENGINE": {"levels": {"minimum_stop_atr": 0.01, "maximum_stop_atr": 0.02}}}
@@ -903,6 +936,20 @@ def test_grok_execute_rejects_pair_removed_from_active_book(tmp_path) -> None:
     with pytest.raises(GrokExecutionError) as error:
         service._executable_signal(signal["signalId"])
     assert error.value.code == "PAIR_NOT_IN_ACTIVE_BOOK"
+
+
+def test_grok_pair_filter_matches_xau_by_prefix() -> None:
+    from grok_engine.service import _symbol_query_matches
+
+    xau = {"display": "XAU/USD", "symbol": "GC=F", "type": "commodity"}
+    zar = {"display": "XAU/ZAR", "symbol": "XAUZAR=X", "type": "commodity"}
+    eurusd = {"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}
+    assert _symbol_query_matches("XAU", xau) is True
+    assert _symbol_query_matches("XAU", zar) is True
+    assert _symbol_query_matches("XAU/USD", xau) is True
+    assert _symbol_query_matches("XAU", eurusd) is False
+    assert _symbol_query_matches("USD", xau) is False
+    assert _symbol_query_matches("USD", eurusd) is False
 
 
 def test_grok_risk_policy_stays_fail_closed_and_not_engine_a() -> None:

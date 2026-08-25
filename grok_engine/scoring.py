@@ -142,10 +142,12 @@ def _execution_geometry(
     buffer_distance = atr * float(levels["stop_atr_buffer"])
     event_extreme = float(raid.get("extreme") or entry)
     if direction > 0:
-        stop = min(event_extreme, min(row.low for row in setup_candles[-6:])) - buffer_distance
+        # Stop at the raid extreme, not min(raid, last-6-bar low). Expanding to
+        # an unrelated later wick made liquid metals fail RR after the max-ATR cap.
+        stop = event_extreme - buffer_distance
         opposing = external.get("pdh")
     else:
-        stop = max(event_extreme, max(row.high for row in setup_candles[-6:])) + buffer_distance
+        stop = event_extreme + buffer_distance
         opposing = external.get("pdl")
     risk = abs(entry - stop)
     if entry <= 0 or stop <= 0 or risk <= 0:

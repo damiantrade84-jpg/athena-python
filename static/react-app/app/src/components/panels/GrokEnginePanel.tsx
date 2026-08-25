@@ -11,6 +11,7 @@ import {
   Play,
   RefreshCw,
   ScanSearch,
+  Search,
   ShieldCheck,
   Sparkles,
   Timer,
@@ -21,6 +22,7 @@ import {
 import { useStore } from '@/hooks/useStore';
 import apiClient from '@/lib/apiClient';
 import { cn } from '@/lib/utils';
+import { LiveQuoteChip } from '@/components/shared';
 import {
   grokClockLabel,
   grokComponentLabel,
@@ -30,6 +32,7 @@ import {
   grokPreviewNotice,
   grokPrice,
   grokScanProgress,
+  grokSignalMatchesQuery,
   grokWindowSchedule,
   grokSetupLabel,
   type GrokAccounts,
@@ -245,6 +248,7 @@ function SignalRow({ signal, selected, onSelect }: { signal: GrokSignal; selecte
             </span>
           </div>
           <div className="mt-1 text-xs text-muted-foreground">{grokSetupLabel(signal.setup)} · {signal.narrative.replaceAll('_', ' ')}</div>
+          <LiveQuoteChip compact pair={signal.pair} symbol={signal.symbol} type={signal.assetType} className="mt-1" />
           <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
             <div><span className="text-muted-foreground">Entry </span><span className="readout">{grokPrice(signal.entry)}</span></div>
             <div><span className="text-muted-foreground">RR </span><span className="readout">{signal.rr?.toFixed(2) ?? '—'}</span></div>
@@ -266,6 +270,7 @@ export default function GrokEnginePanel() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedAssets, setSelectedAssets] = useState<Set<string>>(() => new Set(ASSET_TYPES.map(([id]) => id)));
   const [selectedDecisions, setSelectedDecisions] = useState<Set<GrokDecision>>(() => new Set(['READY', 'WATCH']));
+  const [pairQuery, setPairQuery] = useState('');
   const [mode, setMode] = useState<GrokExecutionMode>('paper');
   const [preview, setPreview] = useState<GrokPreview | null>(null);
   const [replay, setReplay] = useState<GrokReplayResult | null>(null);
@@ -277,20 +282,31 @@ export default function GrokEnginePanel() {
   const mounted = useRef(true);
 
   const capabilities: GrokCapabilities | null = health?.brokerCapabilities ?? accounts?.brokerCapabilities ?? null;
+  const visibleSignals = useMemo(
+    () => (pairQuery.trim() ? signals.filter((row) => grokSignalMatchesQuery(row, pairQuery)) : signals),
+    [pairQuery, signals],
+  );
   const selected = useMemo(
-    () => signals.find((signal) => signal.signalId === selectedId) ?? signals[0] ?? null,
-    [signals, selectedId],
+    () => visibleSignals.find((signal) => signal.signalId === selectedId) ?? visibleSignals[0] ?? null,
+    [visibleSignals, selectedId],
   );
   const progress = grokScanProgress(scan);
   const clock = selected?.sessionClock;
 
-  const loadSignals = useCallback(async (decisions: Set<GrokDecision>) => {
-    const query = new URLSearchParams({ decisions: Array.from(decisions).join(','), limit: '300' });
+  const pairQueryRef = useRef(pairQuery);
+  pairQueryRef.current = pairQuery;
+
+  const loadSignals = useCallback(async (decisions: Set<GrokDecision>, queryText?: string) => {
+    const text = queryText ?? pairQueryRef.current;
+    const searching = Boolean(text.trim());
+    const decisionSet = searching ? new Set<GrokDecision>(['READY', 'WATCH', 'BLOCKED']) : decisions;
+    const query = new URLSearchParams({ decisions: Array.from(decisionSet).join(','), limit: '300' });
     const response = await apiClient.get<{ signals: GrokSignal[] }>(`/api/grok/signals?${query.toString()}`);
     if (!mounted.current) return;
     const rows = Array.isArray(response.signals) ? response.signals : [];
     setSignals(rows);
-    setSelectedId((current) => (current && rows.some((row) => row.signalId === current) ? current : rows[0]?.signalId ?? null));
+    const visible = searching ? rows.filter((row) => grokSignalMatchesQuery(row, text)) : rows;
+    setSelectedId((current) => (current && visible.some((row) => row.signalId === current) ? current : visible[0]?.signalId ?? null));
   }, []);
 
   const refreshAll = useCallback(async () => {
@@ -353,8 +369,8 @@ export default function GrokEnginePanel() {
   }, [selected?.signalId, mode]);
 
   useEffect(() => {
-    void loadSignals(selectedDecisions).catch(() => undefined);
-  }, [loadSignals, selectedDecisions]);
+    void loadSignals(selectedDecisions, pairQuery).catch(() => undefined);
+  }, [loadSignals, selectedDecisions, pairQuery]);
 
   const toggleAsset = (asset: string) => {
     setSelectedAssets((current) => {
@@ -381,13 +397,20 @@ export default function GrokEnginePanel() {
     }
     setLoading(true);
     try {
+      const needle = pairQuery.trim();
       const next = await apiClient.post<GrokScanState & { success: boolean }>('/api/grok/scan', {
         assetTypes: Array.from(selectedAssets),
+        ...(needle ? { symbols: [needle] } : {}),
       });
       setScan(next);
       setSignals([]);
       setSelectedId(null);
-      showToast(`GROK scan started across ${next.totalPairs} live instruments`, 'info');
+      showToast(
+        needle
+          ? `GROK scan started for ${needle} (${next.totalPairs} instruments)`
+          : `GROK scan started across ${next.totalPairs} live instruments`,
+        'info',
+      );
     } catch (error) {
       showToast(`GROK scan did not start: ${errorText(error)}`, 'error');
     } finally {
@@ -585,8 +608,18 @@ export default function GrokEnginePanel() {
             </div>
           </div>
 
+          <label className="relative mt-3 block">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={pairQuery}
+              onChange={(event) => setPairQuery(event.target.value)}
+              placeholder="Find XAU/USD — loads Blocked rows and scopes the next scan"
+              className="h-9 w-full rounded-lg border border-border bg-background/60 pl-8 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+
           <div className="mt-4 grid max-h-[720px] gap-2 overflow-y-auto pr-1 lg:grid-cols-2" style={{ contentVisibility: 'auto' }}>
-            {signals.length ? signals.map((signal) => (
+            {visibleSignals.length ? visibleSignals.map((signal) => (
               <SignalRow
                 key={signal.signalId}
                 signal={signal}
@@ -597,8 +630,14 @@ export default function GrokEnginePanel() {
               <div className="col-span-full grid min-h-64 place-items-center rounded-xl border border-dashed border-border px-6 text-center">
                 <div>
                   <ScanSearch className="mx-auto h-8 w-8 text-muted-foreground/50" />
-                  <div className="mt-3 text-sm font-medium text-foreground">No GROK candidates in this view</div>
-                  <p className="mt-1 text-xs text-muted-foreground">Run a scan on the live pair book or include Watch and Blocked diagnostics.</p>
+                  <div className="mt-3 text-sm font-medium text-foreground">
+                    {pairQuery.trim() ? `No GROK row matching ${pairQuery.trim()}` : 'No GROK candidates in this view'}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {pairQuery.trim()
+                      ? 'Run a scan while this search is set to score that instrument, or include Blocked diagnostics.'
+                      : 'Run a scan on the live pair book or include Watch and Blocked diagnostics.'}
+                  </p>
                 </div>
               </div>
             )}
@@ -615,6 +654,7 @@ export default function GrokEnginePanel() {
                     <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-medium', grokDecisionClass(selected.decision))}>{selected.decision}</span>
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">{grokSetupLabel(selected.setup)} · {selected.direction} · {selected.assetType}</div>
+                  <LiveQuoteChip pair={selected.pair} symbol={selected.symbol} type={selected.assetType} showBook className="mt-1" />
                 </div>
                 <div className="text-right">
                   <div className="readout text-3xl font-semibold text-cyan-300">{selected.score.toFixed(1)}</div>

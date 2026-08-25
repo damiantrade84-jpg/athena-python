@@ -219,6 +219,17 @@ export function grokScanProgress(scan: GrokScanState | null): number {
   return Math.max(0, Math.min(100, (scan.processedPairs / scan.totalPairs) * 100));
 }
 
+export function grokSignalMatchesQuery(
+  signal: Pick<GrokSignal, 'pair' | 'symbol'>,
+  query: string,
+): boolean {
+  const needle = query.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!needle) return true;
+  const pair = String(signal.pair || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const symbol = String(signal.symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return pair.startsWith(needle) || symbol.startsWith(needle) || pair.includes(needle);
+}
+
 export function grokPrice(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—';
   const absolute = Math.abs(value);

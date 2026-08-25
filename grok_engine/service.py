@@ -30,6 +30,17 @@ def _symbol_key(value: Any) -> str:
     return "".join(char for char in str(value or "").upper() if char.isalnum())
 
 
+def _pair_keys(pair: dict[str, Any]) -> set[str]:
+    return {key for key in (_symbol_key(pair.get("display")), _symbol_key(pair.get("symbol"))) if key}
+
+
+def _symbol_query_matches(query: str, pair: dict[str, Any]) -> bool:
+    needle = _symbol_key(query)
+    if not needle:
+        return False
+    return any(key == needle or key.startswith(needle) for key in _pair_keys(pair))
+
+
 def _redact_account(raw: dict[str, Any], venue: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {"venue": venue, "connected": False, "error": "ACCOUNT_UNAVAILABLE"}
@@ -84,10 +95,8 @@ class GrokService:
             asset_type = str(pair.get("type") or "unknown").strip().lower()
             if asset_types and asset_type not in asset_types:
                 continue
-            if symbol_keys:
-                keys = {_symbol_key(pair.get("display")), _symbol_key(pair.get("symbol"))}
-                if not keys.intersection(symbol_keys):
-                    continue
+            if symbol_keys and not any(_symbol_query_matches(query, pair) for query in symbol_keys):
+                continue
             output.append(dict(pair))
         return output
 

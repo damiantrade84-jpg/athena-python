@@ -8,6 +8,7 @@ import {
   grokPrice,
   grokScanProgress,
   grokSetupLabel,
+  grokSignalMatchesQuery,
   grokWindowSchedule,
   type GrokScanState,
 } from '../grokEngine';
@@ -28,6 +29,14 @@ function scan(overrides: Partial<GrokScanState> = {}): GrokScanState {
 }
 
 describe('GROK UI helpers', () => {
+  it('matches XAU search against gold display names without matching EUR/USD', () => {
+    expect(grokSignalMatchesQuery({ pair: 'XAU/USD', symbol: 'GC=F' }, 'xau')).toBe(true);
+    expect(grokSignalMatchesQuery({ pair: 'XAU/USD', symbol: 'GC=F' }, 'XAU/USD')).toBe(true);
+    expect(grokSignalMatchesQuery({ pair: 'XAU/ZAR', symbol: 'XAUZAR=X' }, 'XAU')).toBe(true);
+    expect(grokSignalMatchesQuery({ pair: 'EUR/USD', symbol: 'EURUSD' }, 'XAU')).toBe(false);
+    expect(grokSignalMatchesQuery({ pair: 'EUR/USD', symbol: 'EURUSD' }, '')).toBe(true);
+  });
+
   it('computes and bounds scan progress', () => {
     expect(grokScanProgress(scan())).toBe(25);
     expect(grokScanProgress(scan({ processedPairs: 50 }))).toBe(100);
