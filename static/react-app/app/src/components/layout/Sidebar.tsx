@@ -13,7 +13,7 @@ import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
   Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut, Workflow, Cpu, Radar, Landmark, Sparkles,
-  Ghost, Orbit, Waves, Timer, Gem,
+  Ghost, Orbit, Waves, Timer, Gem, BookOpenCheck,
 } from 'lucide-react';
 
 type NavItem = { id: PanelId; label: string; icon: ElementType; badge?: string; title?: string };
@@ -66,6 +66,13 @@ const navSections: NavSection[] = [
         title: 'OX Alpha — intraday kinetic-liquidity engine: six-axis scoring per score group, demo-gated execution',
         icon: Gem,
         badge: 'OX',
+      },
+      {
+        id: 'oxBook',
+        label: 'OX Book',
+        title: 'OX Book — evidence-certified daily trend book (gold + nasdaq), demo-gated via TSMOM bridge',
+        icon: BookOpenCheck,
+        badge: 'DEMO',
       },
     ],
   },

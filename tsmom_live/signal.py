@@ -32,11 +32,15 @@ class TsmomConfig:
     rr_target: float = 3.0            # synthetic TP (real exit is the trail) -> clears RR floor
 
 
-# Validated deployment set (long-only). Only gold is wired for the first increment;
-# nasdaq/brent require broker-symbol verification before they are enabled.
+# Validated deployment set (long-only). Gold was wired first; nasdaq enabled
+# 2026-08-25 after NAS100.s broker-symbol verification (config.local.yaml override)
+# and OX Book evidence certification (docs/research/ox_book_first_run_2026-08-25.md).
+# Brent stays excluded: it failed the cost-stress gate in that certification run.
 INSTRUMENTS: dict[str, TsmomConfig] = {
     "gold": TsmomConfig(instrument="gold", broker_symbol="XAUUSD", display="XAU/USD",
                         asset_type="commodity", fast=15, slow=60, atr_mult=3.0),
+    "nasdaq": TsmomConfig(instrument="nasdaq", broker_symbol="NAS100", display="NASDAQ-100",
+                          asset_type="index", fast=15, slow=60, atr_mult=3.0),
 }
 
 

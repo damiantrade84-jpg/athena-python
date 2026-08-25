@@ -5567,6 +5567,46 @@ ASE_MAX_LIVE_BAR_AGE_HOURS:
   intraday: 96
   swing: 168
 
+# ── OX Book (evidence-first daily trend book) ──────────────────────────────
+# Standalone paper/research engine built from the surviving-strategy evidence base
+# (docs/research/what_surviving_strategies_do_differently.md + athena_research/tsmom_engine/RESULTS.md).
+# Slow-horizon long-only D1 trend; small curated book of independent low-correlation
+# markets; every evaluation logged to an append-only trial registry; promotion claims
+# require a t-stat above the multiple-testing hurdle. ADVISORY OUTPUT ONLY - no
+# execution path, no live order routing, independent of Engines A/B/C/D and ASE.
+OX_BOOK:
+  ENABLED: false
+  SIGNAL_TIMEFRAME: "D1"       # fixed by design - slow horizons survive, fast decay
+  EMA_FAST: 15                 # plateau centre from 25-yr deep validation (15/60)
+  EMA_SLOW: 60
+  ATR_N: 14
+  ATR_MULT: 3.0                # initial stop distance + chandelier rope (1R = 3xATR)
+  LONG_ONLY: true              # short side showed no persistent edge in validation
+  MIN_BARS: 260                # ~1 year of D1 before any evaluation is allowed
+  MIN_TRADES: 30               # below this the market cannot be evaluated at all
+  MIN_EDGE_QUALITY: 0.20       # exp(R)/std(R) floor per market (tsmom screen bar)
+  SQN_FLOOR: 2.0               # Van Tharp SQN100 headline floor (capped at N=100)
+  PLATEAU_FAST_SET: [12, 15, 18]
+  PLATEAU_SLOW_RATIO: 4.0      # neighbourhood slow = ratio x fast (keeps 15/60 centred)
+  PLATEAU_ATR_MULT_SET: [2.5, 3.0, 3.5]
+  PLATEAU_MIN_PASS_FRAC: 0.6   # fraction of the 3x3 neighbourhood that must clear SQN_FLOOR
+  COST_STRESS_MULT: 2.0        # re-test at stressed per-side cost; must still clear floor
+  BASE_COST_PER_SIDE_BY_CLASS:
+    default: 0.0002
+  ERA_YEARS: 5
+  MIN_POSITIVE_ERAS: 4         # positive expectancy in >=4 of 5 eras (gold standard)
+  CORR_MAX: 0.50               # max |daily-return corr| between book members
+  MAX_BOOK_SIZE: 5             # breadth without dilution - quality gates do the curation
+  T_STAT_HURDLE: 3.0           # Harvey-Liu-Zhu multiple-testing bar for promotion claims
+  DECAY_HAIRCUT: 0.58          # McLean-Pontiff post-publication decline; sizing uses 1-x of backtest edge
+  TRIAL_LOG_PATH: "data/ox_book_trials.jsonl"
+  # Instruments authorized for gated DEMO execution via /api/ox-book-run.
+  # Each must (a) have passed the ox_book evidence gates on deep history
+  # (2026-08-25 run: gold q=0.290 sqn100=2.39; nasdaq q=0.363 sqn100=2.79;
+  # brent FAILED cost-stress -> stays excluded) and (b) exist in tsmom_live
+  # INSTRUMENTS with a verified broker symbol. Empty = nothing authorized.
+  LIVE_MEMBERS: [gold, nasdaq]
+
 # When Engine A omits maxScore, use this default (see ENGINE_C_A_DEFAULT_MAX_SCORE_BY_TYPE).
 ENGINE_C_A_DEFAULT_MAX_SCORE: 3.0
 

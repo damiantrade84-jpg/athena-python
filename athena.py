@@ -19109,6 +19109,13 @@ register_tsmom_routes(app)
 register_macro_routes(app)
 register_forex_factor_routes(app)
 
+# OX Book — evidence-certified membership layer over the TSMOM live bridge.
+# Membership comes from OX_BOOK.LIVE_MEMBERS (config); all execution gates stay
+# in tsmom_live.bridge. Demo-only.
+from athena_app.api.routes_ox_book import register_ox_book_routes  # noqa: E402
+
+register_ox_book_routes(app)
+
 # OX Alpha — standalone intraday kinetic-liquidity engine. The pair provider
 # hands over the enabled registry so the engine never imports this monolith.
 from athena_app.api.routes_ox_alpha import register_ox_alpha_routes  # noqa: E402
