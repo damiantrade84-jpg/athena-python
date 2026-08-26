@@ -17,6 +17,7 @@ let selTf = "15m";
 let chart = null, cSeries = null, vSeries = null, eSeries = null, vChartSymbol = null;
 let livePriceLine = null;
 let chartRequestSeq = 0;
+let ttlTimer = null;
 
 /* ---- local view state (display only) ---- */
 const view = {
@@ -52,6 +53,7 @@ const dispSym = (s) => s.endsWith("USDT") ?
 
 /* ---------------- state stream ---------------- */
 function connect() {
+  if (!ttlTimer) ttlTimer = setInterval(tickSignalTtl, 1000);
   if (window.EventSource) {
     const es = new EventSource(`${BASE}/api/stream`);
     es.onmessage = (m) => { state = JSON.parse(m.data); render(); };
@@ -311,6 +313,38 @@ function rejectHtml(id) {
   </div>`;
 }
 
+function ttlParts(validUntil, now) {
+  const sec = Math.max(0, Math.floor(Number(validUntil) - now));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return { sec, text: `${m}:${String(s).padStart(2, "0")}`, soon: sec <= 5 * 60 };
+}
+
+function ttlTitle(validUntil, now) {
+  const t = ttlParts(validUntil, now);
+  const bars = Number(state?.config?.signalTtlBars);
+  const tf = state?.config?.tfEntry || "5m";
+  const window = Number.isFinite(bars) && bars > 0 ?
+    `max ${bars}×${tf} from the entry bar` : "entry-bar validity window";
+  return t.sec <= 0 ? "expired" :
+    `${t.text} remaining (${window})`;
+}
+
+function tickSignalTtl() {
+  if (!state) return;
+  const now = Date.now() / 1000;
+  document.querySelectorAll("#signals .sig[data-sig]").forEach((row) => {
+    const s = (state.signals || []).find((x) => x.id === row.dataset.sig);
+    if (!s) return;
+    const el = row.querySelector(".ttl");
+    if (!el) return;
+    const t = ttlParts(s.validUntil, now);
+    el.textContent = t.text;
+    el.classList.toggle("soon", t.soon);
+    el.title = ttlTitle(s.validUntil, now);
+  });
+}
+
 function renderSignals() {
   const el = $("signals");
   const min = Number(state.minScore) || 0;
@@ -331,7 +365,7 @@ function renderSignals() {
 
   el.innerHTML = sigs.map(s => {
     const open = view.openSigs.has(s.id);
-    const ttlMin = Math.max(0, Math.round((s.validUntil - now) / 60));
+    const ttl = ttlParts(s.validUntil, now);
     const comps = Object.entries(s.components).map(([k, v]) => {
       const max = COMP_MAX[k] || 10;
       return `<div class="comp">
@@ -362,7 +396,7 @@ function renderSignals() {
           <span class="lvl tp tp2"><span class="lk">TP2</span><span class="lv">${fmtPx(s.tp2)}</span></span>
         </span>
         ${liveHtml}
-        <span class="ttl ${ttlMin <= 5 ? "soon" : ""}" title="time remaining before the signal expires">${ttlMin}m</span>
+        <span class="ttl ${ttl.soon ? "soon" : ""}" title="${esc(ttlTitle(s.validUntil, now))}">${ttl.text}</span>
         <span class="sig-actions">${execButtons(s)}</span>
         <span class="chev">▶</span>
       </div>

@@ -67,6 +67,22 @@ def _features(cs: CandleSet) -> dict:
     }
 
 
+def signal_valid_until(bar_open_ms: float, tf: str, now: float | None = None) -> float:
+    """Expiry at the close of SIGNAL_TTL_BARS entry bars from this bar's open.
+
+    Anchored to the bar, not to wall-clock ``now + N*tf``. The old formula
+    always printed a full 30m (6×5m) remaining, so the chip looked frozen.
+    Future-dated bars are capped at N bars from ``now`` so clock skew cannot
+    extend the window.
+    """
+    tf_sec = float(Config.TF_MINUTES.get(tf, 5)) * 60.0
+    bars = max(1, int(Config.SIGNAL_TTL_BARS))
+    deadline = float(bar_open_ms) / 1000.0 + bars * tf_sec
+    if now is None:
+        now = time.time()
+    return min(deadline, now + bars * tf_sec)
+
+
 def _build(cs_entry: CandleSet, f_ctx: dict, f_bias: dict, f_ent: dict,
            direction: int, card: ScoreCard) -> Signal | None:
     """Entry/SL/TP geometry on the entry timeframe."""
@@ -87,11 +103,11 @@ def _build(cs_entry: CandleSet, f_ctx: dict, f_bias: dict, f_ent: dict,
         return None  # degenerate or absurd geometry
     tp1 = entry + direction * Config.TP1_R * risk
     tp2 = entry + direction * Config.TP2_R * risk
-    tf_sec = Config.TF_MINUTES.get(cs_entry.tf, 5) * 60
+    bar_open_ms = float(cs_entry.t[-1]) if len(cs_entry.t) else time.time() * 1000.0
     return Signal(
         id=f"K{next(_ids):05d}", symbol=cs_entry.symbol, direction=direction,
         entry=entry, sl=sl, tp1=tp1, tp2=tp2, atr=atr_v, card=card,
-        valid_until=time.time() + Config.SIGNAL_TTL_BARS * tf_sec,
+        valid_until=signal_valid_until(bar_open_ms, cs_entry.tf),
     )
 
 

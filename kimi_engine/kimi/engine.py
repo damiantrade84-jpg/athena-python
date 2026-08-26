@@ -118,13 +118,7 @@ class Engine:
                 self.events.extend(self._mark_broker(prices))
                 self.events = self.events[-100:]
 
-            now = time.time()
-            # expire stale signals
-            for sig in list(self.signals.values()):
-                if sig.status == "ACTIVE" and now > sig.valid_until:
-                    sig.status = "EXPIRED"
-                    self.signal_history.append(sig.to_dict())
-                    del self.signals[sig.id]
+            self._expire_signals()
 
         # Per-symbol evaluation: three kline fetches plus the scoring maths.
         # Fetch and score in a pool (IO-bound, no shared state), then commit
@@ -164,6 +158,8 @@ class Engine:
                 with self.lock:
                     self.errors.append(f"{time.strftime('%H:%M:%S')} {sym}: {exc}")
                     self.errors = self.errors[-20:]
+                    # Cannot reconfirm the setup — fail closed, drop the live card.
+                    self._reconcile_symbol_signal(sym, None, False)
                 continue
             if payload is None:
                 continue
@@ -204,22 +200,63 @@ class Engine:
                         "components": c.components, "reasons": c.reasons,
                     } for c in cards},
                 }
-                if sig is not None and fresh:
-                    key = (sig.symbol, sig.direction)
-                    last = self._cooldown.get(key, 0.0)
-                    dup = any(s.symbol == sig.symbol and s.direction == sig.direction
-                              and s.status == "ACTIVE" for s in self.signals.values())
-                    if now_ok := (time.time() - last > Config.SIGNAL_COOLDOWN_SEC):
-                        if not dup:
-                            self._cooldown[key] = time.time()
-                            self.signals[sig.id] = sig
-                            self.signal_history.append(sig.to_dict())
-                            self.signal_history = self.signal_history[-120:]
-                            if self.auto_trade and sig.card.grade == "A+":
-                                self.execute(sig.id)
+                self._reconcile_symbol_signal(sym, sig, fresh)
 
             self.last_scan = time.time()
         self.scan_count += 1
+
+    def _expire_signals(self, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        for sig in list(self.signals.values()):
+            if sig.status == "ACTIVE" and now > sig.valid_until:
+                self._retire_signal(sig, "EXPIRED")
+
+    def _retire_signal(self, sig: Signal, status: str) -> None:
+        """Drop a live card and clear insert-cooldown so a later scan can reprint."""
+        sig.status = status
+        self.signal_history.append(sig.to_dict())
+        self.signal_history = self.signal_history[-120:]
+        self.signals.pop(sig.id, None)
+        self._cooldown.pop((sig.symbol, sig.direction), None)
+
+    def _reconcile_symbol_signal(self, sym: str, sig: Signal | None, fresh: bool) -> None:
+        """Keep the executable row aligned with this scan, like the watchlist.
+
+        A qualifying fresh setup updates the existing card in place (score +
+        geometry) without resetting the validity deadline. A dead, flipped, or
+        stale scan retires the live row immediately instead of waiting out TTL.
+        """
+        keep_dir = sig.direction if (sig is not None and fresh) else None
+        for old in list(self.signals.values()):
+            if old.symbol != sym or old.status != "ACTIVE":
+                continue
+            if old.direction != keep_dir:
+                self._retire_signal(old, "EXPIRED")
+        if keep_dir is None or sig is None:
+            return
+        matched = next(
+            (s for s in self.signals.values()
+             if s.symbol == sym and s.direction == keep_dir and s.status == "ACTIVE"),
+            None,
+        )
+        if matched is not None:
+            matched.card = sig.card
+            matched.entry = sig.entry
+            matched.sl = sig.sl
+            matched.tp1 = sig.tp1
+            matched.tp2 = sig.tp2
+            matched.atr = sig.atr
+            return
+        key = (sig.symbol, sig.direction)
+        last = self._cooldown.get(key, 0.0)
+        if time.time() - last <= Config.SIGNAL_COOLDOWN_SEC:
+            return
+        self._cooldown[key] = time.time()
+        self.signals[sig.id] = sig
+        self.signal_history.append(sig.to_dict())
+        self.signal_history = self.signal_history[-120:]
+        if self.auto_trade and sig.card.grade == "A+":
+            self.execute(sig.id)
 
     # ------------------------------------------------------------------
     def execute(self, signal_id: str, venue: str = "auto") -> dict:
@@ -464,6 +501,7 @@ class Engine:
 
     def snapshot(self) -> dict:
         with self.lock:
+            self._expire_signals()
             prices = {s: d.get("price", 0.0) for s, d in self.scores.items()}
             account = self.paper.snapshot(prices)
             broker_status = self.bybit.status()
@@ -497,6 +535,7 @@ class Engine:
                            "maxDailyLossPct": Config.MAX_DAILY_LOSS_PCT,
                            "takerFeeBps": Config.TAKER_FEE_BPS,
                            "tickStaleSec": Config.TICK_STALE_SEC,
+                           "signalTtlBars": Config.SIGNAL_TTL_BARS,
                            "tfEntry": Config.TF_ENTRY, "tfContext": Config.TF_CONTEXT,
                            "tfBias": Config.TF_BIAS},
             }

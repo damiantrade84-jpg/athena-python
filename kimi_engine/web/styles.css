@@ -392,8 +392,8 @@ select { cursor: pointer; }
 .sig-live.fresh { color: var(--cyan); }
 .sig-live.stale { color: var(--warn); }
 .sig-live small { display: block; color: var(--faint); font-size: 8.5px; letter-spacing: .06em; }
-.ttl { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); width: 40px;
-       text-align: right; flex: none; }
+.ttl { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); width: 4.8ch;
+       text-align: right; flex: none; font-variant-numeric: tabular-nums; }
 .ttl.soon { color: var(--warn); }
 .sig-actions { display: flex; align-items: center; gap: 5px; flex: none; }
 .chev { color: var(--faint); font-size: 10px; transition: transform .16s; flex: none; }
@@ -572,7 +572,7 @@ select { cursor: pointer; }
   /* shave the fixed chrome so the price columns keep their full digits */
   .sig-row .grade-chip { padding: 1px 5px; font-size: 9.5px; }
   .sig-row .btn.mini { padding: 3px 6px; font-size: 9.5px; }
-  .ttl { width: 32px; font-size: 10px; }
+  .ttl { width: 4.8ch; font-size: 10px; }
 }
 @media (max-width: 940px) {
   #workspace { grid-template-columns: var(--rail-l) minmax(0, 1fr); }

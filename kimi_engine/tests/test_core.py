@@ -569,3 +569,185 @@ def test_host_exec_disabled_falls_back_to_paper(monkeypatch, tmp_path):
     r = eng.execute(sig.id, venue="auto")
     assert r["ok"] and r["venue"] == "paper"
     assert eng.paper.positions              # paper position opened
+
+
+# ----------------------------------------------------------------------
+# active-signal lifecycle vs watchlist (scan reconciliation + TTL)
+# ----------------------------------------------------------------------
+
+def _fresh_cs(sym="EURUSD", tf="5m", age_min=0):
+    from kimi.datafeed import CandleSet
+    n = 60
+    end = int(time.time() * 1000) - age_min * 60_000
+    t = np.array([end - i * 300_000 for i in range(n)][::-1], dtype=float)
+    c = np.linspace(100, 101, n)
+    return CandleSet(sym, tf, t, c, c + 0.5, c - 0.5, c,
+                     np.full(n, 10.0), np.zeros(n),
+                     np.ones(n, dtype=bool), "test")
+
+
+def _scan_eng(monkeypatch, tmp_path, evaluate_fn, age_min=0):
+    import kimi.engine as engmod
+    eng = engmod.Engine()
+    eng.paper.state_path = str(tmp_path / "st.json")
+    eng.symbols = ["EURUSD"]
+    now = time.time()
+    monkeypatch.setattr(
+        eng.feed, "tickers",
+        lambda syms: {s: {"price": 101.0, "ts": now, "source": "test"} for s in syms})
+    monkeypatch.setattr(
+        eng.feed, "klines",
+        lambda sym, tf, **kw: _fresh_cs(sym, tf, age_min))
+    monkeypatch.setattr(engmod, "evaluate", evaluate_fn)
+    return eng
+
+
+def _card(total, grade, direction=1, symbol="EURUSD"):
+    from kimi.scoring import ScoreCard
+    return ScoreCard(symbol, direction, float(total), grade, {}, [], True)
+
+
+def _sig(sig_id, card, entry=101.0, sl=100.0):
+    from kimi.signals import Signal
+    return Signal(
+        id=sig_id, symbol=card.symbol, direction=card.direction,
+        entry=entry, sl=sl, tp1=entry + 1.5, tp2=entry + 3.0,
+        atr=0.5, card=card, valid_until=time.time() + 600,
+    )
+
+
+def test_signal_valid_until_is_entry_bars_from_bar_open_not_30min_wall_clock():
+    """Remaining time is the unfinished TTL window on the entry bar, not
+    wall-clock now + 6×5m (the 30m chip that never appeared to move)."""
+    from kimi.config import Config
+    from kimi.signals import signal_valid_until
+
+    now = 1_700_000_000.0
+    bar_open_ms = (now - 4 * 60) * 1000.0          # 5m bar opened 4m ago
+    until = signal_valid_until(bar_open_ms, "5m", now=now)
+    remaining = until - now
+    tf_sec = Config.TF_MINUTES["5m"] * 60
+    assert remaining == Config.SIGNAL_TTL_BARS * tf_sec - 4 * 60
+    assert remaining < 20 * 60                     # regression vs 30m wall clock
+    assert Config.SIGNAL_TTL_BARS <= 3             # 5m trigger: a few bars, not six
+
+
+def test_rescan_drops_active_signal_when_setup_no_longer_qualifies(monkeypatch, tmp_path):
+    """Watchlist cards update every scan; an active row must leave when that
+    scan no longer prints a qualifying setup for the pair."""
+    card_hi = _card(82, "A")
+    card_lo = _card(60, "B")
+    first = _sig("K00001", card_hi)
+    n = {"i": 0}
+
+    def evaluate(*_a, **_k):
+        n["i"] += 1
+        if n["i"] == 1:
+            return first, [card_hi]
+        return None, [card_lo]
+
+    eng = _scan_eng(monkeypatch, tmp_path, evaluate)
+    eng._scan_once_inner()
+    assert list(eng.signals) == ["K00001"]
+    assert eng.scores["EURUSD"]["cards"]["long"]["total"] == 82
+
+    eng._scan_once_inner()
+    assert not eng.signals
+    assert eng.scores["EURUSD"]["cards"]["long"]["total"] == 60
+
+
+def test_rescan_refreshes_active_signal_card_and_levels(monkeypatch, tmp_path):
+    """A still-valid setup must track the latest scan (score + geometry), not
+    the frozen first print. Validity deadline is not reset, so remaining time
+    keeps counting down."""
+    card1 = _card(80, "A")
+    card2 = _card(91, "A+")
+    s1 = _sig("K00011", card1, entry=101.0, sl=100.0)
+    s1.valid_until = time.time() + 400
+    s2 = _sig("K00012", card2, entry=101.4, sl=100.1)
+    s2.valid_until = time.time() + 900
+    n = {"i": 0}
+
+    def evaluate(*_a, **_k):
+        n["i"] += 1
+        return (s1 if n["i"] == 1 else s2), [card1 if n["i"] == 1 else card2]
+
+    eng = _scan_eng(monkeypatch, tmp_path, evaluate)
+    eng._scan_once_inner()
+    live = eng.signals["K00011"]
+    deadline = live.valid_until
+
+    eng._scan_once_inner()
+    assert list(eng.signals) == ["K00011"]          # same id, not a duplicate
+    live = eng.signals["K00011"]
+    assert live.card.total == 91
+    assert live.card.grade == "A+"
+    assert live.entry == 101.4
+    assert live.sl == 100.1
+    assert live.valid_until == deadline             # countdown continues
+
+
+def test_stale_rescan_drops_active_signal(monkeypatch, tmp_path):
+    """Stale entry bars already suppress new prints; they must also retire a
+    live card rather than leave it executable."""
+    import kimi.engine as engmod
+    card = _card(88, "A")
+    sig = _sig("K00021", card)
+    monkeypatch.setattr(engmod, "evaluate", lambda *_a, **_k: (sig, [card]))
+    eng = engmod.Engine()
+    eng.paper.state_path = str(tmp_path / "st.json")
+    eng.symbols = ["EURUSD"]
+    now = time.time()
+    monkeypatch.setattr(
+        eng.feed, "tickers",
+        lambda syms: {s: {"price": 101.0, "ts": now, "source": "test"} for s in syms})
+    age = {"m": 0}
+    monkeypatch.setattr(
+        eng.feed, "klines",
+        lambda sym, tf, **kw: _fresh_cs(sym, tf, age["m"]))
+
+    eng._scan_once_inner()
+    assert "K00021" in eng.signals
+
+    age["m"] = 999
+    eng._scan_once_inner()
+    assert "K00021" not in eng.signals
+
+
+def test_snapshot_expires_lapsed_signals_without_waiting_for_scan(tmp_path):
+    """SSE ticks every 3s; expiry must not wait for the next (possibly long)
+    scan cycle or remaining time sticks at 0m with the row still executable."""
+    import kimi.engine as engmod
+    eng = engmod.Engine()
+    eng.paper.state_path = str(tmp_path / "st.json")
+    sig = _sig("KEXP1", _card(80, "A"))
+    sig.valid_until = time.time() - 1
+    eng.signals[sig.id] = sig
+    snap = eng.snapshot()
+    assert snap["signals"] == []
+    assert "KEXP1" not in eng.signals
+
+
+def test_invalidation_allows_immediate_reprint(monkeypatch, tmp_path):
+    """Dropping a dead setup must not keep the 20-minute insert cooldown, or
+    the pair cannot come back on the next qualifying scan."""
+    hi = _card(82, "A")
+    lo = _card(60, "B")
+    a = _sig("K00031", hi)
+    b = _sig("K00032", hi)
+    n = {"i": 0}
+
+    def evaluate(*_a, **_k):
+        n["i"] += 1
+        if n["i"] == 1:
+            return a, [hi]
+        if n["i"] == 2:
+            return None, [lo]
+        return b, [hi]
+
+    eng = _scan_eng(monkeypatch, tmp_path, evaluate)
+    eng._scan_once_inner()
+    eng._scan_once_inner()
+    assert not eng.signals
+    eng._scan_once_inner()
+    assert list(eng.signals) == ["K00032"]

@@ -78,7 +78,9 @@ class Config:
     SCORE_B = 65.0          # watchlist only, no signal
     SIGNAL_MIN_SCORE = _env_float("KIMI_SIGNAL_MIN_SCORE", SCORE_A)
     SIGNAL_COOLDOWN_SEC = _env_float("KIMI_SIGNAL_COOLDOWN_SEC", 20 * 60)
-    SIGNAL_TTL_BARS = 6     # entry validity, in entry-TF bars
+    # Entry-TF validity window. 6×5m was a 30-minute chip that barely moved
+    # and outlived the setup; two bars is a 5m trigger's usable window.
+    SIGNAL_TTL_BARS = _env_int("KIMI_SIGNAL_TTL_BARS", 2)
 
     # ---- risk ----------------------------------------------------------
     START_EQUITY = _env_float("KIMI_START_EQUITY", 100_000.0)
