@@ -167,6 +167,7 @@ def impulse_vector(
         return candle.range >= atr * range_atr and candle.body >= candle.range * body_fraction
 
     sample = candles[-16:]
+    sample_offset = len(candles) - len(sample)
     best: dict[str, Any] | None = None
     index = 0
     while index < len(sample):
@@ -183,6 +184,9 @@ def impulse_vector(
         ):
             run.append(sample[cursor])
             cursor += 1
+        if len(run) < min_run:
+            index = max(cursor, index + 1)
+            continue
         used_direction = candle.direction
         origin = run[0].low if used_direction > 0 else run[0].high
         terminus = run[-1].high if used_direction > 0 else run[-1].low
@@ -201,6 +205,8 @@ def impulse_vector(
             "efficiency": efficiency,
             "bars": len(run),
             "ageBars": age,
+            "startIndex": sample_offset + index,
+            "endIndex": sample_offset + cursor - 1,
             "_rank": strength * (0.72 + 0.28 * recency),
         }
         if best is None or float(candidate["_rank"]) > float(best.get("_rank") or 0.0):
@@ -208,12 +214,12 @@ def impulse_vector(
         index = max(cursor, index + 1)
 
     singles = [
-        candle
-        for candle in sample
+        (single_index, candle)
+        for single_index, candle in enumerate(sample)
         if candle.range >= atr * single_range_atr and candle.body >= candle.range * body_fraction
     ]
     if singles:
-        single = singles[-1]
+        single_index, single = singles[-1]
         used_direction = single.direction or (1 if single.close >= single.open else -1)
         span = single.range
         efficiency = clamp(single.body / max(span, 1e-12))
@@ -227,7 +233,9 @@ def impulse_vector(
             "spanAtr": span / atr,
             "efficiency": efficiency,
             "bars": 1,
-            "ageBars": len(sample) - 1 - sample.index(single),
+            "ageBars": len(sample) - 1 - single_index,
+            "startIndex": sample_offset + single_index,
+            "endIndex": sample_offset + single_index,
             "_rank": strength,
         }
         if best is None or float(candidate["_rank"]) >= float(best.get("_rank") or 0.0):
@@ -235,13 +243,18 @@ def impulse_vector(
 
     if best is None:
         return {"available": False, "direction": 0, "strength": 0.0, "reason": "NO_DISPLACEMENT"}
-    if int(best.get("bars") or 0) < min_run and int(best.get("bars") or 0) < 1:
-        return {"available": False, "direction": 0, "strength": 0.0, "reason": "NO_DISPLACEMENT"}
     best.pop("_rank", None)
     return best
 
 
-def void_map(candles: list[Candle], *, lookback: int, atr: float) -> dict[str, Any]:
+def void_map(
+    candles: list[Candle],
+    *,
+    lookback: int,
+    atr: float,
+    direction: int = 0,
+    minimum_index: int | None = None,
+) -> dict[str, Any]:
     if len(candles) < 6 or atr <= 0:
         return {"available": False, "direction": 0, "strength": 0.0, "reason": "VOID_INPUT_UNAVAILABLE"}
     start = max(2, len(candles) - lookback)
@@ -285,8 +298,16 @@ def void_map(candles: list[Candle], *, lookback: int, atr: float) -> dict[str, A
         )
     if not voids:
         return {"available": False, "direction": 0, "strength": 0.0, "reason": "NO_VOID"}
-    open_voids = [row for row in voids if row["open"]]
-    chosen = min(open_voids or voids, key=lambda row: (row["ageBars"], -row["widthAtr"]))
+    eligible = [
+        row
+        for row in voids
+        if (direction == 0 or int(row["direction"]) == direction)
+        and (minimum_index is None or int(row["index"]) >= minimum_index)
+    ]
+    if not eligible:
+        return {"available": False, "direction": direction, "strength": 0.0, "reason": "NO_CAUSAL_VOID"}
+    open_voids = [row for row in eligible if row["open"]]
+    chosen = min(open_voids or eligible, key=lambda row: (row["ageBars"], -row["widthAtr"]))
     location = 1.0 if chosen["inside"] else clamp(1.0 - abs(candles[-1].close - chosen["ce"]) / max(atr * 1.6, 1e-12))
     freshness = clamp(1.0 - chosen["ageBars"] / 18.0)
     openness = 1.0 - chosen["fillFraction"]
@@ -305,9 +326,12 @@ def dealing_range(candles: list[Candle], *, lookback: int, ote_inner: float, ote
         return {"available": False, "reason": "DEALING_RANGE_FLAT"}
     close = sample[-1].close
     position = (close - low) / width
-    ote_low = high - ote_outer * width
-    ote_high = high - ote_inner * width
-    in_ote = ote_low <= close <= ote_high
+    long_ote_low = high - ote_outer * width
+    long_ote_high = high - ote_inner * width
+    short_ote_low = low + ote_inner * width
+    short_ote_high = low + ote_outer * width
+    long_in_ote = long_ote_low <= close <= long_ote_high
+    short_in_ote = short_ote_low <= close <= short_ote_high
     return {
         "available": True,
         "high": high,
@@ -316,9 +340,15 @@ def dealing_range(candles: list[Candle], *, lookback: int, ote_inner: float, ote
         "position": position,
         "discount": position <= 0.50,
         "premium": position >= 0.50,
-        "inOte": in_ote,
-        "oteLow": ote_low,
-        "oteHigh": ote_high,
+        "inOte": long_in_ote or short_in_ote,
+        "longInOte": long_in_ote,
+        "shortInOte": short_in_ote,
+        "oteLow": long_ote_low,
+        "oteHigh": long_ote_high,
+        "longOteLow": long_ote_low,
+        "longOteHigh": long_ote_high,
+        "shortOteLow": short_ote_low,
+        "shortOteHigh": short_ote_high,
     }
 
 
@@ -334,20 +364,33 @@ def cisd_state(
     direction = int(raid.get("direction") or impulse.get("direction") or 0)
     if direction == 0:
         return {"available": False, "confirmed": False, "strength": 0.0, "reason": "CISD_DIRECTION_UNRESOLVED"}
-    origin = impulse.get("origin")
-    if not isinstance(origin, (int, float)):
-        sample = candles[-lookback:]
-        opposite = [candle for candle in sample if candle.direction == -direction]
-        if not opposite:
-            return {"available": False, "confirmed": False, "strength": 0.0, "reason": "CISD_ORIGIN_UNAVAILABLE"}
-        origin = opposite[-1].open
+    raid_index = raid.get("eventIndex")
+    impulse_start = impulse.get("startIndex")
+    impulse_end = impulse.get("endIndex")
+    if not all(isinstance(value, int) for value in (raid_index, impulse_start, impulse_end)):
+        return {"available": False, "confirmed": False, "strength": 0.0, "reason": "CISD_SEQUENCE_UNAVAILABLE"}
+    if int(impulse_start) < int(raid_index) or int(impulse_end) < int(impulse_start):
+        return {"available": False, "confirmed": False, "strength": 0.0, "reason": "CISD_SEQUENCE_INVALID"}
+    origin_start = max(0, int(impulse_start) - lookback)
+    opposite = [
+        (index, candles[index])
+        for index in range(origin_start, int(impulse_start))
+        if candles[index].direction == -direction
+    ]
+    if not opposite:
+        return {"available": False, "confirmed": False, "strength": 0.0, "reason": "CISD_ORIGIN_UNAVAILABLE"}
+    origin_index, origin_candle = opposite[-1]
+    origin = origin_candle.open
+    confirmation_start = int(impulse_end)
+    confirmation_index = None
+    for index in range(confirmation_start, len(candles)):
+        close = candles[index].close
+        if (direction > 0 and close > float(origin)) or (direction < 0 and close < float(origin)):
+            confirmation_index = index
+            break
     last = candles[-1]
-    if direction > 0:
-        confirmed = last.close > float(origin)
-        forming = last.high > float(origin) and not confirmed
-    else:
-        confirmed = last.close < float(origin)
-        forming = last.low < float(origin) and not confirmed
+    confirmed = confirmation_index is not None
+    forming = ((last.high > float(origin)) if direction > 0 else (last.low < float(origin))) and not confirmed
     strength = 1.0 if confirmed else 0.42 if forming else 0.0
     return {
         "available": True,
@@ -355,6 +398,8 @@ def cisd_state(
         "forming": forming,
         "strength": strength,
         "origin": float(origin),
+        "originIndex": origin_index,
+        "eventIndex": confirmation_index,
         "direction": direction,
     }
 
@@ -362,11 +407,12 @@ def cisd_state(
 def dealing_quality(dealing: dict[str, Any], direction: int) -> float:
     if not dealing.get("available") or direction == 0:
         return 0.0
-    position = float(dealing.get("position") or 0.5)
+    raw_position = dealing.get("position")
+    position = float(raw_position) if isinstance(raw_position, (int, float)) else 0.5
     if direction > 0:
-        if dealing.get("inOte"):
+        if dealing.get("longInOte"):
             return 1.0
         return clamp(1.0 - position / 0.72)
-    if dealing.get("inOte"):
+    if dealing.get("shortInOte"):
         return 1.0
     return clamp(position / 0.72)

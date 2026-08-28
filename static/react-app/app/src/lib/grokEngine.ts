@@ -18,12 +18,27 @@ export interface GrokGate {
   [key: string]: unknown;
 }
 
+export interface GrokProfile {
+  group: string;
+  family: string;
+  sessionMode: string;
+  source: string;
+  weights?: Record<string, number>;
+  weightScope?: string;
+  calibrationStatus?: string;
+  readyThreshold: number;
+  watchThreshold: number;
+}
+
 export interface GrokSignal {
   signalId: string;
   contractVersion: string;
   pair: string;
   symbol: string;
   assetType: string;
+  scoreGroup: string;
+  profileFamily: string;
+  grokProfile?: GrokProfile;
   venue: 'mt5' | 'bybit';
   direction: 'LONG' | 'SHORT' | 'NONE';
   setup: GrokSetup;

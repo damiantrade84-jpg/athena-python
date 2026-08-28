@@ -231,7 +231,7 @@ function SignalRow({ signal, selected, onSelect }: { signal: GrokSignal; selecte
         <div
           className="relative grid h-12 w-12 shrink-0 place-items-center rounded-full"
           style={{ background: `conic-gradient(#67e8f9 ${scoreAngle}, hsl(var(--muted)) 0deg)` }}
-          aria-label={`Score ${signal.score.toFixed(1)} out of 100`}
+          aria-label={`Raw evidence score ${signal.score.toFixed(1)} out of 100`}
         >
           <div className="absolute inset-[4px] rounded-full bg-card" />
           <span className="readout relative text-xs font-semibold">{signal.score.toFixed(0)}</span>
@@ -247,7 +247,10 @@ function SignalRow({ signal, selected, onSelect }: { signal: GrokSignal; selecte
               {signal.direction}
             </span>
           </div>
-          <div className="mt-1 text-xs text-muted-foreground">{grokSetupLabel(signal.setup)} · {signal.narrative.replaceAll('_', ' ')}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{grokSetupLabel(signal.setup)} · {signal.narrative.replaceAll('_', ' ')} · raw evidence {signal.score.toFixed(1)}</div>
+          {signal.decision !== 'READY' ? (
+            <div className="mt-1 truncate text-[10px] text-warning" title={signal.decisionReason}>Reason: {signal.decisionReason}</div>
+          ) : null}
           <LiveQuoteChip compact pair={signal.pair} symbol={signal.symbol} type={signal.assetType} className="mt-1" />
           <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
             <div><span className="text-muted-foreground">Entry </span><span className="readout">{grokPrice(signal.entry)}</span></div>
@@ -551,7 +554,7 @@ export default function GrokEnginePanel() {
           <Metric label="Ready" value={scan?.readyCount ?? 0} note="all setup gates" />
           <Metric label="Watch" value={scan?.watchCount ?? 0} note="one or more gates" />
           <Metric label="Processed" value={`${scan?.processedPairs ?? 0}/${scan?.totalPairs ?? universeCount}`} note={scan?.status ?? 'idle'} />
-          <Metric label="Score gate" value={selected ? selected.readyThreshold.toFixed(0) : '76'} note="out of 100" />
+          <Metric label="READY threshold" value={selected ? selected.readyThreshold.toFixed(0) : '76'} note="raw evidence / 100" />
           <Metric label="Execution" value={mode.toUpperCase()} note={readyForMode ? 'available' : 'disabled'} />
           <Metric label="Latest" value={shortTime(scan?.completedAt || scan?.startedAt)} note={scan?.scanId?.slice(-8) || 'no scan'} />
         </div>
@@ -654,11 +657,12 @@ export default function GrokEnginePanel() {
                     <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-medium', grokDecisionClass(selected.decision))}>{selected.decision}</span>
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">{grokSetupLabel(selected.setup)} · {selected.direction} · {selected.assetType}</div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">weights {selected.grokProfile?.weightScope || 'legacy profile'} · calibration {selected.grokProfile?.calibrationStatus || 'not stamped'}</div>
                   <LiveQuoteChip pair={selected.pair} symbol={selected.symbol} type={selected.assetType} showBook className="mt-1" />
                 </div>
                 <div className="text-right">
                   <div className="readout text-3xl font-semibold text-cyan-300">{selected.score.toFixed(1)}</div>
-                  <div className="text-[10px] text-muted-foreground">ready at {selected.readyThreshold.toFixed(0)}</div>
+                  <div className="text-[10px] text-muted-foreground">raw evidence · READY at {selected.readyThreshold.toFixed(0)}</div>
                 </div>
               </div>
 
@@ -672,7 +676,7 @@ export default function GrokEnginePanel() {
 
               <div className="space-y-2 rounded-xl border border-border/70 bg-background/30 p-3">
                 <div className="flex items-center justify-between">
-                  <span className="label">Score aperture</span>
+                  <span className="label">Raw evidence aperture</span>
                   <span className="text-[10px] text-muted-foreground">independent components</span>
                 </div>
                 {selected.components.map((component) => {

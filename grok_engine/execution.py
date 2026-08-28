@@ -13,6 +13,7 @@ from .config import GrokConfig
 from .models import TIMEFRAME_SECONDS, Quote
 from .persistence import GrokRepository
 from .profiles import SESSION_MODES, GrokResolvedProfile, profile_from_signal
+from .scoring import REQUIRED_SIGNAL_GATE_NAMES
 from .sessions import classify_session, market_is_open
 
 
@@ -279,12 +280,28 @@ class GrokExecutionCoordinator:
             and float(score) >= float(self._ready_threshold(signal))
         )
         deterministic_gates = signal.get("gates")
-        deterministic_gate_proof = (
+        gate_names = (
+            [gate.get("name") for gate in deterministic_gates if isinstance(gate, dict)]
+            if isinstance(deterministic_gates, list)
+            else []
+        )
+        deterministic_gate_structure = (
             isinstance(deterministic_gates, list)
             and bool(deterministic_gates)
+            and len(gate_names) == len(deterministic_gates)
+            and len(gate_names) == len(set(gate_names))
+            and REQUIRED_SIGNAL_GATE_NAMES.issubset(set(gate_names))
+        )
+        deterministic_gate_proof = (
+            deterministic_gate_structure
             and all(isinstance(gate, dict) and gate.get("passed") is True for gate in deterministic_gates)
             and signal.get("blockingReasons") == []
         )
+        gate_proof_reason = None
+        if not deterministic_gate_structure:
+            gate_proof_reason = "SIGNAL_GATE_PROOF_INCOMPLETE"
+        elif not deterministic_gate_proof:
+            gate_proof_reason = "SIGNAL_GATE_PROOF_INVALID"
         gates.extend(
             [
                 {
@@ -295,7 +312,7 @@ class GrokExecutionCoordinator:
                 {
                     "name": "deterministic_gate_proof",
                     "passed": deterministic_gate_proof,
-                    "reason": None if deterministic_gate_proof else "SIGNAL_GATE_PROOF_INVALID",
+                    "reason": gate_proof_reason,
                 },
             ]
         )

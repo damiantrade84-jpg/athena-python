@@ -1,4 +1,4 @@
-version: grok.v1
+version: grok.v2
 enabled: true
 
 scan:
@@ -100,6 +100,7 @@ indicators:
   impulse_body_fraction: 0.52
   impulse_range_atr: 0.62
   impulse_single_range_atr: 1.28
+  trigger_recent_bars: 2
   void_lookback: 36
   dealing_lookback: 48
   ote_inner: 0.62

@@ -12,7 +12,7 @@ from typing import Any
 
 from engine_a_groups import resolve_score_group_by_type
 
-from .config import GrokConfig, _merge
+from .config import GrokConfig, _merge, _validate_resolved_profile
 
 
 SESSION_MODES = {"ict_killzone", "cash_rth"}
@@ -57,6 +57,8 @@ class GrokResolvedProfile:
     levels: dict[str, Any]
     indicators: dict[str, Any]
     source: str
+    weight_scope: str
+    calibration_status: str
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +66,9 @@ class GrokResolvedProfile:
             "family": self.family,
             "sessionMode": self.session_mode,
             "source": self.source,
+            "weights": {key: float(value) for key, value in self.scoring["weights"].items()},
+            "weightScope": self.weight_scope,
+            "calibrationStatus": self.calibration_status,
             "readyThreshold": float(self.scoring["ready_threshold"]),
             "watchThreshold": float(self.scoring["watch_threshold"]),
             "minimumKillzoneQuality": float(self.scoring["minimum_killzone_quality"]),
@@ -82,14 +87,19 @@ def resolve_grok_profile(pair: dict[str, Any], config: GrokConfig) -> GrokResolv
     profiles = config.profiles
     merged: dict[str, Any] = {}
     sources: list[str] = ["base"]
+    weight_scope = "base"
     family_overlay = _overlay_lookup(profiles.get("families"), family)
     if family_overlay:
         merged = _merge(merged, family_overlay)
         sources.append(f"family:{family}")
+        if isinstance((family_overlay.get("scoring") or {}).get("weights"), dict):
+            weight_scope = f"family:{family}"
     group_overlay = _overlay_lookup(profiles.get("groups"), group)
     if group_overlay:
         merged = _merge(merged, group_overlay)
         sources.append(f"group:{group}")
+        if isinstance((group_overlay.get("scoring") or {}).get("weights"), dict):
+            weight_scope = f"group:{group}"
     pairs_overlay = profiles.get("pairs") if isinstance(profiles.get("pairs"), dict) else {}
     display = _display_key(pair)
     for key in (display, display.upper(), _normalized_forex_display(pair)):
@@ -97,6 +107,8 @@ def resolve_grok_profile(pair: dict[str, Any], config: GrokConfig) -> GrokResolv
         if pair_overlay:
             merged = _merge(merged, pair_overlay)
             sources.append(f"pair:{key}")
+            if isinstance((pair_overlay.get("scoring") or {}).get("weights"), dict):
+                weight_scope = f"pair:{key}"
             break
     session_mode = str(merged.get("session_mode") or "ict_killzone").strip().lower()
     if session_mode not in SESSION_MODES:
@@ -107,6 +119,7 @@ def resolve_grok_profile(pair: dict[str, Any], config: GrokConfig) -> GrokResolv
         config.indicators,
         merged.get("indicators") if isinstance(merged.get("indicators"), dict) else {},
     )
+    _validate_resolved_profile(scoring, levels, indicators, f"resolved profile {group}")
     return GrokResolvedProfile(
         group=group,
         family=family,
@@ -115,6 +128,8 @@ def resolve_grok_profile(pair: dict[str, Any], config: GrokConfig) -> GrokResolv
         levels=levels,
         indicators=indicators,
         source=">".join(sources),
+        weight_scope=weight_scope,
+        calibration_status=str(config.execution.get("research_status") or "UNKNOWN").upper(),
     )
 
 

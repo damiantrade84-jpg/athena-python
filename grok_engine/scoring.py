@@ -25,6 +25,27 @@ from .models import Candle, MarketSnapshot, TIMEFRAME_SECONDS, utc_iso
 from .sessions import classify_session, market_is_open
 
 
+REQUIRED_SIGNAL_GATE_NAMES = frozenset(
+    {
+        "D1_freshness",
+        "H1_freshness",
+        "M15_freshness",
+        "M5_freshness",
+        "session_open",
+        "killzone_window",
+        "direction_resolved",
+        "liquidity_raid_aligned",
+        "displacement_aligned",
+        "delivery_void_open",
+        "delivery_sequence",
+        "dealing_range_location",
+        "cisd_confirmed",
+        "trigger_aligned_recent",
+        "execution_geometry",
+    }
+)
+
+
 def _round(value: float | None, digits: int = 6) -> float | None:
     if value is None or not math.isfinite(float(value)):
         return None
@@ -94,7 +115,14 @@ def _freshness(snapshot: MarketSnapshot, config: GrokConfig) -> tuple[list[dict[
     return gates, failures
 
 
-def _classify_setup(clock: dict[str, Any], raid: dict[str, Any], void: dict[str, Any], cisd: dict[str, Any], dealing: dict[str, Any]) -> str:
+def _classify_setup(
+    clock: dict[str, Any],
+    raid: dict[str, Any],
+    void: dict[str, Any],
+    cisd: dict[str, Any],
+    dealing: dict[str, Any],
+    direction: int,
+) -> str:
     if not raid.get("available"):
         return "NONE"
     kind = str(clock.get("primaryKind") or "")
@@ -107,7 +135,8 @@ def _classify_setup(clock: dict[str, Any], raid: dict[str, Any], void: dict[str,
                 return "JUDAS_RECLAIM"
     if cisd.get("confirmed") and void.get("available"):
         return "CISD_CONTINUATION"
-    if dealing.get("inOte") and void.get("available"):
+    directional_ote = dealing.get("longInOte") if direction > 0 else dealing.get("shortInOte")
+    if directional_ote and void.get("available"):
         return "OTE_DELIVERY"
     if raid.get("available"):
         return "JUDAS_RECLAIM"
@@ -221,6 +250,30 @@ def _signal_id(display: str, identity_epoch: float, direction: str, setup: str, 
     return "grok_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
 
 
+def _delivery_sequence(
+    raid: dict[str, Any],
+    impulse: dict[str, Any],
+    void: dict[str, Any],
+    cisd: dict[str, Any],
+) -> dict[str, Any]:
+    values = (
+        raid.get("eventIndex"),
+        impulse.get("startIndex"),
+        impulse.get("endIndex"),
+        void.get("index"),
+        cisd.get("eventIndex"),
+    )
+    if not all(isinstance(value, int) for value in values):
+        return {"passed": False, "reason": "DELIVERY_SEQUENCE_UNAVAILABLE"}
+    raid_index, impulse_start, impulse_end, void_index, cisd_index = (int(value) for value in values)
+    passed = (
+        raid_index <= impulse_start <= impulse_end
+        and void_index >= impulse_end
+        and cisd_index >= impulse_end
+    )
+    return {"passed": passed, "reason": None if passed else "DELIVERY_SEQUENCE_INVALID"}
+
+
 def evaluate_snapshot(
     snapshot: MarketSnapshot,
     config: GrokConfig,
@@ -268,6 +321,9 @@ def evaluate_snapshot(
         range_atr=float(indicators["impulse_range_atr"]),
         single_range_atr=float(indicators["impulse_single_range_atr"]),
     )
+    direction_value = int(raid.get("direction") or impulse.get("direction") or 0)
+    if impulse.get("available") and raid.get("available") and int(impulse.get("direction") or 0) != int(raid.get("direction") or 0):
+        direction_value = int(raid.get("direction") or 0)
     trigger = impulse_vector(
         m5,
         atr=wilder_atr(m5, int(indicators["atr_period"])) or atr,
@@ -276,7 +332,18 @@ def evaluate_snapshot(
         range_atr=float(indicators["impulse_range_atr"]),
         single_range_atr=float(indicators["impulse_single_range_atr"]),
     )
-    void = void_map(m15, lookback=int(indicators["void_lookback"]), atr=atr)
+    causal_floor_candidates = [
+        value
+        for value in (raid.get("eventIndex"), impulse.get("endIndex"))
+        if isinstance(value, int)
+    ]
+    void = void_map(
+        m15,
+        lookback=int(indicators["void_lookback"]),
+        atr=atr,
+        direction=direction_value,
+        minimum_index=max(causal_floor_candidates) if causal_floor_candidates else None,
+    )
     dealing = dealing_range(
         h1,
         lookback=int(indicators["dealing_lookback"]),
@@ -285,9 +352,6 @@ def evaluate_snapshot(
     )
     cisd = cisd_state(m15, raid, impulse, lookback=int(indicators["cisd_lookback"]))
 
-    direction_value = int(raid.get("direction") or impulse.get("direction") or 0)
-    if impulse.get("available") and raid.get("available") and int(impulse.get("direction") or 0) != int(raid.get("direction") or 0):
-        direction_value = int(raid.get("direction") or 0)
     direction = "LONG" if direction_value > 0 else "SHORT" if direction_value < 0 else "NONE"
     geometry = _execution_geometry(
         m15,
@@ -298,7 +362,8 @@ def evaluate_snapshot(
         levels,
         int(indicators["atr_period"]),
     )
-    setup_kind = _classify_setup(clock, raid, void, cisd, dealing)
+    delivery_sequence = _delivery_sequence(raid, impulse, void, cisd)
+    setup_kind = _classify_setup(clock, raid, void, cisd, dealing, direction_value)
     narrative = _narrative(raid, impulse, void, cisd)
     location_quality = dealing_quality(dealing, direction_value)
 
@@ -364,6 +429,8 @@ def evaluate_snapshot(
             {
                 "position": _round(dealing.get("position") if isinstance(dealing.get("position"), (int, float)) else None),
                 "inOte": dealing.get("inOte"),
+                "longInOte": dealing.get("longInOte"),
+                "shortInOte": dealing.get("shortInOte"),
                 "discount": dealing.get("discount"),
                 "premium": dealing.get("premium"),
             },
@@ -391,13 +458,24 @@ def evaluate_snapshot(
     ]
     score = round(sum(float(item["score"]) for item in components), 2)
 
-    position = float(dealing.get("position") or 0.5) if dealing.get("available") else 0.5
+    raw_position = dealing.get("position")
+    position = float(raw_position) if dealing.get("available") and isinstance(raw_position, (int, float)) else 0.5
     long_location_ok = direction_value <= 0 or position <= float(scoring["maximum_premium_for_long"])
     short_location_ok = direction_value >= 0 or position >= float(scoring["minimum_discount_for_short"])
-    trigger_aligned = int(trigger.get("direction") or 0) == direction_value and float(trigger.get("strength") or 0.0) >= float(
-        scoring["minimum_impulse_strength"]
-    )
-    confirmation_ok = bool(cisd.get("confirmed")) or trigger_aligned
+    trigger_age = trigger.get("ageBars")
+    trigger_direction_ok = int(trigger.get("direction") or 0) == direction_value
+    trigger_strength_ok = float(trigger.get("strength") or 0.0) >= float(scoring["minimum_impulse_strength"])
+    trigger_recent = isinstance(trigger_age, int) and trigger_age <= int(indicators["trigger_recent_bars"])
+    trigger_aligned = bool(trigger.get("available")) and trigger_direction_ok and trigger_strength_ok and trigger_recent
+    if not trigger.get("available"):
+        trigger_reason = str(trigger.get("reason") or "TRIGGER_UNAVAILABLE")
+    elif not trigger_direction_ok or not trigger_strength_ok:
+        trigger_reason = "TRIGGER_NOT_ALIGNED"
+    elif not trigger_recent:
+        trigger_reason = "TRIGGER_STALE"
+    else:
+        trigger_reason = None
+    cisd_ok = bool(cisd.get("confirmed")) and int(cisd.get("direction") or 0) == direction_value
     void_ok = bool(void.get("available") and void.get("open") and int(void.get("direction") or 0) == direction_value)
     raid_ok = (
         bool(raid.get("available"))
@@ -445,14 +523,24 @@ def evaluate_snapshot(
                 "reason": None if void_ok else "DELIVERY_VOID_UNAVAILABLE",
             },
             {
+                "name": "delivery_sequence",
+                "passed": bool(delivery_sequence["passed"]),
+                "reason": delivery_sequence["reason"],
+            },
+            {
                 "name": "dealing_range_location",
                 "passed": long_location_ok and short_location_ok,
                 "reason": None if long_location_ok and short_location_ok else "DEALING_RANGE_EXTREME",
             },
             {
-                "name": "cisd_or_trigger",
-                "passed": confirmation_ok,
-                "reason": None if confirmation_ok else "CISD_OR_TRIGGER_MISSING",
+                "name": "cisd_confirmed",
+                "passed": cisd_ok,
+                "reason": None if cisd_ok else "CISD_NOT_CONFIRMED",
+            },
+            {
+                "name": "trigger_aligned_recent",
+                "passed": trigger_aligned,
+                "reason": trigger_reason,
             },
             {
                 "name": "execution_geometry",

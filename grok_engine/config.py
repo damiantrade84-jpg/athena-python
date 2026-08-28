@@ -198,6 +198,7 @@ def _validate(raw: dict[str, Any]) -> None:
         "raid_lookback_bars",
         "raid_recent_bars",
         "impulse_min_run",
+        "trigger_recent_bars",
         "void_lookback",
         "dealing_lookback",
         "cisd_lookback",
@@ -293,10 +294,46 @@ def _validate(raw: dict[str, Any]) -> None:
         for name, overlay in mapping.items():
             if not isinstance(overlay, dict):
                 raise GrokConfigError(f"profiles.{section}.{name} must be a mapping")
-            _validate_profile_overlay(overlay, f"profiles.{section}.{name}")
+            _validate_profile_overlay(overlay, f"profiles.{section}.{name}", raw)
 
 
-def _validate_profile_overlay(overlay: dict[str, Any], label: str) -> None:
+def _validate_resolved_profile(
+    scoring: dict[str, Any],
+    levels: dict[str, Any],
+    indicators: dict[str, Any],
+    label: str,
+) -> None:
+    weights = scoring.get("weights") or {}
+    if set(weights) != _GROK_WEIGHTS:
+        raise GrokConfigError(f"{label}.scoring.weights does not match the GROK component contract")
+    total = sum(_number(value, f"{label}.scoring.weights.{key}", minimum=0.0) for key, value in weights.items())
+    if abs(total - 100.0) > 1e-9:
+        raise GrokConfigError(f"{label}.scoring.weights must sum to 100")
+    ready = _number(scoring.get("ready_threshold"), f"{label}.scoring.ready_threshold", minimum=0.0)
+    watch = _number(scoring.get("watch_threshold"), f"{label}.scoring.watch_threshold", minimum=0.0)
+    if ready > 100.0 or watch > ready:
+        raise GrokConfigError(f"{label} score thresholds must satisfy 0 <= watch <= ready <= 100")
+    for key in (
+        "minimum_killzone_quality",
+        "minimum_raid_strength",
+        "minimum_impulse_strength",
+        "maximum_premium_for_long",
+        "minimum_discount_for_short",
+    ):
+        value = _number(scoring.get(key), f"{label}.scoring.{key}", minimum=0.0)
+        if value > 1.0:
+            raise GrokConfigError(f"{label}.scoring.{key} cannot exceed 1")
+    minimum_rr = _number(levels.get("minimum_rr"), f"{label}.levels.minimum_rr", minimum=1.0)
+    _number(levels.get("target_rr"), f"{label}.levels.target_rr", minimum=minimum_rr)
+    minimum_stop = _number(levels.get("minimum_stop_atr"), f"{label}.levels.minimum_stop_atr", minimum=0.0)
+    _number(levels.get("maximum_stop_atr"), f"{label}.levels.maximum_stop_atr", minimum=minimum_stop)
+    ote_inner = _number(indicators.get("ote_inner"), f"{label}.indicators.ote_inner", minimum=0.0)
+    ote_outer = _number(indicators.get("ote_outer"), f"{label}.indicators.ote_outer", minimum=0.0)
+    if ote_inner >= ote_outer or ote_outer > 1.0:
+        raise GrokConfigError(f"{label} OTE bounds must satisfy 0 <= inner < outer <= 1")
+
+
+def _validate_profile_overlay(overlay: dict[str, Any], label: str, base: dict[str, Any]) -> None:
     if "session_mode" in overlay:
         mode = str(overlay.get("session_mode") or "").strip().lower()
         if mode not in {"ict_killzone", "cash_rth"}:
@@ -341,12 +378,19 @@ def _validate_profile_overlay(overlay: dict[str, Any], label: str) -> None:
     if indicators is not None:
         if not isinstance(indicators, dict):
             raise GrokConfigError(f"{label}.indicators must be a mapping")
-        for key in ("raid_lookback_bars", "raid_recent_bars", "impulse_min_run", "void_lookback", "dealing_lookback", "cisd_lookback", "atr_period"):
+        for key in ("raid_lookback_bars", "raid_recent_bars", "impulse_min_run", "trigger_recent_bars", "void_lookback", "dealing_lookback", "cisd_lookback", "atr_period"):
             if key in indicators:
                 _integer(indicators.get(key), f"{label}.indicators.{key}")
         for key in ("raid_min_excursion_atr", "impulse_body_fraction", "impulse_range_atr", "impulse_single_range_atr"):
             if key in indicators:
                 _number(indicators.get(key), f"{label}.indicators.{key}", minimum=0.0)
+
+    _validate_resolved_profile(
+        _merge(base["scoring"], scoring or {}),
+        _merge(base["levels"], levels or {}),
+        _merge(base["indicators"], indicators or {}),
+        label,
+    )
 
 
 def load_grok_config(root_config: dict[str, Any] | None = None) -> GrokConfig:

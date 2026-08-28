@@ -11,16 +11,132 @@ import pytest
 from grok_engine.api import register_grok_routes
 from grok_engine.config import GrokConfigError, load_grok_config
 from grok_engine.execution import GrokExecutionCoordinator, GrokExecutionError
-from grok_engine.indicators import raid_signature, void_map, wilder_atr
+from grok_engine.indicators import cisd_state, dealing_quality, dealing_range, impulse_vector, raid_signature, void_map, wilder_atr
 from grok_engine.market_data import normalize_closed_candles
 from grok_engine.models import Candle, MarketSnapshot, Quote, TIMEFRAME_SECONDS
 from grok_engine.persistence import GrokRepository
 from grok_engine.replay import _outcome
-from grok_engine.scoring import _execution_geometry, evaluate_snapshot
+from grok_engine.scoring import _delivery_sequence, _execution_geometry, evaluate_snapshot
 from grok_engine.sessions import classify_session, market_is_open
 
 
 NOW = datetime(2026, 3, 17, 14, 32, tzinfo=timezone.utc).timestamp()
+
+
+def test_impulse_vector_requires_minimum_run_unless_single_bar_meets_stricter_threshold() -> None:
+    candles = [
+        _candle(float(index + 1), 10.0, 10.1, 9.9, 10.0)
+        for index in range(5)
+    ]
+    candles[-1] = _candle(5.0, 10.0, 10.8, 10.0, 10.8)
+
+    result = impulse_vector(
+        candles,
+        atr=1.0,
+        min_run=2,
+        body_fraction=0.55,
+        range_atr=0.62,
+        single_range_atr=1.28,
+    )
+
+    assert result["available"] is False
+    assert result["reason"] == "NO_DISPLACEMENT"
+
+    candles[-1] = _candle(5.0, 10.0, 11.3, 10.0, 11.3)
+    strict_single = impulse_vector(
+        candles,
+        atr=1.0,
+        min_run=2,
+        body_fraction=0.55,
+        range_atr=0.62,
+        single_range_atr=1.28,
+    )
+
+    assert strict_single["available"] is True
+    assert strict_single["bars"] == 1
+    assert strict_single["startIndex"] == 4
+    assert strict_single["endIndex"] == 4
+
+
+@pytest.mark.parametrize(
+    ("close", "long_expected", "short_expected"),
+    [
+        (12.5, 1.0, 0.25 / 0.72),
+        (17.5, 0.0, 1.0),
+        (10.0, 1.0, 0.0),
+    ],
+)
+def test_dealing_range_ote_is_directional_and_preserves_zero_position(
+    close: float,
+    long_expected: float,
+    short_expected: float,
+) -> None:
+    candles = [_candle(float(index + 1), 15.0, 20.0, 10.0, 15.0) for index in range(12)]
+    candles[-1] = _candle(12.0, 15.0, 20.0, 10.0, close)
+
+    dealing = dealing_range(candles, lookback=12, ote_inner=0.62, ote_outer=0.79)
+
+    assert dealing["position"] == pytest.approx((close - 10.0) / 10.0)
+    assert dealing_quality(dealing, 1) == pytest.approx(long_expected)
+    assert dealing_quality(dealing, -1) == pytest.approx(short_expected)
+
+
+def test_cisd_requires_a_post_impulse_close_through_the_last_opposing_open() -> None:
+    candles = [_candle(float(index + 1), 10.0, 10.1, 9.4, 9.8) for index in range(8)]
+    candles[5] = _candle(6.0, 10.0, 10.05, 9.4, 9.5)
+    candles[6] = _candle(7.0, 9.5, 9.9, 9.45, 9.8)
+    candles[7] = _candle(8.0, 9.8, 9.95, 9.7, 9.9)
+    raid = {"available": True, "direction": 1, "eventIndex": 5}
+    impulse = {"available": True, "direction": 1, "origin": 9.4, "startIndex": 6, "endIndex": 6}
+
+    unconfirmed = cisd_state(candles, raid, impulse, lookback=8)
+
+    assert unconfirmed["origin"] == pytest.approx(10.0)
+    assert unconfirmed["confirmed"] is False
+
+    candles[7] = _candle(8.0, 9.8, 10.15, 9.7, 10.1)
+    confirmed = cisd_state(candles, raid, impulse, lookback=8)
+
+    assert confirmed["confirmed"] is True
+    assert confirmed["eventIndex"] == 7
+
+
+@pytest.mark.parametrize(
+    ("raid_index", "impulse_start", "impulse_end", "void_index", "cisd_index"),
+    [
+        (5, 4, 4, 6, 7),
+        (5, 6, 6, 4, 7),
+        (5, 6, 6, 7, 5),
+        (5, None, None, 7, 8),
+    ],
+)
+def test_delivery_sequence_rejects_out_of_order_or_missing_events(
+    raid_index: int,
+    impulse_start: int | None,
+    impulse_end: int | None,
+    void_index: int,
+    cisd_index: int,
+) -> None:
+    result = _delivery_sequence(
+        {"eventIndex": raid_index},
+        {"startIndex": impulse_start, "endIndex": impulse_end},
+        {"index": void_index},
+        {"eventIndex": cisd_index},
+    )
+
+    assert result["passed"] is False
+    assert result["reason"] in {"DELIVERY_SEQUENCE_INVALID", "DELIVERY_SEQUENCE_UNAVAILABLE"}
+
+
+def test_delivery_sequence_accepts_raid_then_impulse_then_void_and_cisd() -> None:
+    result = _delivery_sequence(
+        {"eventIndex": 5},
+        {"startIndex": 6, "endIndex": 6},
+        {"index": 7},
+        {"eventIndex": 6},
+    )
+
+    assert result == {"passed": True, "reason": None}
 
 
 def _last_closed_open(timeframe: str, as_of: float = NOW) -> float:
@@ -121,8 +237,8 @@ def _ready_snapshot(
     m5_closes[-1] = entry
     for offset, close in enumerate(m5_closes, start=len(m5) - 8):
         candle = m5[offset]
-        open_ = close - 0.00014
-        m5[offset] = _candle(candle.time, open_, close + 0.00006, open_ - 0.00004, close, 260)
+        open_ = close - 0.00040
+        m5[offset] = _candle(candle.time, open_, close + 0.00004, open_ - 0.00002, close, 260)
 
     frames = {"D1": d1, "H1": h1, "M15": m15, "M5": m5}
     if mirrored:
@@ -236,7 +352,7 @@ def _passing_quote(signal: dict, *, timestamp: float = NOW) -> Quote:
 
 def test_default_contract_is_valid_and_live_requires_research_validation() -> None:
     config = load_grok_config()
-    assert config.version == "grok.v1"
+    assert config.version == "grok.v2"
     assert sum(config.scoring["weights"].values()) == 100.0
     assert config.execution["default_mode"] == "paper"
     assert config.execution["live_enabled"] is False
@@ -313,6 +429,11 @@ def test_forex_crypto_and_stock_use_distinct_scoring_profiles() -> None:
     assert _component_max(forex, "geometry") != _component_max(stock, "geometry")
     assert forex["grokProfile"]["family"] != crypto["grokProfile"]["family"]
     assert crypto["grokProfile"]["family"] != stock["grokProfile"]["family"]
+    assert sum(forex["grokProfile"]["weights"].values()) == pytest.approx(100.0)
+    assert forex["grokProfile"]["weightScope"] == "base"
+    assert crypto["grokProfile"]["weightScope"] == "family:crypto"
+    assert stock["grokProfile"]["weightScope"] == "family:stock"
+    assert forex["grokProfile"]["calibrationStatus"] == "UNVALIDATED"
 
 
 def test_stock_is_closed_during_london_silver_bullet_while_forex_is_open() -> None:
@@ -370,6 +491,28 @@ def test_pair_profile_override_applies_only_to_that_symbol() -> None:
     )
     assert eurusd["readyThreshold"] == 91.0
     assert gbpusd["readyThreshold"] == load_grok_config().scoring["ready_threshold"]
+
+
+@pytest.mark.parametrize(
+    "overlay",
+    [
+        {"scoring": {"ready_threshold": 101.0}},
+        {"scoring": {"ready_threshold": 50.0, "watch_threshold": 60.0}},
+        {"levels": {"minimum_stop_atr": 3.0, "maximum_stop_atr": 2.0}},
+        {"indicators": {"ote_inner": 0.85, "ote_outer": 0.79}},
+    ],
+)
+def test_invalid_resolved_profile_overlays_fail_closed(overlay: dict[str, object]) -> None:
+    with pytest.raises(GrokConfigError):
+        load_grok_config(
+            {
+                "GROK_ENGINE": {
+                    "profiles": {
+                        "groups": {"forex_majors": overlay},
+                    }
+                }
+            }
+        )
 
 
 def test_score_group_field_on_pair_is_honoured() -> None:
@@ -491,6 +634,48 @@ def test_ready_signal_is_symmetric_auditable_and_fully_gated(mirrored: bool, dir
         assert signal["stop"] < signal["entry"] < signal["target"]
     else:
         assert signal["target"] < signal["entry"] < signal["stop"]
+
+
+def test_opposing_m5_trigger_cannot_be_overridden_by_m15_cisd() -> None:
+    snapshot = _ready_snapshot()
+    frames = {timeframe: list(rows) for timeframe, rows in snapshot.frames.items()}
+    entry = frames["M5"][-1].close
+    closes = [entry + 0.0018 - 0.00024 * step for step in range(8)]
+    for offset, close in enumerate(closes, start=len(frames["M5"]) - len(closes)):
+        candle = frames["M5"][offset]
+        open_ = close + 0.00018
+        frames["M5"][offset] = _candle(candle.time, open_, open_ + 0.00004, close - 0.00006, close, 260)
+
+    signal = evaluate_snapshot(
+        MarketSnapshot(snapshot.pair, frames, snapshot.provenance, snapshot.as_of_epoch),
+        load_grok_config(),
+        generated_at_epoch=NOW,
+    )
+
+    assert signal["indicatorState"]["cisd"]["confirmed"] is True
+    assert signal["indicatorState"]["triggerImpulse"]["direction"] == -1
+    assert signal["decision"] != "READY"
+    assert "TRIGGER_NOT_ALIGNED" in signal["blockingReasons"]
+
+
+def test_stale_m5_trigger_cannot_promote_ready() -> None:
+    snapshot = _ready_snapshot()
+    frames = {timeframe: list(rows) for timeframe, rows in snapshot.frames.items()}
+    entry = frames["M5"][-1].close
+    for offset in range(len(frames["M5"]) - 3, len(frames["M5"])):
+        candle = frames["M5"][offset]
+        frames["M5"][offset] = _candle(candle.time, entry, entry + 0.00002, entry - 0.00002, entry, 120)
+
+    signal = evaluate_snapshot(
+        MarketSnapshot(snapshot.pair, frames, snapshot.provenance, snapshot.as_of_epoch),
+        load_grok_config(),
+        generated_at_epoch=NOW,
+    )
+
+    assert signal["indicatorState"]["triggerImpulse"]["direction"] == 1
+    assert signal["indicatorState"]["triggerImpulse"]["ageBars"] == 3
+    assert signal["decision"] != "READY"
+    assert "TRIGGER_STALE" in signal["blockingReasons"]
 
 
 def test_same_setup_keeps_one_identity_across_trigger_refreshes() -> None:
@@ -776,6 +961,20 @@ def test_tampered_gate_proof_rejects_before_quote(tmp_path) -> None:
     preview = coordinator.preview(tampered)
     assert preview["executable"] is False
     assert preview["error"] == "SIGNAL_GATE_PROOF_INVALID"
+    assert gateway.quote_calls == 0
+
+
+def test_legacy_gate_proof_without_new_causal_gates_rejects_before_quote(tmp_path) -> None:
+    signal = _ready_signal()
+    gateway = _Gateway(_passing_quote(signal))
+    coordinator = _coordinator(tmp_path, [signal], gateway)
+    legacy = deepcopy(signal)
+    legacy["gates"] = [gate for gate in legacy["gates"] if gate["name"] != "trigger_aligned_recent"]
+
+    preview = coordinator.preview(legacy)
+
+    assert preview["executable"] is False
+    assert preview["error"] == "SIGNAL_GATE_PROOF_INCOMPLETE"
     assert gateway.quote_calls == 0
 
 
