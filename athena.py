@@ -14992,6 +14992,7 @@ def api_open_trades_timed():
     _recompute_fn = _recompute_for_trade if _sl_recompute_on_poll else None
 
     out = []
+    _attr_inputs: list[dict] = []
     now_ts = datetime.now(_tz.utc).timestamp()
 
     def _fetch_mt5_positions():
@@ -15247,7 +15248,45 @@ def api_open_trades_timed():
         )
         _enrich_elapsed_s += _time.perf_counter() - _t_enrich
 
+        # Attribution input. Carries the broker symbol (which the response row
+        # does not) and the resolved open time, so an engine store can be matched
+        # even when the venue reports no usable ticket (Bybit positionIdx).
+        _attr_inputs.append(
+            {
+                "index": len(out),
+                "ticket": ticket,
+                "pair": res_p["pair"],
+                "symbol": p.get("symbol"),
+                "direction": res_p["direction"],
+                "entry": res_p["entry"],
+                "venue": res_p["exchange"],
+                "open_ts": open_ts,
+            }
+        )
         out.append(res_p)
+
+    # Engine A/B/D stamp `engine` on their audit_log row, so the audit match
+    # above already resolved them. GROK, SOL, OPUS, KIMI and OX Alpha execute
+    # through their own coordinators and write no audit_log execution row, so
+    # their positions arrive here unlabelled and the dashboard renders "Unknown".
+    # Attribute those from each engine's own execution store — display metadata
+    # only: style, timers, exit mode and every gate above are already resolved
+    # and are not revisited.
+    _t_attr = _time.perf_counter()
+    _unlabelled = [row for row in _attr_inputs if not out[row["index"]].get("engine")]
+    if _unlabelled:
+        try:
+            import engine_attribution
+
+            _attributed = engine_attribution.attribute_positions(_unlabelled)
+            for _attr_idx, _engine_key in _attributed.items():
+                _row = out[_unlabelled[_attr_idx]["index"]]
+                _row["engine"] = _engine_key
+                _row["engine_resolved"] = _engine_key
+                _row["engine_source"] = "engine_store"
+        except Exception as e:
+            log.debug("[OPEN-TRADES] engine attribution unavailable: %s", e)
+    _timing_ms["attribution_ms"] = round((_time.perf_counter() - _t_attr) * 1000, 1)
 
     _timing_ms["enrich_ms"] = round(_enrich_elapsed_s * 1000, 1)
     _timing_ms["position_count"] = len(all_positions)

@@ -8,6 +8,7 @@ export type AuditEngineKey =
   | 'sol'
   | 'opus'
   | 'kimi'
+  | 'ox_alpha'
   | 'external'
   | 'unknown'
   | string;
@@ -39,6 +40,10 @@ const ENGINE_ALIASES: Record<string, AuditEngineKey> = {
   opus_engine: 'opus',
   kimi: 'kimi',
   kimi_engine: 'kimi',
+  ox_alpha: 'ox_alpha',
+  oxalpha: 'ox_alpha',
+  'ox alpha': 'ox_alpha',
+  ox: 'ox_alpha',
   external: 'external',
   webhook: 'external',
 };
@@ -53,6 +58,7 @@ const ENGINE_LABELS: Record<string, string> = {
   sol: 'SOL',
   opus: 'OPUS',
   kimi: 'KIMI',
+  ox_alpha: 'OX ALPHA',
   external: 'Webhook',
   unknown: 'Unknown',
 };
@@ -67,6 +73,7 @@ const ENGINE_TITLES: Record<string, string> = {
   sol: 'SOL engine',
   opus: 'OPUS engine',
   kimi: 'KIMI engine',
+  ox_alpha: 'OX Alpha engine',
   external: 'Webhook / external',
   unknown: 'Unknown engine',
 };

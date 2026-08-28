@@ -290,6 +290,26 @@ def _audit(sig, result_ok: bool, detail: str) -> None:
         pass
 
 
+def _record_attribution(sig, venue: str, host_pair: str, result: dict) -> None:
+    """Durably record the fill so the host dashboard can name KIMI as its engine.
+
+    KIMI's own event feed is in-memory and the host audit row carries no ticket,
+    so without this a KIMI position shows up on the open-trades panel as
+    "Unknown". Display metadata only; never affects the result."""
+    try:
+        import engine_attribution
+        engine_attribution.record_execution(
+            engine=engine_attribution.ENGINE_KIMI,
+            venue=venue,
+            result=result,
+            pair=host_pair,
+            symbol=sig.symbol,
+            direction="LONG" if sig.direction > 0 else "SHORT",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _notify(sig, venue: str) -> None:
     try:
         from telegram_notify import notify_trade_opened
@@ -437,6 +457,8 @@ def execute_signal(engine, sig) -> dict:
     if not success:
         return {"ok": False, "error": str(result.get("error", "executor failed")),
                     "result": result}
+
+    _record_attribution(sig, venue, host_pair, result)
 
     with engine.lock:
         sig.status = "EXECUTED"
