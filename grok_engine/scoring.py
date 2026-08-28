@@ -274,6 +274,35 @@ def _delivery_sequence(
     return {"passed": passed, "reason": None if passed else "DELIVERY_SEQUENCE_INVALID"}
 
 
+def _m5_trigger_is_recent(
+    trigger: dict[str, Any],
+    impulse: dict[str, Any],
+    m5: list[Candle],
+    m15: list[Candle],
+    recent_bars: int,
+) -> bool:
+    age = trigger.get("ageBars")
+    if isinstance(age, int) and 0 <= age <= int(recent_bars):
+        return True
+    if not trigger.get("available") or not impulse.get("available"):
+        return False
+    trigger_start = trigger.get("startIndex")
+    trigger_end = trigger.get("endIndex")
+    impulse_start = impulse.get("startIndex")
+    impulse_end = impulse.get("endIndex")
+    if not all(isinstance(value, int) for value in (trigger_start, trigger_end, impulse_start, impulse_end)):
+        return False
+    if not (0 <= int(trigger_start) <= int(trigger_end) < len(m5)):
+        return False
+    if not (0 <= int(impulse_start) <= int(impulse_end) < len(m15)):
+        return False
+    trigger_open = float(m5[int(trigger_start)].time)
+    trigger_close = float(m5[int(trigger_end)].closes_at("M5"))
+    impulse_open = float(m15[int(impulse_start)].time)
+    impulse_close = float(m15[int(impulse_end)].closes_at("M15"))
+    return trigger_open < impulse_close and impulse_open < trigger_close
+
+
 def evaluate_snapshot(
     snapshot: MarketSnapshot,
     config: GrokConfig,
@@ -464,10 +493,15 @@ def evaluate_snapshot(
     position = float(raw_position) if dealing.get("available") and isinstance(raw_position, (int, float)) else 0.5
     long_location_ok = direction_value <= 0 or position <= float(scoring["maximum_premium_for_long"])
     short_location_ok = direction_value >= 0 or position >= float(scoring["minimum_discount_for_short"])
-    trigger_age = trigger.get("ageBars")
     trigger_direction_ok = int(trigger.get("direction") or 0) == direction_value
     trigger_strength_ok = float(trigger.get("strength") or 0.0) >= float(scoring["minimum_impulse_strength"])
-    trigger_recent = isinstance(trigger_age, int) and trigger_age <= int(indicators["trigger_recent_bars"])
+    trigger_recent = _m5_trigger_is_recent(
+        trigger,
+        impulse,
+        m5,
+        m15,
+        int(indicators["trigger_recent_bars"]),
+    )
     trigger_aligned = bool(trigger.get("available")) and trigger_direction_ok and trigger_strength_ok and trigger_recent
     if not trigger.get("available"):
         raw_trigger_reason = str(trigger.get("reason") or "")

@@ -16,7 +16,7 @@ from grok_engine.market_data import normalize_closed_candles
 from grok_engine.models import Candle, MarketSnapshot, Quote, TIMEFRAME_SECONDS
 from grok_engine.persistence import GrokRepository
 from grok_engine.replay import _outcome
-from grok_engine.scoring import _delivery_sequence, _execution_geometry, evaluate_snapshot
+from grok_engine.scoring import _delivery_sequence, _execution_geometry, _m5_trigger_is_recent, evaluate_snapshot
 from grok_engine.sessions import classify_session, market_is_open
 
 
@@ -703,6 +703,70 @@ def test_opposing_m5_trigger_cannot_be_overridden_by_m15_cisd() -> None:
     assert signal["indicatorState"]["triggerImpulse"]["reason"] == "NO_ALIGNED_DISPLACEMENT"
     assert signal["decision"] != "READY"
     assert "TRIGGER_NOT_ALIGNED" in signal["blockingReasons"]
+
+
+def test_m5_trigger_inside_current_m15_impulse_is_recent() -> None:
+    m15_open = 1_000_000.0
+    m5 = [_candle(m15_open + index * 300, 1.10, 1.11, 1.09, 1.10) for index in range(4)]
+    m15 = [
+        _candle(m15_open - 900, 1.10, 1.11, 1.09, 1.10),
+        _candle(m15_open, 1.10, 1.12, 1.09, 1.11),
+    ]
+    trigger = {"available": True, "ageBars": 3, "startIndex": 0, "endIndex": 0}
+    impulse = {"available": True, "ageBars": 0, "startIndex": 1, "endIndex": 1}
+
+    assert _m5_trigger_is_recent(trigger, impulse, m5, m15, recent_bars=2) is True
+
+
+def test_m5_trigger_inside_previous_m15_impulse_is_recent() -> None:
+    m15_open = 1_000_000.0
+    m5 = [_candle(m15_open + index * 300, 1.10, 1.11, 1.09, 1.10) for index in range(7)]
+    m15 = [
+        _candle(m15_open, 1.10, 1.12, 1.09, 1.11),
+        _candle(m15_open + 900, 1.10, 1.11, 1.09, 1.10),
+    ]
+    trigger = {"available": True, "ageBars": 5, "startIndex": 0, "endIndex": 1}
+    impulse = {"available": True, "ageBars": 1, "startIndex": 0, "endIndex": 0}
+
+    assert _m5_trigger_is_recent(trigger, impulse, m5, m15, recent_bars=2) is True
+
+
+def test_m5_trigger_outside_impulse_window_stays_stale() -> None:
+    m15_open = 1_000_000.0
+    m5 = [_candle(m15_open + index * 300, 1.10, 1.11, 1.09, 1.10) for index in range(8)]
+    m15 = [
+        _candle(m15_open, 1.10, 1.12, 1.09, 1.11),
+        _candle(m15_open + 900, 1.10, 1.11, 1.09, 1.10),
+    ]
+    trigger = {"available": True, "ageBars": 3, "startIndex": 4, "endIndex": 4}
+    impulse = {"available": True, "ageBars": 1, "startIndex": 0, "endIndex": 0}
+
+    assert _m5_trigger_is_recent(trigger, impulse, m5, m15, recent_bars=2) is False
+
+
+def test_m5_trigger_overlapping_live_m15_impulse_is_not_trigger_stale() -> None:
+    snapshot = _ready_snapshot(as_of=NOW + 240)
+    frames = {timeframe: list(rows) for timeframe, rows in snapshot.frames.items()}
+    m5 = frames["M5"]
+    m15 = frames["M15"]
+    entry = m5[-1].close
+    for offset in range(len(m5) - 3, len(m5)):
+        candle = m5[offset]
+        m5[offset] = _candle(candle.time, entry, entry + 0.00002, entry - 0.00002, entry, 120)
+    last = m15[-1]
+    m15[-1] = _candle(last.time, 1.09870, 1.10090, 1.09860, 1.10080, 440)
+
+    signal = evaluate_snapshot(
+        MarketSnapshot(snapshot.pair, frames, snapshot.provenance, snapshot.as_of_epoch),
+        load_grok_config(),
+        generated_at_epoch=NOW + 240,
+    )
+    trigger = signal["indicatorState"]["triggerImpulse"]
+    impulse = signal["indicatorState"]["impulse"]
+
+    assert trigger["ageBars"] == 3
+    assert impulse["ageBars"] == 0
+    assert "TRIGGER_STALE" not in signal["blockingReasons"]
 
 
 def test_stale_m5_trigger_cannot_promote_ready() -> None:
