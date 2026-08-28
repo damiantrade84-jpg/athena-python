@@ -159,6 +159,7 @@ def impulse_vector(
     body_fraction: float,
     range_atr: float,
     single_range_atr: float,
+    required_direction: int = 0,
 ) -> dict[str, Any]:
     if len(candles) < 5 or atr <= 0:
         return {"available": False, "direction": 0, "strength": 0.0, "reason": "IMPULSE_INPUT_UNAVAILABLE"}
@@ -188,13 +189,15 @@ def impulse_vector(
             index = max(cursor, index + 1)
             continue
         used_direction = candle.direction
+        if required_direction and used_direction != required_direction:
+            index = max(cursor, index + 1)
+            continue
         origin = run[0].low if used_direction > 0 else run[0].high
         terminus = run[-1].high if used_direction > 0 else run[-1].low
         span = abs(terminus - origin)
         efficiency = clamp(sum(row.body for row in run) / max(span, 1e-12))
         strength = clamp(0.45 * clamp(span / (atr * 1.8)) + 0.35 * efficiency + 0.20 * clamp(len(run) / 4.0))
         age = len(sample) - cursor
-        recency = clamp(1.0 - age / 8.0)
         candidate = {
             "available": True,
             "direction": used_direction,
@@ -207,9 +210,9 @@ def impulse_vector(
             "ageBars": age,
             "startIndex": sample_offset + index,
             "endIndex": sample_offset + cursor - 1,
-            "_rank": strength * (0.72 + 0.28 * recency),
+            "_rank": (sample_offset + cursor - 1, len(run), strength),
         }
-        if best is None or float(candidate["_rank"]) > float(best.get("_rank") or 0.0):
+        if best is None or tuple(candidate["_rank"]) > tuple(best.get("_rank") or (-1, 0, 0.0)):
             best = candidate
         index = max(cursor, index + 1)
 
@@ -217,6 +220,7 @@ def impulse_vector(
         (single_index, candle)
         for single_index, candle in enumerate(sample)
         if candle.range >= atr * single_range_atr and candle.body >= candle.range * body_fraction
+        and (not required_direction or candle.direction == required_direction)
     ]
     if singles:
         single_index, single = singles[-1]
@@ -236,13 +240,14 @@ def impulse_vector(
             "ageBars": len(sample) - 1 - single_index,
             "startIndex": sample_offset + single_index,
             "endIndex": sample_offset + single_index,
-            "_rank": strength,
+            "_rank": (sample_offset + single_index, 1, strength),
         }
-        if best is None or float(candidate["_rank"]) >= float(best.get("_rank") or 0.0):
+        if best is None or tuple(candidate["_rank"]) > tuple(best.get("_rank") or (-1, 0, 0.0)):
             best = candidate
 
     if best is None:
-        return {"available": False, "direction": 0, "strength": 0.0, "reason": "NO_DISPLACEMENT"}
+        reason = "NO_ALIGNED_DISPLACEMENT" if required_direction else "NO_DISPLACEMENT"
+        return {"available": False, "direction": 0, "strength": 0.0, "reason": reason}
     best.pop("_rank", None)
     return best
 

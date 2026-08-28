@@ -320,6 +320,7 @@ def evaluate_snapshot(
         body_fraction=float(indicators["impulse_body_fraction"]),
         range_atr=float(indicators["impulse_range_atr"]),
         single_range_atr=float(indicators["impulse_single_range_atr"]),
+        required_direction=int(raid.get("direction") or 0),
     )
     direction_value = int(raid.get("direction") or impulse.get("direction") or 0)
     if impulse.get("available") and raid.get("available") and int(impulse.get("direction") or 0) != int(raid.get("direction") or 0):
@@ -331,6 +332,7 @@ def evaluate_snapshot(
         body_fraction=float(indicators["impulse_body_fraction"]),
         range_atr=float(indicators["impulse_range_atr"]),
         single_range_atr=float(indicators["impulse_single_range_atr"]),
+        required_direction=direction_value,
     )
     causal_floor_candidates = [
         value
@@ -468,7 +470,8 @@ def evaluate_snapshot(
     trigger_recent = isinstance(trigger_age, int) and trigger_age <= int(indicators["trigger_recent_bars"])
     trigger_aligned = bool(trigger.get("available")) and trigger_direction_ok and trigger_strength_ok and trigger_recent
     if not trigger.get("available"):
-        trigger_reason = str(trigger.get("reason") or "TRIGGER_UNAVAILABLE")
+        raw_trigger_reason = str(trigger.get("reason") or "")
+        trigger_reason = "TRIGGER_NOT_ALIGNED" if raw_trigger_reason in {"NO_DISPLACEMENT", "NO_ALIGNED_DISPLACEMENT"} else (raw_trigger_reason or "TRIGGER_UNAVAILABLE")
     elif not trigger_direction_ok or not trigger_strength_ok:
         trigger_reason = "TRIGGER_NOT_ALIGNED"
     elif not trigger_recent:

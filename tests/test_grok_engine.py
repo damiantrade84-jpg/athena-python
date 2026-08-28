@@ -58,6 +58,52 @@ def test_impulse_vector_requires_minimum_run_unless_single_bar_meets_stricter_th
     assert strict_single["endIndex"] == 4
 
 
+def test_impulse_vector_uses_latest_valid_delivery_not_stronger_stale_impulse() -> None:
+    candles = [_candle(float(index + 1), 10.0, 10.1, 9.9, 10.0) for index in range(16)]
+    candles[8] = _candle(9.0, 10.0, 11.6, 9.9, 11.5)
+    candles[9] = _candle(10.0, 11.5, 13.1, 11.4, 13.0)
+    candles[14] = _candle(15.0, 10.0, 10.65, 9.95, 10.6)
+    candles[15] = _candle(16.0, 10.6, 11.25, 10.55, 11.2)
+
+    result = impulse_vector(
+        candles,
+        atr=1.0,
+        min_run=2,
+        body_fraction=0.52,
+        range_atr=0.62,
+        single_range_atr=1.28,
+    )
+
+    assert result["available"] is True
+    assert result["startIndex"] == 14
+    assert result["endIndex"] == 15
+    assert result["ageBars"] == 0
+
+
+def test_impulse_vector_can_select_recent_candidate_for_required_direction() -> None:
+    candles = [_candle(float(index + 1), 10.0, 10.1, 9.9, 10.0) for index in range(16)]
+    candles[12] = _candle(13.0, 10.0, 10.65, 9.95, 10.6)
+    candles[13] = _candle(14.0, 10.6, 11.25, 10.55, 11.2)
+    candles[14] = _candle(15.0, 11.2, 11.25, 10.55, 10.6)
+    candles[15] = _candle(16.0, 10.6, 10.65, 9.95, 10.0)
+
+    result = impulse_vector(
+        candles,
+        atr=1.0,
+        min_run=2,
+        body_fraction=0.52,
+        range_atr=0.62,
+        single_range_atr=1.28,
+        required_direction=1,
+    )
+
+    assert result["available"] is True
+    assert result["direction"] == 1
+    assert result["startIndex"] == 12
+    assert result["endIndex"] == 13
+    assert result["ageBars"] == 2
+
+
 @pytest.mark.parametrize(
     ("close", "long_expected", "short_expected"),
     [
@@ -653,7 +699,8 @@ def test_opposing_m5_trigger_cannot_be_overridden_by_m15_cisd() -> None:
     )
 
     assert signal["indicatorState"]["cisd"]["confirmed"] is True
-    assert signal["indicatorState"]["triggerImpulse"]["direction"] == -1
+    assert signal["indicatorState"]["triggerImpulse"]["available"] is False
+    assert signal["indicatorState"]["triggerImpulse"]["reason"] == "NO_ALIGNED_DISPLACEMENT"
     assert signal["decision"] != "READY"
     assert "TRIGGER_NOT_ALIGNED" in signal["blockingReasons"]
 
@@ -676,6 +723,32 @@ def test_stale_m5_trigger_cannot_promote_ready() -> None:
     assert signal["indicatorState"]["triggerImpulse"]["ageBars"] == 3
     assert signal["decision"] != "READY"
     assert "TRIGGER_STALE" in signal["blockingReasons"]
+
+
+def test_stronger_stale_m5_impulse_does_not_hide_recent_aligned_trigger() -> None:
+    snapshot = _ready_snapshot()
+    frames = {timeframe: list(rows) for timeframe, rows in snapshot.frames.items()}
+    m5 = frames["M5"]
+    recent = [m5[-2], m5[-1]]
+    entry = m5[-1].close
+    for offset in range(len(m5) - 3, len(m5)):
+        candle = m5[offset]
+        m5[offset] = _candle(candle.time, entry, entry + 0.00002, entry - 0.00002, entry, 120)
+    m5[-2] = _candle(m5[-2].time, recent[0].open, recent[0].high, recent[0].low, recent[0].close, recent[0].volume or 260)
+    m5[-1] = _candle(m5[-1].time, recent[1].open, recent[1].high, recent[1].low, recent[1].close, recent[1].volume or 260)
+
+    signal = evaluate_snapshot(
+        MarketSnapshot(snapshot.pair, frames, snapshot.provenance, snapshot.as_of_epoch),
+        load_grok_config(),
+        generated_at_epoch=NOW,
+    )
+    trigger = signal["indicatorState"]["triggerImpulse"]
+
+    assert trigger["available"] is True
+    assert trigger["direction"] == 1
+    assert trigger["ageBars"] == 0
+    assert "TRIGGER_STALE" not in signal["blockingReasons"]
+    assert signal["decision"] == "READY", signal["blockingReasons"]
 
 
 def test_same_setup_keeps_one_identity_across_trigger_refreshes() -> None:
