@@ -22,6 +22,27 @@ def pair_dict(pair: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def mt5_broker_symbol(pair: Mapping[str, Any]) -> str | None:
+    """Resolve the broker-tradable MT5 symbol for an MT5-sourced pair.
+
+    The catalog ``symbol`` is a research/catalog id (``EURUSD=X``, ``^GSPC``,
+    ``DIS.US``) and is never a broker symbol; the local broker's name comes
+    only from the platform mapper, which overlays machine-local
+    ``MT5_SYMBOL_OVERRIDES`` (e.g. ``GBPUSD.s``, ``#DIS``). No mapping ->
+    None, and every caller must fail closed on that.
+    """
+    display = str(pair.get("display") or pair.get("symbol") or "").strip()
+    if not display:
+        return None
+    try:
+        from mt5_executor import mt5_map_symbol
+
+        return mt5_map_symbol(display) or None
+    except Exception as exc:
+        log.debug("OX Alpha MT5 symbol mapping unavailable for %s: %s", display, exc)
+        return None
+
+
 def _sort_confirmed_ascending(state: dict[str, Any]) -> None:
     """Enforce oldest->newest order on confirmed bars.
 
@@ -229,9 +250,13 @@ def load_quote(
             )
             from config import CONFIG as _mt5_cfg
 
-            tick = mt5.symbol_info_tick(symbol)
-            if tick is None and pd.get("display") and pd.get("display") != symbol:
-                tick = mt5.symbol_info_tick(str(pd.get("display")))
+            broker_symbol = mt5_broker_symbol(pd)
+            if not broker_symbol:
+                return None
+            tick = mt5.symbol_info_tick(broker_symbol)
+            if tick is None:
+                mt5.symbol_select(broker_symbol, True)
+                tick = mt5.symbol_info_tick(broker_symbol)
             if tick is not None:
                 bid = float(getattr(tick, "bid", 0) or 0)
                 ask = float(getattr(tick, "ask", 0) or 0)

@@ -50,10 +50,17 @@ def market_open_state(pair: Mapping[str, Any]) -> dict:
     if str(pair.get("type") or "").lower() == "crypto":
         return {"open": True, "reason": "crypto_24_7"}
     if str(pair.get("source") or "").lower() == "mt5":
+        # The broker check needs the broker's own symbol. The catalog `symbol`
+        # is a research id (EURUSD=X, ^GSPC, DIS.US) that MT5 has never heard
+        # of, and asking for a tick on it returns MARKET_CLOSED_NO_TICK on a
+        # wide-open market.
+        broker_symbol = feed.mt5_broker_symbol(pair)
+        if not broker_symbol:
+            return {"open": False, "reason": "no_mt5_mapping"}
         try:
             from scalp_engine import mt5_market_open_state
 
-            return mt5_market_open_state(str(pair.get("symbol") or pair.get("display") or ""))
+            return mt5_market_open_state(broker_symbol)
         except Exception as exc:
             return {"open": False, "reason": f"market_open_check_error:{exc}"}
     return {"open": False, "reason": "no_broker_check_available"}

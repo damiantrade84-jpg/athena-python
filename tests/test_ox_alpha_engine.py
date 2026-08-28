@@ -966,3 +966,115 @@ def test_round_number_levels_scale_to_step_hint():
                for g in gaps)
     nearest = min(fx_levels, key=lambda lv: abs(lv - 1.08432))
     assert abs(nearest - 1.08432) <= 0.005  # grid within half a hint-decade
+
+
+# --- broker-symbol resolution -------------------------------------------------
+# Regression: OX Alpha passed the catalog id (EURUSD=X, ^GSPC, DIS.US) to the
+# MT5 broker checks. ATFX names those GBPUSD.s / US500.s / #DIS, so every MT5
+# pair answered MARKET_CLOSED_NO_TICK on a wide-open market and was forced to
+# NO_SIGNAL + entryReadiness UNAVAILABLE, and its quote never resolved.
+
+def _fake_mt5_executor(mapping, calls):
+    import types
+
+    mod = types.ModuleType("mt5_executor")
+
+    def _map(display):
+        calls.append(display)
+        return mapping.get(display)
+
+    mod.mt5_map_symbol = _map
+    return mod
+
+
+def test_mt5_broker_symbol_maps_display_never_catalog_id(monkeypatch):
+    import sys
+
+    from ox_alpha import feed
+
+    calls: list[str] = []
+    monkeypatch.setitem(
+        sys.modules, "mt5_executor",
+        _fake_mt5_executor({"GBP/USD": "GBPUSD.s", "DIS": "#DIS"}, calls),
+    )
+    pair = {"display": "GBP/USD", "symbol": "GBPUSD=X", "source": "mt5"}
+    assert feed.mt5_broker_symbol(pair) == "GBPUSD.s"
+    assert calls == ["GBP/USD"]  # display, not "GBPUSD=X"
+    assert feed.mt5_broker_symbol({"display": "DIS", "symbol": "DIS.US"}) == "#DIS"
+    assert feed.mt5_broker_symbol({"display": "NOPE", "symbol": "NOPE=X"}) is None
+
+
+def test_market_open_state_probes_broker_symbol(monkeypatch):
+    import sys
+    import types
+
+    from ox_alpha import runtime
+
+    seen: list[str] = []
+    scalp = types.ModuleType("scalp_engine")
+    scalp.mt5_market_open_state = lambda sym: (
+        seen.append(sym) or {"open": True, "reason": "market_open"}
+    )
+    monkeypatch.setitem(sys.modules, "scalp_engine", scalp)
+    monkeypatch.setattr(runtime.feed, "mt5_broker_symbol", lambda pair: "GBPUSD.s")
+
+    state = runtime.market_open_state(
+        {"display": "GBP/USD", "symbol": "GBPUSD=X", "type": "forex", "source": "mt5"}
+    )
+    assert state["open"] is True
+    assert seen == ["GBPUSD.s"]
+
+
+def test_market_open_state_fails_closed_without_broker_mapping(monkeypatch):
+    from ox_alpha import runtime
+
+    monkeypatch.setattr(runtime.feed, "mt5_broker_symbol", lambda pair: None)
+    state = runtime.market_open_state(
+        {"display": "GBP/USD", "symbol": "GBPUSD=X", "type": "forex", "source": "mt5"}
+    )
+    assert state == {"open": False, "reason": "no_mt5_mapping"}
+
+
+def test_load_quote_ticks_broker_symbol(monkeypatch):
+    import sys
+    import time as _time
+    import types
+
+    from ox_alpha import feed
+
+    from config import CONFIG
+
+    now = _time.time()
+    # MT5 stamps ticks in broker-local time; the loader normalizes them back.
+    broker_now = now + int(CONFIG.get("MT5_BROKER_UTC_OFFSET", 3)) * 3600
+    asked: list[str] = []
+
+    class _Tick:
+        bid = 1.2700
+        ask = 1.2701
+        time_msc = int(broker_now * 1000)
+
+    mt5 = types.ModuleType("MetaTrader5")
+    mt5.symbol_info_tick = lambda sym: (_Tick() if asked.append(sym) is None and sym == "GBPUSD.s" else None)
+    mt5.symbol_select = lambda sym, enable: True
+    monkeypatch.setitem(sys.modules, "MetaTrader5", mt5)
+    monkeypatch.setattr(feed, "mt5_broker_symbol", lambda pair: "GBPUSD.s")
+
+    quote = feed.load_quote(
+        {"display": "GBP/USD", "symbol": "GBPUSD=X", "type": "forex", "source": "mt5"},
+        max_age_sec=30.0,
+        time_now=now,
+    )
+    assert asked and asked[0] == "GBPUSD.s"  # never "GBPUSD=X" / "GBP/USD"
+    assert quote is not None and quote["source"] == "mt5_tick"
+    assert quote["bid"] == 1.2700 and quote["ask"] == 1.2701
+
+
+def test_load_quote_none_without_broker_mapping(monkeypatch):
+    from ox_alpha import feed
+
+    monkeypatch.setattr(feed, "mt5_broker_symbol", lambda pair: None)
+    assert feed.load_quote(
+        {"display": "GBP/USD", "symbol": "GBPUSD=X", "type": "forex", "source": "mt5"},
+        max_age_sec=30.0,
+    ) is None
