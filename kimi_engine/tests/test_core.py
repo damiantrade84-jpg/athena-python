@@ -86,6 +86,12 @@ def test_classify_and_crypto_detection():
     assert classify("XAUUSD") == "metals"
     assert classify("US30") == "indices"
     assert classify("WTI") == "energy"
+    # Share CFDs (Athena type=stock) must not fall through to "other":
+    # host_exec maps classify() → signal type and rejects unmapped classes.
+    assert classify("INTC") == "stock"
+    assert classify("AAPL") == "stock"
+    assert classify("BA") == "stock"
+    assert classify("FOOBARBAZ") == "other"
 
 
 def _fake_mt5(names):
@@ -494,6 +500,21 @@ def test_host_exec_full_pipeline_mt5(monkeypatch, tmp_path):
     assert calls["guardian"]["pair"] == "EUR/USD"
     assert sig.id not in eng.signals        # marked EXECUTED + removed
     assert eng.events[-1]["type"] == "HOST" and eng.events[-1]["ticket"] == 12345
+
+
+def test_host_exec_stock_cfd_is_classifiable(monkeypatch, tmp_path):
+    """INTC is a US share CFD. classify() used to return 'other', and HOST
+    rejected with 'unclassifiable instrument INTC' before any risk gate."""
+    calls = _fake_host_modules(monkeypatch)
+    eng, sig = _host_engine(monkeypatch, tmp_path, symbol="INTC")
+    r = eng.execute(sig.id, venue="host")
+    assert r["ok"], r.get("error")
+    assert r["venue"] == "host-mt5"
+    venue, payload = calls["exec"]
+    assert venue == "mt5"
+    assert payload["type"] == "stock"
+    assert payload["pair"] == "INTC"
+    assert "unclassifiable" not in str(r).lower()
 
 
 def test_host_exec_demo_gate_blocks_real_account(monkeypatch, tmp_path):

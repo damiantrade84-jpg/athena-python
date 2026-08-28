@@ -45,7 +45,7 @@ _TF_MAP = {"1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30",
 
 # datafeed.classify() → host signal "type"
 _HOST_TYPE = {"forex": "forex", "metals": "commodity", "energy": "commodity",
-              "indices": "index", "crypto": "crypto"}
+              "indices": "index", "crypto": "crypto", "stock": "stock"}
 
 
 def _reset_cache() -> None:

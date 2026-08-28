@@ -40,6 +40,11 @@ def classify(symbol: str) -> str:
         return "energy"
     if len(s) == 6 and s.isalpha():
         return "forex"
+    # Share CFDs from the Athena book (INTC, AAPL, BA, SPY, …). Universe
+    # canonicalization already drops 1-char tickers. Host execution maps
+    # this class to signal type "stock"; "other" still fail-closes.
+    if 2 <= len(s) <= 5 and s.isalnum():
+        return "stock"
     return "other"
 
 
