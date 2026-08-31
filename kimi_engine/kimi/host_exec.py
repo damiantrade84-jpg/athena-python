@@ -261,9 +261,13 @@ def _demo_gate(venue: str, account: dict) -> str | None:
             return (f"MT5 account is {env} — KIMI host execution is demo-first "
                     f"(KIMI_HOST_REAL_ORDERS=1 to override)")
     else:
-        demo = os.environ.get("BYBIT_DEMO", "").lower() in ("true", "1", "yes")
-        testnet = os.environ.get("BYBIT_TESTNET", "").lower() in ("true", "1", "yes")
-        if not (demo or testnet):
+        # Trust what the executor VERIFIED about the account first; the env
+        # vars are only a fallback for accounts that report neither flag.
+        acct_demo = bool((account or {}).get("demo")
+                         or (account or {}).get("testnet"))
+        env_demo = os.environ.get("BYBIT_DEMO", "").lower() in ("true", "1", "yes")
+        env_testnet = os.environ.get("BYBIT_TESTNET", "").lower() in ("true", "1", "yes")
+        if not (acct_demo or env_demo or env_testnet):
             return ("Bybit is not in demo/testnet — set BYBIT_DEMO=true "
                     "(or KIMI_HOST_REAL_ORDERS=1 to override)")
     return None

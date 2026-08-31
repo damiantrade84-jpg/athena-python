@@ -36,19 +36,26 @@ class RiskManager:
         return max(0.0, (self.day_start_equity - equity) / self.day_start_equity * 100.0)
 
     def approve(self, *, entry: float, sl: float, equity: float,
-                open_positions: int) -> RiskVerdict:
+                open_positions: int, quote_to_account: float = 1.0) -> RiskVerdict:
+        """qty = risk_amt / (stop distance x quote->account conversion).
+
+        ``quote_to_account`` converts the stop distance (quote currency per
+        unit) into account currency: 1.0 for USD/USDT-quoted instruments,
+        1/price for USD-base pairs like USDJPY. Crosses without a USD leg
+        stay 1.0 — a documented paper-ledger approximation."""
         if self.kill_switch:
             return RiskVerdict(False, "kill switch engaged")
         risk = abs(entry - sl)
         if risk <= 0 or entry <= 0:
             return RiskVerdict(False, "invalid entry/SL geometry")
+        conv = quote_to_account if quote_to_account > 0 else 1.0
         if open_positions >= Config.MAX_POSITIONS:
             return RiskVerdict(False, f"max positions ({Config.MAX_POSITIONS}) reached")
         loss_pct = self.daily_loss_pct(equity)
         if loss_pct >= Config.MAX_DAILY_LOSS_PCT:
             return RiskVerdict(False, f"daily loss limit hit ({loss_pct:.2f}%)")
         risk_amt = equity * Config.RISK_PER_TRADE_PCT / 100.0
-        qty = risk_amt / risk
+        qty = risk_amt / (risk * conv)
         if qty <= 0:
             return RiskVerdict(False, "zero size")
         return RiskVerdict(True, qty=qty)

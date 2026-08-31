@@ -22,12 +22,12 @@ npm run dev                 # same thing, Kimi Work preview entry
 |---|---|---|
 | Data | `kimi/datafeed.py` | Bybit-first crypto live quotes, Binance crypto candles/fallback quotes, MT5 terminal attach (suffix resolver, tick + D1 change), Yahoo fallback, TTL caches |
 | Indicators | `kimi/indicators.py` | Tide (trend), Pulse (momentum), Pressure (signed relvol), Flow (taker imbalance), Vol regime, session VWAP |
-| Structure | `kimi/structure.py` | swings, liquidity sweeps, displacements, FVGs |
-| Scoring | `kimi/scoring.py` | KIMI Score 0–100, 8 weighted components, grades A+/A/B |
-| Signals | `kimi/signals.py` | multi-TF fuse (1h bias / 15m context / 5m entry), SL from swept structure, TP1/TP2 at R multiples |
-| Risk | `kimi/risk.py` | 1% fixed-fractional sizing, max positions, daily-loss limit, kill switch — fail closed |
-| Broker | `kimi/broker.py` | PaperBroker (fees+slippage, TP1 partial, BE move, persisted) + Bybit v5 adapter |
-| Engine | `kimi/engine.py` | scan loop, cooldowns, signal lifecycle, execution routing, entry-TF freshness gate |
+| Structure | `kimi/structure.py` | swings, liquidity sweeps, displacements, FVGs (forming-bar events excluded via closed flags) |
+| Scoring | `kimi/scoring.py` | KIMI Score 0–100, 8 weighted components, group-aware session timing, grades A+/A/B at Config thresholds; A+ and the signal gate require a RECENT sweep/displacement |
+| Signals | `kimi/signals.py` | multi-TF fuse (1h bias / 15m context / 5m entry), SL from context-TF structure with context-TF ATR (provenance travels together), TP1/TP2 at R multiples |
+| Risk | `kimi/risk.py` | 1% fixed-fractional sizing with quote→account currency conversion, max positions, daily-loss limit, kill switch — fail closed |
+| Broker | `kimi/broker.py` | PaperBroker (fees+slippage, TP1 partial, BE move, quote-currency-aware PnL, persisted) + Bybit v5 adapter |
+| Engine | `kimi/engine.py` | scan loop, cooldowns, signal lifecycle, execution routing, per-TF freshness gates |
 | Server | `server.py` | stdlib HTTP + SSE, no dependencies |
 | UI | `web/` | dark terminal dashboard, candle chart with sweeps/signal markers |
 
@@ -38,11 +38,17 @@ npm run dev                 # same thing, Kimi Work preview entry
   then Yahoo. MT5 volume is tick volume; taker-flow scores neutral there.
 - The ticker batch is split by asset class — a non-Binance symbol can never
   fail the crypto batch; failed symbols keep their last-known tick.
+- Quote timestamps are honest: an MT5 tick keeps its broker-clock-derived
+  age (frozen weekend feeds fail closed to the labeled Yahoo fallback), and
+  a Yahoo price carries its bar timestamp — neither is stamped "now".
 - MT5 bar times are normalized from the broker clock (ATFX = UTC+3) to UTC —
   inferred from the live tick clock, `KIMI_MT5_BROKER_UTC_OFFSET` fallback.
   Without the shift, weekend/future bars would fool every freshness gate.
-- Freshness gate: entry-TF candles older than 2 bars (or future-dated) still
-  score in the UI but never emit executable signals.
+- Freshness gate: ALL THREE timeframes (entry/context/bias) must have fresh
+  last bars for a signal; stale candles of any TF still score in the UI
+  (`fresh`/`ctxFresh`/`biasFresh` badges) but never emit executable signals.
+  A failed kline refetch may serve only a recent cache (≈10×TF bound), never
+  an arbitrarily old one.
 
 ## Execution modes
 

@@ -267,6 +267,8 @@ function renderWatchlist() {
       <span class="sym-top">
         <span class="sym-name">${dispSym(sym)}</span>
         ${d.fresh === false ? '<span class="flag">STALE BAR</span>' : ""}
+        ${d.fresh !== false && (d.ctxFresh === false || d.biasFresh === false) ?
+          '<span class="flag" title="context/bias timeframe stale — signals gated">STALE HTF</span>' : ""}
         <span class="sym-px mono ${d.priceFresh === false ? "stale" : ""}" title="${esc(pxTitle)}">${fmtPx(d.price || 0)}</span>
         ${chgHtml}
       </span>

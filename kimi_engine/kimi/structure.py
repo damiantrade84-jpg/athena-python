@@ -94,13 +94,26 @@ def detect_fvgs(h: np.ndarray, l: np.ndarray) -> list[StructureEvent]:
 
 
 def structure_events(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray,
-                     max_age: int = 24) -> list[StructureEvent]:
-    """Fused recent event stream, newest last, ages relative to last bar."""
+                     max_age: int = 24,
+                     closed: np.ndarray | None = None) -> list[StructureEvent]:
+    """Fused recent event stream, newest last, ages relative to last bar.
+
+    When ``closed`` flags are supplied, events on the still-forming last bar
+    are dropped: a sweep only counts once the bar CLOSES back inside the
+    level — on the forming bar the "close" is the live price and the event
+    would repaint as price moves."""
     evts = detect_sweeps(h, l, c) + detect_displacements(o, h, l, c) + detect_fvgs(h, l)
     last = len(c) - 1
+    forming = closed is not None and len(closed) > 0 and not bool(closed[-1])
+    out: list[StructureEvent] = []
     for e in evts:
         e.age = last - e.idx
-    return sorted([e for e in evts if e.age <= max_age], key=lambda e: e.idx)
+        if e.age > max_age:
+            continue
+        if forming and e.idx == last:
+            continue
+        out.append(e)
+    return sorted(out, key=lambda e: e.idx)
 
 
 def nearest_swing(sw: list[Swing], kind: str, below: float | None = None,

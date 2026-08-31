@@ -13,7 +13,7 @@ import numpy as np
 from . import indicators as I
 from . import structure as S
 from .config import Config
-from .datafeed import CandleSet
+from .datafeed import CandleSet, classify
 from .scoring import ScoreCard, score
 
 _ids = itertools.count(1)
@@ -62,8 +62,12 @@ def _features(cs: CandleSet) -> dict:
         "vol": I.vol_regime(h, l, c),
         "atr": a,
         "vwap": vw,
-        "events": S.structure_events(o, h, l, c),
+        # closed flags keep forming-bar sweeps/FVGs out of the event stream
+        "events": S.structure_events(o, h, l, c, closed=cs.closed),
         "swings": S.swings(h, l),
+        "lo10": float(l[-10:].min()) if len(l) else 0.0,
+        "hi10": float(h[-10:].max()) if len(h) else 0.0,
+        "has_volume": bool(np.any(v > 0)),
     }
 
 
@@ -83,21 +87,26 @@ def signal_valid_until(bar_open_ms: float, tf: str, now: float | None = None) ->
     return min(deadline, now + bars * tf_sec)
 
 
-def _build(cs_entry: CandleSet, f_ctx: dict, f_bias: dict, f_ent: dict,
+def _build(cs_entry: CandleSet, f_ctx: dict,
            direction: int, card: ScoreCard) -> Signal | None:
-    """Entry/SL/TP geometry on the entry timeframe."""
-    c, h, l = cs_entry.c, cs_entry.h, cs_entry.l
-    atr_v = float(f_ent["atr"][-1])
+    """Entry from the entry-TF close; SL/TP geometry from the CONTEXT TF.
+
+    The SL anchor (context swing, else the 10-bar context extreme) and the
+    ATR used for the buffer and the sanity band travel together from the
+    same timeframe — anchoring to a 15m swing while buffering with a 5m ATR
+    made legitimate stops read as absurd geometry and vice versa. The stamped
+    ``atr`` is the context-TF ATR that actually built the SL."""
+    entry = float(cs_entry.c[-1])
+    atr_v = float(f_ctx["atr"][-1])
     if atr_v <= 0:
         return None
-    entry = float(c[-1])
     sw = f_ctx["swings"]
     if direction > 0:
         ref = S.nearest_swing(sw, "low", below=entry)
-        sl = (ref.price if ref else float(l[-10:].min())) - Config.SL_ATR_BUFFER * atr_v
+        sl = (ref.price if ref else f_ctx["lo10"]) - Config.SL_ATR_BUFFER * atr_v
     else:
         ref = S.nearest_swing(sw, "high", above=entry)
-        sl = (ref.price if ref else float(h[-10:].max())) + Config.SL_ATR_BUFFER * atr_v
+        sl = (ref.price if ref else f_ctx["hi10"]) + Config.SL_ATR_BUFFER * atr_v
     risk = abs(entry - sl)
     if risk < 0.25 * atr_v or risk > 4.0 * atr_v:
         return None  # degenerate or absurd geometry
@@ -116,6 +125,10 @@ def evaluate(cs_entry: CandleSet, cs_ctx: CandleSet, cs_bias: CandleSet,
     """Returns (signal_or_None, [long_card, short_card]) — cards always returned
     so the UI can show live scores even when no signal fires."""
     f_ent, f_ctx, f_bias = _features(cs_entry), _features(cs_ctx), _features(cs_bias)
+    group = classify(cs_entry.symbol)
+    vw_last = float(f_ent["vwap"][-1])
+    vwap_rel = ((float(cs_entry.c[-1]) - vw_last) / vw_last
+                if f_ent["has_volume"] and vw_last > 0 else None)
     cards: list[ScoreCard] = []
     best: tuple[Signal | None, float] = (None, -1.0)
 
@@ -127,9 +140,10 @@ def evaluate(cs_entry: CandleSet, cs_ctx: CandleSet, cs_bias: CandleSet,
             pulse_v=float(f_ctx["pulse"][-1]),
             flow_v=float(f_ent["flow"][-1]),
             pressure_v=float(f_ent["pressure"][-1]),
-            vwap_rel=(float(cs_entry.c[-1]) - float(f_ent["vwap"][-1])) / float(f_ent["vwap"][-1]),
+            vwap_rel=vwap_rel,
             vol_pct=float(f_ctx["vol"][-1]),
             events=f_ctx["events"],
+            group=group,
         )
         cards.append(card)
 
@@ -141,8 +155,8 @@ def evaluate(cs_entry: CandleSet, cs_ctx: CandleSet, cs_bias: CandleSet,
         if f_ctx["tide"][-1] * direction < 0.05:
             continue                       # context TF must not fight
         if not card.hard_event:
-            continue                       # need sweep or displacement trigger
-        sig = _build(cs_entry, f_ctx, f_bias, f_ent, direction, card)
+            continue                       # need a RECENT sweep/displacement
+        sig = _build(cs_entry, f_ctx, direction, card)
         if sig and card.total > best[1]:
             best = (sig, card.total)
 

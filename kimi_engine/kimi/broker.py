@@ -36,9 +36,11 @@ class Position:
     status: str = "OPEN"
     signal_id: str = ""
     score: float = 0.0
+    ccy_factor: float = 1.0   # quote→account conversion for pnl/fees
 
     def unrealized(self, price: float) -> float:
-        return (price - self.entry) * self.qty * self.direction
+        return ((price - self.entry) * self.qty * self.direction
+                * self.ccy_factor)
 
     def to_dict(self, price: float | None = None) -> dict:
         d = {
@@ -71,15 +73,17 @@ class PaperBroker:
     def available(self) -> bool:
         return True
 
-    def execute(self, sig: Signal, qty: float) -> Position:
+    def execute(self, sig: Signal, qty: float,
+                ccy_factor: float = 1.0) -> Position:
         slip = Config.SLIPPAGE_BPS / 1e4
         fill = sig.entry * (1 + slip * sig.direction)
-        fee = fill * qty * Config.TAKER_FEE_BPS / 1e4
+        fee = fill * qty * Config.TAKER_FEE_BPS / 1e4 * ccy_factor
         pos = Position(
             id=f"P{uuid.uuid4().hex[:8]}", symbol=sig.symbol,
             direction=sig.direction, qty=qty, entry=fill, sl=sig.sl,
             tp1=sig.tp1, tp2=sig.tp2, opened_at=time.time(),
             fees=fee, signal_id=sig.id, score=sig.card.total,
+            ccy_factor=ccy_factor,
         )
         self.equity -= fee
         self.positions[pos.id] = pos
@@ -101,8 +105,8 @@ class PaperBroker:
     def _close_leg(self, pos: Position, qty: float, price: float, reason: str) -> dict:
         slip = Config.SLIPPAGE_BPS / 1e4
         fill = price * (1 - slip * pos.direction)
-        fee = fill * qty * Config.TAKER_FEE_BPS / 1e4
-        pnl = (fill - pos.entry) * qty * pos.direction - fee
+        fee = fill * qty * Config.TAKER_FEE_BPS / 1e4 * pos.ccy_factor
+        pnl = (fill - pos.entry) * qty * pos.direction * pos.ccy_factor - fee
         self.equity += pnl
         pos.fees += fee
         pos.realized += pnl

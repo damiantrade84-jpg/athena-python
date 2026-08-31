@@ -772,3 +772,179 @@ def test_invalidation_allows_immediate_reprint(monkeypatch, tmp_path):
     assert not eng.signals
     eng._scan_once_inner()
     assert list(eng.signals) == ["K00032"]
+
+
+# ----------------------------------------------------------------------
+# review-fix regressions
+# ----------------------------------------------------------------------
+def test_grades_come_from_config_thresholds(monkeypatch):
+    """Grade cutoffs live in Config — editing them must move the grades."""
+    from kimi.config import Config
+    from kimi.structure import StructureEvent
+    ny = 1_699_971_180                       # 14:13 UTC → NewYork weight 1.0
+    ev = [StructureEvent(idx=1, kind="sweep", direction=1, level=99.0, age=1)]
+    kw = dict(tide_bias=1.0, tide_ctx=1.0, pulse_v=100, flow_v=1.0,
+              pressure_v=1.0, vwap_rel=0.004, vol_pct=0.5, events=ev, ts=ny)
+    card = score("TESTUSDT", +1, **kw)
+    assert card.total >= Config.SCORE_A_PLUS and card.grade == "A+"
+    monkeypatch.setattr(Config, "SCORE_A_PLUS", card.total + 1.0)
+    assert score("TESTUSDT", +1, **kw).grade == "A"
+
+
+def test_hard_trigger_requires_recent_event():
+    """A sweep 20 context bars ago still adds decayed points but can no longer
+    be the required structural trigger (was: hard=True at any age ≤ 24)."""
+    from kimi.structure import StructureEvent
+    kw = dict(tide_bias=0.9, tide_ctx=0.8, pulse_v=80, flow_v=0.6,
+              pressure_v=0.5, vwap_rel=0.004, vol_pct=0.5)
+    old = [StructureEvent(idx=1, kind="sweep", direction=1, level=99.0, age=20)]
+    recent = [StructureEvent(idx=1, kind="sweep", direction=1, level=99.0, age=3)]
+    card_old = score("TESTUSDT", +1, events=old, **kw)
+    card_new = score("TESTUSDT", +1, events=recent, **kw)
+    assert card_old.components["structure"] > 0     # decayed points remain
+    assert not card_old.hard_event
+    assert card_new.hard_event
+
+
+def test_vwap_neutral_without_volume():
+    """Zero-volume feeds (Yahoo FX) degenerate VWAP to the typical price —
+    the component must sit neutral instead of flapping 2↔8 points."""
+    from kimi.scoring import WEIGHTS
+    card = score("EURUSD", +1, tide_bias=0.0, tide_ctx=0.0, pulse_v=50,
+                 flow_v=0.0, pressure_v=0.0, vwap_rel=None, vol_pct=0.5,
+                 events=[], ts=1_700_000_000)
+    assert card.components["vwap"] == round(WEIGHTS["vwap"] * 0.5, 1)
+    assert any("no volume" in r for r in card.reasons)
+
+
+def test_session_weight_is_group_aware():
+    ny = 1_699_971_180                       # 14:13 UTC — US cash hours
+    pre_mkt = 1_699_952_400                  # 09:00 UTC — London, pre-US cash
+    assert session_weight(ny, "crypto")[0] == 0.8      # flat, no killzones
+    assert session_weight(ny, "stock")[0] == 1.0       # US cash session
+    assert session_weight(pre_mkt, "stock")[0] == 0.2  # underlying closed
+    assert session_weight(pre_mkt, "forex")[0] == 1.0  # London killzone
+
+
+def test_forming_bar_sweep_excluded_until_close():
+    """On the live bar the 'close' is the live price — a sweep there repaints.
+    It only counts once the bar is marked closed."""
+    n = 40
+    o = np.full(n, 10.0); h = np.full(n, 10.5)
+    l = np.full(n, 9.5); c = np.full(n, 10.0)
+    h[10] = 11.0                                     # confirmed swing high
+    o[-1], h[-1], c[-1] = 10.6, 11.2, 10.4           # wick above, close back
+    closed = np.ones(n, dtype=bool)
+    ev = S.structure_events(o, h, l, c, closed=closed)
+    assert any(e.kind == "sweep" and e.idx == n - 1 for e in ev)
+    live = closed.copy(); live[-1] = False
+    ev_live = S.structure_events(o, h, l, c, closed=live)
+    assert not any(e.idx == n - 1 for e in ev_live)
+    ev_default = S.structure_events(o, h, l, c)      # no flags → legacy behavior
+    assert any(e.idx == n - 1 for e in ev_default)
+
+
+def test_classify_requires_fiat_quotes():
+    """6 alpha chars is not proof of forex — MT5 crypto CFDs (BTCUSD) must not
+    route to the host as type=forex; 'other' fail-closes instead."""
+    from kimi.datafeed import classify
+    assert classify("EURUSD") == "forex"
+    assert classify("USDZAR") == "forex"
+    assert classify("BTCUSD") == "other"
+    assert classify("ETHUSD") == "other"
+
+
+def test_stale_bias_or_context_suppresses_signal(monkeypatch, tmp_path):
+    """The freshness gate is per-TF now: fresh 5m entry bars cannot print a
+    signal while the 15m/1h inputs are stale (e.g. unbounded cache fallback)."""
+    import kimi.engine as engmod
+    card = _card(88, "A")
+    sig = _sig("KBIAS1", card)
+    monkeypatch.setattr(engmod, "evaluate", lambda *_a, **_k: (sig, [card]))
+    eng = engmod.Engine()
+    eng.paper.state_path = str(tmp_path / "st.json")
+    eng.symbols = ["EURUSD"]
+    now = time.time()
+    monkeypatch.setattr(
+        eng.feed, "tickers",
+        lambda syms: {s: {"price": 101.0, "ts": now, "source": "test"}
+                      for s in syms})
+    monkeypatch.setattr(
+        eng.feed, "klines",
+        lambda sym, tf, **kw: _fresh_cs(sym, tf, 0 if tf == "5m" else 999))
+    eng._scan_once_inner()
+    assert "KBIAS1" not in eng.signals
+    sc = eng.scores["EURUSD"]
+    assert sc["fresh"] is True
+    assert sc["ctxFresh"] is False and sc["biasFresh"] is False
+
+
+def test_klines_cache_fallback_is_age_bounded(monkeypatch):
+    """A dead source may serve the recent cache, never an arbitrarily old one."""
+    from kimi.datafeed import CandleSet, DataFeed
+    feed = DataFeed()
+    n = 60
+    cs = CandleSet("BTCUSDT", "5m",
+                   np.arange(n, dtype=float) * 300_000,
+                   np.full(n, 1.0), np.full(n, 1.0), np.full(n, 1.0),
+                   np.full(n, 1.0), np.full(n, 1.0), np.zeros(n),
+                   np.ones(n, dtype=bool), "test")
+    feed._kl_cache[("BTCUSDT", "5m")] = cs
+    monkeypatch.setattr(feed, "_fetch_binance_klines", lambda *a: None)
+    monkeypatch.setattr(feed, "_fetch_bybit_klines", lambda *a: None)
+    cs.fetched_at = time.time() - 100        # past poll window, within bound
+    assert feed.klines("BTCUSDT", "5m") is cs
+    cs.fetched_at = time.time() - 7200       # 2h ≫ 10×5m bound
+    try:
+        feed.klines("BTCUSDT", "5m")
+        raise AssertionError("expected RuntimeError for ancient cache")
+    except RuntimeError:
+        pass
+
+
+def test_mt5_tick_drops_frozen_weekend_quote(monkeypatch):
+    """MT5 serves the last tick forever; a frozen (weekend) tick must fail
+    closed instead of being stamped 'now' and shown as a live price."""
+    import sys
+    import types
+    from kimi.datafeed import DataFeed
+    now = int(time.time())
+    shift = 3 * 3600
+    fake = _fake_mt5(("EURUSD.s",))
+    fake.symbol_info_tick = lambda sym: types.SimpleNamespace(
+        time=now - 20 * 3600 + shift, bid=1.104, ask=1.105)   # Friday broker time
+    monkeypatch.setitem(sys.modules, "MetaTrader5", fake)
+    feed = DataFeed()
+    assert feed.mt5_tick("EURUSD") is None
+    fake.symbol_info_tick = lambda sym: types.SimpleNamespace(
+        time=now + shift, bid=1.104, ask=1.105)               # live broker tick
+    tk = feed.mt5_tick("EURUSD")
+    assert tk and abs(tk["ts"] - now) < 60 and tk["price"] > 0
+
+
+def test_risk_sizing_converts_quote_currency():
+    """USDJPY: the 0.5 stop is in JPY — qty must convert it to account USD."""
+    rm = RiskManager()
+    v = rm.approve(entry=150.0, sl=149.5, equity=100_000, open_positions=0,
+                   quote_to_account=1.0 / 150.0)
+    assert v.ok
+    risk_usd = v.qty * 0.5 / 150.0
+    assert abs(risk_usd - 1000.0) < 1.0      # ≈ 1% of 100k, not ¥1000
+
+
+def test_paper_pnl_uses_ccy_factor(tmp_path):
+    from kimi.broker import PaperBroker, Position
+    pb = PaperBroker(str(tmp_path / "st.json"))
+    pos = Position(id="PJ1", symbol="USDJPY", direction=1, qty=300_000,
+                   entry=150.0, sl=149.5, tp1=150.75, tp2=151.5,
+                   opened_at=0.0, ccy_factor=1.0 / 150.0)
+    pb.positions[pos.id] = pos
+    assert abs(pos.unrealized(150.5) - 1000.0) < 1.0   # ¥150k ≈ $1000
+
+
+def test_quote_ccy_factor_mapping():
+    from kimi.engine import Engine
+    assert Engine._quote_ccy_factor("EURUSD", 1.1) == 1.0
+    assert Engine._quote_ccy_factor("BTCUSDT", 60000.0) == 1.0
+    assert abs(Engine._quote_ccy_factor("USDJPY", 150.0) - 1.0 / 150.0) < 1e-12
+    assert Engine._quote_ccy_factor("EURJPY", 160.0) == 1.0   # documented approx

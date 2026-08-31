@@ -79,7 +79,6 @@ def tide(h: np.ndarray, l: np.ndarray, c: np.ndarray) -> np.ndarray:
         slope[5:] = (e21[5:] - e21[:-5]) / a_safe[5:]
     slope = np.clip(slope, -1, 1)
 
-    hh = np.maximum.accumulate(np.maximum(h, 0))  # placeholder replaced below
     n = 20
     don = np.zeros_like(c)
     for i in range(len(c)):

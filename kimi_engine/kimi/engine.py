@@ -34,6 +34,7 @@ class Engine:
         self.scores: dict[str, dict] = {}           # per-symbol live scorecards
         self.events: list[dict] = []                # execution/fill events feed
         self._cooldown: dict[tuple[str, int], float] = {}
+        self._scan_guard = threading.Lock()   # non-blocking re-entry guard
         self._thread: threading.Thread | None = None
         self.last_scan: float = 0.0
         self.scan_count = 0
@@ -62,13 +63,16 @@ class Engine:
 
     # ------------------------------------------------------------------
     def scan_once(self) -> None:
-        if self._scanning:
+        # Non-blocking re-entry guard: the loop thread and a manual scan_now
+        # thread must never overlap network fetches or double-commit results.
+        if not self._scan_guard.acquire(blocking=False):
             return
         self._scanning = True
         try:
             self._scan_once_inner()
         finally:
             self._scanning = False
+            self._scan_guard.release()
 
     def scan_now(self) -> dict:
         """Manual scan trigger from the UI — async so HTTP stays fast."""
@@ -112,13 +116,22 @@ class Engine:
 
         with self.lock:
             self.risk.roll_day(self.paper.equity)
-            if not self.risk.kill_switch:
+            kill = self.risk.kill_switch
+            if not kill:
                 fills = self.paper.mark(prices)
                 self.events.extend(fills)
-                self.events.extend(self._mark_broker(prices))
                 self.events = self.events[-100:]
-
             self._expire_signals()
+
+        if not kill:
+            # Broker exit detection polls the exchange — keep that IO OUTSIDE
+            # the engine lock so a slow ccxt call cannot stall the scan loop
+            # or SSE snapshots. State reads/commits inside are lock-guarded.
+            broker_events = self._mark_broker(prices)
+            if broker_events:
+                with self.lock:
+                    self.events.extend(broker_events)
+                    self.events = self.events[-100:]
 
         # Per-symbol evaluation: three kline fetches plus the scoring maths.
         # Fetch and score in a pool (IO-bound, no shared state), then commit
@@ -137,7 +150,7 @@ class Engine:
                 sig, cards = evaluate(cs_e, cs_x, cs_b, self.min_score)
             except Exception as exc:  # noqa: BLE001
                 return sym, None, exc
-            return sym, (cs_e, sig, cards), None
+            return sym, (cs_e, cs_x, cs_b, sig, cards), None
 
         workers = max(1, min(int(Config.SCAN_WORKERS), len(universe) or 1))
         if workers > 1 and len(universe) > 1:
@@ -163,20 +176,31 @@ class Engine:
                 continue
             if payload is None:
                 continue
-            cs_e, sig, cards = payload
+            cs_e, cs_x, cs_b, sig, cards = payload
 
             px = prices.get(sym, cs_e.last_price)
             if px:
                 # keep a last-known price for symbols the ticker batch cannot
                 # cover, so paper TP/SL marking never goes blind
                 prices.setdefault(sym, px)
-            tf_ms = Config.TF_MINUTES.get(Config.TF_ENTRY, 5) * 60_000
-            # entry-TF freshness gate: forex/metals close on weekends and Yahoo
-            # is delayed — stale candles may still score (UI) but never signal.
-            # Lower bound too: unshifted broker-clock (UTC+3) bars would
-            # otherwise read as "from the future" after the Friday close.
-            age_ms = time.time() * 1000 - float(cs_e.t[-1]) if len(cs_e) else 9e15
-            fresh = -300_000 <= age_ms < 2 * tf_ms
+            # Freshness is per-TF: a signal is only as good as its stalest
+            # input. The entry bar drives the UI `fresh` badge, but ALL THREE
+            # timeframes must be fresh for a signal to go live — a dead or
+            # indefinitely-cached context/bias feed can never print one.
+            # Stale candles may still score (UI) but never signal. Lower bound
+            # too: unshifted broker-clock (UTC+3) bars would otherwise read as
+            # "from the future" after the Friday close.
+            now_ms = time.time() * 1000
+
+            def _bar_fresh(cs, tf: str) -> bool:
+                tf_ms = Config.TF_MINUTES.get(tf, 5) * 60_000
+                age = now_ms - float(cs.t[-1]) if len(cs) else 9e15
+                return -300_000 <= age < 2 * tf_ms
+
+            fresh = _bar_fresh(cs_e, Config.TF_ENTRY)
+            ctx_fresh = _bar_fresh(cs_x, Config.TF_CONTEXT)
+            bias_fresh = _bar_fresh(cs_b, Config.TF_BIAS)
+            all_fresh = fresh and ctx_fresh and bias_fresh
             # Price freshness is a SEPARATE question from candle freshness:
             # a symbol whose tick feed died still has fresh bars, and the old
             # payload only reported the bar age. A quote with no stamp at all
@@ -194,13 +218,15 @@ class Engine:
                     "priceFresh": price_fresh,
                     "priceSource": tk.get("source") or cs_e.source,
                     "fresh": fresh,
+                    "ctxFresh": ctx_fresh,
+                    "biasFresh": bias_fresh,
                     "source": cs_e.source,
                     "cards": {("long" if c.direction > 0 else "short"): {
                         "total": c.total, "grade": c.grade,
                         "components": c.components, "reasons": c.reasons,
                     } for c in cards},
                 }
-                self._reconcile_symbol_signal(sym, sig, fresh)
+                self._reconcile_symbol_signal(sym, sig, all_fresh)
 
             self.last_scan = time.time()
         self.scan_count += 1
@@ -286,6 +312,22 @@ class Engine:
                 self.events = self.events[-100:]
         return out
 
+    @staticmethod
+    def _quote_ccy_factor(symbol: str, ref_price: float) -> float:
+        """Quote→account (USD) conversion for KIMI-owned sizing and paper PnL.
+
+        1.0 for USD-quoted instruments (*USD) and USDT crypto; 1/price for
+        USD-base pairs (USDJPY, USDCHF…) whose stop distance is in the quote
+        currency. Crosses without a USD leg stay 1.0 — a documented paper-
+        ledger approximation. Host-venue sizing is owned by the Athena risk
+        engine and never uses this."""
+        s = symbol.upper()
+        if is_crypto(s) or s.endswith("USD"):
+            return 1.0
+        if s.startswith("USD") and ref_price > 0:
+            return 1.0 / ref_price
+        return 1.0
+
     def _execute(self, signal_id: str, venue: str = "auto") -> dict:
         # Host pipeline first: real broker orders through Athena's audited
         # path (freshness → demo gate → guardian → risk engine → managed
@@ -297,69 +339,88 @@ class Engine:
                     return {"ok": False, "error": "signal not active"}
             from . import host_exec
             return host_exec.execute_signal(self, sig)
+
         with self.lock:
             sig = self.signals.get(signal_id)
             if sig is None or sig.status != "ACTIVE":
                 return {"ok": False, "error": "signal not active"}
-
             use_bybit = venue == "bybit" or (venue == "auto" and Config.BROKER == "bybit")
-            if use_bybit:
-                if not is_crypto(sig.symbol):
-                    return {"ok": False,
-                            "error": "bybit venue trades USDT crypto pairs only "
-                                     "- use paper for MT5 symbols"}
-                if not self.bybit.available():
-                    return {"ok": False,
-                            "error": f"bybit demo not armed: {self.bybit._err}"}
-                # size off the DEMO account equity, not the paper ledger
-                acct_eq = self.bybit.get_equity()
+            if use_bybit and not is_crypto(sig.symbol):
+                return {"ok": False,
+                        "error": "bybit venue trades USDT crypto pairs only "
+                                 "- use paper for MT5 symbols"}
+
+        if use_bybit:
+            # Exchange IO happens OUTSIDE the engine lock (ccxt calls can take
+            # seconds); state is re-checked under the lock immediately before
+            # the order and the result committed under it after.
+            if not self.bybit.available():
+                return {"ok": False,
+                        "error": f"bybit demo not armed: {self.bybit._err}"}
+            # size off the DEMO account equity, not the paper ledger
+            acct_eq = self.bybit.get_equity()
+            with self.lock:
+                live = self.signals.get(signal_id)
+                if live is None or live.status != "ACTIVE":
+                    return {"ok": False, "error": "signal expired before order"}
                 verdict = self.risk.approve(
                     entry=sig.entry, sl=sig.sl,
                     equity=acct_eq or Config.START_EQUITY,
                     open_positions=len(self.broker_positions))
-                if not verdict.ok:
-                    return {"ok": False, "error": f"risk: {verdict.reason}"}
-                try:
-                    side = "Buy" if sig.direction > 0 else "Sell"
-                    res = self.bybit.market_order(sig.symbol, side, verdict.qty,
-                                                  sl=sig.sl, tp=sig.tp2)
-                    pos = Position(
-                        id=f"B{sig.id[1:]}", symbol=sig.symbol,
-                        direction=sig.direction, qty=res.get("qty", verdict.qty),
-                        entry=sig.entry, sl=sig.sl, tp1=sig.tp1, tp2=sig.tp2,
-                        opened_at=time.time(), broker="bybit",
-                        signal_id=sig.id, score=sig.card.total)
-                    self.broker_positions[pos.id] = pos
-                    sig.status = "EXECUTED"
-                    del self.signals[sig.id]
-                    ev = {"type": "DEMO", "symbol": sig.symbol, "side": side,
-                          "qty": pos.qty, "orderId": res.get("orderId"),
-                          "sl": sig.sl, "tp": sig.tp2,
-                          "t": time.time(), "signalId": sig.id}
-                    if res.get("warning"):
-                        ev["warning"] = res["warning"]
-                    self.events.append(ev)
-                    out = {"ok": True, "venue": "bybit-demo", "order": res,
-                           "position": pos.to_dict()}
-                    if res.get("warning"):
-                        out["warning"] = res["warning"]
-                    return out
-                except Exception as exc:  # noqa: BLE001
-                    return {"ok": False, "error": f"bybit: {exc}"}
-
-            equity = self.paper.snapshot({}).get("equity", Config.START_EQUITY)
-            verdict = self.risk.approve(entry=sig.entry, sl=sig.sl, equity=equity,
-                                        open_positions=len(self.paper.positions))
             if not verdict.ok:
                 return {"ok": False, "error": f"risk: {verdict.reason}"}
-            pos = self.paper.execute(sig, verdict.qty)
+            try:
+                side = "Buy" if sig.direction > 0 else "Sell"
+                res = self.bybit.market_order(sig.symbol, side, verdict.qty,
+                                              sl=sig.sl, tp=sig.tp2)
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": f"bybit: {exc}"}
+            with self.lock:
+                # The order is already on the exchange; record it even if the
+                # signal row was retired while the order call was in flight.
+                pos = Position(
+                    id=f"B{sig.id[1:]}", symbol=sig.symbol,
+                    direction=sig.direction, qty=res.get("qty", verdict.qty),
+                    entry=sig.entry, sl=sig.sl, tp1=sig.tp1, tp2=sig.tp2,
+                    opened_at=time.time(), broker="bybit",
+                    signal_id=sig.id, score=sig.card.total)
+                self.broker_positions[pos.id] = pos
+                sig.status = "EXECUTED"
+                self.signals.pop(sig.id, None)
+                ev = {"type": "DEMO", "symbol": sig.symbol, "side": side,
+                      "qty": pos.qty, "orderId": res.get("orderId"),
+                      "sl": sig.sl, "tp": sig.tp2,
+                      "t": time.time(), "signalId": sig.id}
+                if res.get("warning"):
+                    ev["warning"] = res["warning"]
+                self.events.append(ev)
+                self.events = self.events[-100:]
+            out = {"ok": True, "venue": "bybit-demo", "order": res,
+                   "position": pos.to_dict()}
+            if res.get("warning"):
+                out["warning"] = res["warning"]
+            return out
+
+        with self.lock:
+            sig = self.signals.get(signal_id)
+            if sig is None or sig.status != "ACTIVE":
+                return {"ok": False, "error": "signal not active"}
+            factor = self._quote_ccy_factor(sig.symbol, sig.entry)
+            equity = self.paper.snapshot({}).get("equity", Config.START_EQUITY)
+            verdict = self.risk.approve(entry=sig.entry, sl=sig.sl, equity=equity,
+                                        open_positions=len(self.paper.positions),
+                                        quote_to_account=factor)
+            if not verdict.ok:
+                return {"ok": False, "error": f"risk: {verdict.reason}"}
+            pos = self.paper.execute(sig, verdict.qty, ccy_factor=factor)
             sig.status = "EXECUTED"
-            del self.signals[sig.id]
+            self.signals.pop(sig.id, None)
             ev = {"type": "PAPER", "symbol": pos.symbol,
                   "direction": "LONG" if pos.direction > 0 else "SHORT",
                   "qty": pos.qty, "entry": pos.entry, "t": time.time(),
                   "signalId": sig.id}
             self.events.append(ev)
+            self.events = self.events[-100:]
             return {"ok": True, "venue": "paper", "position": pos.to_dict()}
 
     def close_position(self, pos_id: str) -> dict:
@@ -406,33 +467,44 @@ class Engine:
     def _mark_broker(self, prices: dict[str, float]) -> list[dict]:
         """Broker positions carry on-exchange SL/TP. Detect the exit by polling
         the position when price crosses a level (plus a slow periodic check for
-        external closes); record the fill locally only when confirmed flat."""
+        external closes); record the fill locally only when confirmed flat.
+
+        The exchange call (position_open) runs OUTSIDE the engine lock — a
+        slow ccxt round-trip must not stall the scan loop or SSE snapshots.
+        Only the due-scan and the close-commit re-acquire it."""
+        due: list[tuple[str, str, bool, bool, float]] = []
+        with self.lock:
+            for pos in list(self.broker_positions.values()):
+                px = prices.get(pos.symbol)
+                if px is None:
+                    continue
+                crossed_sl = (pos.sl - px) * pos.direction >= 0
+                crossed_tp = (px - pos.tp2) * pos.direction >= 0
+                checks = getattr(pos, "_checks", 0) + 1
+                setattr(pos, "_checks", checks)
+                periodic = checks % 12 == 0          # ~1/min at 5s scan cadence
+                if crossed_sl or crossed_tp or periodic:
+                    due.append((pos.id, pos.symbol, crossed_sl, crossed_tp, px))
         events: list[dict] = []
-        for pos in list(self.broker_positions.values()):
-            px = prices.get(pos.symbol)
-            if px is None:
-                continue
-            crossed_sl = (pos.sl - px) * pos.direction >= 0
-            crossed_tp = (px - pos.tp2) * pos.direction >= 0
-            checks = getattr(pos, "_checks", 0) + 1
-            setattr(pos, "_checks", checks)
-            periodic = checks % 12 == 0          # ~1/min at 5s scan cadence
-            if not (crossed_sl or crossed_tp or periodic):
-                continue
-            state = self.bybit.position_open(pos.symbol)
+        for pos_id, symbol, crossed_sl, crossed_tp, px in due:
+            state = self.bybit.position_open(symbol)     # network IO, no lock
             if state is not False:
                 continue                          # still open, or API unsure
-            reason = "SL" if crossed_sl else ("TP2" if crossed_tp else "external")
-            exit_px = pos.sl if crossed_sl else (pos.tp2 if crossed_tp else px)
-            pnl = (exit_px - pos.entry) * pos.qty * pos.direction
-            rec = {"type": "CLOSE", "id": pos.id, "symbol": pos.symbol,
-                   "direction": "LONG" if pos.direction > 0 else "SHORT",
-                   "qty": pos.qty, "entry": pos.entry, "exit": exit_px,
-                   "pnl": round(pnl, 2), "reason": reason,
-                   "closedAt": time.time(), "score": pos.score,
-                   "signalId": pos.signal_id, "broker": "bybit"}
-            del self.broker_positions[pos.id]
-            events.append(rec)
+            with self.lock:
+                pos = self.broker_positions.get(pos_id)
+                if pos is None:
+                    continue                      # closed manually meanwhile
+                reason = "SL" if crossed_sl else ("TP2" if crossed_tp else "external")
+                exit_px = pos.sl if crossed_sl else (pos.tp2 if crossed_tp else px)
+                pnl = (exit_px - pos.entry) * pos.qty * pos.direction
+                rec = {"type": "CLOSE", "id": pos.id, "symbol": pos.symbol,
+                       "direction": "LONG" if pos.direction > 0 else "SHORT",
+                       "qty": pos.qty, "entry": pos.entry, "exit": exit_px,
+                       "pnl": round(pnl, 2), "reason": reason,
+                       "closedAt": time.time(), "score": pos.score,
+                       "signalId": pos.signal_id, "broker": "bybit"}
+                del self.broker_positions[pos.id]
+                events.append(rec)
         return events
 
     def set_kill(self, on: bool) -> dict:
@@ -484,7 +556,8 @@ class Engine:
         cs = self.feed.klines(symbol, tf, limit=180, max_age_sec=10)
         vw, s1, s2 = I.vwap_session(cs.t, cs.h, cs.l, cs.c, cs.v)
         e21 = I.ema(cs.c, 21)
-        evts = S.structure_events(cs.o, cs.h, cs.l, cs.c, max_age=48)
+        evts = S.structure_events(cs.o, cs.h, cs.l, cs.c, max_age=48,
+                                  closed=cs.closed)
         candles = [{"t": int(cs.t[i] / 1000), "o": float(cs.o[i]), "h": float(cs.h[i]),
                     "l": float(cs.l[i]), "c": float(cs.c[i]), "v": float(cs.v[i])}
                    for i in range(len(cs))]

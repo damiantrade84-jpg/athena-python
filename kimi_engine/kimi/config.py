@@ -81,6 +81,10 @@ class Config:
     # Entry-TF validity window. 6×5m was a 30-minute chip that barely moved
     # and outlived the setup; two bars is a 5m trigger's usable window.
     SIGNAL_TTL_BARS = _env_int("KIMI_SIGNAL_TTL_BARS", 2)
+    # A sweep/displacement older than this many context bars still contributes
+    # decayed structure points, but no longer counts as the REQUIRED hard
+    # trigger for A+ grades and signal gating.
+    STRUCT_HARD_MAX_AGE_BARS = _env_int("KIMI_STRUCT_HARD_MAX_AGE_BARS", 8)
 
     # ---- risk ----------------------------------------------------------
     START_EQUITY = _env_float("KIMI_START_EQUITY", 100_000.0)
