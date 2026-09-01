@@ -16,6 +16,7 @@ from .indicators import (
     dealing_range,
     external_liquidity,
     impulse_vector,
+    intraday_trend_bias,
     raid_signature,
     session_pools,
     void_map,
@@ -34,6 +35,7 @@ REQUIRED_SIGNAL_GATE_NAMES = frozenset(
         "session_open",
         "killzone_window",
         "direction_resolved",
+        "intraday_trend_aligned",
         "liquidity_raid_aligned",
         "displacement_aligned",
         "delivery_void_open",
@@ -382,6 +384,15 @@ def evaluate_snapshot(
         ote_outer=float(indicators["ote_outer"]),
     )
     cisd = cisd_state(m15, raid, impulse, lookback=int(indicators["cisd_lookback"]))
+    bias_enabled = bool(indicators["bias_enabled"])
+    bias = intraday_trend_bias(
+        h1,
+        atr=wilder_atr(h1, int(indicators["atr_period"])),
+        fast_period=int(indicators["bias_fast_period"]),
+        slow_period=int(indicators["bias_slow_period"]),
+        min_separation_atr=float(indicators["bias_min_separation_atr"]),
+        require_price_side=bool(indicators["bias_require_price_side"]),
+    )
 
     direction = "LONG" if direction_value > 0 else "SHORT" if direction_value < 0 else "NONE"
     geometry = _execution_geometry(
@@ -526,6 +537,20 @@ def evaluate_snapshot(
     )
     clock_ok = clock_quality >= float(scoring["minimum_killzone_quality"]) and session_open
 
+    bias_direction = int(bias.get("direction") or 0)
+    if not bias_enabled or direction_value == 0:
+        bias_ok = True
+        bias_reason = None
+    elif not bias.get("available"):
+        bias_ok = False
+        bias_reason = str(bias.get("reason") or "BIAS_INPUT_UNAVAILABLE")
+    elif bias_direction == 0 or bias_direction == direction_value:
+        bias_ok = True
+        bias_reason = None
+    else:
+        bias_ok = False
+        bias_reason = "COUNTER_TREND_LONG" if direction_value > 0 else "COUNTER_TREND_SHORT"
+
     hard_gates = list(freshness_gates)
     hard_gates.extend(
         [
@@ -543,6 +568,13 @@ def evaluate_snapshot(
                 "name": "direction_resolved",
                 "passed": direction_value != 0,
                 "reason": None if direction_value != 0 else "DIRECTION_UNRESOLVED",
+            },
+            {
+                "name": "intraday_trend_aligned",
+                "passed": bias_ok,
+                "reason": bias_reason,
+                "biasDirection": bias_direction,
+                "separationAtr": _round(bias.get("separationAtr") if isinstance(bias.get("separationAtr"), (int, float)) else None),
             },
             {
                 "name": "liquidity_raid_aligned",
@@ -650,6 +682,7 @@ def evaluate_snapshot(
             "void": {key: _round(value) if isinstance(value, float) else value for key, value in void.items()},
             "dealingRange": {key: _round(value) if isinstance(value, float) else value for key, value in dealing.items()},
             "cisd": {key: _round(value) if isinstance(value, float) else value for key, value in cisd.items()},
+            "bias": {"enabled": bias_enabled, **{key: _round(value) if isinstance(value, float) else value for key, value in bias.items()}},
         },
         "dataProvenance": snapshot.provenance,
         "execution": {

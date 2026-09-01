@@ -106,6 +106,13 @@ indicators:
   ote_inner: 0.62
   ote_outer: 0.79
   cisd_lookback: 20
+  # Intraday trend-bias gate (H1 EMA stack). Blocks signals that fight a
+  # decisive H1 trend; neutral separation keeps both directions eligible.
+  bias_enabled: true
+  bias_fast_period: 20
+  bias_slow_period: 50
+  bias_min_separation_atr: 0.15
+  bias_require_price_side: true
 
 scoring:
   ready_threshold: 76.0

@@ -217,6 +217,14 @@ def _validate(raw: dict[str, Any]) -> None:
         raise GrokConfigError("indicators.ote_inner must be < indicators.ote_outer")
     if str(indicators.get("session_source_timeframe") or "").upper() not in {"H1", "M15"}:
         raise GrokConfigError("indicators.session_source_timeframe must be H1 or M15")
+    for key in ("bias_enabled", "bias_require_price_side"):
+        if not isinstance(indicators.get(key), bool):
+            raise GrokConfigError(f"indicators.{key} must be a boolean")
+    bias_fast = _integer(indicators.get("bias_fast_period"), "indicators.bias_fast_period", minimum=2)
+    bias_slow = _integer(indicators.get("bias_slow_period"), "indicators.bias_slow_period", minimum=2)
+    if bias_fast >= bias_slow:
+        raise GrokConfigError("indicators.bias_fast_period must be < indicators.bias_slow_period")
+    _number(indicators.get("bias_min_separation_atr"), "indicators.bias_min_separation_atr", minimum=0.0)
 
     weights = raw["scoring"].get("weights") or {}
     if set(weights) != _GROK_WEIGHTS:
@@ -331,6 +339,14 @@ def _validate_resolved_profile(
     ote_outer = _number(indicators.get("ote_outer"), f"{label}.indicators.ote_outer", minimum=0.0)
     if ote_inner >= ote_outer or ote_outer > 1.0:
         raise GrokConfigError(f"{label} OTE bounds must satisfy 0 <= inner < outer <= 1")
+    bias_fast = _integer(indicators.get("bias_fast_period"), f"{label}.indicators.bias_fast_period", minimum=2)
+    bias_slow = _integer(indicators.get("bias_slow_period"), f"{label}.indicators.bias_slow_period", minimum=2)
+    if bias_fast >= bias_slow:
+        raise GrokConfigError(f"{label}.indicators.bias_fast_period must be < bias_slow_period")
+    _number(indicators.get("bias_min_separation_atr"), f"{label}.indicators.bias_min_separation_atr", minimum=0.0)
+    for key in ("bias_enabled", "bias_require_price_side"):
+        if not isinstance(indicators.get(key), bool):
+            raise GrokConfigError(f"{label}.indicators.{key} must be a boolean")
 
 
 def _validate_profile_overlay(overlay: dict[str, Any], label: str, base: dict[str, Any]) -> None:
@@ -378,12 +394,15 @@ def _validate_profile_overlay(overlay: dict[str, Any], label: str, base: dict[st
     if indicators is not None:
         if not isinstance(indicators, dict):
             raise GrokConfigError(f"{label}.indicators must be a mapping")
-        for key in ("raid_lookback_bars", "raid_recent_bars", "impulse_min_run", "trigger_recent_bars", "void_lookback", "dealing_lookback", "cisd_lookback", "atr_period"):
+        for key in ("raid_lookback_bars", "raid_recent_bars", "impulse_min_run", "trigger_recent_bars", "void_lookback", "dealing_lookback", "cisd_lookback", "atr_period", "bias_fast_period", "bias_slow_period"):
             if key in indicators:
                 _integer(indicators.get(key), f"{label}.indicators.{key}")
-        for key in ("raid_min_excursion_atr", "impulse_body_fraction", "impulse_range_atr", "impulse_single_range_atr"):
+        for key in ("raid_min_excursion_atr", "impulse_body_fraction", "impulse_range_atr", "impulse_single_range_atr", "bias_min_separation_atr"):
             if key in indicators:
                 _number(indicators.get(key), f"{label}.indicators.{key}", minimum=0.0)
+        for key in ("bias_enabled", "bias_require_price_side"):
+            if key in indicators and not isinstance(indicators.get(key), bool):
+                raise GrokConfigError(f"{label}.indicators.{key} must be a boolean")
 
     _validate_resolved_profile(
         _merge(base["scoring"], scoring or {}),

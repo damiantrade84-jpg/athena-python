@@ -1424,3 +1424,150 @@ def test_api_rejected_execute_surfaces_the_gate_code() -> None:
     assert payload["success"] is False
     assert payload["error"] == "SPREAD_TOO_WIDE"
     assert payload["result"]["error"] == "SPREAD_TOO_WIDE"
+
+
+def _with_h1_trend(snapshot: MarketSnapshot, price_at) -> MarketSnapshot:
+    """Replace H1 with a synthetic close path on the same timestamps.
+
+    Reproduces the 2026-09-01 gold pattern: a persistent intraday trend on H1
+    while the M15/M5 raid-bounce machinery still fires an otherwise-ready
+    counter-trend signal.
+    """
+    trending: list[Candle] = []
+    previous: float | None = None
+    for index, candle in enumerate(snapshot.frames["H1"]):
+        close = float(price_at(index))
+        open_ = previous if previous is not None else close
+        trending.append(
+            _candle(
+                candle.time,
+                open_,
+                max(open_, close) + 0.00006,
+                min(open_, close) - 0.00006,
+                close,
+                900,
+            )
+        )
+        previous = close
+    snapshot.frames["H1"] = trending
+    return snapshot
+
+
+def _gate(signal: dict, name: str) -> dict:
+    return next(item for item in signal["gates"] if item["name"] == name)
+
+
+def test_counter_trend_long_is_blocked_in_persistent_h1_downtrend() -> None:
+    baseline = _ready_signal()
+    assert baseline["decision"] == "READY"
+
+    snapshot = _with_h1_trend(_ready_snapshot(), lambda index: 1.1307 - 0.00035 * index)
+    signal = evaluate_snapshot(snapshot, load_grok_config(), generated_at_epoch=NOW)
+
+    gate = _gate(signal, "intraday_trend_aligned")
+    assert gate["passed"] is False
+    assert gate["reason"] == "COUNTER_TREND_LONG"
+    assert gate["biasDirection"] == -1
+    assert signal["decision"] != "READY"
+    assert "COUNTER_TREND_LONG" in signal["blockingReasons"]
+    assert signal["indicatorState"]["bias"]["direction"] == -1
+
+
+def test_counter_trend_short_is_blocked_in_persistent_h1_uptrend() -> None:
+    snapshot = _with_h1_trend(_ready_snapshot(mirrored=True), lambda index: 1.8693 + 0.00035 * index)
+    signal = evaluate_snapshot(snapshot, load_grok_config(), generated_at_epoch=NOW)
+
+    assert signal["direction"] == "SHORT"
+    gate = _gate(signal, "intraday_trend_aligned")
+    assert gate["passed"] is False
+    assert gate["reason"] == "COUNTER_TREND_SHORT"
+    assert signal["decision"] != "READY"
+
+
+def test_with_trend_signal_passes_the_bias_gate() -> None:
+    # Mirroring flips price direction: build an H1 uptrend (flat head, steady
+    # rise, small terminal pullback so the mirrored SHORT also clears the
+    # dealing-range location gate) so the mirrored snapshot rides a decisive
+    # downtrend and stays bias-aligned.
+    def pre_mirror(index: int) -> float:
+        count = 90
+        pullback = 6
+        if index == 0:
+            return 1.9150  # spike high; becomes the mirrored range low
+        if index < 40:
+            return 1.8693
+        top_index = count - 1 - pullback
+        if index <= top_index:
+            return 1.8693 + 0.0006 * (index - 40)
+        return 1.8693 + 0.0006 * (top_index - 40) - 0.0006 * (index - top_index)
+
+    downtrend = _with_h1_trend(_ready_snapshot(), pre_mirror)
+    axis = 3.0
+
+    def mirror(candle: Candle) -> Candle:
+        return Candle(
+            candle.time,
+            axis - candle.open,
+            axis - candle.low,
+            axis - candle.high,
+            axis - candle.close,
+            candle.volume,
+            candle.volume_source,
+        )
+
+    downtrend.frames = {
+        timeframe: [mirror(candle) for candle in rows]
+        for timeframe, rows in downtrend.frames.items()
+    }
+    signal = evaluate_snapshot(downtrend, load_grok_config(), generated_at_epoch=NOW)
+
+    assert signal["direction"] == "SHORT"
+    gate = _gate(signal, "intraday_trend_aligned")
+    assert gate["passed"] is True
+    assert gate["biasDirection"] == -1
+    assert signal["blockingReasons"] == []
+
+
+def test_bias_gate_disabled_by_config_restores_counter_trend_ready() -> None:
+    config = load_grok_config({"GROK_ENGINE": {"indicators": {"bias_enabled": False}}})
+    snapshot = _with_h1_trend(_ready_snapshot(), lambda index: 1.1307 - 0.00035 * index)
+    signal = evaluate_snapshot(snapshot, config, generated_at_epoch=NOW)
+
+    assert _gate(signal, "intraday_trend_aligned")["passed"] is True
+    assert signal["decision"] == "READY"
+    assert signal["indicatorState"]["bias"]["enabled"] is False
+
+
+def test_neutral_h1_chop_keeps_both_directions_eligible() -> None:
+    for mirrored in (False, True):
+        signal = _ready_signal(mirrored=mirrored)
+        gate = _gate(signal, "intraday_trend_aligned")
+        assert gate["passed"] is True
+        assert signal["decision"] == "READY"
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"bias_fast_period": 50},                       # fast must be < slow (50)
+        {"bias_fast_period": 60, "bias_slow_period": 50},
+        {"bias_slow_period": 1},                        # minimum period is 2
+        {"bias_min_separation_atr": -0.1},
+        {"bias_enabled": "yes"},
+        {"bias_require_price_side": 1},
+    ],
+)
+def test_bias_config_values_fail_closed(override: dict[str, object]) -> None:
+    with pytest.raises(GrokConfigError):
+        load_grok_config({"GROK_ENGINE": {"indicators": override}})
+
+
+def test_bias_profile_overlay_is_validated() -> None:
+    overlay = {"profiles": {"families": {"forex": {"indicators": {"bias_enabled": "yes"}}}}}
+    with pytest.raises(GrokConfigError):
+        load_grok_config({"GROK_ENGINE": overlay})
+
+    relaxed = load_grok_config({"GROK_ENGINE": {"profiles": {"families": {"forex": {"indicators": {"bias_enabled": False}}}}}})
+    snapshot = _with_h1_trend(_ready_snapshot(), lambda index: 1.1307 - 0.00035 * index)
+    signal = evaluate_snapshot(snapshot, relaxed, generated_at_epoch=NOW)
+    assert signal["decision"] == "READY"

@@ -421,3 +421,73 @@ def dealing_quality(dealing: dict[str, Any], direction: int) -> float:
     if dealing.get("shortInOte"):
         return 1.0
     return clamp(position / 0.72)
+
+
+def ema_last(values: list[float], period: int) -> float:
+    """SMA-seeded exponential moving average of the series tail."""
+    period = max(2, int(period))
+    if len(values) < period:
+        return 0.0
+    ema = sum(values[:period]) / period
+    k = 2.0 / (period + 1.0)
+    for value in values[period:]:
+        ema = value * k + ema * (1.0 - k)
+    return float(ema)
+
+
+def intraday_trend_bias(
+    candles: list[Candle],
+    *,
+    atr: float,
+    fast_period: int,
+    slow_period: int,
+    min_separation_atr: float,
+    require_price_side: bool,
+) -> dict[str, Any]:
+    """H1 EMA-stack intraday bias used by the counter-trend hard gate.
+
+    Direction is +1/-1 only when the fast/slow separation is decisive
+    (>= min_separation_atr * ATR) and, optionally, the last close sits on the
+    trend side of the fast EMA. Anything else is neutral (0) so chop keeps
+    both directions eligible. Fail-closed on insufficient input.
+    """
+    fast_period = int(fast_period)
+    slow_period = int(slow_period)
+    needed = max(slow_period, fast_period, 2)
+    if len(candles) < needed or atr <= 0:
+        return {
+            "available": False,
+            "direction": 0,
+            "strength": 0.0,
+            "reason": "BIAS_INPUT_UNAVAILABLE",
+        }
+    closes = [float(candle.close) for candle in candles]
+    fast = ema_last(closes, fast_period)
+    slow = ema_last(closes, slow_period)
+    if fast <= 0 or slow <= 0:
+        return {
+            "available": False,
+            "direction": 0,
+            "strength": 0.0,
+            "reason": "BIAS_INPUT_UNAVAILABLE",
+        }
+    separation_atr = (fast - slow) / atr
+    last_close = closes[-1]
+    threshold = float(min_separation_atr)
+    if separation_atr >= threshold and (not require_price_side or last_close > fast):
+        direction = 1
+    elif separation_atr <= -threshold and (not require_price_side or last_close < fast):
+        direction = -1
+    else:
+        direction = 0
+    strength = clamp(abs(separation_atr) / max(threshold * 3.0, 1e-12)) if direction else 0.0
+    return {
+        "available": True,
+        "direction": direction,
+        "strength": strength,
+        "fast": fast,
+        "slow": slow,
+        "separationAtr": separation_atr,
+        "lastClose": last_close,
+        "reason": None,
+    }
