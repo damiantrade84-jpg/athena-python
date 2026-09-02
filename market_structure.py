@@ -1425,6 +1425,71 @@ def _engine_b_structural_sl_pivot_buffer_atr(regime: str) -> tuple[float, str]:
     )
 
 
+def _engine_b_invalidate_state_memory_bos(
+    bos_data: dict,
+    sequences: list[tuple[str, dict | None]],
+) -> dict:
+    """Withdraw a state-memory BOS that the swing sequence has since turned against.
+
+    State memory keeps a break alive until price closes back through the level.
+    That is the right test for "the level held", but not for "the break is still
+    the active structure": AUD/JPY 2026-09-02 carried a 48-bar-old H4 bull BOS
+    (max 60) as ``structure PASS`` while both the H4 and H1 swing sequence had
+    printed lower highs / lower lows six bars earlier. The engine bought a
+    9-pip-stop pullback into a market whose structure had already rolled over.
+
+    ``sequences`` is ``[(label, sequence_data), ...]`` for the structure and
+    bias rungs. A bull BOS is withdrawn when any rung reads ``LH_LL`` (bear:
+    ``HH_HL``) and that sequence formed AFTER the break (``last_swing_age`` <
+    BOS bar age, each in its own rung's bars — a faster-rung age is at least
+    as recent). Only ``state_memory`` breaks are subject to this; a break
+    inside the event window keeps legacy semantics. Returns a new dict; the
+    input is not mutated. ``ENGINE_B_BOS_STATE_SEQUENCE_INVALIDATION: false``
+    restores the pure level-hold test.
+    """
+    if not isinstance(bos_data, dict):
+        return bos_data
+    if str(bos_data.get("bos_state_source") or "") != "state_memory":
+        return bos_data
+    if not bool(config.CONFIG.get("ENGINE_B_BOS_STATE_SEQUENCE_INVALIDATION", True)):
+        return bos_data
+    out = dict(bos_data)
+    for side, opposing_state in (("bull", "LH_LL"), ("bear", "HH_HL")):
+        if not bool(out.get(f"bos_{side}")):
+            continue
+        bos_age = out.get(f"bos_{side}_bar_age")
+        try:
+            bos_age_f = float(bos_age) if bos_age is not None else None
+        except (TypeError, ValueError):
+            bos_age_f = None
+        for label, seq in sequences:
+            if not isinstance(seq, dict):
+                continue
+            state = str(seq.get("state") or "").upper()
+            if state != opposing_state:
+                continue
+            seq_age = seq.get("last_swing_age")
+            try:
+                seq_age_f = float(seq_age) if seq_age is not None else None
+            except (TypeError, ValueError):
+                seq_age_f = None
+            if bos_age_f is not None and seq_age_f is not None and seq_age_f >= bos_age_f:
+                # The opposing sequence predates the break; the break answered it.
+                continue
+            out[f"bos_{side}"] = False
+            out[f"bos_{side}_recent"] = False
+            out["bos_state_source"] = "state_memory_invalidated"
+            out["bos_state_invalidated"] = {
+                "side": side,
+                "by": f"opposing_sequence:{label}",
+                "sequence": state,
+                "sequence_age": seq_age,
+                "bos_bar_age": bos_age,
+            }
+            break
+    return out
+
+
 def _engine_b_bos_state_max_bars(timeframe: str | None) -> int:
     """Structure-state memory span (bars) for ``_detect_bos`` on ``timeframe``.
 
@@ -3339,8 +3404,18 @@ def resolve_engine_b_execution_levels(
     fallback_rr: float | None = None,
     pair: str | None = None,
     score_group: str | None = None,
+    structural_sl_anchor: str | None = None,
+    trigger_atr: float | None = None,
 ) -> dict:
     """Resolve final Engine B execution SL/TP for RR gating.
+
+    ``structural_sl_anchor`` is the anchor analyze_structure used for the
+    structural stop (``swing`` / ``support_zone`` / ``resistance_zone`` /
+    ``price_below_swing`` / ``price_above_swing``). A price-anchored stop has
+    no structure behind it and is not treated as structural (so the ATR path
+    with its full minimum leg applies). ``trigger_atr`` adds a floor to the
+    absolute minimum stop in trigger-rung ATR units
+    (``ENGINE_B_MIN_SL_TRIGGER_ATR_MULT``).
 
     Priority:
     - SL : ATR-based execution SL (fallback: structural SL).
@@ -3393,6 +3468,18 @@ def resolve_engine_b_execution_levels(
         and ((direction == "LONG" and _struct_sl < _entry)
              or (direction == "SHORT" and _struct_sl > _entry))
     )
+    _price_anchored_sl = str(structural_sl_anchor or "").lower() in {
+        "price_below_swing",
+        "price_above_swing",
+    }
+    if (
+        _struct_sl_valid
+        and _price_anchored_sl
+        and bool(config.CONFIG.get("ENGINE_B_PRICE_ANCHORED_SL_NOT_STRUCTURAL", True))
+    ):
+        # Live price + buffer is not a structural level (see analyze_structure
+        # sl_anchor_source). Fall through to the ATR stop with its minimum leg.
+        _struct_sl_valid = False
     _struct_tp_valid = bool(
         _struct_tp is not None and _entry > 0
         and ((direction == "LONG" and _struct_tp > _entry)
@@ -3595,6 +3682,21 @@ def resolve_engine_b_execution_levels(
         except (TypeError, ValueError):
             _abs_min_sl_atr = 0.35
         _abs_min_sl_atr = max(0.0, min(_abs_min_sl_atr, _min_sl_atr))
+        # Trigger-rung floor: the absolute minimum is expressed in structure-
+        # rung ATR, which says nothing about the bars the entry is actually
+        # exposed to. AUD/JPY 2026-09-02 cleared the 0.35 H4-ATR floor with a
+        # 9-pip stop while the M30 trigger ATR was 17 pips. The floor is now at
+        # least ENGINE_B_MIN_SL_TRIGGER_ATR_MULT x trigger ATR (still capped by
+        # the preferred minimum leg). 0 disables.
+        _trigger_floor_atr = None
+        try:
+            _trig_mult = float(config.CONFIG.get("ENGINE_B_MIN_SL_TRIGGER_ATR_MULT", 1.0) or 0.0)
+            _trig_atr = float(trigger_atr) if trigger_atr is not None else 0.0
+        except (TypeError, ValueError):
+            _trig_mult, _trig_atr = 0.0, 0.0
+        if _trig_mult > 0 and _trig_atr > 0 and _atr > 0:
+            _trigger_floor_atr = min(_min_sl_atr, (_trig_mult * _trig_atr) / _atr)
+            _abs_min_sl_atr = max(_abs_min_sl_atr, _trigger_floor_atr)
         _effective_min_sl_atr = _min_sl_atr if _min_leg_applies else _abs_min_sl_atr
         _dist_atr = abs(_entry - _exec_sl) / _atr
         _max_leg_applies = _profitability_gates_enforced
@@ -3619,6 +3721,9 @@ def resolve_engine_b_execution_levels(
                 "max_leg_applied": bool(_max_leg_applies),
                 "min_leg_applied": bool(_min_leg_applies),
                 "effective_min_sl_atr": round(_effective_min_sl_atr, 4),
+                "trigger_floor_atr": (
+                    round(_trigger_floor_atr, 4) if _trigger_floor_atr is not None else None
+                ),
             }
 
     # Select execution TP: structural when valid, ATR fallback
@@ -6407,6 +6512,12 @@ class NakedEngine:
             swings=struct_swings, min_break_atr=structure_min_break_atr,
             state_max_bars=_engine_b_bos_state_max_bars(structure_tf),
         )
+        # A held level is not an active break once the structure / bias rung
+        # sequence has rolled over after it (AUD/JPY 2026-09-02 post-mortem).
+        bos_data = _engine_b_invalidate_state_memory_bos(
+            bos_data,
+            [("structure", sequence_data), ("bias", macro_seq_data)],
+        )
 
         _sweep_swing_high = None
         _sweep_swing_low = None
@@ -6982,6 +7093,52 @@ class NakedEngine:
 
         anchored_low = min(current_price, sequence_data["recent_low"])
         anchored_high = max(current_price, sequence_data["recent_high"])
+        # Structural stop anchor (AUD/JPY 2026-09-02 post-mortem). When price
+        # has already traded through the last swing, min()/max() anchored the
+        # "structural" stop on the LIVE PRICE plus a 0.25 ATR pivot buffer — a
+        # 9-pip stop two minutes after a 75-pip flush bar, filled at 13:43 and
+        # stopped at 13:44 while price recovered above entry within the next
+        # bar. A price-anchored stop has no structure behind it, so it is
+        # labelled as such and the execution resolver refuses to treat it as
+        # structural. When the entry sits inside or just above a support zone
+        # (below a resistance zone for shorts), the stop anchors beyond the
+        # zone's far side — the level the trade is actually leaning on.
+        sl_anchor_source = "swing"
+        try:
+            _recent_low_f = float(sequence_data["recent_low"])
+            _recent_high_f = float(sequence_data["recent_high"])
+        except (TypeError, ValueError, KeyError):
+            _recent_low_f = _recent_high_f = None
+        if direction == "LONG" and _recent_low_f is not None and current_price <= _recent_low_f:
+            sl_anchor_source = "price_below_swing"
+        elif direction == "SHORT" and _recent_high_f is not None and current_price >= _recent_high_f:
+            sl_anchor_source = "price_above_swing"
+        if bool(config.CONFIG.get("ENGINE_B_STRUCTURAL_SL_ZONE_ANCHOR_ENABLED", True)):
+            _zone_near_atr = float(
+                (config.CONFIG.get("NAKED_ENGINE", {}) or {}).get("zone_near_side_atr_mult", 0.5) or 0.5
+            )
+            if direction == "LONG" and nearest_sup is not None:
+                _far_candidates = [
+                    float(v) for v in (nearest_sup.get("pivot"), nearest_sup.get("lower"))
+                    if v is not None
+                ]
+                _zone_upper = float(nearest_sup.get("upper", current_price))
+                if _far_candidates and current_price <= _zone_upper + atr * _zone_near_atr:
+                    _zone_far = min(_far_candidates)
+                    if _zone_far < current_price:
+                        anchored_low = min(anchored_low, _zone_far)
+                        sl_anchor_source = "support_zone"
+            elif direction == "SHORT" and nearest_res is not None:
+                _far_candidates = [
+                    float(v) for v in (nearest_res.get("pivot"), nearest_res.get("upper"))
+                    if v is not None
+                ]
+                _zone_lower = float(nearest_res.get("lower", current_price))
+                if _far_candidates and current_price >= _zone_lower - atr * _zone_near_atr:
+                    _zone_far = max(_far_candidates)
+                    if _zone_far > current_price:
+                        anchored_high = max(anchored_high, _zone_far)
+                        sl_anchor_source = "resistance_zone"
 
         multipliers = config.CONFIG.get("NAKED_ENGINE", {}).get("zone_multipliers", {})
         buf = multipliers.get(regime.upper(), multipliers.get("RANGING", {"upper": 0.5, "lower": 1.2, "sl": 1.0}))
@@ -7145,6 +7302,29 @@ class NakedEngine:
             score_group=_zone_score_group,
             trigger_tf=str(tfs.get("trigger") or ""),
         )
+        # A NEWER opposing trigger invalidates an older aligned one. The
+        # trigger lookback (Engine A parity) accepts a pattern up to N closed
+        # bars old; AUD/JPY 2026-09-02 printed a bullish STRONG_CLOSE two bars
+        # back and a bearish STRONG_CLOSE one bar back, and the older bullish
+        # bar was taken as the entry catalyst while the market had already
+        # answered it. The pattern is kept for diagnostics; only trigger_ok is
+        # withdrawn. ENGINE_B_TRIGGER_NEWER_OPPOSING_INVALIDATES: false restores.
+        if (
+            bool(config.CONFIG.get("ENGINE_B_TRIGGER_NEWER_OPPOSING_INVALIDATES", True))
+            and bool(trigger_ctx.get("trigger_ok"))
+            and bool(_opposing_trigger_ctx.get("trigger_ok"))
+        ):
+            try:
+                _newer_opposing = int(_opposing_trigger_ctx.get("bar_age")) < int(
+                    trigger_ctx.get("bar_age")
+                )
+            except (TypeError, ValueError):
+                _newer_opposing = False
+            if _newer_opposing:
+                trigger_ctx = dict(trigger_ctx)
+                trigger_ctx["invalidated_pattern"] = trigger_ctx.get("pattern")
+                trigger_ctx["invalidated_by"] = "newer_opposing_trigger"
+                trigger_ctx["trigger_ok"] = False
 
         # Conditional-M5 prerequisite: the setup rung must have armed a
         # direction-aligned trigger before the M5 entry event counts. This is
@@ -7441,6 +7621,7 @@ class NakedEngine:
             "levels_atr_tf": tfs["atr"],
             "structural_sl_buffer_atr_mult": round(float(sl_mult), 4),
             "structural_sl_buffer_source": sl_mult_source,
+            "structural_sl_anchor": sl_anchor_source,
             "trigger_atr_period": precompute.get("trigger_atr_period"),
             "trigger_tf_calibration": precompute.get("trigger_tf_calibration"),
             "bos_confirmed": bos_confirmed,
@@ -7507,6 +7688,8 @@ class NakedEngine:
             "trigger_ok": trigger_ctx["trigger_ok"],
             "trigger_bar_age": trigger_ctx.get("bar_age"),
             "trigger_bar_time": trigger_ctx.get("trigger_bar_time"),
+            "trigger_invalidated_by": trigger_ctx.get("invalidated_by"),
+            "trigger_invalidated_pattern": trigger_ctx.get("invalidated_pattern"),
             "opposing_trigger_pattern": _opposing_trigger_ctx.get("pattern"),
             "opposing_trigger_ok": bool(_opposing_trigger_ctx.get("trigger_ok")),
             "opposing_trigger_bar_age": _opposing_trigger_ctx.get("bar_age"),
@@ -8213,6 +8396,8 @@ class NakedEngine:
             style=exec_style,
             asset_class=_exec_asset_class,
             min_rr=min_rr,
+            structural_sl_anchor=res.get("structural_sl_anchor"),
+            trigger_atr=res.get("trigger_atr"),
             fallback_rr=profile.get("fallback_rr"),
             pair=res.get("pair_display") or res.get("pair") or res.get("display") or res.get("symbol"),
             score_group=profile.get("score_group"),
@@ -8683,6 +8868,20 @@ class NakedEngine:
             _ft_bonus = max(_ft_min, min(_ft_max, _ft_result.get("score", 0.0)))
             if not _ft_enabled:
                 _ft_bonus = 0.0
+            # Follow-through is momentum evidence for a FRESH break. With BOS
+            # state memory the structure break bar can be up to STATE_MAX_BARS
+            # old (AUD/JPY 2026-09-02: 48 H4 bars, +1.5 "strong" bonus on an
+            # 8-day-old break inside an LH_LL sequence). A held level still
+            # earns structure credit; the follow-through bonus does not apply
+            # unless the break is inside the event window.
+            if (
+                _ft_bonus > 0.0
+                and bool(config.CONFIG.get("ENGINE_B_FOLLOW_THROUGH_REQUIRES_RECENT_BOS", True))
+                and not bool(res.get("bos_recent", res.get("bos_confirmed")))
+            ):
+                _ft_detail["stale_bos_bonus_zeroed"] = True
+                _ft_detail["bos_bar_age"] = res.get("bos_bar_age")
+                _ft_bonus = 0.0
             _ft_detail["bonus_applied"] = round(_ft_bonus, 2)
 
         if not _use_weighted_scoring:
@@ -9145,9 +9344,14 @@ class NakedEngine:
             elif _ft_trap_blocked:
                 _trigger_failure_reasons.append("follow_through_trap")
             elif not trigger_ok:
-                _trigger_failure_reasons.append(
-                    ENGINE_B_REASON_RAW_TRIGGER_MISSING
-                )
+                if res.get("trigger_invalidated_by"):
+                    _trigger_failure_reasons.append(
+                        str(res.get("trigger_invalidated_by"))
+                    )
+                else:
+                    _trigger_failure_reasons.append(
+                        ENGINE_B_REASON_RAW_TRIGGER_MISSING
+                    )
                 if bool(res.get("opposing_trigger_ok")):
                     _trigger_failure_reasons.append(
                         ENGINE_B_REASON_OPPOSITE_TRIGGER_PRESENT

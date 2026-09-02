@@ -416,8 +416,17 @@ class QuantScore:
 
 
 # ── trend (multi-timeframe EMA stack) ────────────────────────────────────────
-def _tf_trend(snap: Mapping[str, Any]) -> tuple[float, str, bool]:
-    """One timeframe's EMA-stack vote -> (-1..1, label, available)."""
+def _tf_trend(
+    snap: Mapping[str, Any], *, structure_only: bool = False
+) -> tuple[float, str, bool]:
+    """One timeframe's EMA-stack vote -> (-1..1, label, available).
+
+    ``structure_only`` drops the close-vs-trend-EMA vote and keeps the EMA
+    ordering + long-EMA slope votes. Used for the setup/trigger rungs: their
+    close-vs-EMA read is the pullback the location component already scores,
+    and voting it here made the trend component weakest at exactly the
+    retracement the engine is built to buy (review 2026-09-02, finding 3).
+    """
     close = _f(snap.get("close"))
     e_trend = _f(snap.get("ema21"))   # trend EMA (group period)
     e_mom = _f(snap.get("ema50"))     # momentum EMA
@@ -425,10 +434,11 @@ def _tf_trend(snap: Mapping[str, Any]) -> tuple[float, str, bool]:
     if close is None or e_trend is None or e_mom is None or e_long is None:
         return 0.0, "FLAT", False
     votes = [
-        1.0 if close > e_trend else -1.0,
         1.0 if e_trend > e_mom else -1.0,
         1.0 if e_mom > e_long else -1.0,
     ]
+    if not structure_only:
+        votes.insert(0, 1.0 if close > e_trend else -1.0)
     slope = _f(snap.get("ema200Slope10"), 0.0) or 0.0
     if slope:
         votes.append(1.0 if slope > 0 else -1.0)
@@ -441,6 +451,52 @@ def _tf_trend(snap: Mapping[str, Any]) -> tuple[float, str, bool]:
     margin = (1.0 / len(votes)) - 1e-9
     label = "UP" if score >= margin else "DOWN" if score <= -margin else "FLAT"
     return score, label, True
+
+
+_TF_LADDER_ORDER: dict[str, int] = {
+    "D1": 0, "H4": 1, "H1": 2, "M30": 3, "M15": 4, "M5": 5, "M1": 6,
+}
+
+
+def _trend_structure_only_tfs(
+    tf_weights: Mapping[str, float], setup_tf: str | None
+) -> frozenset[str]:
+    """Trend-stack rungs that vote on EMA structure only (no close-vs-EMA).
+
+    Every rung at or below the setup rung: for the universal intraday ladder
+    that is H1; for swing (setup H4, trigger H1) it is H4 and H1; for the
+    equity intraday ladder (structure H1, setup M30) no stack rung qualifies,
+    so the H1 structure rung keeps its full vote. Reversible via
+    ``ENGINE_A_V3_TREND_STACK.SETUP_RUNG_STRUCTURE_VOTE_ONLY: false``.
+    """
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_TREND_STACK") or {}
+        if not bool(cfg.get("SETUP_RUNG_STRUCTURE_VOTE_ONLY", True)):
+            return frozenset()
+    except Exception:
+        pass
+    setup_index = _TF_LADDER_ORDER.get(str(setup_tf or "").upper())
+    if setup_index is None:
+        return frozenset()
+    return frozenset(
+        str(tf).upper()
+        for tf in tf_weights
+        if _TF_LADDER_ORDER.get(str(tf).upper(), -1) >= setup_index
+    )
+
+
+def _trend_health_adx_source() -> str:
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_TREND_HEALTH") or {}
+        value = str(cfg.get("ADX_SLOPE_SOURCE", "momentum_anchor") or "momentum_anchor")
+    except Exception:
+        value = "momentum_anchor"
+    value = value.strip().lower()
+    return value if value in {"entry", "momentum_anchor", "off"} else "momentum_anchor"
 
 
 def _tf_stack_separation(snap: Mapping[str, Any]) -> float | None:
@@ -492,6 +548,8 @@ def _trend_component(
     indicator_periods: Mapping[str, int] | None = None,
     entry_tf: str = "H1",
     series_cache=None,
+    structure_only_tfs: frozenset[str] | None = None,
+    health_adx_tf: str | None = None,
 ) -> tuple[Component, dict[str, Any]]:
     parts: dict[str, float] = {}
     coherence: dict[str, Any] = {}
@@ -499,11 +557,14 @@ def _trend_component(
     total_w = 0.0
     sep_weighted = 0.0
     sep_w_total = 0.0
+    _structure_only = structure_only_tfs or frozenset()
     for tf, w in tf_w.items():
         snap = snaps.get(tf)
         if not snap:
             continue
-        score, label, available = _tf_trend(snap)
+        score, label, available = _tf_trend(
+            snap, structure_only=str(tf).upper() in _structure_only
+        )
         if not available:
             continue
         parts[tf] = score
@@ -579,8 +640,10 @@ def _trend_component(
         quality *= _clamp(sep_mult, sep_floor, 1.0)
     quality *= _trend_health_mult(
         weighted, snaps, entry_candles, indicator_periods, entry_tf=entry_tf,
-        series_cache=series_cache,
+        series_cache=series_cache, adx_tf=health_adx_tf,
     )
+    if _structure_only:
+        coherence["structure_only_timeframes"] = sorted(_structure_only)
     return Component(_clamp(weighted, -1.0, 1.0), _clamp01(quality)), coherence
 
 
@@ -653,8 +716,18 @@ def _trend_health_mult(
     *,
     entry_tf: str = "H1",
     series_cache=None,
+    adx_tf: str | None = None,
 ) -> float:
-    """Penalize stale or weakening trends (config-gated, default on)."""
+    """Penalize stale or weakening trends (config-gated, default on).
+
+    ``adx_tf`` is the momentum-anchor rung. With ``ADX_SLOPE_SOURCE:
+    momentum_anchor`` (default) the ADX-slope and plateau reads come from that
+    snapshot instead of the entry rung: a five-bar ADX10 slope on H1 penalised
+    68% of EUR/USD bars (mean 0.906, 12% at the floor) on a D1/H4-led trend —
+    that is entry-rung noise, not trend health (review 2026-09-02, finding 4).
+    ``entry`` restores the previous read; ``off`` disables the ADX branches and
+    keeps only the alignment-age penalty.
+    """
     enabled = True
     start_bars = 8
     bar_penalty = 0.03
@@ -662,6 +735,7 @@ def _trend_health_mult(
     adx_weakening_penalty = 0.15
     plateau_enabled = False
     plateau_mult = 0.85
+    adx_source = "momentum_anchor"
     try:
         from config import CONFIG
 
@@ -673,8 +747,12 @@ def _trend_health_mult(
         adx_weakening_penalty = float(cfg.get("ADX_WEAKENING_PENALTY", 0.15))
         plateau_enabled = bool(cfg.get("PLATEAU_PENALTY_ENABLED", False))
         plateau_mult = float(cfg.get("PLATEAU_PENALTY_MULT", 0.85))
+        adx_source = str(cfg.get("ADX_SLOPE_SOURCE", "momentum_anchor") or "momentum_anchor")
     except Exception:
         pass
+    adx_source = adx_source.strip().lower()
+    if adx_source not in {"entry", "momentum_anchor", "off"}:
+        adx_source = "momentum_anchor"
     if not enabled or abs(trend_signal) < 0.34:
         return 1.0
 
@@ -687,20 +765,31 @@ def _trend_health_mult(
         or snaps.get("D1")
         or {}
     )
+    _adx_key = str(adx_tf or "").upper()
+    if adx_source == "momentum_anchor" and _adx_key and snaps.get(_adx_key):
+        adx_snap = snaps[_adx_key]
+    else:
+        adx_snap = entry_snap
     # ADX is unsigned trend strength: a falling slope means the trend is
     # weakening regardless of direction, so the penalty applies symmetrically
     # to LONG and SHORT (previously the SHORT branch penalized rising ADX —
     # i.e. strengthening downtrends — inverting the intent for shorts).
-    adx_slope = _f(entry_snap.get("adxSlope"), 0.0) or 0.0
-    if adx_slope < 0:
+    adx_slope = _f(adx_snap.get("adxSlope"), 0.0) or 0.0
+    if adx_source != "off" and adx_slope < 0:
         mult *= _clamp(1.0 + adx_weakening_penalty * adx_slope, floor, 1.0)
 
     # Plateau penalty is off by default: a steady ADX above 25 is a stable
     # trend, not a stale one — actual weakening is the negative-slope branch
     # above. Re-enable via ENGINE_A_V3_TREND_HEALTH.PLATEAU_PENALTY_ENABLED.
-    adx = _f(entry_snap.get("adx"), 0.0) or 0.0
-    adx_prev = _f(entry_snap.get("adxPrev"))
-    if plateau_enabled and adx_prev is not None and adx > 25 and abs(adx - adx_prev) < 1.0:
+    adx = _f(adx_snap.get("adx"), 0.0) or 0.0
+    adx_prev = _f(adx_snap.get("adxPrev"))
+    if (
+        adx_source != "off"
+        and plateau_enabled
+        and adx_prev is not None
+        and adx > 25
+        and abs(adx - adx_prev) < 1.0
+    ):
         mult *= plateau_mult
 
     if entry_candles:
@@ -750,6 +839,29 @@ def _momentum_blend_enabled() -> bool:
 
         cfg = CONFIG.get("ENGINE_A_V3_MOMENTUM_BLEND") or {}
         return bool(cfg.get("ENABLED", True))
+    except Exception:
+        return True
+
+
+def _momentum_aligned_quality_only() -> bool:
+    """Whether momentum confidence counts only sub-terms on the blended side.
+
+    Quality was the weighted mean of every term's magnitude regardless of sign,
+    so a DI reading that opposed the blended RSI/MACD direction *added*
+    confidence: RSI 62 / DI +0.30 / MACD rising scored signal 0.495, quality
+    0.495; flipping DI to -0.30 dropped the signal to 0.285 and left quality at
+    0.495. Because the aggregator credits quality (not signal x quality) for any
+    aligned component, conflicted momentum was paid in full (review
+    2026-09-02, finding 1). Default true: opposing terms keep their weight in
+    the divisor and contribute nothing to the numerator — the same rule the
+    top-level confluence loop applies across components. Reversible via
+    ``ENGINE_A_V3_MOMENTUM_BLEND.ALIGNED_QUALITY_ONLY: false``.
+    """
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_MOMENTUM_BLEND") or {}
+        return bool(cfg.get("ALIGNED_QUALITY_ONLY", True))
     except Exception:
         return True
 
@@ -829,7 +941,9 @@ def _momentum_component(
     # A zero-weight term must be absent from both halves of the component; the
     # previous unweighted mean let zero-weight RSI/DI/MACD readings change the
     # headline score and gave any positive ROC weight an equal quality vote.
-    quality_terms: list[tuple[float, float]] = []
+    # Entries: (weight, quality, signed term, name). The sign lets the aligned-
+    # only quality rule below drop terms that oppose the blended direction.
+    quality_terms: list[tuple[float, float, float, str]] = []
 
     rsi = _f(snap.get("rsi"))
     if rsi is not None:
@@ -853,7 +967,7 @@ def _momentum_component(
         weighted_signal += rsi_w * rsi_term
         weight_total += rsi_w
         if rsi_w > 0:
-            quality_terms.append((rsi_w, _clamp01(rsi_quality)))
+            quality_terms.append((rsi_w, _clamp01(rsi_quality), rsi_term, "rsi"))
         diag["rsiTerm"] = round(rsi_term, 4)
         diag["rsiQuality"] = round(_clamp01(rsi_quality), 4)
 
@@ -864,7 +978,7 @@ def _momentum_component(
         weighted_signal += di_w * di_term
         weight_total += di_w
         if di_w > 0:
-            quality_terms.append((di_w, abs(di_term)))
+            quality_terms.append((di_w, abs(di_term), di_term, "di"))
         diag["diAlignMult"] = round(1.0 + 0.3 * di_term, 4)
         diag["diTerm"] = round(di_term, 4)
 
@@ -914,7 +1028,7 @@ def _momentum_component(
             macd_quality = _clamp01(macd_quality * magnitude)
             diag["macdMagnitude"] = round(magnitude, 4)
         if macd_w > 0:
-            quality_terms.append((macd_w, macd_quality))
+            quality_terms.append((macd_w, macd_quality, macd_term, "macd"))
         diag["macdSlopeTerm"] = round(macd_term, 4)
         diag["macdQuality"] = round(macd_quality, 4)
 
@@ -940,7 +1054,7 @@ def _momentum_component(
             roc_term = _clamp(roc / roc_scale, -1.0, 1.0)
             weighted_signal += roc_w * roc_term
             weight_total += roc_w
-            quality_terms.append((roc_w, _clamp01(abs(roc) / roc_scale)))
+            quality_terms.append((roc_w, _clamp01(abs(roc) / roc_scale), roc_term, "roc"))
             diag["rocTerm"] = round(roc_term, 4)
 
     signal = weighted_signal / weight_total if weight_total > 0 else 0.0
@@ -984,14 +1098,23 @@ def _momentum_component(
     diag["adxMultiplier"] = round(adx_mult, 4)
     if adx_mult <= 0.0:
         diag["adxHardFail"] = True
-    quality_weight_total = sum(weight for weight, _quality in quality_terms)
-    base_quality = (
-        sum(weight * term_quality for weight, term_quality in quality_terms)
-        / quality_weight_total
-        if quality_weight_total > 0
-        else 0.0
-    )
+    quality_weight_total = sum(weight for weight, _q, _t, _n in quality_terms)
+    aligned_only = _momentum_aligned_quality_only()
+    signal_sign = 1.0 if signal > 0 else -1.0 if signal < 0 else 0.0
+    opposed_terms: list[str] = []
+    credited = 0.0
+    for weight, term_quality, term_value, term_name in quality_terms:
+        term_sign = 1.0 if term_value > 0 else -1.0 if term_value < 0 else 0.0
+        aligned = term_sign == 0.0 or (signal_sign != 0.0 and term_sign == signal_sign)
+        if aligned or not aligned_only:
+            credited += weight * term_quality
+        if not aligned and term_sign != 0.0:
+            opposed_terms.append(term_name)
+    base_quality = credited / quality_weight_total if quality_weight_total > 0 else 0.0
     diag["qualityWeightTotal"] = round(quality_weight_total, 4)
+    diag["alignedQualityOnly"] = aligned_only
+    if opposed_terms:
+        diag["opposedTerms"] = opposed_terms
     quality = _clamp01(base_quality * adx_mult)
     return Component(_clamp(signal, -1.0, 1.0), quality), diag
 
@@ -1015,6 +1138,21 @@ def _location_trend_timing_only() -> bool:
         return bool(cfg.get("TREND_TIMING_ONLY", True))
     except Exception:
         return True
+
+
+def _location_trend_quality_scaling_params() -> tuple[bool, float]:
+    """(enabled, floor) for scaling trend-mode location credit by trend quality."""
+    enabled, floor = True, 0.4
+    try:
+        from config import CONFIG
+
+        cfg = (CONFIG.get("ENGINE_A_V3_LOCATION") or {}).get("TREND_QUALITY_SCALING") or {}
+        if isinstance(cfg, Mapping):
+            enabled = bool(cfg.get("ENABLED", True))
+            floor = float(cfg.get("FLOOR", 0.4))
+    except Exception:
+        pass
+    return enabled, _clamp01(floor)
 
 
 def _location_direction_aware_params() -> tuple[bool, float, float, float, float]:
@@ -1792,6 +1930,16 @@ def _volume_provenance_diagnostic(
     return result
 
 
+def _volume_graded_obv_signal() -> bool:
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_VOLUME_BLEND") or {}
+        return bool(cfg.get("GRADED_OBV_SIGNAL", True))
+    except Exception:
+        return True
+
+
 def _volume_component(
     snap: Mapping[str, Any],
     candles: list[dict],
@@ -1832,8 +1980,18 @@ def _volume_component(
             if index == midpoint:
                 mid_obv = obv
         delta = obv - mid_obv
-        signal = 1.0 if delta > 0 else -1.0 if delta < 0 else 0.0
-        quality = min(1.0, abs(delta) / max(1.0, sum(float(c.get("vol") or 0) for c in valid[midpoint:])))
+        flow_total = max(1.0, sum(float(c.get("vol") or 0) for c in valid[midpoint:]))
+        imbalance = _clamp(delta / flow_total, -1.0, 1.0)
+        # Graded flow vote (default): the signal is the signed net-flow share,
+        # not its sign. The bare sign was +/-1 on 88% of BTC/USDT H1 bars at a
+        # mean quality of 0.35 — a second full-magnitude short-horizon price
+        # vote collinear with trend/momentum (review 2026-09-02, finding 6).
+        # ENGINE_A_V3_VOLUME_BLEND.GRADED_OBV_SIGNAL: false restores the sign.
+        if _volume_graded_obv_signal():
+            signal = imbalance
+        else:
+            signal = 1.0 if delta > 0 else -1.0 if delta < 0 else 0.0
+        quality = min(1.0, abs(imbalance))
 
     # Relative volume from the context ratio when a feed supplies one, else
     # derived from candle volume. Only forex populates context["volume_ratio"]
@@ -1892,6 +2050,26 @@ def _volume_component(
         _clamp01(quality),
         available=(len(valid) >= 5 or (context_volume_accepted and vr is not None)),
     )
+
+
+def _subsystem_max_directional_share() -> float | None:
+    """Cap on the combined subsystem share of the direction vote (None = no cap)."""
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_SUBSYSTEMS") or {}
+        raw = cfg.get("MAX_DIRECTIONAL_SHARE", 0.10)
+    except Exception:
+        raw = 0.10
+    if raw is None:
+        return None
+    try:
+        share = float(raw)
+    except (TypeError, ValueError):
+        return 0.10
+    if not math.isfinite(share) or share < 0.0:
+        return None
+    return min(share, 1.0)
 
 
 # ── config resolvers ─────────────────────────────────────────────────────────
@@ -2199,6 +2377,15 @@ def score_pair(
         (snaps.get(momentum_tf) or snaps.get("H4") or entry_snap)
     )
 
+    structure_only_tfs = _trend_structure_only_tfs(
+        tf_weights, policy_setup_tf or entry_tf
+    )
+    _health_adx_source = _trend_health_adx_source()
+    health_adx_tf = (
+        momentum_tf
+        if _health_adx_source == "momentum_anchor" and snaps.get(momentum_tf)
+        else entry_tf
+    )
     trend_key = (
         "trend",
         entry_tf,
@@ -2211,6 +2398,9 @@ def score_pair(
             for tf in sorted(tf_weights)
         ),
         len(candles.get(entry_tf) or []),
+        tuple(sorted(structure_only_tfs)),
+        health_adx_tf,
+        _health_adx_source,
     )
     trend_result = feature_cache.get(trend_key) if feature_cache is not None else None
     if trend_result is None:
@@ -2221,6 +2411,8 @@ def score_pair(
             indicator_periods=trend_indicator_periods,
             entry_tf=entry_tf,
             series_cache=series_cache,
+            structure_only_tfs=structure_only_tfs,
+            health_adx_tf=health_adx_tf,
         )
         if feature_cache is not None:
             previous_key = feature_cache.get("_latest_trend_key")
@@ -2435,15 +2627,37 @@ def score_pair(
     # leaving its weight in the denominator would silently damp |dir_sum| and
     # push borderline signals under the direction deadband / ramp floor.
     weight_sum = 0.0
+    core_dir_weight = 0.0
     for name, comp in active.items():
         if not comp.directional:
             continue
-        weight_sum += max(0.0, combined_weights.get(name, 0.0))
+        core_dir_weight += max(0.0, combined_weights.get(name, 0.0))
+    weight_sum = core_dir_weight
+    # Subsystem direction-share cap. Carry + COT held 26.6% (forex) / 30%
+    # (commodity) of the directional weight and could zero a moderate price
+    # trend by themselves (AUD/USD at carry +2 sigma resolved FLAT on a
+    # moderate downtrend; review 2026-09-02, finding 2). Their vote in dirSum
+    # is scaled so the combined subsystem share stays at or under
+    # MAX_DIRECTIONAL_SHARE; their confluence credit and the core budget scale
+    # are unchanged, so an aligned carry still adds score.
+    sub_dir_raw = 0.0
+    sub_dir_scale = 1.0
+    sub_max_share = _subsystem_max_directional_share()
     if subsystems_enabled():
         for name in SUBSYSTEM_FACTORS:
             w = max(0.0, combined_weights.get(name, 0.0))
             if w > 0 and subsystem_states.get(name) != ST_NA:
-                weight_sum += w
+                sub_dir_raw += w
+        if (
+            sub_dir_raw > 0
+            and core_dir_weight > 0
+            and sub_max_share is not None
+            and 0.0 <= sub_max_share < 1.0
+        ):
+            sub_dir_cap = sub_max_share * core_dir_weight / (1.0 - sub_max_share)
+            if sub_dir_raw > sub_dir_cap:
+                sub_dir_scale = sub_dir_cap / sub_dir_raw
+        weight_sum += sub_dir_raw * sub_dir_scale
     weight_sum = weight_sum or 1.0
 
     def _subsystem_contributes(name: str) -> bool:
@@ -2503,10 +2717,9 @@ def score_pair(
         for n in SUBSYSTEM_FACTORS:
             if _subsystem_contributes(n):
                 comp = components[n]
-                dir_terms.append((combined_weights.get(n, 0.0), comp.signal * comp.quality))
-                dir_contributions[n] = (
-                    combined_weights.get(n, 0.0) * comp.signal * comp.quality
-                )
+                w_dir = combined_weights.get(n, 0.0) * sub_dir_scale
+                dir_terms.append((w_dir, comp.signal * comp.quality))
+                dir_contributions[n] = w_dir * comp.signal * comp.quality
     dir_sum = sum(w * term for w, term in dir_terms) / weight_sum
     if weight_sum > 0:
         dir_contributions = {
@@ -2643,6 +2856,43 @@ def score_pair(
             components["location"] = location
             if "location" in active:
                 active["location"] = location
+
+    # ── Location credit scaled by trend quality ──────────────────────────────
+    # Trend-mode location is non-directional and credited on quality alone, so
+    # "price at the EMA in chop" earned the same 0.66 of the 3.0 scale as a
+    # pullback inside a real trend (review 2026-09-02, finding 5). Timing is
+    # only worth its weight when there is a trend to pull back into: scale the
+    # credit by trend quality with a floor so a genuinely aligned entry in a
+    # weak stack is discounted, not erased. Mean-reversion location is
+    # directional and votes; it is left alone.
+    location_trend_scale_diag: dict[str, Any] | None = None
+    if (
+        level_style != "mean_reversion"
+        and dsign
+        and not components["location"].directional
+        and components["location"].available
+    ):
+        _lts_enabled, _lts_floor = _location_trend_quality_scaling_params()
+        if _lts_enabled:
+            _trend_quality = _clamp01(trend.quality) if trend.available else 0.0
+            _lts_scale = _lts_floor + (1.0 - _lts_floor) * _trend_quality
+            _lts_before = components["location"].quality
+            location = Component(
+                components["location"].signal,
+                _clamp01(_lts_before * _lts_scale),
+                available=True,
+                directional=False,
+            )
+            components["location"] = location
+            if "location" in active:
+                active["location"] = location
+            location_trend_scale_diag = {
+                "trendQuality": round(_trend_quality, 4),
+                "floor": round(_lts_floor, 4),
+                "scale": round(_lts_scale, 4),
+                "qualityBefore": round(_lts_before, 4),
+                "qualityAfter": round(location.quality, 4),
+            }
 
     # Confluence = weighted aligned quality. Directional components that disagree
     # with the chosen direction contribute nothing (continuous), but never veto.
@@ -2867,6 +3117,7 @@ def score_pair(
             "locationPrice": location_price,
             "locationPriceSource": location_price_source,
             "locationTiming": location_timing_diag,
+            "locationTrendScale": location_trend_scale_diag,
             "minDirectionalFailed": min_directional_failed,
             "legacyFilters": legacy_diag,
             "equityVolumeBlocked": equity_volume_blocked,
@@ -2902,6 +3153,7 @@ def score_pair(
             "locationPrice": location_price,
             "locationPriceSource": location_price_source,
             "locationTiming": location_timing_diag,
+            "locationTrendScale": location_trend_scale_diag,
             "scoringTimeframes": {
                 "policyApplied": bool(policy),
                 "trend": list(tf_weights.keys()),
@@ -2917,7 +3169,9 @@ def score_pair(
                 # plateau). Both are reported so a divergence is visible; the
                 # thresholds themselves remain asset-class keyed, not TF-aware.
                 "momentumAdx": momentum_tf,
-                "trendHealthAdx": entry_tf,
+                "trendHealthAdx": health_adx_tf if _health_adx_source != "off" else None,
+                "trendHealthAdxSource": _health_adx_source,
+                "trendStructureOnlyTfs": sorted(structure_only_tfs),
                 **tf_diagnostics,
             },
             "m5Policy": policy_m5 or "disabled",
@@ -2966,6 +3220,11 @@ def score_pair(
                 "coreScale": round(price_scale, 4),
                 "subsystemBudget": round(sub_budget, 4),
                 "subsystemWeightScope": sub_weight_scope,
+                "subsystemMaxDirectionalShare": sub_max_share,
+                "subsystemDirectionScale": round(sub_dir_scale, 4),
+                "subsystemDirectionShare": round(
+                    (sub_dir_raw * sub_dir_scale) / weight_sum, 4
+                ),
             },
             "legacyFilters": legacy_diag,
             "trendState": legacy_diag.get("trendState"),

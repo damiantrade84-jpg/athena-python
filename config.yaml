@@ -451,6 +451,18 @@ ENGINE_A_V3_LOCATION:
   PULLBACK_DECAY_ATR: 2.5
   CHASE_FREE_ATR: 0.25       # in-direction extension scored at full quality
   CHASE_DECAY_ATR: 1.75
+  # 2026-09-02 review (finding 5): trend-mode location is credited on quality
+  # alone once a direction exists, and at the EMA its quality is 1.0 — 0.66 of
+  # the 3.0 scale (47% of the forex_majors bar) for "price near the EMA" with no
+  # requirement that a trend exists to pull back into. Forex was shielded by the
+  # ADX blocked-state demotion; indices, commodities, equities and crypto were
+  # not. The credit is now scaled by trend quality with a floor:
+  #   credit = q_location x (FLOOR + (1 - FLOOR) x q_trend)
+  # so an aligned entry in a weak stack is discounted, not erased. Continuous
+  # reweighting, not a gate. Mean-reversion location is untouched. Reversible.
+  TREND_QUALITY_SCALING:
+    ENABLED: true
+    FLOOR: 0.4
 # Structural SL must be at least this many ATRs from entry (noise-stop floor).
 ENGINE_A_V3_STRUCTURAL_SL_FLOOR_ATR_MULT: 0.35
 # Structural trend geometry (Engine A V3). Global defaults = historical contract
@@ -525,6 +537,16 @@ ENGINE_A_V3_CRYPTO_DERIV_GUARD:
 # using the hybrid denominator policy from the ablation harness.
 ENGINE_A_V3_SUBSYSTEMS:
   ENABLED: true
+  # 2026-09-02 review (finding 2): carry (0.14/0.16) + COT (0.08/0.09) entered
+  # dirSum as full directional votes — 26.6% of the directional weight on forex,
+  # 30% on commodities — and could zero a moderate price trend by themselves
+  # (AUD/USD at carry z +2.15 resolved FLAT / 0.00 on a moderate downtrend;
+  # XAU/USD longs started 0.21 behind on carry -1.83 + COT -3.0). Carry moves
+  # monthly and COT is weekly with a 3-day lag; they should tilt, not decide,
+  # the side of an H1-setup trade. Their combined share of the direction vote is
+  # now capped here; confluence credit when aligned and the core budget scale
+  # are unchanged. null = no cap (previous behaviour).
+  MAX_DIRECTIONAL_SHARE: 0.10
   WEIGHTS_BY_FAMILY:
     crypto:
       # Zero while MICROSTRUCTURE_BYBIT_FEEDS_ENABLED is false — a non-zero
@@ -554,6 +576,15 @@ ENGINE_A_V3_MOMENTUM_BLEND:
   RSI_WEIGHT: 0.35
   DI_WEIGHT: 0.35
   MACD_SLOPE_WEIGHT: 0.30
+  # 2026-09-02 review (finding 1): momentum confidence was the weighted mean of
+  # every sub-term's magnitude regardless of sign, so a DI reading that opposed
+  # the blended RSI/MACD direction ADDED confidence (RSI 62 / DI -0.30 / MACD
+  # rising kept quality 0.495 while the signal fell 0.495 -> 0.285; 32% of
+  # EUR/USD H4 bars were conflicted and over-credited ~30%). Only sub-terms on
+  # the blended side now count; opposing terms keep their weight in the divisor
+  # and contribute nothing, the same rule the top-level confluence loop uses.
+  # Reversible: false.
+  ALIGNED_QUALITY_ONLY: true
   # 2026-08-06 audit — two quality (confidence) fixes. Neither touches the
   # directional term; both change only how much confidence is attached to it.
   #
@@ -585,6 +616,13 @@ ENGINE_A_V3_MOMENTUM_BLEND:
     precious_trackers: { ROC_WEIGHT: 0.15 }
 
 ENGINE_A_V3_VOLUME_BLEND:
+  # 2026-09-02 review (finding 6): the OBV direction vote was the bare sign of
+  # the 10-bar OBV change — +/-1 on 88% of BTC/USDT H1 bars at mean quality
+  # 0.35, a second full-magnitude short-horizon price vote collinear with
+  # trend/momentum. The signal is now the signed net-flow share (same ratio the
+  # quality already used), so a marginal flow imbalance casts a marginal vote.
+  # Reversible: false restores the sign.
+  GRADED_OBV_SIGNAL: true
   BY_GROUP:
     crypto_other: { MFI_WEIGHT: 0.0 }
     precious_trackers: { MFI_WEIGHT: 0.0 }
@@ -610,6 +648,26 @@ ENGINE_A_V3_TREND_HEALTH:
   BAR_PENALTY: 0.03
   FLOOR: 0.75
   ADX_WEAKENING_PENALTY: 0.15
+  # 2026-09-02 review (finding 4): the ADX-slope branch read the ENTRY rung
+  # (H1, ADX period 10). A five-bar ADX10 slope on H1 penalised 68% of EUR/USD
+  # bars (mean multiplier 0.906, 12% at the 0.75 floor) on a D1/H4-led trend;
+  # the stale-alignment branch the block is named for fired on 14%. The slope
+  # and plateau reads now come from the momentum anchor (H4; D1 for bond_tlt).
+  # Values: momentum_anchor (default) | entry (previous behaviour) | off
+  # (alignment-age penalty only).
+  ADX_SLOPE_SOURCE: momentum_anchor
+
+# 2026-09-02 review (finding 3): every trend-stack rung voted close-vs-EMA, so
+# a retracement to the mean flipped the setup rung's vote and the coherence
+# term — trend quality was 0.351 on pullback bars vs 0.43-0.48 at/above the
+# EMA over 624 EUR/USD H1 bars with the D1/H4 direction held fixed. The engine
+# was most confident when chasing and least at the entry the location term is
+# built to reward. Rungs at or below the policy setup rung (H1 on the universal
+# intraday ladder; H4 + H1 for swing; none on the equity intraday ladder, whose
+# H1 is the structure rung) now vote on EMA ordering and long-EMA slope only —
+# close-vs-EMA on those rungs is the location read and is scored there.
+ENGINE_A_V3_TREND_STACK:
+  SETUP_RUNG_STRUCTURE_VOTE_ONLY: true
 
 # Engine A quant scorer (ground-up rebuild) per-score_group component weights.
 # Core components only: trend, momentum, location, volume (the V3 profile schema
@@ -4864,6 +4922,43 @@ ENGINE_B_BOS_STATE_MAX_BARS:
   D1: 40
   W1: 26
   default: 60
+
+# ── AUD/JPY 2026-09-02 post-mortem (LONG 113.709, SL 113.609, stopped in 76s) ──
+# The 99% signal was built on a 48-bar-old H4 bull BOS held by state memory
+# while both the H4 and H1 swing sequence had turned LH_LL (age 6), a bullish
+# STRONG_CLOSE two bars back that a bearish STRONG_CLOSE one bar back had
+# already answered, a +1.5 "strong" follow-through bonus read off that 8-day-old
+# break bar, and a "structural" stop anchored on the live price + 0.25 ATR
+# (price had already traded through the last swing) that the clamp only lifted
+# to the 0.35 H4-ATR absolute floor — 9 pips, two minutes after a 75-pip flush
+# bar. Each knob below is reversible with false / 0.
+#
+# State-memory BOS is withdrawn when the swing sequence on the structure or
+# bias rung has turned against it AFTER the break (sequence age < BOS bar age).
+# A held level with the structure already printing lower highs / lower lows is
+# not an active break.
+ENGINE_B_BOS_STATE_SEQUENCE_INVALIDATION: true
+# A newer opposing trigger pattern withdraws an older aligned one found by the
+# trigger lookback; the pattern stays in diagnostics (trigger_invalidated_by).
+ENGINE_B_TRIGGER_NEWER_OPPOSING_INVALIDATES: true
+# Follow-through bonus applies only to a fresh break (bos_recent); a held
+# level still earns structure credit, but not momentum credit for a break that
+# is up to STATE_MAX_BARS old.
+ENGINE_B_FOLLOW_THROUGH_REQUIRES_RECENT_BOS: true
+# Structural stop anchor. When the entry sits inside / just above a support
+# zone (below a resistance zone for shorts) the pivot buffer is placed beyond
+# the zone's far side (min of pivot and lower edge) instead of the last swing.
+ENGINE_B_STRUCTURAL_SL_ZONE_ANCHOR_ENABLED: true
+# A stop whose anchor was the live price (price already through the last
+# swing, no zone) is reported as structural_sl_anchor=price_*_swing and the
+# execution resolver refuses to treat it as structural, so the ATR stop with
+# its full 0.75 minimum leg applies instead of the 0.35 absolute floor.
+ENGINE_B_PRICE_ANCHORED_SL_NOT_STRUCTURAL: true
+# Absolute-minimum stop floor in TRIGGER-rung ATR units (the bars the entry is
+# exposed to), capped by ENGINE_B_MIN_SL_ATR_DEFAULT. AUD/JPY: 0.35 x H4 ATR =
+# 9 pips vs 1.0 x M30 ATR = 17 pips. Judgment value, not outcome-calibrated;
+# 0 disables.
+ENGINE_B_MIN_SL_TRIGGER_ATR_MULT: 1.0
 # Sweep reclaim: the raid bar may close beyond the level and a later bar close
 # back inside. Closes checked from the wick bar; 1 = legacy same-bar only.
 ENGINE_B_SWEEP_RECLAIM_BARS: 2

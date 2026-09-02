@@ -1498,6 +1498,14 @@ CONFIG: dict = {
     # as half the preferred 0.75 minimum; validate against backtest stop-out
     # rates before trusting it. Clamped to <= ENGINE_B_MIN_SL_ATR_DEFAULT.
     "ENGINE_B_ABSOLUTE_MIN_SL_ATR": 0.35,
+    # AUD/JPY 2026-09-02 post-mortem knobs (see config.yaml for the account).
+    "ENGINE_B_BOS_STATE_SEQUENCE_INVALIDATION": True,
+    "ENGINE_B_TRIGGER_NEWER_OPPOSING_INVALIDATES": True,
+    "ENGINE_B_FOLLOW_THROUGH_REQUIRES_RECENT_BOS": True,
+    "ENGINE_B_STRUCTURAL_SL_ZONE_ANCHOR_ENABLED": True,
+    "ENGINE_B_PRICE_ANCHORED_SL_NOT_STRUCTURAL": True,
+    # Absolute-minimum stop floor in trigger-rung ATR units; 0 disables.
+    "ENGINE_B_MIN_SL_TRIGGER_ATR_MULT": 1.0,
     # True: build the structural stop as pivot + NAKED_ENGINE.structural_sl_pivot_buffer_atr.
     # False: legacy pivot + zone_multipliers[regime].sl (1.0-1.8 ATR).
     "ENGINE_B_STRUCTURAL_SL_PIVOT_BUFFER_ENABLED": True,
@@ -2118,6 +2126,9 @@ CONFIG: dict = {
     },
     "ENGINE_A_V3_SUBSYSTEMS": {
         "ENABLED": True,
+        # Cap on the combined subsystem (carry/COT/...) share of the direction
+        # vote. None = uncapped. See engine_a_v3/quant_scorer.py score_pair.
+        "MAX_DIRECTIONAL_SHARE": 0.10,
         "WEIGHTS_BY_FAMILY": {
             "crypto": {"microstructure": 0.08},
         },
@@ -2130,6 +2141,9 @@ CONFIG: dict = {
     },
     "ENGINE_A_V3_MOMENTUM_BLEND": {
         "ENABLED": True,
+        # Only sub-terms on the blended side count toward momentum confidence
+        # (engine_a_v3/quant_scorer.py::_momentum_aligned_quality_only).
+        "ALIGNED_QUALITY_ONLY": True,
         "RSI_WEIGHT": 0.35,
         "DI_WEIGHT": 0.35,
         "MACD_SLOPE_WEIGHT": 0.30,
@@ -2148,6 +2162,9 @@ CONFIG: dict = {
     # group has no entry). See engine_a_v3/quant_scorer.py::_volume_component.
     "ENGINE_A_V3_VOLUME_BLEND": {
         "MFI_WEIGHT": 0.0,
+        # Signed net-flow share as the OBV vote instead of its bare sign
+        # (engine_a_v3/quant_scorer.py::_volume_graded_obv_signal).
+        "GRADED_OBV_SIGNAL": True,
         "BY_GROUP": {},
     },
     # ENGINE_A_V3_LOCATION.TREND_TIMING_ONLY defaults True even when this key is
@@ -2157,6 +2174,9 @@ CONFIG: dict = {
     # pullback-timing quality, and it opposed the fade in the MR regime.
     "ENGINE_A_V3_LOCATION": {
         "TREND_TIMING_ONLY": True,
+        # Trend-mode location credit scaled by trend quality with a floor
+        # (engine_a_v3/quant_scorer.py::_location_trend_quality_scaling_params).
+        "TREND_QUALITY_SCALING": {"ENABLED": True, "FLOOR": 0.4},
     },
     "ENGINE_A_V3_VOLATILITY_GATING": {
         "ENABLED": True,
@@ -2171,6 +2191,14 @@ CONFIG: dict = {
         "BAR_PENALTY": 0.03,
         "FLOOR": 0.75,
         "ADX_WEAKENING_PENALTY": 0.15,
+        # momentum_anchor | entry | off — which snapshot feeds the ADX-slope and
+        # plateau branches (engine_a_v3/quant_scorer.py::_trend_health_mult).
+        "ADX_SLOPE_SOURCE": "momentum_anchor",
+    },
+    # Trend-stack rungs at or below the policy setup rung vote on EMA ordering
+    # and slope only (engine_a_v3/quant_scorer.py::_trend_structure_only_tfs).
+    "ENGINE_A_V3_TREND_STACK": {
+        "SETUP_RUNG_STRUCTURE_VOTE_ONLY": True,
     },
     "ENGINE_A_SCORING_PROFILE": {
         "ENABLED": True,
@@ -4083,6 +4111,7 @@ def _fatal_config_validation(cfg: dict) -> None:
         "ENGINE_A_V3_MR_OPPOSITION_GUARD",
         "ENGINE_A_V3_TREND_SEPARATION",
         "ENGINE_A_V3_TREND_HEALTH",
+        "ENGINE_A_V3_TREND_STACK",
         "ENGINE_A_V3_MOMENTUM_BLEND",
         "ENGINE_A_V3_VOLUME_BLEND",
         "ENGINE_A_V3_LOCATION",
