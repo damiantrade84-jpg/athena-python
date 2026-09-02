@@ -1425,6 +1425,101 @@ def _engine_b_structural_sl_pivot_buffer_atr(regime: str) -> tuple[float, str]:
     )
 
 
+def _engine_b_bos_state_max_bars(timeframe: str | None) -> int:
+    """Structure-state memory span (bars) for ``_detect_bos`` on ``timeframe``.
+
+    ``ENGINE_B_BOS_STATE_MAX_BARS`` is a scalar or a per-timeframe dict with an
+    optional ``default`` key. Only consulted when
+    ``ENGINE_B_BOS_STATE_MEMORY_ENABLED`` is true.
+    """
+    raw = config.CONFIG.get("ENGINE_B_BOS_STATE_MAX_BARS", 60)
+    key = str(timeframe or "").strip().upper()
+    if isinstance(raw, dict):
+        val = raw.get(key, raw.get("default", 60))
+    else:
+        val = raw
+    try:
+        return max(1, int(val))
+    except (TypeError, ValueError):
+        return 60
+
+
+def _engine_b_zone_near_side_atr_mult(regime: str, buf: dict | None) -> float:
+    """Near-side (toward price) zone thickness in ATR for ``_find_zones``.
+
+    ``NAKED_ENGINE.zone_location_band_atr_mult`` may be a scalar or a per-regime
+    dict (``default`` key honoured). When the key is absent the legacy
+    ``zone_multipliers[regime].lower`` thickness is used unchanged.
+    """
+    naked_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
+    raw = naked_cfg.get("zone_location_band_atr_mult")
+    key = str(regime or "").upper()
+    legacy = float((buf or {}).get("lower", 1.2))
+    if raw is None:
+        return legacy
+    if isinstance(raw, dict):
+        val = raw.get(key, raw.get("default"))
+        if val is None:
+            return legacy
+        try:
+            return max(0.0, float(val))
+        except (TypeError, ValueError):
+            return legacy
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return legacy
+
+
+def _engine_b_macro_alignment_evidence(res: dict, direction: str) -> bool:
+    """Higher-timeframe alignment for the ``require_macro_align`` gate.
+
+    ``ENGINE_B_SWING_SEQUENCE_DIRECTION_ENABLED`` is off in production, which
+    used to hard-code ``macro_aligned=False`` — so any profile with
+    ``require_macro_align`` (swing commodities) failed the macro gate
+    unconditionally. This read is NOT direction authority; it only answers
+    whether the bias-rung evidence agrees with the candidate side:
+
+    * a direction-aligned bias-rung swing sequence whose age is measured and
+      within ``ENGINE_B_SWING_SEQUENCE_FRESH_BARS``, or
+    * a direction-aligned D1 BOS, or
+    * a valid, aligned top-down HTF bias (``htf_bias``),
+
+    and never while an exclusive opposing D1 BOS is active. Reversible:
+    ``ENGINE_B_MACRO_ALIGN_EVIDENCE_ENABLED: false`` (legacy, always False).
+    """
+    if not bool(config.CONFIG.get("ENGINE_B_MACRO_ALIGN_EVIDENCE_ENABLED", True)):
+        return False
+    d = str(direction or "").upper()
+    if d not in {"LONG", "SHORT"}:
+        return False
+    seq = str(res.get("macro_swing_sequence") or "").upper()
+    seq_aligned = (d == "LONG" and seq == "HH_HL") or (d == "SHORT" and seq == "LH_LL")
+    fresh_bars = _float_cfg("ENGINE_B_SWING_SEQUENCE_FRESH_BARS", 10.0)
+    try:
+        age = float(res.get("macro_swing_sequence_age"))
+    except (TypeError, ValueError):
+        age = None
+    seq_fresh = bool(
+        seq_aligned
+        and age is not None
+        and math.isfinite(age)
+        and age >= 0
+        and (fresh_bars <= 0 or age <= fresh_bars)
+    )
+    d1 = res.get("d1_bos_data") if isinstance(res.get("d1_bos_data"), dict) else {}
+    d1_aligned = bool(d1.get("bos_bull")) if d == "LONG" else bool(d1.get("bos_bear"))
+    d1_opposed = bool(d1.get("bos_bear")) if d == "LONG" else bool(d1.get("bos_bull"))
+    htf = res.get("htf_bias") if isinstance(res.get("htf_bias"), dict) else {}
+    htf_aligned = (
+        str(htf.get("state") or "").lower() == "valid"
+        and str(htf.get("direction") or "").upper() == d
+    )
+    if d1_opposed and not d1_aligned:
+        return False
+    return bool(seq_fresh or d1_aligned or htf_aligned)
+
+
 def _engine_b_d1_conflict_window_atr_mult() -> float:
     naked_cfg = config.CONFIG.get("NAKED_ENGINE", {}) or {}
     try:
@@ -4231,6 +4326,16 @@ class NakedEngine:
             regime.upper(),
             multipliers.get("RANGING", {"upper": 0.5, "lower": 1.2, "sl": 1.0}),
         )
+        # Near-side (toward price) zone thickness. zone_multipliers.*.lower
+        # (1.0-1.5 ATR) was used for both location and the opposing wall, so a
+        # LONG counted as "at support" up to 1.2 ATR above the trough while its
+        # target was cut 1.2 ATR in front of the resistance peak. The
+        # reaction band around a pivot is a fraction of an ATR;
+        # NAKED_ENGINE.zone_location_band_atr_mult sets it (scalar or per
+        # regime). Absent key = legacy `lower` (2026-09-02 review).
+        near_mult = _engine_b_zone_near_side_atr_mult(regime, buf)
+        far_mult = float(buf.get("upper", 0.5))
+        _flip_enabled = bool(config.CONFIG.get("ENGINE_B_ZONE_FLIP_ENABLED", True))
 
         # Calculate recent average volume for normalisation
         vols = np.array([float(c.get("vol", 0)) for c in candles], dtype=float)
@@ -4247,58 +4352,104 @@ class NakedEngine:
         closes = np.array([float(c["close"]) for c in candles], dtype=float)
 
         res_zones = []
+        sup_zones = []
+        n_bars = len(highs)
         for idx in peak_idx:
-            peak_price = highs[idx]
-            zone_upper = peak_price + (atr * buf.get("upper", 0.5))
+            peak_price = float(highs[idx])
+            zone_upper = peak_price + (atr * far_mult)
+            # Average vol of 3 bars around the peak
+            zone_vol = float(zone_vol_means[idx]) if idx < len(zone_vol_means) else 0.0
+            vol_strength = min(1.0, zone_vol / avg_volume_20)
 
             # A confirmed close through the far edge breaks resistance. Keeping
             # that historical peak as an opposing wall would block later
             # continuation/retest setups even though price already accepted
             # above it. The caller supplies confirmed zone-timeframe candles.
-            if np.any(closes[idx + 1 :] > zone_upper):
+            _post = closes[idx + 1 :]
+            _broken = np.flatnonzero(_post > zone_upper)
+            if _broken.size:
+                # Broken resistance becomes support (S/R flip / breaker) while
+                # price has not accepted back below its far side. It used to be
+                # discarded outright, so the highest-probability retest
+                # location in the methodology never existed (2026-09-02).
+                if _flip_enabled:
+                    _first_break = idx + 1 + int(_broken[0])
+                    _flip_lower = peak_price - (atr * far_mult)
+                    if not np.any(closes[_first_break + 1 :] < _flip_lower):
+                        sup_zones.append(
+                            {
+                                "lower": _flip_lower,
+                                "upper": peak_price + (atr * near_mult),
+                                "center": peak_price,
+                                "pivot": peak_price,
+                                "volume_strength": vol_strength,
+                                "age_bars": int(n_bars - 1 - idx),
+                                "is_flip": True,
+                                "flip_from": "resistance",
+                                "flip_bar_index": int(_first_break),
+                                "near_side_atr_mult": near_mult,
+                            }
+                        )
                 continue
-
-            # Average vol of 3 bars around the peak
-            zone_vol = float(zone_vol_means[idx]) if idx < len(zone_vol_means) else 0.0
-            vol_strength = min(1.0, zone_vol / avg_volume_20)
 
             # Zone expands below the peak (ceiling)
             res_zones.append(
                 {
                     "upper": zone_upper,  # slight overshoot tolerance
-                    "lower": peak_price
-                    - (atr * buf.get("lower", 1.2)),  # buffer zone thickness
+                    "lower": peak_price - (atr * near_mult),  # reaction band toward price
                     "center": peak_price,
+                    "pivot": peak_price,
                     "volume_strength": vol_strength,
                     # M-6: bars since the zone-forming pivot, so consumers can
                     # downweight stale zones. 0 = most recent bar.
-                    "age_bars": int(len(highs) - 1 - idx),
+                    "age_bars": int(n_bars - 1 - idx),
+                    "near_side_atr_mult": near_mult,
                 }
             )
 
-        sup_zones = []
         for idx in trough_idx:
-            trough_price = lows[idx]
-            zone_lower = trough_price - (atr * buf.get("upper", 0.5))
-
-            # Symmetric support invalidation: once a confirmed close accepts
-            # below the far edge, this trough is no longer a valid opposing wall.
-            if np.any(closes[idx + 1 :] < zone_lower):
-                continue
-
+            trough_price = float(lows[idx])
+            zone_lower = trough_price - (atr * far_mult)
             # Average vol of 3 bars around the trough
             zone_vol = float(zone_vol_means[idx]) if idx < len(zone_vol_means) else 0.0
             vol_strength = min(1.0, zone_vol / avg_volume_20)
+
+            # Symmetric support invalidation: once a confirmed close accepts
+            # below the far edge, this trough is no longer a valid opposing wall.
+            _post = closes[idx + 1 :]
+            _broken = np.flatnonzero(_post < zone_lower)
+            if _broken.size:
+                if _flip_enabled:
+                    _first_break = idx + 1 + int(_broken[0])
+                    _flip_upper = trough_price + (atr * far_mult)
+                    if not np.any(closes[_first_break + 1 :] > _flip_upper):
+                        res_zones.append(
+                            {
+                                "upper": _flip_upper,
+                                "lower": trough_price - (atr * near_mult),
+                                "center": trough_price,
+                                "pivot": trough_price,
+                                "volume_strength": vol_strength,
+                                "age_bars": int(n_bars - 1 - idx),
+                                "is_flip": True,
+                                "flip_from": "support",
+                                "flip_bar_index": int(_first_break),
+                                "near_side_atr_mult": near_mult,
+                            }
+                        )
+                continue
 
             # Zone expands above the trough (floor)
             sup_zones.append(
                 {
                     "lower": zone_lower,
-                    "upper": trough_price + (atr * buf.get("lower", 1.2)),
+                    "upper": trough_price + (atr * near_mult),
                     "center": trough_price,
+                    "pivot": trough_price,
                     "volume_strength": vol_strength,
                     # M-6: bars since the zone-forming pivot (0 = most recent bar).
-                    "age_bars": int(len(lows) - 1 - idx),
+                    "age_bars": int(n_bars - 1 - idx),
+                    "near_side_atr_mult": near_mult,
                 }
             )
 
@@ -4390,7 +4541,8 @@ class NakedEngine:
     def _detect_bos(self, highs: np.ndarray, lows: np.ndarray, atr: float,
                     volumes: np.ndarray = None, closes: np.ndarray = None,
                     swings: dict | None = None,
-                    min_break_atr: float = 0.0) -> dict:
+                    min_break_atr: float = 0.0,
+                    state_max_bars: int | None = None) -> dict:
         """Detect Break of Structure (BOS) using close-based breakout of the
         prior structural swing.
 
@@ -4398,6 +4550,19 @@ class NakedEngine:
         close that breached the prior swing AND has not been invalidated since
         (no subsequent close back across the level). This captures BOS-then-
         retest entries that the legacy last-bar-only logic missed.
+
+        2026-09-02 review: the lookback is an EVENT window, not structure
+        state. A held break used to be forgotten the moment it aged past the
+        window even though no close ever came back through the level, and
+        every consumer keyed on the flag (order blocks, trend-pullback
+        location, structure_ok) died with it, so the BOS -> pullback -> order
+        block entry was unreachable after ~lookback structure bars. When
+        nothing breaks inside the lookback, the scan now continues back up to
+        ``state_max_bars`` (``ENGINE_B_BOS_STATE_MAX_BARS``) for the most
+        recent break that is still valid; ``bos_*_recent`` keeps the old
+        event-window semantics for consumers that need a fresh break
+        (breakout-candle location). ``ENGINE_B_BOS_STATE_MEMORY_ENABLED:
+        false`` restores the pure event window.
 
         volumes: numpy array of bar volumes. Volume gate now applies only when
         volumes are real exchange contract volume (Bybit/Binance). MT5
@@ -4477,10 +4642,16 @@ class NakedEngine:
                 _ref_peaks = 3
             _ref_peaks = max(1, _ref_peaks)
 
+            # The candidate set is the last N swings that formed BEFORE the
+            # break bar: filter first, then slice. Slicing the newest N of ALL
+            # swings first let peaks that formed after the break (the breakout
+            # leg's own high) push the real reference out of the window, so
+            # the reported broken level drifted to an older, lower pivot as
+            # soon as price pulled back (2026-09-02 review).
             def _ref_high_for(break_idx: int):
                 if _ref_mode == "legacy_second_last":
                     return prior_high, prior_high_idx
-                cands = [int(p) for p in peak_idx[-_ref_peaks:] if int(p) < break_idx]
+                cands = [int(p) for p in peak_idx if int(p) < break_idx][-_ref_peaks:]
                 if not cands:
                     return None, None
                 best = max(cands, key=lambda p: float(highs[p]))
@@ -4489,11 +4660,29 @@ class NakedEngine:
             def _ref_low_for(break_idx: int):
                 if _ref_mode == "legacy_second_last":
                     return prior_low, prior_low_idx
-                cands = [int(t) for t in trough_idx[-_ref_peaks:] if int(t) < break_idx]
+                cands = [int(t) for t in trough_idx if int(t) < break_idx][-_ref_peaks:]
                 if not cands:
                     return None, None
                 best = min(cands, key=lambda t: float(lows[t]))
                 return float(lows[best]), best
+
+            # The qualifying bar found by the newest-first scan is the LAST bar
+            # of the breakout run, not the bar that crossed the level (every
+            # continuation close above the reference qualifies until a newer
+            # peak forms). Walk back to the first close beyond the reference so
+            # the reported break bar is the crossing: OB search, follow-through
+            # and bar age all key off it (2026-09-02 review).
+            def _first_crossing(idx: int, ref: float, ref_idx, *, bullish: bool) -> int:
+                floor_idx = int(ref_idx) if ref_idx is not None else -1
+                while idx - 1 > floor_idx:
+                    cprev = float(closes[idx - 1])
+                    if bullish and cprev > ref + min_break_abs:
+                        idx -= 1
+                    elif (not bullish) and cprev < ref - min_break_abs:
+                        idx -= 1
+                    else:
+                        break
+                return idx
 
             bos_bull = False; bos_bull_idx = None; bos_bull_vol_ref = None
             bos_bear = False; bos_bear_idx = None; bos_bear_vol_ref = None
@@ -4513,7 +4702,8 @@ class NakedEngine:
                                 invalidated = True
                                 break
                         if not invalidated:
-                            bos_bull, bos_bull_idx, bos_bull_vol_ref = True, idx, idx
+                            _cross = _first_crossing(idx, _rh, _rh_idx, bullish=True)
+                            bos_bull, bos_bull_idx, bos_bull_vol_ref = True, _cross, _cross
                             bull_ref_high, bull_ref_high_idx = _rh, _rh_idx
                 if not bos_bear:
                     _rl, _rl_idx = _ref_low_for(idx)
@@ -4524,10 +4714,52 @@ class NakedEngine:
                                 invalidated = True
                                 break
                         if not invalidated:
-                            bos_bear, bos_bear_idx, bos_bear_vol_ref = True, idx, idx
+                            _cross = _first_crossing(idx, _rl, _rl_idx, bullish=False)
+                            bos_bear, bos_bear_idx, bos_bear_vol_ref = True, _cross, _cross
                             bear_ref_low, bear_ref_low_idx = _rl, _rl_idx
                 if bos_bull and bos_bear:
                     break
+
+            # Event-window flags (legacy semantics) before state memory widens
+            # the search.
+            bos_bull_recent = bool(bos_bull)
+            bos_bear_recent = bool(bos_bear)
+            bos_state_source = "lookback" if (bos_bull or bos_bear) else "none"
+            _state_enabled = bool(
+                config.CONFIG.get("ENGINE_B_BOS_STATE_MEMORY_ENABLED", True)
+            )
+            try:
+                _state_max = int(
+                    state_max_bars
+                    if state_max_bars is not None
+                    else config.CONFIG.get("ENGINE_B_BOS_STATE_MAX_BARS", 60) or 60
+                )
+            except (TypeError, ValueError):
+                _state_max = 60
+            _state_max = max(lookback, min(_state_max, n))
+            if _state_enabled and not bos_bull and not bos_bear and _state_max > lookback:
+                # Walk back from the oldest lookback bar: the FIRST valid break
+                # found is the most recent structural event, and a break on
+                # either side ends the search so an older opposite-side break
+                # can never coexist with the newer one.
+                for k in range(lookback + 1, _state_max + 1):
+                    idx = n - k
+                    close_v = float(closes[idx])
+                    _rh, _rh_idx = _ref_high_for(idx)
+                    if _rh is not None and close_v > _rh + min_break_abs:
+                        if not any(float(closes[j]) < _rh for j in range(idx + 1, n)):
+                            _cross = _first_crossing(idx, _rh, _rh_idx, bullish=True)
+                            bos_bull, bos_bull_idx, bos_bull_vol_ref = True, _cross, _cross
+                            bull_ref_high, bull_ref_high_idx = _rh, _rh_idx
+                    _rl, _rl_idx = _ref_low_for(idx)
+                    if _rl is not None and close_v < _rl - min_break_abs:
+                        if not any(float(closes[j]) > _rl for j in range(idx + 1, n)):
+                            _cross = _first_crossing(idx, _rl, _rl_idx, bullish=False)
+                            bos_bear, bos_bear_idx, bos_bear_vol_ref = True, _cross, _cross
+                            bear_ref_low, bear_ref_low_idx = _rl, _rl_idx
+                    if bos_bull or bos_bear:
+                        bos_state_source = "state_memory"
+                        break
 
             # Reported reference: the swing the detected break actually cleared,
             # else the reference a break on the latest bar would be measured
@@ -4618,6 +4850,14 @@ class NakedEngine:
                 "bos_volume_status": bos_volume_status,
                 "bos_bull_bar_index": bos_bull_idx,
                 "bos_bear_bar_index": bos_bear_idx,
+                # Event-window (fresh break) flags vs. held-structure state.
+                "bos_bull_recent": bos_bull_recent,
+                "bos_bear_recent": bos_bear_recent,
+                "bos_bull_bar_age": (n - 1 - bos_bull_idx) if bos_bull_idx is not None else None,
+                "bos_bear_bar_age": (n - 1 - bos_bear_idx) if bos_bear_idx is not None else None,
+                "bos_state_source": bos_state_source,
+                "bos_state_max_bars": _state_max,
+                "bos_lookback_bars": lookback,
             }
 
         except Exception as exc:
@@ -4968,6 +5208,9 @@ class NakedEngine:
             "sweep_direction": None,
             "sweep_low": None,
             "sweep_high": None,
+            "sweep_bar_index": None,
+            "sweep_reclaim_bar_index": None,
+            "swept_level": None,
         }
         if len(closes) < 8:
             return _empty
@@ -5014,30 +5257,57 @@ class NakedEngine:
             except (TypeError, ValueError):
                 wick_atr_mult = 0.3
 
+            # A raid does not have to be reclaimed on the same candle: the wick
+            # bar can close beyond the level and the NEXT bar close back inside
+            # (classic two-candle sweep). Allow the reclaim within
+            # ENGINE_B_SWEEP_RECLAIM_BARS closes starting at the wick bar; the
+            # legacy same-bar form is reclaim_bars=1 (2026-09-02 review).
+            try:
+                reclaim_bars = int(config.CONFIG.get("ENGINE_B_SWEEP_RECLAIM_BARS", 2) or 1)
+            except (TypeError, ValueError):
+                reclaim_bars = 2
+            reclaim_bars = max(1, min(reclaim_bars, 5))
+            n_total = len(closes)
+            win_start = n_total - sweep_lookback
+
+            def _reclaim_index(abs_i: int, level: float, *, bullish: bool):
+                for j in range(abs_i, min(n_total, abs_i + reclaim_bars)):
+                    cj = float(closes[j])
+                    if (bullish and cj > level) or ((not bullish) and cj < level):
+                        return j
+                return None
+
             # Track best (most recent, then largest wick) candidate per side.
-            best_bull: tuple[int, float, float] | None = None  # (bar_i, wick_depth, low)
-            best_bear: tuple[int, float, float] | None = None
+            # (window_i, wick_depth, extreme, abs_bar_index, reclaim_bar_index)
+            best_bull: tuple[int, float, float, int, int] | None = None
+            best_bear: tuple[int, float, float, int, int] | None = None
 
             for i in range(sweep_lookback):
                 high = float(recent_highs[i])
                 low = float(recent_lows[i])
-                close = float(recent_closes[i])
+                abs_i = win_start + i
 
-                # Bullish sweep: wick below swing low, close above it (stop hunt below → reversal up)
-                if low < ref_low - wick_atr_mult * atr and close > ref_low:
-                    depth = float(ref_low) - low
-                    if best_bull is None or i > best_bull[0] or (
-                        i == best_bull[0] and depth > best_bull[1]
-                    ):
-                        best_bull = (i, depth, low)
+                # Bullish sweep: wick below swing low, close back above it
+                # (stop hunt below → reversal up)
+                if low < ref_low - wick_atr_mult * atr:
+                    _rj = _reclaim_index(abs_i, float(ref_low), bullish=True)
+                    if _rj is not None:
+                        depth = float(ref_low) - low
+                        if best_bull is None or i > best_bull[0] or (
+                            i == best_bull[0] and depth > best_bull[1]
+                        ):
+                            best_bull = (i, depth, low, abs_i, _rj)
 
-                # Bearish sweep: wick above swing high, close below it (stop hunt above → reversal down)
-                if high > ref_high + wick_atr_mult * atr and close < ref_high:
-                    depth = high - float(ref_high)
-                    if best_bear is None or i > best_bear[0] or (
-                        i == best_bear[0] and depth > best_bear[1]
-                    ):
-                        best_bear = (i, depth, high)
+                # Bearish sweep: wick above swing high, close back below it
+                # (stop hunt above → reversal down)
+                if high > ref_high + wick_atr_mult * atr:
+                    _rj = _reclaim_index(abs_i, float(ref_high), bullish=False)
+                    if _rj is not None:
+                        depth = high - float(ref_high)
+                        if best_bear is None or i > best_bear[0] or (
+                            i == best_bear[0] and depth > best_bear[1]
+                        ):
+                            best_bear = (i, depth, high, abs_i, _rj)
 
             if best_bull is not None and best_bear is not None:
                 # Mutual exclusion: keep the more recent sweep; tie-break on wick depth.
@@ -5048,14 +5318,23 @@ class NakedEngine:
                 else:
                     best_bull = None
 
+            sweep_bar_index = None
+            sweep_reclaim_bar_index = None
+            swept_level = None
             if best_bull is not None:
                 bull_sweep = True
                 sweep_low = best_bull[2]
                 sweep_direction = "LONG"
+                sweep_bar_index = int(best_bull[3])
+                sweep_reclaim_bar_index = int(best_bull[4])
+                swept_level = float(ref_low)
             if best_bear is not None:
                 bear_sweep = True
                 sweep_high = best_bear[2]
                 sweep_direction = "SHORT"
+                sweep_bar_index = int(best_bear[3])
+                sweep_reclaim_bar_index = int(best_bear[4])
+                swept_level = float(ref_high)
 
             return {
                 "bull_sweep": bull_sweep,
@@ -5063,6 +5342,12 @@ class NakedEngine:
                 "sweep_low": sweep_low,
                 "sweep_high": sweep_high,
                 "sweep_direction": sweep_direction,
+                # Absolute index of the raid (wick) bar and of the bar whose
+                # close reclaimed the level, so quality grading can read the
+                # candle that actually swept instead of the newest bar.
+                "sweep_bar_index": sweep_bar_index,
+                "sweep_reclaim_bar_index": sweep_reclaim_bar_index,
+                "swept_level": swept_level,
             }
 
         except Exception:
@@ -6117,7 +6402,11 @@ class NakedEngine:
             _vol_gate_eligible and struct_volumes is not None
         )
 
-        bos_data = self._detect_bos(struct_highs, struct_lows, struct_atr, volumes=struct_volumes, closes=struct_closes, swings=struct_swings, min_break_atr=structure_min_break_atr)
+        bos_data = self._detect_bos(
+            struct_highs, struct_lows, struct_atr, volumes=struct_volumes, closes=struct_closes,
+            swings=struct_swings, min_break_atr=structure_min_break_atr,
+            state_max_bars=_engine_b_bos_state_max_bars(structure_tf),
+        )
 
         _sweep_swing_high = None
         _sweep_swing_low = None
@@ -6168,7 +6457,10 @@ class NakedEngine:
         d1_prominence_mult = max(float(d1_crypto_diag.get("swing_prominence_mult", 1.0) or 1.0), float(d1_asset_diag.get("swing_prominence_mult", 1.0) or 1.0))
         d1_min_break_atr = max(float(d1_crypto_diag.get("bos_min_break_atr", 0.0) or 0.0), float(d1_asset_diag.get("bos_min_break_atr", 0.0) or 0.0))
         d1_swings = self._swing_cache(d1_highs, d1_lows, d1_atr, prominence_mult=d1_prominence_mult)
-        d1_bos = self._detect_bos(d1_highs, d1_lows, d1_atr, closes=d1_closes, swings=d1_swings, min_break_atr=d1_min_break_atr)
+        d1_bos = self._detect_bos(
+            d1_highs, d1_lows, d1_atr, closes=d1_closes, swings=d1_swings,
+            min_break_atr=d1_min_break_atr, state_max_bars=_engine_b_bos_state_max_bars("D1"),
+        )
 
         d1_order_blocks_raw: list = []
         d1_fvgs_raw: list = []
@@ -6244,7 +6536,10 @@ class NakedEngine:
                     if _w1_atr > 0:
                         _w1_swings = self._swing_cache(_w1_highs, _w1_lows, _w1_atr)
                         _w1_seq = self._determine_sequence(_w1_highs, _w1_lows, _w1_atr, "LONG", swings=_w1_swings)
-                        _w1_bos = self._detect_bos(_w1_highs, _w1_lows, _w1_atr, closes=_w1_closes, swings=_w1_swings)
+                        _w1_bos = self._detect_bos(
+                            _w1_highs, _w1_lows, _w1_atr, closes=_w1_closes, swings=_w1_swings,
+                            state_max_bars=_engine_b_bos_state_max_bars("W1"),
+                        )
                         _w1_evidence = {
                             "sequence": _w1_seq.get("state"),
                             "bos_bull": bool(_w1_bos.get("bos_bull")),
@@ -6813,6 +7108,11 @@ class NakedEngine:
             for ob in order_blocks:
                 if _ob_directional and str(ob.get("type") or "").lower() != _aligned_ob_type:
                     continue
+                # A mitigated block (close through its far side) has been
+                # consumed; BOS state memory now surfaces older blocks, so it
+                # must not count as live confluence at the zone.
+                if bool(ob.get("mitigated")):
+                    continue
                 if not (ob["top"] < az_lower or ob["bottom"] > az_upper):
                     if ob.get("strength", 0) >= _ob_min_strength:
                         _ob_at_zone = True
@@ -6947,6 +7247,75 @@ class NakedEngine:
             _last_tc = trigger_candles[-1]
             latest_trigger_candle_time = _last_tc.get("time") or _last_tc.get("timestamp") or _last_tc.get("datetime") or _last_tc.get("date")
 
+        # Fresh-break flag (legacy event-window semantics) alongside the held
+        # structure state. Breakout-candle location and follow-through read
+        # the fresh flag; structure/OB/pullback read the state.
+        bos_recent = (
+            (direction == "LONG" and bool(bos_data.get("bos_bull_recent", bos_data.get("bos_bull"))))
+            or (direction == "SHORT" and bool(bos_data.get("bos_bear_recent", bos_data.get("bos_bear"))))
+        )
+        bos_bar_age = (
+            bos_data.get("bos_bull_bar_age") if direction == "LONG" else bos_data.get("bos_bear_bar_age")
+        )
+
+        # Follow-through on the STRUCTURE rung at the actual break bar. The
+        # trigger-TF form located "the breakout bar" as the newest M15 close
+        # across the structure level, which during a retest is the re-cross,
+        # so two red M15 bars after a re-cross read as a trap on the H4 break.
+        structure_follow_through: dict = {
+            "score": 0.0,
+            "confidence": "no_breakout_bar",
+            "bars_checked": 0,
+            "breakout_bar_index": None,
+            "source": "structure",
+            "timeframe": structure_tf,
+        }
+        if bos_confirmed:
+            _bos_idx_key = "bos_bull_bar_index" if direction == "LONG" else "bos_bear_bar_index"
+            _bos_idx_raw = bos_data.get(_bos_idx_key)
+            try:
+                _bos_idx = int(_bos_idx_raw) if _bos_idx_raw is not None else None
+            except (TypeError, ValueError):
+                _bos_idx = None
+            if _bos_idx is not None and struct_candles and 0 <= _bos_idx < len(struct_candles):
+                try:
+                    structure_follow_through = dict(
+                        _breakout_follow_through(
+                            list(struct_candles), direction, float(struct_atr), breakout_bar_index=_bos_idx
+                        )
+                    )
+                except Exception as _sft_err:
+                    structure_follow_through["error"] = str(_sft_err)
+                structure_follow_through.update(
+                    {"breakout_bar_index": _bos_idx, "source": "structure", "timeframe": structure_tf}
+                )
+
+        # Distance from the TRIGGER BAR (not the newest bar) to the active
+        # zone, so the entry pattern can be paired with the level it fired at.
+        # None when no trigger fired or no zone is in play.
+        trigger_bar_zone_distance = None
+        _tb_age = trigger_ctx.get("bar_age")
+        if (
+            active_zone
+            and _tb_age is not None
+            and trigger_candles
+            and len(trigger_candles) > int(_tb_age)
+        ):
+            try:
+                _tb = trigger_candles[-1 - int(_tb_age)]
+                _tb_low = float(_tb["low"])
+                _tb_high = float(_tb["high"])
+                _zl = float(active_zone.get("lower"))
+                _zu = float(active_zone.get("upper"))
+                if _tb_high >= _zl and _tb_low <= _zu:
+                    trigger_bar_zone_distance = 0.0
+                elif _tb_low > _zu:
+                    trigger_bar_zone_distance = _tb_low - _zu
+                else:
+                    trigger_bar_zone_distance = _zl - _tb_high
+            except (KeyError, TypeError, ValueError):
+                trigger_bar_zone_distance = None
+
         # Volume profile interaction (direction-dependent part)
         _profile_result = {
             "prev_session_profile_valid": False, "prev_session_profile_source_tf": None,
@@ -7075,6 +7444,11 @@ class NakedEngine:
             "trigger_atr_period": precompute.get("trigger_atr_period"),
             "trigger_tf_calibration": precompute.get("trigger_tf_calibration"),
             "bos_confirmed": bos_confirmed,
+            "bos_recent": bool(bos_recent),
+            "bos_bar_age": bos_bar_age,
+            "bos_state_source": bos_data.get("bos_state_source"),
+            "structure_follow_through": structure_follow_through,
+            "trigger_bar_zone_distance": trigger_bar_zone_distance,
             # bos_mtf_confirmed stays direction-blind (an MTF break exists in
             # *some* direction) for backward compatibility; bos_mtf_aligned is
             # the direction-aware value scoring already uses, exported so UI and
@@ -7194,6 +7568,10 @@ class NakedEngine:
                 session_quality=str(_session_payload.get("session_quality") or "unknown"),
                 asset_type=asset_type,
                 aggtrade_available=bool(precompute.get("aggtrade_available")),
+                # Sweep grading reads the raid bar on the series it was
+                # detected on (structure rung), not the newest trigger bar.
+                structure_candles=list(struct_candles or []),
+                structure_atr=float(struct_atr or atr),
             )
             _result["invalidation_context"] = build_invalidation_context(_result, direction)
         except Exception as _phase2_err:
@@ -7416,8 +7794,12 @@ class NakedEngine:
             )
         else:
             micro_aligned = False
-            macro_aligned = False
             hard_counter = False
+            # macro_aligned feeds ONLY the require_macro_align gate here. It was
+            # hard-coded False, which turned that gate into an unconditional
+            # veto (swing commodities could never pass). Resolve it from
+            # bias-rung evidence instead; it is never direction authority.
+            macro_aligned = _engine_b_macro_alignment_evidence(res, direction)
         # hard_counter softening: default is a soft score penalty rather than
         # a structure_ok veto. Legacy veto mode remains available via the
         # NAKED_ENGINE.hard_counter_mode config key. Mirrors Engine A's soft
@@ -7675,7 +8057,12 @@ class NakedEngine:
 
         zone_ok = bool(res.get("zone_touched") or res.get("near_active_zone"))
         trigger_ok = bool(res.get("trigger_ok")) and trigger_timeframe_gate_ok
-        breakout_ok = bool(res.get("bos_confirmed")) and bool(
+        # Breakout-candle location needs a FRESH break (event window). With BOS
+        # state memory a held break can be many bars old; a strong close deep
+        # into an old trend leg is not a breakout location. Legacy payloads
+        # without the stamp fall back to bos_confirmed.
+        _bos_recent = bool(res.get("bos_recent", res.get("bos_confirmed")))
+        breakout_ok = bool(res.get("bos_confirmed")) and _bos_recent and bool(
             res.get("strong_close")
             or res.get("inside_break_candle")
             or res.get("engulfing_candle")
@@ -7986,13 +8373,25 @@ class NakedEngine:
             )
         except (TypeError, ValueError):
             _trigger_loc_max_atr = 0.75
+        # Distance term: measure from the bar that printed the trigger, not
+        # from the newest bar. A pattern that fired away from the level must
+        # not be paired with a zone price only reached afterwards. Legacy
+        # payloads without the stamp keep the current-price distance.
+        _trigger_loc_distance = _active_zone_distance
+        if bool(config.CONFIG.get("ENGINE_B_TRIGGER_AT_LOCATION_USE_TRIGGER_BAR", True)):
+            _tb_dist_raw = res.get("trigger_bar_zone_distance")
+            if _tb_dist_raw is not None:
+                try:
+                    _trigger_loc_distance = abs(float(_tb_dist_raw))
+                except (TypeError, ValueError):
+                    _trigger_loc_distance = _active_zone_distance
         _trigger_at_location = (
             zone_ok
             or ob_at_zone
             or _trend_pullback
             or _fvg_sweep_location
             or (allow_breakout_entry and breakout_ok)
-            or _active_zone_distance <= atr_val * _trigger_loc_max_atr
+            or _trigger_loc_distance <= atr_val * _trigger_loc_max_atr
         )
         _trigger_location_blocked = bool(
             _trigger_loc_enabled and trigger_ok and not _trigger_at_location
@@ -8012,27 +8411,49 @@ class NakedEngine:
             _ft_cfg_early.get("BLOCK_ENTRY_ON_TRAP", True)
         )
         _ft_trap_blocked = False
-        if _ft_block_entry and entry_ok:
-            _ft_bos_early = res.get("bos_data") or {}
-            _ft_level_early = (
-                _ft_bos_early.get("last_broken_high")
+
+        def _resolve_follow_through() -> dict:
+            """Follow-through evidence for the break behind this candidate.
+
+            ``ENGINE_B_FOLLOW_THROUGH_SOURCE: structure`` (default) reads the
+            structure-rung evaluation stamped by analyze_structure_direction at
+            the actual break bar. Payloads without that stamp (hand-built /
+            legacy) and ``trigger`` mode use the trigger-TF crossing.
+            """
+            _src = str(
+                config.CONFIG.get("ENGINE_B_FOLLOW_THROUGH_SOURCE", "structure") or "structure"
+            ).lower()
+            _sft = res.get("structure_follow_through")
+            if _src == "structure" and isinstance(_sft, dict):
+                return dict(_sft)
+            _ft_bos = res.get("bos_data") or {}
+            _ft_level = (
+                _ft_bos.get("last_broken_high")
                 if direction == "LONG"
-                else _ft_bos_early.get("last_broken_low")
+                else _ft_bos.get("last_broken_low")
             )
-            _ft_series_early = _follow_through_candle_series(entry_candles)
-            _ft_idx_early = _find_breakout_bar_index(
-                _ft_series_early, direction, _ft_level_early
-            )
-            if _ft_idx_early is not None:
-                _ft_early = _breakout_follow_through(
-                    _ft_series_early,
-                    direction,
-                    trigger_atr_val,
-                    breakout_bar_index=_ft_idx_early,
+            _ft_series = _follow_through_candle_series(entry_candles)
+            _ft_idx = _find_breakout_bar_index(_ft_series, direction, _ft_level)
+            if _ft_idx is not None:
+                out = _breakout_follow_through(
+                    _ft_series, direction, trigger_atr_val, breakout_bar_index=_ft_idx
                 )
-                if float(_ft_early.get("score") or 0.0) < 0.0:
-                    entry_ok = False
-                    _ft_trap_blocked = True
+                out["breakout_bar_index"] = _ft_idx
+                out["source"] = "trigger"
+                return out
+            return {
+                "score": 0.0,
+                "confidence": "no_breakout_bar",
+                "bars_checked": 0,
+                "breakout_bar_index": None,
+                "source": "trigger",
+            }
+
+        _ft_resolved = _resolve_follow_through()
+        if _ft_block_entry and entry_ok:
+            if float(_ft_resolved.get("score") or 0.0) < 0.0:
+                entry_ok = False
+                _ft_trap_blocked = True
 
         # Accept both structural TPs and synthetic-fallback TPs as a "meaningful"
         # target that can substitute for room. Raw ATR TPs do not qualify
@@ -8250,29 +8671,9 @@ class NakedEngine:
             "diagnostics_enabled": _ft_diagnostics_enabled,
         }
         if _ft_enabled or _ft_diagnostics_enabled:
-            # Locate the actual breakout bar (close crossing the broken BOS level)
-            # so follow-through evaluates the bars after it. Defaulting to the
-            # last bar always yields zero bars to check.
-            _ft_bos = res.get("bos_data") or {}
-            _ft_level = (
-                _ft_bos.get("last_broken_high")
-                if direction == "LONG"
-                else _ft_bos.get("last_broken_low")
-            )
-            _ft_series = _follow_through_candle_series(entry_candles)
-            _ft_idx = _find_breakout_bar_index(_ft_series, direction, _ft_level)
-            if _ft_idx is not None:
-                _ft_result = _breakout_follow_through(
-                    _ft_series, direction, trigger_atr_val, breakout_bar_index=_ft_idx
-                )
-                _ft_result["breakout_bar_index"] = _ft_idx
-            else:
-                _ft_result = {
-                    "score": 0.0,
-                    "confidence": "no_breakout_bar",
-                    "bars_checked": 0,
-                    "breakout_bar_index": None,
-                }
+            # Same evidence the trap block used above: structure-rung break bar
+            # by default, trigger-TF crossing for legacy payloads / trigger mode.
+            _ft_result = dict(_ft_resolved)
             _ft_detail.update(_ft_result)
             _ft_detail["confirmed_only"] = bool(
                 config.CONFIG.get("ENGINE_B_FOLLOW_THROUGH_CONFIRMED_ONLY", True)

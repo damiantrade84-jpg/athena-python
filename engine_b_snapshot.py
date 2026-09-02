@@ -346,10 +346,21 @@ def resolve_engine_b_regime_label(
         "LOW_VOL_ENV": "LOW_VOLATILITY",
     }
     raw: Any = None
-    if isinstance(regime_hint, Mapping):
-        raw = regime_hint.get("label") or regime_hint.get("regime")
-    elif regime_hint:
-        raw = regime_hint
+    # Engine B geometry (zone thickness, structural stop buffer, min-score
+    # regime multiplier) keys off this label. Live callers passed Engine A's
+    # regime context as the hint, so Engine B's zones changed whenever Engine
+    # A relabelled. Engine independence: derive the label from Engine B's own
+    # H4 candles unless the legacy hint path is explicitly re-enabled.
+    _independent = True
+    try:
+        _independent = bool(CONFIG.get("ENGINE_B_REGIME_LABEL_INDEPENDENT", True))
+    except Exception:
+        _independent = True
+    if not _independent:
+        if isinstance(regime_hint, Mapping):
+            raw = regime_hint.get("label") or regime_hint.get("regime")
+        elif regime_hint:
+            raw = regime_hint
     if raw:
         normalized = str(raw).upper()
         if normalized not in {"NONE", "UNKNOWN", ""}:

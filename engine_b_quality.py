@@ -345,6 +345,11 @@ def _ob_confluence_score(res: dict[str, Any], direction: str) -> float:
         for block in blocks:
             if not isinstance(block, dict):
                 continue
+            # A consumed block (close through its far side) is not confluence.
+            # BOS state memory now surfaces older blocks, so this filter keeps
+            # a mitigated origin from paying as an active PD array.
+            if bool(block.get("mitigated")):
+                continue
             block_type = str(block.get("type") or "").lower()
             if block_type:
                 typed_seen = True

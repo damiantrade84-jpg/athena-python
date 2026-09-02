@@ -2661,7 +2661,13 @@ def test_find_zones_excludes_levels_broken_by_later_confirmed_close():
         structure_tf="H1",
     )
 
-    assert [zone["center"] for zone in res_zones] == [107.0]
+    # The broken 105 peak is gone from resistance; price later closed well
+    # below it, so it does not flip either. The 95 trough broken on the last
+    # bar is no longer support (2026-09-02 review: it now flips into a
+    # resistance candidate for the retest, flagged is_flip, instead of being
+    # discarded).
+    assert [zone["center"] for zone in res_zones if not zone.get("is_flip")] == [107.0]
+    assert [zone["center"] for zone in res_zones if zone.get("is_flip")] == [95.0]
     assert [zone["center"] for zone in sup_zones] == [93.0]
 
 

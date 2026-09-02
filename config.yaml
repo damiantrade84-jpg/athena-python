@@ -4471,6 +4471,21 @@ NAKED_ENGINE:
   # caught nearly every pair's opposing D1 OB/FVG, creating a constant -0.25 penalty.
   d1_pd_array_conflict_window_atr_mult: 1.5
 
+  # 2026-09-02 review: near-side (toward price) zone thickness in ATR, per
+  # regime. zone_multipliers.*.lower (1.0-1.5 ATR) was used for BOTH location
+  # and the opposing wall: a LONG counted as "at support" up to 1.2 ATR above
+  # the trough while its structural target was cut 1.2 ATR in front of the
+  # resistance peak (1.45 ATR with the TP buffer). The reaction band around a
+  # swing pivot is a fraction of an ATR. JUDGMENT values (legacy ordering
+  # kept: HIGH_VOL > TRENDING/RANGING > LOW_VOL); delete the key to restore
+  # the legacy `lower` thickness. Far side stays zone_multipliers.*.upper.
+  zone_location_band_atr_mult:
+    TRENDING: 0.50
+    RANGING: 0.50
+    HIGH_VOLATILITY: 0.60
+    LOW_VOLATILITY: 0.40
+    default: 0.50
+
   # Rejection trigger wick/body requirement.
   # Default preserves current behavior; lower only after backtest/shadow validation.
   rejection_wick_body_ratio: 1.2
@@ -4827,6 +4842,49 @@ ENGINE_B_TRIGGER_AT_LOCATION_ENABLED: true
 # M15 rejection/engulf still count as trigger-at-location. Keep ENABLED true —
 # disabling reopens the anywhere-on-chart engulfing + distant-zone loophole.
 ENGINE_B_TRIGGER_AT_LOCATION_MAX_ATR: 1.0
+# Measure the trigger-at-location distance term from the bar that printed the
+# trigger (its wick to the active zone) instead of from the newest bar, so a
+# pattern that fired away from the level is not paired with a zone price only
+# reached afterwards. false = legacy current-price distance.
+ENGINE_B_TRIGGER_AT_LOCATION_USE_TRIGGER_BAR: true
+
+# ── Engine B structure fixes (2026-09-02 independent review) ───────────────
+# BOS state memory. ENGINE_B_BOS_LOOKBACK_BARS (5) is an EVENT window: a held
+# break was forgotten once it aged past it even with no close back through the
+# level, and order blocks / trend-pullback location / structure_ok all keyed
+# on that flag, so the BOS -> pullback -> order-block entry was unreachable
+# after ~20h on H4. When nothing breaks inside the lookback the scan continues
+# back up to STATE_MAX_BARS (per structure TF, `default` fallback) for the most
+# recent break still valid. bos_*_recent keeps the event-window semantics for
+# breakout-candle location. false restores the pure event window.
+ENGINE_B_BOS_STATE_MEMORY_ENABLED: true
+ENGINE_B_BOS_STATE_MAX_BARS:
+  H1: 80
+  H4: 60
+  D1: 40
+  W1: 26
+  default: 60
+# Sweep reclaim: the raid bar may close beyond the level and a later bar close
+# back inside. Closes checked from the wick bar; 1 = legacy same-bar only.
+ENGINE_B_SWEEP_RECLAIM_BARS: 2
+# require_macro_align gate evidence while swing-sequence direction voting is
+# off: fresh aligned bias-rung sequence, aligned D1 BOS, or a valid aligned
+# HTF bias (never while an exclusive opposing D1 BOS is active). Before this
+# macro_aligned was hard-coded False, so every profile with
+# require_macro_align (swing commodities) failed the gate unconditionally.
+# false restores the always-False legacy read.
+ENGINE_B_MACRO_ALIGN_EVIDENCE_ENABLED: true
+# Follow-through / trap evidence source: `structure` evaluates the structure
+# rung at the actual break bar (bos_*_bar_index); `trigger` restores the
+# trigger-TF crossing, which during a retest was the re-cross, not the break.
+ENGINE_B_FOLLOW_THROUGH_SOURCE: structure
+# Broken pivots flip (resistance -> support, support -> resistance) while price
+# has not accepted back through their far side, instead of being discarded.
+ENGINE_B_ZONE_FLIP_ENABLED: true
+# Engine B derives its regime label (zone thickness, structural stop buffer,
+# min-score regime multiplier) from its own H4 candles. false re-enables the
+# legacy hint path that took Engine A's regime context.
+ENGINE_B_REGIME_LABEL_INDEPENDENT: true
 
 # Location/trigger coupling. The trend-pullback branch of `location_ok` used to
 # require `trigger_ok`, so one missing candle pattern failed two gates at once.

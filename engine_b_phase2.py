@@ -40,10 +40,22 @@ def _last_time(candle: dict[str, Any]) -> str | None:
 
 
 def _volume_grade(
-    res: dict[str, Any], *, asset_type: str, aggtrade_available: bool = False
+    res: dict[str, Any],
+    *,
+    asset_type: str,
+    aggtrade_available: bool = False,
+    direction: str | None = None,
 ) -> dict[str, Any]:
     """Grade volume while preserving source hierarchy and missing-data truth."""
     bos = res.get("bos_data") if isinstance(res.get("bos_data"), dict) else {}
+    # CVD alignment: the producer stamps ``aggtrade_cvd_direction``; no
+    # producer ever set ``aggtrade_cvd_aligned`` on the result, so the
+    # CVD-backed "strong" grade was unreachable. Resolve it here.
+    _cvd_dir = str(res.get("aggtrade_cvd_direction") or "").upper()
+    _dir_u = str(direction or "").upper()
+    cvd_aligned = bool(res.get("aggtrade_cvd_aligned")) or (
+        bool(_cvd_dir) and bool(_dir_u) and _cvd_dir == _dir_u
+    )
     ratio = _number(bos.get("bos_volume_ratio"), 0.0)
     threshold = max(1e-9, _number(bos.get("bos_volume_threshold"), 1.3))
     available = bool(bos.get("bos_volume_available"))
@@ -74,7 +86,7 @@ def _volume_grade(
     relative_strength = ratio / threshold if available and threshold > 0 else 0.0
     if not available and not aggtrade_available:
         grade, score = "unavailable", 0.0
-    elif relative_strength >= 1.0 or (aggtrade_available and res.get("aggtrade_cvd_aligned")):
+    elif relative_strength >= 1.0 or (aggtrade_available and cvd_aligned):
         grade, score = "strong", 1.0
     elif relative_strength >= 0.75 or aggtrade_available:
         grade, score = "moderate", 0.60
@@ -110,9 +122,18 @@ def _pullback_quality(
     bar_range = max(high - low, 1e-12)
 
     extreme = min(lows) if direction_u == "LONG" else max(highs)
-    depth_atr = abs(float(anchor) - extreme) / atr
-    # Best pullbacks are material but not deep enough to threaten H4 invalidation.
-    depth_score = _clamp01(1.0 - abs(depth_atr - 0.50) / 0.75)
+    # Signed penetration of the anchor (broken level / zone centre): positive =
+    # the pullback traded THROUGH the level, negative = it stopped short of it.
+    # The unsigned form could not tell a retest that never reached the level
+    # from one that ran 0.5 ATR through it, and its optimum sat 0.5 ATR past
+    # the level, inside BOS-invalidation territory. A retest is best when it
+    # tags the level with a small wick-through (~0.10 ATR); it decays to zero
+    # by 0.60 ATR through (level failed) and by 0.40 ATR short (never tested).
+    penetration_atr = (
+        (float(anchor) - extreme) / atr if direction_u == "LONG" else (extreme - float(anchor)) / atr
+    )
+    depth_atr = abs(penetration_atr)
+    depth_score = _clamp01(1.0 - abs(penetration_atr - 0.10) / 0.50)
     prior_speed = sum(ranges[:-2]) / max(1, len(ranges[:-2]))
     recent_speed = sum(ranges[-2:]) / 2.0
     speed_ratio = recent_speed / max(prior_speed, 1e-12)
@@ -129,6 +150,7 @@ def _pullback_quality(
         "available": True,
         "score": round(_clamp01(score), 4),
         "depth_atr": round(depth_atr, 4),
+        "penetration_atr": round(penetration_atr, 4),
         "depth_score": round(depth_score, 4),
         "speed_ratio": round(speed_ratio, 4),
         "speed_score": round(speed_score, 4),
@@ -141,6 +163,10 @@ def _sweep_quality(
     candles: list[dict[str, Any]], direction: str, atr: float, sweep_active: bool,
     session_quality: str, structural_overlap: bool,
     direction_aligned: bool | None = None,
+    *,
+    sweep_bar_index: int | None = None,
+    reclaim_bar_index: int | None = None,
+    swept_level: float | None = None,
 ) -> dict[str, Any]:
     """Grade sweep quality for the candidate direction.
 
@@ -150,24 +176,58 @@ def _sweep_quality(
     full-quality confluence for this side (structure gating elsewhere already
     refuses opposing sweeps; this only stops the quality layer from paying
     them). Unknown direction keeps neutral treatment.
+
+    ``candles``/``atr`` must be the series the sweep was detected on (the
+    structure rung) and ``sweep_bar_index`` the raid bar inside it. The grade
+    used to read the NEWEST trigger-TF bar against the structure ATR, so an
+    M15 doji was scored as "the sweep" while the real raid sat up to eight
+    structure bars back (2026-09-02 review). Without an index the newest bar
+    is still used (legacy payloads).
     """
     if not sweep_active or len(candles) < 2 or atr <= 0:
         return {"available": bool(sweep_active), "score": 0.0, "grade": "none"}
-    last = candles[-1]
-    open_ = _number(last.get("open"))
-    close = _number(last.get("close"))
-    high = _number(last.get("high"))
-    low = _number(last.get("low"))
-    bar_range = max(high - low, 1e-12)
+    n = len(candles)
+    bar_i = n - 1
+    try:
+        if sweep_bar_index is not None and 0 <= int(sweep_bar_index) < n:
+            bar_i = int(sweep_bar_index)
+    except (TypeError, ValueError):
+        bar_i = n - 1
+    raid = candles[bar_i]
+    reclaim = raid
+    try:
+        if reclaim_bar_index is not None and bar_i <= int(reclaim_bar_index) < n:
+            reclaim = candles[int(reclaim_bar_index)]
+    except (TypeError, ValueError):
+        reclaim = raid
+    open_ = _number(raid.get("open"))
+    close = _number(raid.get("close"))
+    high = _number(raid.get("high"))
+    low = _number(raid.get("low"))
     direction_u = str(direction or "").upper()
-    wick = min(open_, close) - low if direction_u == "LONG" else high - max(open_, close)
+    # Wick depth beyond the swept level when known (the raid itself), else the
+    # raid bar's own wick.
+    if swept_level is not None:
+        wick = (float(swept_level) - low) if direction_u == "LONG" else (high - float(swept_level))
+        level = float(swept_level)
+    else:
+        wick = min(open_, close) - low if direction_u == "LONG" else high - max(open_, close)
+        level = low if direction_u == "LONG" else high
     wick_atr = max(0.0, wick) / atr
-    close_strength = (close - low) / bar_range if direction_u == "LONG" else (high - close) / bar_range
-    level = low if direction_u == "LONG" else high
+    # Close strength on the bar that reclaimed the level (same bar for a
+    # single-candle sweep).
+    r_close = _number(reclaim.get("close"))
+    r_high = _number(reclaim.get("high"))
+    r_low = _number(reclaim.get("low"))
+    r_range = max(r_high - r_low, 1e-12)
+    close_strength = (r_close - r_low) / r_range if direction_u == "LONG" else (r_high - r_close) / r_range
+    # Liquidity resting at the level: prior bars (before the raid) whose
+    # extreme sat within tolerance of the swept level (equal lows/highs).
     tolerance = atr * 0.10
+    prior = candles[max(0, bar_i - 12) : bar_i]
     tests = sum(
         1
-        for c in candles[-12:]
+        for c in prior
         if abs((_number(c.get("low")) if direction_u == "LONG" else _number(c.get("high"))) - level)
         <= tolerance
     )
@@ -192,6 +252,9 @@ def _sweep_quality(
         "wick_atr": round(wick_atr, 4),
         "close_strength": round(_clamp01(close_strength), 4),
         "tests": int(tests),
+        "sweep_bar_index": int(bar_i),
+        "sweep_bar_age": int(n - 1 - bar_i),
+        "swept_level": round(float(level), 8),
         "liquidity_type": "session" if str(session_quality).lower() in {"high", "medium"} else "structural",
         "session_quality": str(session_quality or "unknown").lower(),
         "structural_overlap": bool(structural_overlap),
@@ -229,23 +292,44 @@ def build_phase2_context(
     session_quality: str = "unknown",
     asset_type: str = "",
     aggtrade_available: bool = False,
+    structure_candles: list[dict[str, Any]] | None = None,
+    structure_atr: float | None = None,
 ) -> dict[str, Any]:
-    """Build independently measurable Phase 2 evidence without changing gates."""
+    """Build independently measurable Phase 2 evidence without changing gates.
+
+    ``candles``/``atr`` are the trigger series and the structure ATR (pullback
+    depth is measured in structure ATRs). ``structure_candles``/``structure_atr``
+    are the series the sweep was detected on; when supplied the sweep grade
+    reads the raid bar from ``res["sweep_data"]`` instead of the newest
+    trigger bar.
+    """
     candles = candles or []
     bos = res.get("bos_data") if isinstance(res.get("bos_data"), dict) else {}
     anchor = bos.get("last_broken_high") if str(direction).upper() == "LONG" else bos.get("last_broken_low")
     if anchor is None and isinstance(active_zone, dict):
         anchor = active_zone.get("center")
     structural_overlap = bool(res.get("ob_at_zone") or res.get("fvg_overlap") or res.get("breaker_block"))
-    volume = _volume_grade(res, asset_type=asset_type, aggtrade_available=aggtrade_available)
+    volume = _volume_grade(
+        res, asset_type=asset_type, aggtrade_available=aggtrade_available, direction=direction
+    )
     pullback = _pullback_quality(candles, direction, atr, _number(anchor) if anchor is not None else None)
     # Direction-resolve the raid: an opposing sweep must not grade as full
     # confluence for this side. Unknown direction stays neutral.
     _sweep_dir = str(res.get("sweep_direction") or "").upper() or None
     _sweep_aligned = None if _sweep_dir is None else (_sweep_dir == str(direction or "").upper())
+    _sweep_data = res.get("sweep_data") if isinstance(res.get("sweep_data"), dict) else {}
+    _sweep_series = structure_candles if structure_candles else candles
+    _sweep_atr = float(structure_atr) if structure_atr else atr
+    _sweep_idx = _sweep_data.get("sweep_bar_index") if structure_candles else None
+    _reclaim_idx = _sweep_data.get("sweep_reclaim_bar_index") if structure_candles else None
+    _swept_level = _sweep_data.get("swept_level") if structure_candles else None
     sweep = _sweep_quality(
-        candles, direction, atr, bool(res.get("liquidity_sweep")), session_quality, structural_overlap,
+        _sweep_series, direction, _sweep_atr, bool(res.get("liquidity_sweep")), session_quality,
+        structural_overlap,
         direction_aligned=_sweep_aligned,
+        sweep_bar_index=_sweep_idx,
+        reclaim_bar_index=_reclaim_idx,
+        swept_level=_swept_level,
     )
     lifecycle = _freshness_score(active_zone)
     breakers = res.get("breaker_blocks") if isinstance(res.get("breaker_blocks"), list) else []
