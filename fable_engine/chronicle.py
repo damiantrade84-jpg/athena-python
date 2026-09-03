@@ -88,13 +88,12 @@ def run_chronicle(
             continue
         seen.add(signal_id)
         tiers[str(signal["tier"])] += 1
-        if end >= total:
-            continue
         entry = m15[end].open
         stop = float(signal["stop"])
         target = float(signal["target"])
         direction = str(signal["direction"])
-        future = m15[end + 1 : end + 1 + horizon]
+        # The entry bar itself can stop the trade out; it is part of the walk.
+        future = m15[end : end + horizon]
         outcome, r_multiple, held, exit_price = _outcome(direction, entry, stop, target, future)
         risk = abs(entry - stop)
         chapters.append(

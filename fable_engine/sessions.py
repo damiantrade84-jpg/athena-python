@@ -93,6 +93,56 @@ def session_state(epoch: float, config: FableConfig) -> dict[str, Any]:
     }
 
 
+def _weekend_gated(asset_type: str, config: FableConfig) -> bool:
+    gated = config.sessions.get("apply_weekend_gate_to") or []
+    return str(asset_type or "").strip().lower() in {str(item).strip().lower() for item in gated}
+
+
+def _weekend_windows(start: float, end: float, config: FableConfig) -> list[tuple[float, float]]:
+    """Weekend closures (NY clock) that overlap ``[start, end]`` as (close_epoch, open_epoch)."""
+    sessions = config.sessions
+    zone = _zone(config)
+    close_weekday = int(sessions.get("weekend_close_weekday", 4))
+    close_hour = int(sessions.get("weekend_close_hour", 17))
+    open_weekday = int(sessions.get("weekend_open_weekday", 6))
+    open_hour = int(sessions.get("weekend_open_hour", 17))
+    span_days = (open_weekday - close_weekday) % 7 or 7
+    first = datetime.fromtimestamp(float(start), tz=timezone.utc).astimezone(zone).date() - timedelta(days=7)
+    last = datetime.fromtimestamp(float(end), tz=timezone.utc).astimezone(zone).date() + timedelta(days=1)
+    windows: list[tuple[float, float]] = []
+    day = first
+    while day <= last:
+        if day.weekday() == close_weekday:
+            close_at = datetime(day.year, day.month, day.day, close_hour, tzinfo=zone)
+            open_day = day + timedelta(days=span_days)
+            open_at = datetime(open_day.year, open_day.month, open_day.day, open_hour, tzinfo=zone)
+            windows.append((close_at.timestamp(), open_at.timestamp()))
+        day += timedelta(days=1)
+    return windows
+
+
+def market_closed_seconds(start: float, end: float, asset_type: str, config: FableConfig) -> float:
+    """Seconds inside weekend closures between ``start`` and ``end`` for weekend-gated assets."""
+    if end <= start or not _weekend_gated(asset_type, config):
+        return 0.0
+    closed = 0.0
+    for close_at, open_at in _weekend_windows(start, end, config):
+        overlap = min(end, open_at) - max(start, close_at)
+        if overlap > 0:
+            closed += overlap
+    return closed
+
+
+def market_is_closed(epoch: float, asset_type: str, config: FableConfig) -> tuple[bool, str | None]:
+    """Weekend closure check for weekend-gated assets. Crypto and ungated types are always open."""
+    if not _weekend_gated(asset_type, config):
+        return False, None
+    for close_at, open_at in _weekend_windows(epoch, epoch, config):
+        if close_at <= float(epoch) < open_at:
+            return True, "WEEKEND"
+    return False, None
+
+
 def window_schedule(epoch: float, config: FableConfig) -> list[dict[str, Any]]:
     """Today's windows rendered in the display timezone for the UI."""
     local = ny_datetime(epoch, config)

@@ -226,7 +226,7 @@ class FableRepository:
             active = con.execute(
                 """
                 SELECT * FROM fable_executions
-                WHERE signal_id=? AND status IN ('PENDING','SUCCESS')
+                WHERE signal_id=? AND status IN ('PENDING','SUCCESS','FAILED')
                 ORDER BY requested_at DESC LIMIT 1
                 """,
                 (signal_id,),

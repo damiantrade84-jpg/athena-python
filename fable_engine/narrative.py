@@ -37,7 +37,7 @@ from .models import (
     Shift,
     utc_iso,
 )
-from .sessions import session_state
+from .sessions import market_closed_seconds, market_is_closed, session_state
 from .structure import (
     atr_series,
     dealing_range,
@@ -154,12 +154,16 @@ def _data_gates(snapshot: MarketSnapshot, config: FableConfig, end_index: int | 
             gates.append(_gate(f"{role}_fresh", False, f"DATA_MISSING:{timeframe}", timeframe=timeframe))
             continue
         last_close = series[-1].closes_at(timeframe)
-        age_buckets = (snapshot.as_of_epoch - last_close) / TIMEFRAME_SECONDS[timeframe]
+        # Weekend closures do not age a bar: Friday's D1/H4 close is still the
+        # current bar on Monday morning.
+        closed_seconds = market_closed_seconds(last_close, snapshot.as_of_epoch, snapshot.asset_type, config)
+        age_buckets = max(0.0, snapshot.as_of_epoch - last_close - closed_seconds) / TIMEFRAME_SECONDS[timeframe]
         fresh = age_buckets <= float(max_age[timeframe])
         diag: dict[str, Any] = {
             "status": "FRESH" if fresh else "STALE",
             "lastBarIso": utc_iso(last_close),
             "ageBuckets": round(age_buckets, 3),
+            "closedMarketSec": round(closed_seconds, 1),
             "source": provider,
         }
         if not fresh:
@@ -228,7 +232,10 @@ def build_pools(
             equal_tolerance_atr=float(structure["equal_level_tolerance_atr"]),
         )
     )
-    pools.extend(session_extremes(m15, as_of_epoch=as_of_epoch, zone=zone))
+    # Previous-day / previous-week extremes come from the H1 series: the M15
+    # window (~3 trading days) loses the prior week mid-week and, worse, reports
+    # a partial-week extreme as PWH/PWL.
+    pools.extend(session_extremes(h1, as_of_epoch=as_of_epoch, zone=zone))
     return dedupe_pools(pools, tolerance=atr * float(structure["equal_level_tolerance_atr"]))
 
 
@@ -507,6 +514,7 @@ def build_levels(
     pools: Sequence[LiquidityPool],
     draw_target: LiquidityPool | None,
     levels_cfg: dict[str, Any],
+    leg_end_time: float = math.inf,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     gates: list[dict[str, Any]] = []
     buffer = atr * float(levels_cfg["stop_buffer_atr"])
@@ -526,15 +534,28 @@ def build_levels(
         reason = "STOP_TOO_TIGHT" if stop_atr < min_stop else "STOP_TOO_WIDE"
     gates.append(_gate("stop_geometry", stop_ok, reason, stopAtr=round(stop_atr, 4) if math.isfinite(stop_atr) else None, minimumStopAtr=min_stop, maximumStopAtr=max_stop))
 
+    # Target ladder: every untaken level beyond the entry, nearest first. Pools
+    # inside the displacement leg that existed before the leg ran were traded
+    # through by it; pools formed after the leg (pullback lower highs / higher
+    # lows) are real obstacles and stay in the ladder.
     candidates: list[tuple[str, float]] = []
     if direction == "LONG":
         candidates.append(("leg_high", shift.leg_end))
-        for pool in sorted((p for p in pools if p.side == "buyside" and p.price > price), key=lambda p: p.price):
+        for pool in pools:
+            if pool.side != "buyside" or pool.price <= price:
+                continue
+            if pool.price < shift.leg_end and pool.time < leg_end_time:
+                continue
             candidates.append((pool.source, pool.price - target_buffer))
     else:
         candidates.append(("leg_low", shift.leg_end))
-        for pool in sorted((p for p in pools if p.side == "sellside" and p.price < price), key=lambda p: -p.price):
+        for pool in pools:
+            if pool.side != "sellside" or pool.price >= price:
+                continue
+            if pool.price > shift.leg_end and pool.time < leg_end_time:
+                continue
             candidates.append((pool.source, pool.price + target_buffer))
+    candidates.sort(key=lambda item: abs(item[1] - price))
 
     def rr_of(target: float) -> float:
         if risk <= 0:
@@ -670,7 +691,15 @@ def evaluate_snapshot(
             as_of_epoch=as_of,
             quality_errors=list(snapshot.quality_errors),
         )
-    gates, freshness = _data_gates(snapshot, config, end_index)
+    market_closed, closed_reason = market_is_closed(as_of, snapshot.asset_type, config)
+    if market_closed:
+        # A closed market is neither scored nor treated as data: nothing about
+        # the story can be trusted until the venue reopens.
+        gates: list[dict[str, Any]] = [_gate("market_open", False, "MARKET_CLOSED", detail=closed_reason)]
+        freshness: dict[str, Any] = {}
+    else:
+        gates, freshness = _data_gates(snapshot, config, end_index)
+        gates.insert(0, _gate("market_open", True, None))
     session = session_state(as_of, config)
     generated_at = utc_iso(generated_at_epoch)
 
@@ -756,6 +785,8 @@ def evaluate_snapshot(
             "chorusContext": {key: value for key, value in context.items() if key != "eventRisk"},
         }
 
+    if market_closed:
+        return finish("VOID", "MARKET_CLOSED")
     if not all(gate["passed"] for gate in gates):
         return finish("VOID", "DATA_GATE_FAILED")
 
@@ -894,6 +925,7 @@ def evaluate_snapshot(
         pools=pools,
         draw_target=draw_target,
         levels_cfg=levels_cfg,
+        leg_end_time=float(m15[shift.leg_end_index].time),
     )
     levels.update(computed_levels)
     gates.extend(level_gates)

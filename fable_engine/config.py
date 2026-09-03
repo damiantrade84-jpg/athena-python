@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-from .models import ACT_NAMES, ROLE_TIMEFRAMES
+from .models import ACT_NAMES, CONTRACT_VERSION, ROLE_TIMEFRAMES
 
 
 class FableConfigError(ValueError):
@@ -105,6 +105,8 @@ class FableConfig:
 
 
 def _validate(raw: dict[str, Any]) -> None:
+    if str(raw.get("version") or "") != CONTRACT_VERSION:
+        raise FableConfigError(f"version must be {CONTRACT_VERSION!r} (signals are stamped with the code contract)")
     for section in ("sessions", "scan", "structure", "scoring", "levels", "execution", "chronicle"):
         if not isinstance(raw.get(section), dict):
             raise FableConfigError(f"{section} must be a mapping")
@@ -129,6 +131,16 @@ def _validate(raw: dict[str, Any]) -> None:
     for key in ("timezone", "display_timezone"):
         if not str(sessions.get(key) or "").strip():
             raise FableConfigError(f"sessions.{key} is required")
+    for key in ("weekend_close_weekday", "weekend_open_weekday"):
+        weekday = _integer(sessions.get(key), f"sessions.{key}", minimum=0)
+        if weekday > 6:
+            raise FableConfigError(f"sessions.{key} must be 0..6")
+    for key in ("weekend_close_hour", "weekend_open_hour"):
+        hour = _integer(sessions.get(key), f"sessions.{key}", minimum=0)
+        if hour > 23:
+            raise FableConfigError(f"sessions.{key} must be 0..23")
+    if not isinstance(sessions.get("apply_weekend_gate_to"), list):
+        raise FableConfigError("sessions.apply_weekend_gate_to must be a list")
     _number(sessions.get("fallback_utc_offset_hours"), "sessions.fallback_utc_offset_hours")
     _number(sessions.get("display_fallback_utc_offset_hours"), "sessions.display_fallback_utc_offset_hours")
     _number(sessions.get("minimum_window_quality"), "sessions.minimum_window_quality", minimum=0.0, maximum=1.0)

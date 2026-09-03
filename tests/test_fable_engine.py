@@ -615,3 +615,118 @@ def test_routes_register_and_preview_reports_gate(workdir) -> None:
     assert "/api/fable/positions" in rules
     bad = client.get("/api/fable/signals?decisions=READY")
     assert bad.status_code == 400
+
+
+# ── weekend / closed-market gates and audit fixes ───────────────────────
+
+
+def _empty_snapshot(pair: dict, as_of: float) -> MarketSnapshot:
+    return MarketSnapshot(pair, {tf: [] for tf in ("D1", "H4", "H1", "M15")}, {}, as_of)
+
+
+def test_closed_market_is_voided_without_data_and_crypto_stays_open() -> None:
+    from fable_engine.sessions import market_is_closed
+
+    config = load_fable_config({})
+    saturday = NOW + 30 * 3600  # Sat 14:00 UTC
+    assert market_is_closed(saturday, "forex", config) == (True, "WEEKEND")
+    assert market_is_closed(saturday, "crypto", config) == (False, None)
+    assert market_is_closed(NOW, "forex", config) == (False, None)
+    signal = evaluate_snapshot(_empty_snapshot({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}, saturday), config, generated_at_epoch=saturday)
+    assert signal["decision"] == "VOID" and signal["decisionReason"] == "MARKET_CLOSED"
+    assert signal["voidReasons"] == ["MARKET_CLOSED"]
+    crypto = evaluate_snapshot(_empty_snapshot({"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}, saturday), config, generated_at_epoch=saturday)
+    assert crypto["decisionReason"] != "MARKET_CLOSED"
+
+
+def test_friday_daily_bar_is_still_fresh_on_monday() -> None:
+    from fable_engine.narrative import _data_gates
+
+    config = load_fable_config({})
+    friday_close = datetime(2027, 1, 29, 21, 0, tzinfo=timezone.utc).timestamp()  # broker D1 closes Fri 21:00 UTC
+    monday = datetime(2027, 2, 1, 12, 0, tzinfo=timezone.utc).timestamp()
+
+    def series(tf: str, count: int, last_close: float) -> list[Candle]:
+        sec = TIMEFRAME_SECONDS[tf]
+        return [_bar(last_close - sec * (count - i), 1.0, 1.1, 0.9, 1.0) for i in range(count)]
+
+    frames = {"D1": series("D1", 40, friday_close), "H4": series("H4", 80, monday - 600), "H1": series("H1", 120, monday - 600), "M15": series("M15", 200, monday - 60)}
+    forex = MarketSnapshot({"display": "EUR/USD", "symbol": "EURUSD", "type": "forex"}, frames, {}, monday)
+    gates, fresh = _data_gates(forex, config, None)
+    assert all(gate["passed"] for gate in gates), [g["reason"] for g in gates if not g["passed"]]
+    assert fresh["D1"]["closedMarketSec"] == pytest.approx(48 * 3600)
+    assert fresh["D1"]["ageBuckets"] < 1.0
+    crypto = MarketSnapshot({"display": "BTC/USDT", "symbol": "BTCUSDT", "type": "crypto"}, frames, {}, monday)
+    _, crypto_fresh = _data_gates(crypto, config, None)
+    assert crypto_fresh["D1"]["status"] == "STALE"  # 24/7 venues get no weekend credit
+
+
+def test_session_extremes_come_from_h1_not_the_short_m15_window() -> None:
+    from fable_engine.structure import ny_zone, session_extremes
+
+    snapshot = _story_snapshot()
+    zone = ny_zone("America/New_York", -4.0)
+    h1_sources = {pool.source for pool in session_extremes(snapshot.frames["H1"], as_of_epoch=NOW, zone=zone)}
+    m15_sources = {pool.source for pool in session_extremes(snapshot.frames["M15"], as_of_epoch=NOW, zone=zone)}
+    assert {"PDH", "PDL", "PWH", "PWL"} <= h1_sources
+    assert "PWH" in h1_sources and len(snapshot.frames["M15"]) * 900 < 5 * 86400
+    assert m15_sources <= h1_sources
+
+
+def test_target_ladder_takes_nearest_untaken_level() -> None:
+    from fable_engine.models import Raid, Shift
+    from fable_engine.narrative import build_levels
+
+    atr = 0.0010
+    price = 1.1000
+    pool = LiquidityPool(1.0900, "sellside", "H1_swing", 0.5, NOW - 40 * 900)
+    raid = Raid(pool, "LONG", 10, 12, 1.0985, 1.0, 0.5, 5, None)  # stop = 1.0985 - buffer (~1.75 ATR)
+    shift = Shift("LONG", 1.1010, 5, 14, 1.0985, 1.1060, 16, 7.5, 1.0, (), None)
+    leg_end_time = NOW - 20 * 900
+    inside_old = LiquidityPool(1.1040, "buyside", "H1_swing", 0.5, NOW - 60 * 900)  # traded through by the leg
+    inside_new = LiquidityPool(1.1035, "buyside", "H1_swing", 0.5, NOW - 5 * 900)  # pullback lower high
+    beyond = LiquidityPool(1.1120, "buyside", "PDH", 0.85, NOW - 300 * 900)
+    cfg = load_fable_config({}).levels_for("forex")
+    levels, gates = build_levels(direction="LONG", price=price, atr=atr, raid=raid, shift=shift, pools=[beyond, inside_old, inside_new], draw_target=beyond, levels_cfg=cfg, leg_end_time=leg_end_time)
+    assert all(gate["passed"] for gate in gates)
+    assert levels["targetSource"] == "H1_swing" and levels["target"] == pytest.approx(inside_new.price - atr * cfg["target_liquidity_buffer_atr"])
+    without_pullback, _ = build_levels(direction="LONG", price=price, atr=atr, raid=raid, shift=shift, pools=[beyond, inside_old], draw_target=beyond, levels_cfg=cfg, leg_end_time=leg_end_time)
+    assert without_pullback["targetSource"] == "leg_high"
+
+
+def test_preview_rejects_price_that_left_the_imbalance(workdir) -> None:
+    signal = _execute_signal()
+    array_high = float(signal["annotations"]["array"]["high"])
+    run_up = array_high + 0.6 * float(signal["atr"])
+    quote = Quote("mt5", "EURUSD.s", run_up - 0.00003, run_up + 0.00003, NOW - 1.0, "mt5_tick")
+    preview = _coordinator(workdir, [signal], _Gateway(quote)).preview(signal)
+    assert preview["error"] == "PRICE_LEFT_IMBALANCE"
+    assert next(g for g in preview["gates"] if g["name"] == "quote_drift")["passed"] is True
+
+
+def test_failed_broker_execution_blocks_reexecution(workdir, monkeypatch) -> None:
+    import guardian
+    import risk_engine
+
+    signal = _execute_signal()
+    gateway = _Gateway(_passing_quote(signal))
+    gateway.execute = lambda venue, payload, approval: (_ for _ in ()).throw(RuntimeError("socket closed after order send"))
+    coordinator = _coordinator(workdir, [signal], gateway, root={"EXECUTOR_MODE": "demo"})
+    monkeypatch.setattr(guardian, "pre_trade_check", lambda *a, **k: (True, "OK"))
+    monkeypatch.setattr(risk_engine, "risk_check", lambda payload, **k: risk_engine.RiskApproval(True, 0.1, 10.0, 0.001, 0.01, 0.0, "OK", "calculated", "calculated"))
+    first = coordinator.execute(signal, mode="demo", idempotency_key="fable-fail:1")
+    assert first["status"] == "FAILED" and first["result"]["error"] == "EXECUTION_INTERNAL_ERROR"
+    second = coordinator.execute(signal, mode="demo", idempotency_key="fable-fail:2")
+    assert second["idempotent"] is True and second["status"] == "FAILED"  # broker state unknown: never re-send
+
+
+def test_step_decimals_handle_scientific_notation() -> None:
+    from fable_engine.execution import _step_decimals
+
+    assert [_step_decimals(s) for s in (0.01, 0.001, 1e-05, 1.0, 100.0)] == [2, 3, 5, 0, 0]
+    assert round(0.00436, _step_decimals(1e-05)) == pytest.approx(0.00436)
+
+
+def test_config_rejects_version_override() -> None:
+    with pytest.raises(FableConfigError):
+        load_fable_config({"FABLE_ENGINE": {"version": "fable.v2"}})

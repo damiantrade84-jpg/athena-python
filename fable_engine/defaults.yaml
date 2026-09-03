@@ -11,6 +11,20 @@ sessions:
     - forex
     - index
     - commodity
+  # Weekend closure on the New York clock: Friday 17:00 -> Sunday 17:00.
+  # Gated assets are not fetched or scored while closed, and closed-market time
+  # is excluded from closed-bar age so Friday's D1/H4 bars stay fresh on Monday.
+  weekend_close_weekday: 4
+  weekend_close_hour: 17
+  weekend_open_weekday: 6
+  weekend_open_hour: 17
+  apply_weekend_gate_to:
+    - forex
+    - index
+    - commodity
+    - stock
+    - etf
+    - etf_bond
   minimum_window_quality: 0.30
   windows:
     asia_accumulation:

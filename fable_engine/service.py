@@ -14,10 +14,10 @@ from .chronicle import run_chronicle
 from .config import FableConfig
 from .execution import FableExecutionCoordinator
 from .market_data import FableMarketDataProvider
-from .models import parse_iso
+from .models import ROLE_TIMEFRAMES, MarketSnapshot, parse_iso
 from .narrative import evaluate_snapshot
 from .persistence import FableRepository
-from .sessions import session_state, window_schedule
+from .sessions import market_is_closed, session_state, window_schedule
 
 
 class ScanAlreadyRunning(RuntimeError):
@@ -212,6 +212,18 @@ class FableService:
         return dict(context or {})
 
     def _evaluate_pair(self, pair: dict[str, Any], generated_at: float) -> dict[str, Any]:
+        asset_type = str(pair.get("type") or "unknown").strip().lower()
+        closed, closed_reason = market_is_closed(generated_at, asset_type, self.config)
+        if closed:
+            # Closed markets are neither fetched nor scored: an empty snapshot
+            # lets the scorer stamp a MARKET_CLOSED void without touching a feed.
+            snapshot = MarketSnapshot(
+                pair=dict(pair),
+                frames={timeframe: [] for timeframe in ROLE_TIMEFRAMES.values()},
+                provenance={timeframe: {"provider": "skipped", "bars": 0, "skipped": closed_reason} for timeframe in ROLE_TIMEFRAMES.values()},
+                as_of_epoch=generated_at,
+            )
+            return evaluate_snapshot(snapshot, self.config, generated_at_epoch=generated_at, context={})
         snapshot = self.market_data.fetch_snapshot(pair, as_of_epoch=generated_at)
         context = self._gather_context(pair)
         return evaluate_snapshot(snapshot, self.config, generated_at_epoch=generated_at, context=context)
@@ -251,6 +263,7 @@ class FableService:
                 "stageCount": decision_counter["STAGE"],
                 "observeCount": decision_counter["OBSERVE"],
                 "voidCount": decision_counter["VOID"],
+                "closedMarketCount": reason_counter["MARKET_CLOSED"],
                 "errorCount": len(errors),
                 "topReasons": [{"reason": reason, "count": count} for reason, count in reason_counter.most_common(10)],
                 "errors": errors[: int(self.config.scan["max_errors_returned"])],

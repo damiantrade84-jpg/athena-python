@@ -74,9 +74,11 @@ def normalize_closed_candles(
     now_epoch: float,
     provider: str,
     observed_at_epoch: float | None = None,
+    clock_skew_sec: float = 1.0,
 ) -> tuple[list[Candle], dict[str, Any], list[str]]:
     """Normalize one series and remove any bar that is not provably closed."""
 
+    skew = max(0.0, float(clock_skew_sec))
     errors: list[str] = []
     source_detail = ""
     if isinstance(rows, dict):
@@ -109,13 +111,13 @@ def normalize_closed_candles(
             if time_value is None:
                 time_value = raw.get("time", raw.get("timestamp", raw.get("ts")))
             opened_at = _epoch(time_value)
-            if opened_at > observed_at + 1.0:
+            if opened_at > observed_at + skew:
                 future += 1
                 continue
-            if opened_at > now_epoch + 1.0:
+            if opened_at > now_epoch + skew:
                 post_as_of += 1
                 continue
-            if opened_at + interval > now_epoch + 1.0:
+            if opened_at + interval > now_epoch + skew:
                 forming += 1
                 continue
             volume = _optional_float(raw, "volume", "vol", "real_volume", "tick_volume")
@@ -207,6 +209,7 @@ class FableMarketDataProvider:
                 now_epoch=point_in_time,
                 provider=provider,
                 observed_at_epoch=float(self.now_fn()),
+                clock_skew_sec=float(self.config.scan["maximum_clock_skew_sec"]),
             )
             frames[timeframe] = candles
             provenance[timeframe] = meta

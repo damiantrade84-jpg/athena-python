@@ -147,15 +147,21 @@ class RuntimeContextFeeds:
                 context["fundingRate"] = float(funding.get("rate") or 0.0)
             else:
                 context["fundingRate"] = None
-        import event_risk
-
-        risk = self._safe(event_risk.check_event_risk, display, asset_type, 4)
+        try:
+            import event_risk
+        except Exception:  # pragma: no cover - import failure is treated as feed unavailable
+            event_risk = None
+        risk = self._safe(event_risk.check_event_risk, display, asset_type, 4) if event_risk is not None else None
         if isinstance(risk, dict):
             context["eventRisk"] = {
                 "allowed": bool(risk.get("allowed", True)),
                 "reason": risk.get("reason"),
                 "events": risk.get("events") or [],
             }
+        elif bool(self.runtime.CONFIG.get("EVENT_RISK_ENABLED", False)):
+            # The calendar is switched on but produced nothing: missing safety
+            # data rejects by default rather than reading as "no events".
+            context["eventRisk"] = {"allowed": False, "reason": "EVENT_RISK_FEED_UNAVAILABLE", "events": []}
         return context
 
 

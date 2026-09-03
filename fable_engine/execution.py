@@ -12,6 +12,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
+from decimal import Decimal
 import math
 import os
 from typing import Any, Protocol
@@ -49,6 +50,12 @@ def _asset_limit(mapping: dict[str, Any], asset_type: str) -> float:
 
 def _finite_positive(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)) and float(value) > 0
+
+
+def _step_decimals(step: float) -> int:
+    """Decimal places implied by a broker volume step (robust to scientific notation such as 1e-05)."""
+    exponent = Decimal(repr(float(step))).normalize().as_tuple().exponent
+    return max(0, min(8, -int(exponent)))
 
 
 def _gate(name: str, passed: bool, reason: str | None, **extra: Any) -> dict[str, Any]:
@@ -260,6 +267,27 @@ class FableExecutionCoordinator:
                     driftRef=drift_ref,
                 )
             )
+            # EXECUTE means "price is inside the imbalance"; the live entry must
+            # still be inside it (favourable drift is not caught by the adverse
+            # drift gate above).
+            array = (signal.get("annotations") or {}).get("array") if isinstance(signal.get("annotations"), dict) else None
+            tolerance = atr * float(self.config.structure["return_tolerance_atr"])
+            inside = (
+                isinstance(array, dict)
+                and _finite_positive(array.get("low"))
+                and _finite_positive(array.get("high"))
+                and float(array["low"]) - tolerance <= entry <= float(array["high"]) + tolerance
+            )
+            gates.append(
+                _gate(
+                    "inside_imbalance",
+                    inside,
+                    "PRICE_LEFT_IMBALANCE",
+                    arrayLow=array.get("low") if isinstance(array, dict) else None,
+                    arrayHigh=array.get("high") if isinstance(array, dict) else None,
+                    toleranceAtr=float(self.config.structure["return_tolerance_atr"]),
+                )
+            )
             # The stop is immutable. The live entry may move a little inside the
             # imbalance, so the reward is re-measured; target2 (the external draw)
             # is the only permitted fallback when target1 no longer clears min RR.
@@ -433,7 +461,7 @@ class FableExecutionCoordinator:
             step = float(symbol_info.get("volume_step") or (0.001 if payload["type"] == "crypto" else 0.01))
             minimum = float(symbol_info.get("volume_min") or step)
             downsized = math.floor((approval.volume * ratio) / step) * step if step > 0 else approval.volume * ratio
-            decimals = max(0, min(8, len(str(step).split(".", 1)[1].rstrip("0")) if "." in str(step) else 0))
+            decimals = _step_decimals(step)
             downsized = round(downsized, decimals)
             if downsized < minimum or downsized <= 0:
                 raise FableExecutionError("FABLE_RISK_BUDGET_BELOW_BROKER_MINIMUM")
