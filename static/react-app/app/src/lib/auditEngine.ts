@@ -9,6 +9,7 @@ export type AuditEngineKey =
   | 'opus'
   | 'kimi'
   | 'ox_alpha'
+  | 'fable'
   | 'external'
   | 'unknown'
   | string;
@@ -44,6 +45,8 @@ const ENGINE_ALIASES: Record<string, AuditEngineKey> = {
   oxalpha: 'ox_alpha',
   'ox alpha': 'ox_alpha',
   ox: 'ox_alpha',
+  fable: 'fable',
+  fable_engine: 'fable',
   external: 'external',
   webhook: 'external',
 };
@@ -59,6 +62,7 @@ const ENGINE_LABELS: Record<string, string> = {
   opus: 'OPUS',
   kimi: 'KIMI',
   ox_alpha: 'OX ALPHA',
+  fable: 'FABLE',
   external: 'Webhook',
   unknown: 'Unknown',
 };
@@ -74,6 +78,7 @@ const ENGINE_TITLES: Record<string, string> = {
   opus: 'OPUS engine',
   kimi: 'KIMI engine',
   ox_alpha: 'OX Alpha engine',
+  fable: 'FABLE engine (narrative liquidity)',
   external: 'Webhook / external',
   unknown: 'Unknown engine',
 };

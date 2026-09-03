@@ -60,6 +60,8 @@ const requiredCssMarkers = [
   'app-shell-bg',
   'panel-glass',
   'meter-fill',
+  // FABLE codex stylesheet (scoped .fbl-* classes) must ship with the bundle.
+  'fbl-root',
 ];
 for (const marker of requiredCssMarkers) {
   if (!cssText.includes(marker)) {
@@ -83,6 +85,11 @@ const requiredJsMarkers = [
   'ASE WATCH ALIGNED',
   'supportEligible',
   'no Engine B score or gate change',
+  // Latest ASE scan results must survive sidebar panel unmount/remount.
+  'aseScanCache',
+  // FABLE engine panel and its scan-board snapshot adapter.
+  'fable-engine',
+  '/api/fable/scan',
 ];
 for (const marker of requiredJsMarkers) {
   if (!jsText.includes(marker)) {

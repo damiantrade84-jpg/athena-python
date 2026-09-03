@@ -1,0 +1,165 @@
+version: fable.v1
+enabled: true
+
+sessions:
+  # Scoring clock is New York (institutional session windows). Display is SAST.
+  timezone: America/New_York
+  display_timezone: Africa/Johannesburg
+  fallback_utc_offset_hours: -4.0
+  display_fallback_utc_offset_hours: 2.0
+  apply_window_gate_to:
+    - forex
+    - index
+    - commodity
+  minimum_window_quality: 0.30
+  windows:
+    asia_accumulation:
+      start_minute: 1200
+      end_minute: 1440
+      quality: 0.35
+    london_open:
+      start_minute: 120
+      end_minute: 300
+      quality: 0.95
+    london_ny_overlap:
+      start_minute: 420
+      end_minute: 600
+      quality: 1.0
+    ny_lunch:
+      start_minute: 720
+      end_minute: 810
+      quality: 0.15
+    ny_afternoon:
+      start_minute: 810
+      end_minute: 960
+      quality: 0.80
+  fringe_minutes: 30
+  fringe_quality: 0.55
+  off_window_quality: 0.20
+
+scan:
+  max_workers: 6
+  max_errors_returned: 50
+  maximum_clock_skew_sec: 2.0
+  bars:
+    D1: 120
+    H4: 180
+    H1: 240
+    M15: 320
+  minimum_bars:
+    D1: 30
+    H4: 60
+    H1: 80
+    M15: 120
+  maximum_closed_bar_age_buckets:
+    D1: 1.5
+    H4: 2.0
+    H1: 2.0
+    M15: 2.0
+
+structure:
+  atr_period: 14
+  swing_strength:
+    D1: 3
+    H4: 3
+    H1: 3
+    M15: 2
+  pool_lookback:
+    H4: 60
+    H1: 120
+  equal_level_tolerance_atr: 0.12
+  raid_lookback_bars: 32
+  raid_max_excursion_bars: 3
+  raid_min_depth_atr: 0.05
+  raid_max_depth_atr: 2.50
+  shift_min_displacement_atr: 1.00
+  shift_min_body_atr: 0.55
+  shift_max_bars_after_raid: 24
+  ote_low: 0.62
+  ote_high: 0.79
+  return_tolerance_atr: 0.25
+  participation_baseline_window: 40
+  efficiency_window: 20
+  atr_percentile_window: 200
+
+scoring:
+  execute_threshold: 64.0
+  stage_threshold: 50.0
+  tiers:
+    LEGEND: 80.0
+    SAGA: 64.0
+    TALE: 50.0
+  quality_floor: 0.02
+  weights:
+    draw: 22.0
+    raid: 20.0
+    shift: 22.0
+    return: 18.0
+    chorus: 18.0
+  atr_pct_min: 0.0002
+  atr_pct_max: 0.03
+  chorus:
+    carry_weight: 0.20
+    cot_weight: 0.20
+    vol_skew_weight: 0.15
+    funding_weight: 0.20
+    participation_weight: 0.25
+    volatility_weight: 0.25
+    session_weight: 0.35
+
+levels:
+  # Stop = raid extreme +/- buffer. An OTE entry (0.62-0.79 retrace) with the
+  # stop beyond the sweep is ~0.7 x leg + sweep depth + buffer, so a 2-3 ATR
+  # displacement leg needs a 2.5-3.5 ATR stop; the cap rejects only outliers.
+  stop_buffer_atr: 0.25
+  minimum_stop_atr: 0.35
+  maximum_stop_atr: 3.50
+  minimum_rr: 1.50
+  target_liquidity_buffer_atr: 0.08
+  by_asset_type:
+    crypto:
+      maximum_stop_atr: 4.00
+    commodity:
+      maximum_stop_atr: 3.80
+    index:
+      maximum_stop_atr: 3.60
+
+execution:
+  default_mode: paper
+  follow_global_executor_mode: true
+  paper_enabled: true
+  demo_enabled: true
+  live_enabled: false
+  require_validated_research_for_live: true
+  research_status: UNVALIDATED
+  paper_equity: 10000.0
+  risk_fraction: 0.0025
+  max_signal_age_sec: 900
+  maximum_clock_skew_sec: 2.0
+  max_quote_drift_atr: 0.50
+  maximum_narrative_bar_age_buckets: 2.0
+  maximum_quote_age_sec:
+    forex: 15.0
+    crypto: 10.0
+    commodity: 20.0
+    index: 20.0
+    stock: 90.0
+    etf: 90.0
+    etf_bond: 90.0
+    default: 20.0
+  maximum_spread_bps:
+    forex: 5.0
+    crypto: 18.0
+    commodity: 15.0
+    index: 12.0
+    stock: 30.0
+    etf: 30.0
+    etf_bond: 30.0
+    default: 20.0
+
+chronicle:
+  enabled: true
+  default_bars: 600
+  maximum_bars: 1200
+  outcome_horizon_bars: 64
+  minimum_trades_for_evidence: 30

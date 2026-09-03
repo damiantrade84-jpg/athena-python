@@ -1247,8 +1247,13 @@ ADX_MISSING_BOTH_ABORT: true
 # Narrowed from 0.0002 to 0.0001 so typical Binance/Bybit funding deviations
 # are treated as signal rather than noise.
 # Carry static fallback versioning — warn when FRED fails and these rates are used.
-CARRY_STATIC_RATES_AS_OF: "2026-07-28"
+CARRY_STATIC_RATES_AS_OF: "2026-08-28"
 CARRY_STATIC_RATES_MAX_AGE_DAYS: 30
+# Reject stale live FRED observations before falling back to reviewed static rates.
+# Monthly/OECD series report dated monthly observations and may lag publication.
+CARRY_FRED_MAX_OBSERVATION_AGE_DAYS:
+  daily: 7
+  monthly: 120
 
 FACTOR_FUNDING_BASELINE: 0.0001
 FACTOR_FUNDING_NOISE_BAND: 0.0001
@@ -7050,6 +7055,24 @@ GROK_ENGINE:
     display_timezone: Africa/Johannesburg
   execution:
     default_mode: paper
+    paper_enabled: true
+    demo_enabled: true
+    live_enabled: false
+    research_status: UNVALIDATED
+
+# FABLE Engine — Narrative Liquidity Engine. Five-act story per pair (draw,
+# raid, shift, return, chorus) fused by a weighted geometric mean into a 0-100
+# coherence score. Own structure detection, own store (fable_engine.db), own
+# panel. Execution follows EXECUTOR_MODE when demo is enabled (same guardian
+# -> risk_check -> MT5/Bybit path as the other standalone engines). Live stays
+# locked until research_status=VALIDATED. Full defaults: fable_engine/defaults.yaml.
+FABLE_ENGINE:
+  enabled: true
+  sessions:
+    display_timezone: Africa/Johannesburg
+  execution:
+    default_mode: paper
+    follow_global_executor_mode: true
     paper_enabled: true
     demo_enabled: true
     live_enabled: false

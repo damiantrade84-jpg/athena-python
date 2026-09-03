@@ -18816,6 +18816,8 @@ from sol_engine.api import register_sol_routes  # noqa: E402
 from sol_engine.runtime import build_sol_service  # noqa: E402
 from grok_engine.api import register_grok_routes  # noqa: E402
 from grok_engine.runtime import build_grok_service  # noqa: E402
+from fable_engine.api import register_fable_routes  # noqa: E402
+from fable_engine.runtime import build_fable_service  # noqa: E402
 
 set_runtime(
     SimpleNamespace(
@@ -19142,6 +19144,44 @@ _grok_service = _LazyGrokService(
     )
 )
 register_grok_routes(app, SimpleNamespace(service=_grok_service))
+
+
+class _LazyFableService:
+    """Build the standalone FABLE service only when its first route is used."""
+
+    def __init__(self, runtime):
+        self._runtime = runtime
+        self._service = None
+        self._lock = threading.Lock()
+
+    def _get(self):
+        if self._service is not None:
+            return self._service
+        with self._lock:
+            if self._service is None:
+                self._service = build_fable_service(self._runtime)
+        return self._service
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
+
+
+# FABLE — Narrative Liquidity Engine. Standalone five-act scorer (draw, raid,
+# shift, return, chorus) with its own store (fable_engine.db); demo execution
+# rides the shared guardian -> risk_check -> MT5/Bybit executor chain.
+_fable_service = _LazyFableService(
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        AUDIT_DB=_AUDIT_DB,
+        fetch_mt5=fetch_mt5,
+        fetch_bybit_klines=_fetch_bybit_klines,
+        fetch_bybit_ticker=_fetch_bybit_ticker,
+        active_pairs=lambda: ACTIVE_PAIRS,
+        kill_switch=lambda: _kill_switch,
+        log=log,
+    )
+)
+register_fable_routes(app, SimpleNamespace(service=_fable_service))
 
 register_ase_routes(app)
 register_tsmom_routes(app)

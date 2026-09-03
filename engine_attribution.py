@@ -46,6 +46,7 @@ ENGINE_SOL = "sol"
 ENGINE_OPUS = "opus"
 ENGINE_KIMI = "kimi"
 ENGINE_OX_ALPHA = "ox_alpha"
+ENGINE_FABLE = "fable"
 
 _CACHE_TTL_SEC = 5.0
 # An execution record and its resulting position agree on open time to within
@@ -321,6 +322,7 @@ def load_records(*, root: Path | None = None, now: float | None = None) -> list:
     records: list = []
     records += _load_coordinator_store(base / "grok_engine.db", "grok_executions", ENGINE_GROK)
     records += _load_coordinator_store(base / "sol_engine.db", "sol_executions", ENGINE_SOL)
+    records += _load_coordinator_store(base / "fable_engine.db", "fable_executions", ENGINE_FABLE)
     records += _load_opus(base / "opus_store.sqlite3")
     records += _load_jsonl(
         base / "ox_alpha" / "_journal" / "ox_alpha_journal.jsonl", _parse_ox_alpha_row

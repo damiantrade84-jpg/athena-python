@@ -239,8 +239,10 @@ export type PanelId =
   | 'opusEngine'
   | 'kimiEngine'
   | 'grokEngine'
+  | 'fableEngine'
   | 'oxAlpha'
-  | 'oxBook';
+  | 'oxBook'
+  | 'engineCompile';
 
 /**
  * Derived data-fidelity diagnostic for a Cascade Scan candidate.

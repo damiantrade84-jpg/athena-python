@@ -34,8 +34,10 @@ import OpusEnginePanel from '@/components/panels/OpusEnginePanel';
 import SolEnginePanel from '@/components/panels/SolEnginePanel';
 import KimiEnginePanel from '@/components/panels/KimiEnginePanel';
 import GrokEnginePanel from '@/components/panels/GrokEnginePanel';
+import FableEnginePanel from '@/components/panels/FableEnginePanel';
 import OxAlphaPanel from '@/components/panels/OxAlphaPanel';
 import OxBookPanel from '@/components/panels/OxBookPanel';
+import EngineCompilePanel from '@/components/panels/EngineCompilePanel';
 
 const panels: Record<string, React.ComponentType> = {
   dashboard: DashboardPanel,
@@ -72,8 +74,10 @@ const panels: Record<string, React.ComponentType> = {
   solEngine: SolEnginePanel,
   kimiEngine: KimiEnginePanel,
   grokEngine: GrokEnginePanel,
+  fableEngine: FableEnginePanel,
   oxAlpha: OxAlphaPanel,
   oxBook: OxBookPanel,
+  engineCompile: EngineCompilePanel,
 };
 
 export default function Home() {

@@ -13,7 +13,7 @@ import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
   Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut, Workflow, Cpu, Radar, Landmark, Sparkles,
-  Ghost, Orbit, Waves, Timer, Gem, BookOpenCheck,
+  Ghost, Orbit, Waves, Timer, Gem, BookOpenCheck, Combine, Feather,
 } from 'lucide-react';
 
 type NavItem = { id: PanelId; label: string; icon: ElementType; badge?: string; title?: string };
@@ -61,6 +61,13 @@ const navSections: NavSection[] = [
         badge: 'KIMI',
       },
       {
+        id: 'fableEngine',
+        label: 'FABLE Engine',
+        title: 'FABLE — Narrative Liquidity Engine: draw, raid, shift, return, chorus fused into a coherence score; demo-gated execution',
+        icon: Feather,
+        badge: 'FABLE',
+      },
+      {
         id: 'oxAlpha',
         label: 'OX Alpha',
         title: 'OX Alpha — intraday kinetic-liquidity engine: six-axis scoring per score group, demo-gated execution',
@@ -73,6 +80,12 @@ const navSections: NavSection[] = [
         title: 'OX Book — evidence-certified daily trend book (gold + nasdaq), demo-gated via TSMOM bridge',
         icon: BookOpenCheck,
         badge: 'DEMO',
+      },
+      {
+        id: 'engineCompile',
+        label: 'Scan Board',
+        title: 'Compiles last scan results across engines — does not start a scan',
+        icon: Combine,
       },
     ],
   },
