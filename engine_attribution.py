@@ -12,10 +12,12 @@ an engine store, never participates in a gate, and returns nothing rather than
 guessing when the evidence is ambiguous.
 
 Matching is ticket-first. Bybit positions report ``ticket`` as ``positionIdx``
-(usually ``0``) while Bybit fills return an order id, so a Bybit position can
-only be matched on symbol + direction + entry price inside a time window around
-its open. Two different engines matching the same position is treated as no
-match - a wrong engine label is worse than an honest "Unknown".
+(usually ``0``) while Bybit fills return an order id, so a Bybit position is
+normally matched on symbol + direction + entry price inside a time window around
+its open. If Bybit omits the open time too, a unique engine may still be shown
+only for an exact symbol/direction/entry match. Two different engines matching
+the same position is treated as no match - a wrong engine label is worse than
+an honest "Unknown".
 """
 
 from __future__ import annotations
@@ -57,6 +59,10 @@ _OPEN_TIME_WINDOW_SEC = 30 * 60.0
 # Tighter than the 1% used for audit-row matching because this fallback has no
 # ticket to fall back on.
 _MAX_ENTRY_DRIFT = 0.005
+# Bybit's one-way position endpoint sometimes has neither an order id nor an
+# opening timestamp. A timeless fallback must be materially stricter than the
+# regular price match; this tolerates only representation-level float noise.
+_EXACT_ENTRY_REL_TOLERANCE = 1e-6
 # Records older than this cannot correspond to anything the brokers still list.
 _MAX_RECORD_AGE_SEC = 30 * 24 * 3600.0
 
@@ -370,6 +376,25 @@ def _symbols_overlap(record: ExecutionRecord, position: Mapping[str, Any]) -> bo
     return any(symbols_match(a, b) for a in record.symbols for b in pos_symbols)
 
 
+def _matches_symbol_direction_entry(
+    record: ExecutionRecord,
+    position: Mapping[str, Any],
+    *,
+    max_entry_drift: float,
+) -> bool:
+    if not _symbols_overlap(record, position):
+        return False
+
+    direction = _direction(position.get("direction") or position.get("side"))
+    if direction and record.direction and direction != record.direction:
+        return False
+
+    pos_entry = _float(position.get("entry") or position.get("entryPrice"))
+    if pos_entry <= 0 or record.entry <= 0:
+        return False
+    return abs(record.entry - pos_entry) / abs(pos_entry) <= max_entry_drift
+
+
 def _matches(record: ExecutionRecord, position: Mapping[str, Any]) -> bool:
     venue = _venue(position.get("venue") or position.get("exchange"))
     if venue and record.venue and venue != record.venue:
@@ -382,23 +407,27 @@ def _matches(record: ExecutionRecord, position: Mapping[str, Any]) -> bool:
         # another engine's position on the same symbol.
         return ticket in record.tickets
 
-    if not _symbols_overlap(record, position):
-        return False
-
-    direction = _direction(position.get("direction") or position.get("side"))
-    if direction and record.direction and direction != record.direction:
-        return False
-
-    pos_entry = _float(position.get("entry") or position.get("entryPrice"))
-    if pos_entry <= 0 or record.entry <= 0:
-        return False
-    if abs(record.entry - pos_entry) / abs(pos_entry) > _MAX_ENTRY_DRIFT:
+    if not _matches_symbol_direction_entry(
+        record, position, max_entry_drift=_MAX_ENTRY_DRIFT
+    ):
         return False
 
     open_ts = _float(position.get("open_ts"))
     if open_ts <= 0 or record.ts <= 0:
         return False
     return abs(record.ts - open_ts) <= _OPEN_TIME_WINDOW_SEC
+
+
+def _matches_without_open_time(record: ExecutionRecord, position: Mapping[str, Any]) -> bool:
+    """Safely match a Bybit one-way position that lacks an opening timestamp."""
+    venue = _venue(position.get("venue") or position.get("exchange"))
+    if venue != "bybit" or (record.venue and record.venue != venue):
+        return False
+    if _ticket_key(position.get("ticket")) or _float(position.get("open_ts")) > 0:
+        return False
+    return _matches_symbol_direction_entry(
+        record, position, max_entry_drift=_EXACT_ENTRY_REL_TOLERANCE
+    )
 
 
 def attribute_positions(
@@ -421,6 +450,12 @@ def attribute_positions(
     resolved: dict = {}
     for index, position in enumerate(positions):
         engines = {record.engine for record in candidates if _matches(record, position)}
+        if not engines:
+            engines = {
+                record.engine
+                for record in candidates
+                if _matches_without_open_time(record, position)
+            }
         if len(engines) == 1:
             resolved[index] = engines.pop()
         elif len(engines) > 1:

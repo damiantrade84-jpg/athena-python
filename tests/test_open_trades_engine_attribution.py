@@ -41,7 +41,7 @@ GROK_RECORD = engine_attribution.ExecutionRecord(
 )
 
 
-def _setup(monkeypatch, *, positions, audit_row, records):
+def _setup(monkeypatch, *, positions, audit_row, records, bybit_positions=()):
     athena_module = _load_athena_module()
     for cache in (
         athena_module._ott_audit_cache,
@@ -56,7 +56,7 @@ def _setup(monkeypatch, *, positions, audit_row, records):
     )
     monkeypatch.setattr(
         bybit_executor, "bybit_get_positions",
-        lambda: {"error": False, "positions": []},
+        lambda: {"error": False, "positions": list(bybit_positions)},
     )
     monkeypatch.setattr(
         timed_exit_monitor, "_load_recent_audit_rows",
@@ -113,6 +113,42 @@ def test_unattributable_position_stays_unlabelled(monkeypatch):
     row = payload["positions"][0]
     assert row["engine"] is None
     assert row["engine_resolved"] is None
+
+
+def test_bybit_position_without_open_time_uses_exact_fable_execution_record(monkeypatch):
+    position = {
+        "ticket": "0",  # Bybit's one-way position index, not the fill id.
+        "pair": "AVAX/USDT",
+        "symbol": "AVAX/USDT:USDT",
+        "direction": "LONG",
+        "profit": 0.0,
+        "entry": 7.489,
+        "sl": 7.459,
+        "tp": 7.572,
+        "volume": 450.4,
+    }
+    record = engine_attribution.ExecutionRecord(
+        engine="fable",
+        venue="bybit",
+        tickets=frozenset({"9423C0BE-A9C6-4CE4-B7E0-F911B744CF3C"}),
+        symbols=("AVAX/USDT:USDT", "AVAXUSDT", "AVAX/USDT"),
+        direction="LONG",
+        entry=7.489,
+        # Demonstrate that the fallback does not assume the broker poll time
+        # is when the order opened.
+        ts=float(OPEN_TIME - (6 * 3600)),
+    )
+    payload = _setup(
+        monkeypatch,
+        positions=[],
+        bybit_positions=[position],
+        audit_row=None,
+        records=[record],
+    )
+    row = payload["positions"][0]
+    assert row["engine"] == "fable"
+    assert row["engine_resolved"] == "fable"
+    assert row["engine_source"] == "engine_store"
 
 
 def test_attribution_reports_its_own_timing(monkeypatch):

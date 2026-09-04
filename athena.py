@@ -15032,14 +15032,17 @@ def api_open_trades_timed():
         # Some MT5 terminals/brokers can surface position open times that are ahead
         # of UTC "now" from the API consumer's perspective. Ignore implausible future
         # timestamps and fall back to audited open time instead.
+        attribution_open_ts = 0.0
         if raw_open_ts > 0 and raw_open_ts <= (now_ts + 300):
             open_ts = raw_open_ts
+            attribution_open_ts = raw_open_ts
             open_iso = datetime.fromtimestamp(open_ts, tz=_tz.utc).isoformat()
         elif audit_ts_iso:
             try:
                 open_ts = datetime.fromisoformat(
                     audit_ts_iso.replace("Z", "+00:00")
                 ).timestamp()
+                attribution_open_ts = open_ts
                 open_iso = audit_ts_iso
             except Exception:
                 open_ts = now_ts
@@ -15214,7 +15217,10 @@ def api_open_trades_timed():
                 "direction": res_p["direction"],
                 "entry": res_p["entry"],
                 "venue": res_p["exchange"],
-                "open_ts": open_ts,
+                # ``open_ts`` falls back to now for timer display when Bybit
+                # omits it. Attribution must retain the absence so its strict
+                # no-open-time match can use the engine fill record instead.
+                "open_ts": attribution_open_ts,
             }
         )
         out.append(res_p)

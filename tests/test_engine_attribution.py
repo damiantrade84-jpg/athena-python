@@ -148,10 +148,26 @@ def test_bybit_fill_outside_the_open_time_window_is_not_attributed():
     assert ea.attribute_positions([_bybit_position()], records=[stale]) == {}
 
 
-def test_position_with_no_open_time_is_not_price_matched():
+def test_bybit_position_with_no_open_time_matches_a_unique_exact_engine_record():
+    """Bybit omits the opening timestamp for one-way positions.
+
+    The fallback is deliberately stricter than the regular timestamped match:
+    only an exact entry match and a single candidate engine can label it.
+    """
     assert ea.attribute_positions(
-        [_bybit_position(open_ts=0)], records=[_bybit_record("sol", NOW)]
+        [_bybit_position(open_ts=0)], records=[_bybit_record("sol", NOW - (6 * 3600))]
+    ) == {0: "sol"}
+
+
+def test_bybit_position_with_no_open_time_requires_an_exact_entry_match():
+    assert ea.attribute_positions(
+        [_bybit_position(open_ts=0, entry=106.2602)], records=[_bybit_record("sol", NOW)]
     ) == {}
+
+
+def test_bybit_position_with_no_open_time_stays_unlabelled_when_engines_conflict():
+    records = [_bybit_record("sol", NOW), _bybit_record("grok", NOW)]
+    assert ea.attribute_positions([_bybit_position(open_ts=0)], records=records) == {}
 
 
 # -- ambiguity --------------------------------------------------------------
