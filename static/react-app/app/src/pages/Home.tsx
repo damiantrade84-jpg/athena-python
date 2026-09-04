@@ -35,6 +35,7 @@ import SolEnginePanel from '@/components/panels/SolEnginePanel';
 import KimiEnginePanel from '@/components/panels/KimiEnginePanel';
 import GrokEnginePanel from '@/components/panels/GrokEnginePanel';
 import FableEnginePanel from '@/components/panels/FableEnginePanel';
+import MuseEnginePanel from '@/components/panels/MuseEnginePanel';
 import OxAlphaPanel from '@/components/panels/OxAlphaPanel';
 import OxBookPanel from '@/components/panels/OxBookPanel';
 import EngineCompilePanel from '@/components/panels/EngineCompilePanel';
@@ -75,6 +76,7 @@ const panels: Record<string, React.ComponentType> = {
   kimiEngine: KimiEnginePanel,
   grokEngine: GrokEnginePanel,
   fableEngine: FableEnginePanel,
+  museEngine: MuseEnginePanel,
   oxAlpha: OxAlphaPanel,
   oxBook: OxBookPanel,
   engineCompile: EngineCompilePanel,

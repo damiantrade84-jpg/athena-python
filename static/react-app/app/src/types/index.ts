@@ -240,6 +240,7 @@ export type PanelId =
   | 'kimiEngine'
   | 'grokEngine'
   | 'fableEngine'
+  | 'museEngine'
   | 'oxAlpha'
   | 'oxBook'
   | 'engineCompile';

@@ -9,6 +9,7 @@ export const COMPILE_ENGINE_IDS = [
   'oxAlpha',
   'grok',
   'fable',
+  'muse',
 ] as const;
 
 export type CompileEngineId = (typeof COMPILE_ENGINE_IDS)[number];
@@ -73,10 +74,11 @@ export const COMPILE_ENGINE_META: Record<CompileEngineId, { label: string; short
   oxAlpha: { label: 'OX Alpha', short: 'OX', panel: 'oxAlpha' },
   grok: { label: 'GROK', short: 'GROK', panel: 'grokEngine' },
   fable: { label: 'FABLE', short: 'FBL', panel: 'fableEngine' },
+  muse: { label: 'MUSE', short: 'MUSE', panel: 'museEngine' },
 };
 
-const PASS_DECISIONS = new Set(['TRADE', 'READY']);
-const WATCH_DECISIONS = new Set(['WATCH', 'ARMED', 'WATCHLIST']);
+const PASS_DECISIONS = new Set(['TRADE', 'READY', 'PRIME']);
+const WATCH_DECISIONS = new Set(['WATCH', 'ARMED', 'WATCHLIST', 'STAGE']);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -195,6 +197,7 @@ function emptyHits(): Record<CompileEngineId, CompileEngineHit | null> {
     oxAlpha: null,
     grok: null,
     fable: null,
+    muse: null,
   };
 }
 
@@ -420,6 +423,33 @@ export function snapshotFromSolLikeSignals(
         score: num(row.score),
         maxScore: num(row.maxScore),
         reason: firstReason(row.decisionReason, row.blockingReasons, row.reason),
+      };
+    }),
+  };
+}
+
+/** MUSE decisions (PRIME / STAGE / DORMANT / BLOCKED) map onto the compile stances explicitly. */
+export function snapshotFromMuseSignals(
+  signals: unknown[] | null | undefined,
+  scannedAt?: string | number | null,
+): EngineScanSnapshot {
+  return {
+    engine: 'muse',
+    scannedAt: unixOrIso(scannedAt),
+    rows: (signals || []).map((item) => {
+      const row = asRecord(item) || {};
+      const decision = text(row.decision);
+      const stance: CompileStance = decision === 'PRIME' ? 'pass' : decision === 'STAGE' ? 'watch' : 'fail';
+      return {
+        pair: text(row.pair),
+        display: text(row.display) || text(row.pair),
+        symbol: text(row.symbol),
+        direction: text(row.direction),
+        decision,
+        score: num(row.score),
+        maxScore: num(row.maxScore) ?? 100,
+        reason: firstReason(row.decisionReason, row.blockingReasons, row.reason),
+        stance,
       };
     }),
   };

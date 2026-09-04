@@ -13,7 +13,7 @@ import {
   LayoutDashboard, Zap, Search, Settings, TrendingUp,
   Layers, Activity, BarChart2, FlaskConical, Filter, Ticket,
   Microscope, PieChart, Globe, ShieldCheck, Radio, BrainCircuit, ListChecks, LogOut, Workflow, Cpu, Radar, Landmark, Sparkles,
-  Ghost, Orbit, Waves, Timer, Gem, BookOpenCheck, Combine, Feather,
+  Ghost, Orbit, Waves, Timer, Gem, BookOpenCheck, Combine, Feather, Anchor,
 } from 'lucide-react';
 
 type NavItem = { id: PanelId; label: string; icon: ElementType; badge?: string; title?: string };
@@ -66,6 +66,13 @@ const navSections: NavSection[] = [
         title: 'FABLE — Narrative Liquidity Engine: draw, raid, shift, return, chorus fused into a coherence score; demo-gated execution',
         icon: Feather,
         badge: 'FABLE',
+      },
+      {
+        id: 'museEngine',
+        label: 'MUSE Engine',
+        title: 'MUSE — Meridian Undertow Synthesis: harmonic prism fusion on D1/H4/M15/M5 with tide timing; paper-first execution',
+        icon: Anchor,
+        badge: 'MUSE',
       },
       {
         id: 'oxAlpha',

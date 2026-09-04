@@ -3687,55 +3687,6 @@ def fetch_mt5(pair: dict, tf: str, limit: int):
                 shift_tag,
             )
 
-        # #region agent log — forex H4 timestamp-alignment diagnostic (read-only)
-        # Records the raw copy_rates H4 bar stamps vs the chosen shift decision so a
-        # GMT+3 broker series left unshifted (shiftTag=utc_assumed_recent) can be told
-        # apart from a genuinely lagging feed. Scoped to forex H4; no behavior change.
-        if (
-            tf == "H4"
-            and str(pair.get("type") or "").lower() == "forex"
-            and CONFIG.get("MT5_H4_ALIGN_DIAG_ENABLED", True)
-        ):
-            try:
-                from athena_app.debug_ndjson_agent import append_agent_ndjson
-
-                _broker_shift_s = _broker_offset_cfg * 3600
-                _shifted_age = _utc_now - (_newest_ts - _broker_shift_s)
-
-                def _align_iso(_e: float) -> str:
-                    return datetime.fromtimestamp(int(_e), tz=timezone.utc).isoformat()
-
-                _raw_tail = [int(b["time"]) for b in bars[-6:]]
-                append_agent_ndjson(
-                    {
-                        "hypothesisId": "H_mt5_h4_align",
-                        "location": "athena.fetch_mt5",
-                        "message": "forex_h4_shift_decision",
-                        "runId": "verify",
-                        "data": {
-                            "symbol": symbol,
-                            "mt5Symbol": mt5_symbol,
-                            "tf": tf,
-                            "shiftTag": shift_tag,
-                            "offsetSeconds": int(offset_seconds),
-                            "brokerOffsetCfgHours": _broker_offset_cfg,
-                            "utcNowEpoch": int(_utc_now),
-                            "utcNowIso": _align_iso(_utc_now),
-                            "rawNewestEpoch": int(_newest_ts),
-                            "rawNewestIso": _align_iso(_newest_ts),
-                            "shiftedNewestIso": _align_iso(_newest_ts - offset_seconds),
-                            "unshiftedAgeSec": round(_unshifted_age, 1),
-                            "shiftedAgeSec": round(_shifted_age, 1),
-                            "rawTailEpochs": _raw_tail,
-                            "rawTailIso": [_align_iso(e) for e in _raw_tail],
-                            "rawBarCount": int(len(bars)),
-                        },
-                    }
-                )
-            except Exception:
-                pass
-        # #endregion
-
     # Vectorised bar -> dict conversion. The previous per-bar loop called
     # datetime.fromtimestamp().isoformat() once per bar, which measured ~5.1ms per
     # 1100-bar fetch — roughly 85x the cost of the copy_rates IPC call it wraps
@@ -12435,6 +12386,9 @@ def _scalp_ui_signal(raw_signal: dict) -> dict:
         "sl_distance": raw_signal.get("sl_distance"),
         "tp_partial": raw_signal.get("tp_partial"),
         "ai_reasons": raw_signal.get("ai_reasons", []),
+        # Advisory breakdown behind ai_score — lets a grade drift between the
+        # scanned card and the execute-time rescan be attributed per component.
+        "ai_score_components": raw_signal.get("ai_score_components"),
         "gate_result": raw_signal.get("gate_result", "PASS"),
         "executable": bool(raw_signal.get("executable", True)),
         "candidate_status": raw_signal.get("candidate_status"),
@@ -18818,6 +18772,8 @@ from grok_engine.api import register_grok_routes  # noqa: E402
 from grok_engine.runtime import build_grok_service  # noqa: E402
 from fable_engine.api import register_fable_routes  # noqa: E402
 from fable_engine.runtime import build_fable_service  # noqa: E402
+from muse_engine.api import register_muse_routes  # noqa: E402
+from muse_engine.runtime import build_muse_service  # noqa: E402
 
 set_runtime(
     SimpleNamespace(
@@ -19182,6 +19138,45 @@ _fable_service = _LazyFableService(
     )
 )
 register_fable_routes(app, SimpleNamespace(service=_fable_service))
+
+
+class _LazyMuseService:
+    """Build the standalone MUSE service only when its first route is used."""
+
+    def __init__(self, runtime):
+        self._runtime = runtime
+        self._service = None
+        self._lock = threading.Lock()
+
+    def _get(self):
+        if self._service is not None:
+            return self._service
+        with self._lock:
+            if self._service is None:
+                self._service = build_muse_service(self._runtime)
+        return self._service
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
+
+
+# MUSE — Meridian Undertow Synthesis Engine. Standalone harmonic-fusion scorer
+# (echo, surge, haven, compass prisms on D1/H4/M15/M5) with its own store
+# (muse_engine.db); demo execution rides the shared guardian -> risk_check ->
+# MT5/Bybit executor chain. Live stays locked until research_status=VALIDATED.
+_muse_service = _LazyMuseService(
+    SimpleNamespace(
+        CONFIG=CONFIG,
+        AUDIT_DB=_AUDIT_DB,
+        fetch_mt5=fetch_mt5,
+        fetch_bybit_klines=_fetch_bybit_klines,
+        fetch_bybit_ticker=_fetch_bybit_ticker,
+        active_pairs=lambda: ACTIVE_PAIRS,
+        kill_switch=lambda: _kill_switch,
+        log=log,
+    )
+)
+register_muse_routes(app, SimpleNamespace(service=_muse_service))
 
 register_ase_routes(app)
 register_tsmom_routes(app)

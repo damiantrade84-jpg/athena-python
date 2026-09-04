@@ -7078,6 +7078,24 @@ FABLE_ENGINE:
     live_enabled: false
     research_status: UNVALIDATED
 
+# MUSE Engine — Meridian Undertow Synthesis. Four core prisms (echo, surge,
+# haven, compass) fused by a harmonic mean into a 0-100 score, scaled by tide
+# timing and nudged by the halo voice median. Own tide clock (atlas D1,
+# current H4, vector M15, spark M5), own store (muse_engine.db), own panel.
+# Execution follows EXECUTOR_MODE when demo is enabled (same guardian ->
+# risk_check -> MT5/Bybit path as the other standalone engines). Live stays
+# locked until research_status=VALIDATED. Full defaults: muse_engine/defaults.yaml.
+MUSE_ENGINE:
+  enabled: true
+  sessions:
+    display_timezone: Africa/Johannesburg
+  execution:
+    default_mode: paper
+    paper_enabled: true
+    demo_enabled: true
+    live_enabled: false
+    research_status: UNVALIDATED
+
 # OX Alpha Engine - standalone intraday kinetic-liquidity engine (own
 # indicators, own group-aware scoring profiles, own gates). It consumes the
 # shared candle cache, timeframe policy, and demo-gated execution primitives;

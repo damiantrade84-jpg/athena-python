@@ -1,0 +1,158 @@
+version: muse.v1
+enabled: true
+
+scan:
+  max_workers: 6
+  max_errors_returned: 50
+  maximum_clock_skew_sec: 2.0
+  timeframes:
+    atlas: D1
+    current: H4
+    vector: M15
+    spark: M5
+  bars:
+    D1: 140
+    H4: 200
+    M15: 280
+    M5: 340
+  minimum_bars:
+    D1: 36
+    H4: 56
+    M15: 80
+    M5: 96
+  maximum_closed_bar_age_buckets:
+    D1: 2.0
+    H4: 2.0
+    M15: 2.0
+    M5: 2.0
+
+sessions:
+  timezone: America/New_York
+  display_timezone: Africa/Johannesburg
+  fallback_utc_offset_hours: -4.0
+  display_fallback_utc_offset_hours: 2.0
+  weekend_close_weekday: 4
+  weekend_close_hour: 17
+  weekend_open_weekday: 6
+  weekend_open_hour: 17
+  apply_weekend_gate_to:
+    - forex
+    - index
+    - commodity
+  fringe_minutes: 20
+  fringe_quality: 0.50
+  off_tide_quality: 0.14
+  windows:
+    pacific_drift:
+      start_minute: 1200
+      end_minute: 1440
+      kind: drift
+      quality: 0.26
+    london_tide:
+      start_minute: 120
+      end_minute: 300
+      kind: tide
+      quality: 0.82
+    atlantic_bridge:
+      start_minute: 420
+      end_minute: 600
+      kind: surge
+      quality: 0.88
+    meridian_surge:
+      start_minute: 540
+      end_minute: 660
+      kind: surge
+      quality: 1.0
+    midday_slack:
+      start_minute: 720
+      end_minute: 790
+      kind: slack
+      quality: 0.10
+    dusk_tide:
+      start_minute: 830
+      end_minute: 910
+      kind: tide
+      quality: 0.90
+
+prisms:
+  atr_period: 14
+  echo_lookback_bars: 18
+  echo_reclaim_bars: 5
+  echo_min_depth_atr: 0.10
+  echo_max_reclaim_bars: 4
+  surge_min_run: 2
+  surge_body_share: 0.54
+  surge_leg_atr: 0.70
+  surge_single_leg_atr: 1.35
+  haven_lookback: 30
+  haven_max_age_bars: 24
+  haven_fresh_boost: 0.25
+  compass_channel: 34
+  compass_slope_span: 8
+  compass_min_slope_atr: 0.06
+  spark_recent_bars: 3
+  spark_min_body_atr: 0.10
+  ote_inner: 0.64
+  ote_outer: 0.80
+
+scoring:
+  prime_threshold: 74.0
+  stage_threshold: 58.0
+  minimum_tide_quality: 0.45
+  minimum_echo: 0.32
+  minimum_surge: 0.34
+  minimum_haven: 0.30
+  maximum_halo_dissent: 0.35
+  timing_base: 0.55
+  timing_gain: 0.45
+  halo_floor: 0.88
+  halo_ceiling: 1.06
+  harmonic_floor: 0.015
+
+levels:
+  entry_ote_inner: 0.64
+  entry_ote_outer: 0.80
+  stop_buffer_atr: 0.18
+  minimum_stop_atr: 0.24
+  maximum_stop_atr: 2.60
+  target_rr: 2.00
+  minimum_rr: 1.70
+  haven_buffer_atr: 0.06
+
+execution:
+  default_mode: paper
+  paper_enabled: true
+  demo_enabled: true
+  live_enabled: false
+  require_validated_research_for_live: true
+  research_status: UNVALIDATED
+  paper_equity: 10000.0
+  risk_fraction: 0.0025
+  max_signal_age_sec: 600
+  maximum_clock_skew_sec: 2.0
+  max_quote_drift_atr: 0.80
+  maximum_quote_age_sec:
+    forex: 15.0
+    crypto: 10.0
+    commodity: 20.0
+    index: 20.0
+    stock: 90.0
+    etf: 90.0
+    etf_bond: 90.0
+    default: 20.0
+  maximum_spread_bps:
+    forex: 5.0
+    crypto: 18.0
+    commodity: 15.0
+    index: 12.0
+    stock: 30.0
+    etf: 30.0
+    etf_bond: 30.0
+    default: 20.0
+
+sounding:
+  enabled: true
+  default_bars: 500
+  maximum_bars: 900
+  outcome_horizon_m5_bars: 40
+  minimum_trades_for_evidence: 30
