@@ -438,3 +438,89 @@ def test_engine_b_regime_label_ignores_engine_a_hint_by_default(monkeypatch):
     assert resolve_engine_b_regime_label([], "forex", {"label": "TREND_PULLBACK"}) == "RANGING"
     monkeypatch.setitem(config.CONFIG, "ENGINE_B_REGIME_LABEL_INDEPENDENT", False)
     assert resolve_engine_b_regime_label([], "forex", {"label": "TREND_PULLBACK"}) == "TRENDING"
+
+
+# ── 2026-09-04 signal-quality fixes ──────────────────────────────────────────
+
+
+def test_swing_cache_requires_right_side_confirmation(engine, monkeypatch):
+    """A swing confirmed by a single right-side bar is not usable structure."""
+    naked = config.CONFIG.setdefault("NAKED_ENGINE", {})
+    previous = dict(naked)
+    try:
+        # Swing high at the second-newest bar: exactly one bar of right side.
+        highs = np.array([95.0, 97.0, 100.0, 99.0])
+        lows = np.array([94.0, 96.0, 98.0, 97.5])
+        monkeypatch.setitem(naked, "swing_right_confirmation_bars", 2)
+        dropped = engine._swing_cache(highs, lows, 1.0)
+        assert len(dropped["peak_idx"]) == 0
+
+        monkeypatch.setitem(naked, "swing_right_confirmation_bars", 1)
+        legacy = engine._swing_cache(highs, lows, 1.0)
+        assert list(legacy["peak_idx"]) == [2]
+    finally:
+        naked.clear()
+        naked.update(previous)
+
+
+def test_sweep_fallback_reference_ends_before_sweep_window(engine):
+    """The fallback pool reference must predate the raid window.
+
+    The wick bar sits at index -6: inside the sweep window but also inside the
+    legacy [-15:-5] fallback, so the wick set its own reference and the sweep
+    was invisible. The boundary is now the sweep window itself.
+    """
+    n = 60
+    highs = np.full(n, 100.2)
+    lows = np.full(n, 99.8)
+    closes = np.full(n, 100.0)
+    wick_i = n - 6  # inside both the recent window and the legacy fallback
+    highs[wick_i] = 100.4
+    lows[wick_i] = 98.0
+    closes[wick_i] = 99.5  # closed beyond the reference -> not reclaimed yet
+    closes[wick_i + 1] = 100.5  # reclaim on the next close (reclaim_bars=2)
+
+    sweep = engine._detect_sweep(highs, lows, closes, 1.0)
+    assert sweep["bull_sweep"] is True
+    assert sweep["swept_level"] == pytest.approx(99.8)
+    assert sweep["sweep_low"] == pytest.approx(98.0)
+
+
+def test_sweep_fallback_without_causal_reference_is_disabled(engine):
+    """No pre-window data on a side disables that side instead of self-referencing."""
+    n = 8  # sweep window covers the whole series: no causal reference exists
+    highs = np.full(n, 100.2)
+    lows = np.full(n, 99.8)
+    closes = np.full(n, 100.0)
+    lows[n - 3] = 98.0
+    closes[n - 3] = 99.5
+    closes[n - 2] = 100.5
+
+    sweep = engine._detect_sweep(highs, lows, closes, 1.0)
+    assert sweep["bull_sweep"] is False
+
+
+def test_equal_extrema_stale_pair_gets_no_credit(engine, monkeypatch):
+    """Equal-highs credit requires the pair's newest member to be recent."""
+    # Equal highs at ~level 100, the newest confirmed ~2 bars from the end.
+    highs = np.array([97.0] * 60 + [96.5, 97.0, 100.0, 96.8, 97.2, 100.0, 96.9, 97.1])
+    lows = highs - 0.5
+
+    naked = config.CONFIG.setdefault("NAKED_ENGINE", {})
+    previous = dict(naked)
+    try:
+        monkeypatch.setitem(naked, "equal_extrema_max_age_bars", 60)
+        fresh = engine._determine_sequence(highs, lows, 1.0, "SHORT")
+        assert fresh["equal_highs"] is True
+
+        # The same pair is 2 bars old: a 1-bar gate drops the credit.
+        monkeypatch.setitem(naked, "equal_extrema_max_age_bars", 1)
+        stale = engine._determine_sequence(highs, lows, 1.0, "SHORT")
+        assert stale["equal_highs"] is False
+
+        monkeypatch.setitem(naked, "equal_extrema_max_age_bars", 0)
+        disabled = engine._determine_sequence(highs, lows, 1.0, "SHORT")
+        assert disabled["equal_highs"] is True
+    finally:
+        naked.clear()
+        naked.update(previous)

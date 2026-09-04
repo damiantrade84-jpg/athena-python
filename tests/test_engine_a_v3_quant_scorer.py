@@ -332,10 +332,13 @@ def test_mr_yields_tradable_level(monkeypatch):
 def test_mr_threshold_tracks_config_not_literal_18(monkeypatch):
     from config import CONFIG
 
-    _, style_19 = _location_component(_stretched_below_snap(adx=19.0), "forex", "forex_majors")
+    # Ranging anchor supplied: the fail-closed higher-TF test has data and the
+    # assertion stays focused on the ceiling tracking ADX_TREND_MIN_CLASS.
+    ranging_anchor = 10.0
+    _, style_19 = _location_component(_stretched_below_snap(adx=19.0), "forex", "forex_majors", corroborating_adx=ranging_anchor)
     assert style_19 == "mean_reversion"
 
-    _, style_20 = _location_component(_stretched_below_snap(adx=20.0), "forex", "forex_majors")
+    _, style_20 = _location_component(_stretched_below_snap(adx=20.0), "forex", "forex_majors", corroborating_adx=ranging_anchor)
     assert style_20 == "trend"
 
     monkeypatch.setitem(
@@ -343,11 +346,11 @@ def test_mr_threshold_tracks_config_not_literal_18(monkeypatch):
         "ADX_TREND_MIN_CLASS",
         {**dict(CONFIG.get("ADX_TREND_MIN_CLASS") or {}), "forex_majors": 25},
     )
-    _, style_22 = _location_component(_stretched_below_snap(adx=22.0), "forex", "forex_majors")
+    _, style_22 = _location_component(_stretched_below_snap(adx=22.0), "forex", "forex_majors", corroborating_adx=ranging_anchor)
     assert style_22 == "mean_reversion"
-    _, style_24 = _location_component(_stretched_below_snap(adx=24.0), "forex", "forex_majors")
+    _, style_24 = _location_component(_stretched_below_snap(adx=24.0), "forex", "forex_majors", corroborating_adx=ranging_anchor)
     assert style_24 == "mean_reversion"
-    _, style_25 = _location_component(_stretched_below_snap(adx=25.0), "forex", "forex_majors")
+    _, style_25 = _location_component(_stretched_below_snap(adx=25.0), "forex", "forex_majors", corroborating_adx=ranging_anchor)
     assert style_25 == "trend"
 
 
@@ -955,7 +958,7 @@ def test_mr_blocked_when_momentum_anchor_is_trending(monkeypatch):
     assert quant.direction != "LONG"
 
 
-def test_location_corroboration_is_reversible():
+def test_location_corroboration_is_reversible(monkeypatch):
     """With the corroboration disabled the entry rung alone decides the regime."""
     trending_anchor_adx = 28.0
     _comp, style_guarded = _location_component(
@@ -966,10 +969,26 @@ def test_location_corroboration_is_reversible():
     )
     assert style_guarded == "trend"
 
+    # Fail-closed on missing data: without an anchor ADX the higher-TF test
+    # cannot pass, so the regime flip is disqualified (missing data no longer
+    # reads as "maximally ranging"). Disabling FAIL_CLOSED_ON_MISSING_ADX
+    # restores the legacy open behaviour.
+    from config import CONFIG
+
     _comp, style_no_anchor = _location_component(
         _stretched_below_snap(adx=15.0), "forex", "forex_majors"
     )
-    assert style_no_anchor == "mean_reversion"
+    assert style_no_anchor == "trend"
+
+    monkeypatch.setitem(
+        CONFIG,
+        "ENGINE_A_V3_MEAN_REVERSION",
+        {**dict(CONFIG.get("ENGINE_A_V3_MEAN_REVERSION") or {}), "FAIL_CLOSED_ON_MISSING_ADX": False},
+    )
+    _comp, style_open = _location_component(
+        _stretched_below_snap(adx=15.0), "forex", "forex_majors"
+    )
+    assert style_open == "mean_reversion"
 
 
 def test_trend_mode_location_credits_pullback_and_extension_equally():

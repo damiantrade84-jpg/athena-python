@@ -424,15 +424,31 @@ def resolve_adaptive_thresholds(
     enabled = bool(cfg.get("APPLY_ADAPTIVE_ROOM_RR", False)) and phase2_available and regime_key in {
         "TRENDING", "RANGING", "HIGH_VOLATILITY", "LOW_VOLATILITY"
     }
-    room_mult = {"TRENDING": 0.90, "RANGING": 1.10, "HIGH_VOLATILITY": 1.10}.get(regime_key, 1.0)
-    rr_mult = {"TRENDING": 0.97, "RANGING": 1.05, "HIGH_VOLATILITY": 1.05}.get(regime_key, 1.0)
+    # Bounded-regime multipliers are config-sourced (ENGINE_B_PHASE2_QUALITY.
+    # ADAPTIVE_ROOM_MULTIPLIERS / ADAPTIVE_RR_MULTIPLIERS) with the historical
+    # in-code literals as defaults, so the room/RR regime semantics are tunable
+    # without a code change and stay auditable in one place.
+    room_mult = _number(
+        (cfg.get("ADAPTIVE_ROOM_MULTIPLIERS") or {}).get(regime_key),
+        {"TRENDING": 0.90, "RANGING": 1.10, "HIGH_VOLATILITY": 1.10}.get(regime_key, 1.0),
+    )
+    rr_mult = _number(
+        (cfg.get("ADAPTIVE_RR_MULTIPLIERS") or {}).get(regime_key),
+        {"TRENDING": 0.97, "RANGING": 1.05, "HIGH_VOLATILITY": 1.05}.get(regime_key, 1.0),
+    )
     density_score = _number(density.get("score"), 0.0)
-    if density_score >= 75.0:
-        rr_mult *= 0.97
-    elif density_score < 40.0:
-        rr_mult *= 1.05
-    room_mult = max(0.85, min(1.15, room_mult))
-    rr_mult = max(0.90, min(1.10, rr_mult))
+    density_high = _number(cfg.get("ADAPTIVE_DENSITY_HIGH"), 75.0)
+    density_low = _number(cfg.get("ADAPTIVE_DENSITY_LOW"), 40.0)
+    if density_score >= density_high:
+        rr_mult *= _number(cfg.get("ADAPTIVE_DENSITY_RR_FACTOR_HIGH"), 0.97)
+    elif density_score < density_low:
+        rr_mult *= _number(cfg.get("ADAPTIVE_DENSITY_RR_FACTOR_LOW"), 1.05)
+    room_clamp_low = _number((cfg.get("ADAPTIVE_ROOM_CLAMP") or {}).get("LOW"), 0.85)
+    room_clamp_high = _number((cfg.get("ADAPTIVE_ROOM_CLAMP") or {}).get("HIGH"), 1.15)
+    rr_clamp_low = _number((cfg.get("ADAPTIVE_RR_CLAMP") or {}).get("LOW"), 0.90)
+    rr_clamp_high = _number((cfg.get("ADAPTIVE_RR_CLAMP") or {}).get("HIGH"), 1.10)
+    room_mult = max(room_clamp_low, min(room_clamp_high, room_mult))
+    rr_mult = max(rr_clamp_low, min(rr_clamp_high, rr_mult))
     if not enabled:
         room_mult = rr_mult = 1.0
     return {

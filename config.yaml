@@ -3702,6 +3702,26 @@ ENGINE_B_PHASE2_QUALITY:
   APPLY_ADAPTIVE_ROOM_RR: true
   HIGH_CONVICTION_MIN_DENSITY: 65
   ZONE_FRESHNESS_DECAY_HOURS: 168
+  # Bounded room/RR regime adaptation. Multipliers/clamps were in-code literals
+  # (2026-09-04 review); same values, now auditable/tunable here.
+  ADAPTIVE_ROOM_MULTIPLIERS:
+    TRENDING: 0.90
+    RANGING: 1.10
+    HIGH_VOLATILITY: 1.10
+  ADAPTIVE_RR_MULTIPLIERS:
+    TRENDING: 0.97
+    RANGING: 1.05
+    HIGH_VOLATILITY: 1.05
+  ADAPTIVE_DENSITY_HIGH: 75
+  ADAPTIVE_DENSITY_LOW: 40
+  ADAPTIVE_DENSITY_RR_FACTOR_HIGH: 0.97
+  ADAPTIVE_DENSITY_RR_FACTOR_LOW: 1.05
+  ADAPTIVE_ROOM_CLAMP:
+    LOW: 0.85
+    HIGH: 1.15
+  ADAPTIVE_RR_CLAMP:
+    LOW: 0.90
+    HIGH: 1.10
   CONFLUENCE_WEIGHTS:
     structure_break: 24
     order_block: 14
@@ -4488,6 +4508,14 @@ NAKED_ENGINE:
   # prominence base (prominence = ATR * swing_prominence_atr_mult * per-style mult).
   swing_distance: 3
   swing_prominence_atr_mult: 0.8
+  # Right-side confirmation before a find_peaks pivot is usable as structure
+  # (HH/HL sequence, equal highs/lows, BOS reference, tight-SL pivot).
+  # find_peaks guarantees only one bar after a pivot; 2 means the newest usable
+  # swing high/low is at least 2 closed bars old. 1 restores the legacy form.
+  swing_right_confirmation_bars: 2
+  # "Equal highs/lows" pool credit requires the compared pair's newest member to
+  # be within this many structure bars of the current bar (0 = disabled/legacy).
+  equal_extrema_max_age_bars: 60
   # Forex ADX regime-classification boundaries (>= trending -> TRENDING,
   # >= normal -> NORMAL, else RANGING).
   forex_adx_trending_threshold: 30

@@ -1246,6 +1246,38 @@ def _mean_reversion_requires_higher_tf_confirmation() -> bool:
         return True
 
 
+def _mean_reversion_fails_closed_on_missing_adx() -> bool:
+    """Missing ADX must not read as 'maximally ranging' for the MR flip.
+
+    The regime switch previously passed both of its ADX tests on absent data:
+    a missing entry-rung ADX coerced to 0.0 (always below the ceiling) and a
+    missing momentum-anchor ADX defaulted the higher-TF check to True, so a
+    stretched candle with no ADX history flipped straight into a counter-trend
+    fade. Fail closed instead: no ADX on a required test disqualifies the
+    mean-reversion branch (trend timing is unaffected). Reversible:
+    ``ENGINE_A_V3_MEAN_REVERSION.FAIL_CLOSED_ON_MISSING_ADX: false``.
+    """
+    try:
+        from config import CONFIG
+
+        cfg = CONFIG.get("ENGINE_A_V3_MEAN_REVERSION") or {}
+        return bool(cfg.get("FAIL_CLOSED_ON_MISSING_ADX", True))
+    except Exception:
+        return True
+
+
+def _finite_adx(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:  # NaN
+        return None
+    return number
+
+
 def _location_component(
     snap: Mapping[str, Any],
     asset_type: str,
@@ -1279,12 +1311,24 @@ def _location_component(
     bb_l = _f(snap.get("bbLower"))
     stretched = bool((bb_u is not None and close > bb_u) or (bb_l is not None and close < bb_l))
     mr_adx_ceiling = _resolve_mr_adx_ceiling(asset_type, score_group)
+    mr_adx_fail_closed = _mean_reversion_fails_closed_on_missing_adx()
 
+    entry_adx = _finite_adx(snap.get("adx"))
     higher_tf_ranging = True
-    if corroborating_adx is not None and _mean_reversion_requires_higher_tf_confirmation():
-        higher_tf_ranging = corroborating_adx < mr_adx_ceiling
+    if _mean_reversion_requires_higher_tf_confirmation():
+        anchor_adx = _finite_adx(corroborating_adx)
+        if anchor_adx is not None:
+            higher_tf_ranging = anchor_adx < mr_adx_ceiling
+        elif mr_adx_fail_closed:
+            higher_tf_ranging = False
 
-    if adx < mr_adx_ceiling and stretched and higher_tf_ranging:
+    entry_adx_usable = entry_adx is not None or not mr_adx_fail_closed
+    if (
+        entry_adx_usable
+        and adx < mr_adx_ceiling
+        and stretched
+        and higher_tf_ranging
+    ):
         # Range fade: signal opposite to the stretch; quality scales with stretch.
         signal = -1.0 if (bb_u is not None and close > bb_u) else 1.0
         quality = _clamp01(abs(dist) / 3.0)

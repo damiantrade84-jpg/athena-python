@@ -4324,6 +4324,7 @@ class NakedEngine:
         atr: float,
         distance: int | None = None,
         prominence_mult: float | None = None,
+        min_right_bars: int | None = None,
     ) -> dict:
         if atr <= 0:
             return {"peak_idx": np.array([], dtype=int), "trough_idx": np.array([], dtype=int)}
@@ -4350,6 +4351,28 @@ class NakedEngine:
         prominence = atr * prominence_base * prominence_mult
         peak_idx, _ = find_peaks(highs, prominence=prominence, distance=distance)
         trough_idx, _ = find_peaks(-lows, prominence=prominence, distance=distance)
+        # Right-side confirmation: find_peaks guarantees only ONE bar after a
+        # pivot (the last array index is never a peak). A swing high/low whose
+        # level price has tested for a single bar is not yet a resting structural
+        # level, but it fed the HH/HL sequence, equal-highs, the BOS reference
+        # and the tight-SL pivot. Require N confirmed right-side bars before a
+        # pivot is usable as structure. 1 restores the effective legacy form.
+        try:
+            right_bars = (
+                int(naked_cfg.get("swing_right_confirmation_bars", 2))
+                if min_right_bars is None
+                else int(min_right_bars)
+            )
+        except (TypeError, ValueError):
+            right_bars = 2
+        right_bars = max(1, right_bars)
+        max_idx = len(highs) - 1 - right_bars
+        if max_idx < 0:
+            return {"peak_idx": np.array([], dtype=int), "trough_idx": np.array([], dtype=int)}
+        if len(peak_idx) and int(peak_idx[-1]) > max_idx:
+            peak_idx = peak_idx[peak_idx <= max_idx]
+        if len(trough_idx) and int(trough_idx[-1]) > max_idx:
+            trough_idx = trough_idx[trough_idx <= max_idx]
         return {"peak_idx": peak_idx, "trough_idx": trough_idx}
 
     def set_registry_context(self, symbol: str | None):
@@ -4600,12 +4623,45 @@ class NakedEngine:
             )
         except (TypeError, ValueError):
             _eq_atr = 0.15
+
+        # Stale-pair gate: "equal highs/lows" is credit for a RESTING pool, but
+        # the compared pair is just the two newest swings — when both are old
+        # (or the newest is ancient) the pool has already been raided and the
+        # credit is fiction. Require the pair's newest member to be within
+        # ENGINE_B_EQUAL_EXTREMA_MAX_AGE_BARS of the current bar. 0 disables
+        # the gate (legacy behaviour).
+        def _age_of(indexes, position_from_end: int) -> int | None:
+            try:
+                idx = int(indexes[-position_from_end])
+            except (IndexError, TypeError, ValueError):
+                return None
+            return int(len(highs) - 1 - idx)
+
+        try:
+            _eq_max_age = int(
+                (config.CONFIG.get("NAKED_ENGINE") or {}).get(
+                    "equal_extrema_max_age_bars", 60
+                )
+                or 0
+            )
+        except (TypeError, ValueError):
+            _eq_max_age = 60
+
+        def _pair_is_live(indexes) -> bool:
+            if _eq_max_age <= 0:
+                return True
+            newest_age = _age_of(indexes, 1)
+            return newest_age is not None and newest_age <= _eq_max_age
+
         equal_highs = (
-            len(last_peaks) >= 2 and abs(last_peaks[-1] - last_peaks[-2]) < atr * _eq_atr
+            len(last_peaks) >= 2
+            and abs(last_peaks[-1] - last_peaks[-2]) < atr * _eq_atr
+            and _pair_is_live(peak_idx)
         )
         equal_lows = (
             len(last_troughs) >= 2
             and abs(last_troughs[-1] - last_troughs[-2]) < atr * _eq_atr
+            and _pair_is_live(trough_idx)
         )
 
         has_equal_extrema = False
@@ -5321,27 +5377,46 @@ class NakedEngine:
             return _empty
 
         try:
+            sweep_lookback = int(config.CONFIG.get("ENGINE_B_SWEEP_LOOKBACK_BARS", 8) or 8)
+        except (TypeError, ValueError):
+            sweep_lookback = 5
+        sweep_lookback = max(1, min(sweep_lookback, len(closes)))
+
+        try:
             # B4 FIX: Improved fallback - use local extremes from lookback window
-            # instead of arbitrary closes[-6] which can be misleading in choppy markets
+            # instead of arbitrary closes[-6] which can be misleading in choppy markets.
+            # The fallback window must also END strictly before the sweep window:
+            # with the default 15-bar window and an 8-bar sweep window the two
+            # overlapped on 3 bars, so the "pre-existing" reference could be the
+            # sweep wick itself and the raid was invisible. Empty result = no
+            # causal reference = no fallback sweep (fail closed).
+            try:
+                fb_lookback = int(
+                    config.CONFIG.get("ENGINE_B_SWEEP_FALLBACK_LOOKBACK_BARS", 15) or 15
+                )
+            except (TypeError, ValueError):
+                fb_lookback = 15
+            fb_lookback = max(1, fb_lookback)
+            fb_end = len(lows) - sweep_lookback
             if swing_low is not None:
                 ref_low = swing_low
+            elif fb_end > 0:
+                fb_lows = lows[max(0, fb_end - fb_lookback) : fb_end]
+                ref_low = float(np.min(fb_lows)) if len(fb_lows) > 0 else None
             else:
-                # Use the minimum low from bars 6-15 as reference (avoids recent noise)
-                lookback_lows = lows[-15:-5] if len(lows) >= 15 else lows[:-5]
-                ref_low = float(np.min(lookback_lows)) if len(lookback_lows) > 0 else float(lows[-6])
-            
+                ref_low = None
             if swing_high is not None:
                 ref_high = swing_high
+            elif fb_end > 0:
+                fb_highs = highs[max(0, fb_end - fb_lookback) : fb_end]
+                ref_high = float(np.max(fb_highs)) if len(fb_highs) > 0 else None
             else:
-                # Use the maximum high from bars 6-15 as reference
-                lookback_highs = highs[-15:-5] if len(highs) >= 15 else highs[:-5]
-                ref_high = float(np.max(lookback_highs)) if len(lookback_highs) > 0 else float(highs[-6])
-
-            try:
-                sweep_lookback = int(config.CONFIG.get("ENGINE_B_SWEEP_LOOKBACK_BARS", 8) or 8)
-            except (TypeError, ValueError):
-                sweep_lookback = 5
-            sweep_lookback = max(1, min(sweep_lookback, len(closes)))
+                ref_high = None
+            # No causal reference on a side disables that side (never matches).
+            if ref_low is None:
+                ref_low = float("-inf")
+            if ref_high is None:
+                ref_high = float("inf")
 
             recent_highs = highs[-sweep_lookback:]
             recent_lows = lows[-sweep_lookback:]

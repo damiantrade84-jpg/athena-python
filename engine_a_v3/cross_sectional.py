@@ -737,6 +737,14 @@ def evaluate_backtest_ranking(
 
     Does not mutate the frozen ``EngineASetupSignal``. Callers skip the trade
     when the diagnostic is applied and ``accepted`` is false.
+
+    Parity caveat: a replay bar only ever carries one scored pair, so the
+    cohort's eligible count is 1 and the cutoff degenerates to rank 1 — a
+    ``top_n`` cut larger than 1 can never demote anything here, while the live
+    scan ranks a full universe and demotes everything past ``TOP_N``. When the
+    caveat is enabled (``BACKTEST_UNIVERSE_OF_ONE_CAVEAT``, default true) the
+    annotation says so instead of silently passing the cut; trade-skip
+    semantics are unchanged so backtests keep matching live rank-1 behaviour.
     """
     cfg = resolve_cross_sectional_config(config)
     if not cfg.applies_to("backtest"):
@@ -752,7 +760,19 @@ def evaluate_backtest_ranking(
         surface="backtest",
         config=config,
     )
-    return annotations[0] if annotations else {"enabled": True, "applied": False}
+    annotation = annotations[0] if annotations else {"enabled": True, "applied": False}
+    raw_xsec = _cfg_mapping(config).get(CONFIG_KEY)
+    caveat_default = None if not isinstance(raw_xsec, Mapping) else raw_xsec.get("BACKTEST_UNIVERSE_OF_ONE_CAVEAT")
+    caveat_enabled = _as_bool(caveat_default, True)
+    if (
+        caveat_enabled
+        and annotation.get("applied")
+        and cfg.method == "top_n"
+        and cfg.top_n > 1
+    ):
+        annotation["parityCaveat"] = "universe_of_one_live_cutoff_top_n"
+        annotation["liveCutoffTopN"] = cfg.top_n
+    return annotation
 
 
 def backtest_ranking_blocks_trade(
