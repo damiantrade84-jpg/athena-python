@@ -62,7 +62,7 @@ def run_chronicle(
             "pair": str(pair.get("display") or pair.get("symbol") or "UNKNOWN"),
             "evidenceStatus": "INSUFFICIENT_DATA",
             "chapters": [],
-            "summary": {"trades": 0},
+            "summary": {"trades": 0, "skippedFills": 0},
             "decisions": {},
             "bars": total,
         }
@@ -72,6 +72,8 @@ def run_chronicle(
     seen: set[str] = set()
     decisions: Counter[str] = Counter()
     tiers: Counter[str] = Counter()
+    skipped_fills = 0
+    tolerance_atr = float(config.structure["return_tolerance_atr"])
     for end in range(start, total):
         signal = evaluate_snapshot(
             snapshot,
@@ -87,8 +89,23 @@ def run_chronicle(
         if signal_id in seen:
             continue
         seen.add(signal_id)
-        tiers[str(signal["tier"])] += 1
         entry = m15[end].open
+        # Mirror the live execution gate: EXECUTE means "price is inside the
+        # imbalance". A gap through the array between the decision bar and the
+        # fill bar would be rejected live (PRICE_LEFT_IMBALANCE), so the replay
+        # must not turn it into a fill either.
+        array = ((signal.get("annotations") or {}).get("array") or {})
+        tolerance = float(signal.get("atr") or 0.0) * tolerance_atr
+        inside = (
+            isinstance(array, dict)
+            and isinstance(array.get("low"), (int, float))
+            and isinstance(array.get("high"), (int, float))
+            and float(array["low"]) - tolerance <= entry <= float(array["high"]) + tolerance
+        )
+        if not inside:
+            skipped_fills += 1
+            continue
+        tiers[str(signal["tier"])] += 1
         stop = float(signal["stop"])
         target = float(signal["target"])
         direction = str(signal["direction"])
@@ -130,6 +147,7 @@ def run_chronicle(
         "averageLossR": round(sum(c["rMultiple"] for c in losses) / len(losses), 4) if losses else None,
         "outcomes": dict(Counter(chapter["outcome"] for chapter in chapters)),
         "tiers": dict(tiers),
+        "skippedFills": skipped_fills,
         "minimumTradesForEvidence": minimum_trades,
     }
     evidence = "INSUFFICIENT_SAMPLE" if len(closed) < minimum_trades else "SAMPLE_OK"

@@ -153,7 +153,17 @@ def _data_gates(snapshot: MarketSnapshot, config: FableConfig, end_index: int | 
             freshness[timeframe] = {"status": "MISSING", "lastBarIso": None, "ageBuckets": None, "source": provider, "stalenessSeverity": "missing"}
             gates.append(_gate(f"{role}_fresh", False, f"DATA_MISSING:{timeframe}", timeframe=timeframe))
             continue
-        last_close = series[-1].closes_at(timeframe)
+        # Replay: higher-timeframe frames still contain bars that closed after
+        # the replay clock. Cut them for the freshness diagnostic so the
+        # reported age reflects what was knowable at that point in time.
+        fresh_series = series
+        if end_index is not None and role != "narrative":
+            fresh_series = [candle for candle in series if candle.closes_at(timeframe) <= snapshot.as_of_epoch + 1]
+            if not fresh_series:
+                freshness[timeframe] = {"status": "MISSING", "lastBarIso": None, "ageBuckets": None, "source": provider, "stalenessSeverity": "missing"}
+                gates.append(_gate(f"{role}_fresh", False, f"DATA_MISSING:{timeframe}", timeframe=timeframe))
+                continue
+        last_close = fresh_series[-1].closes_at(timeframe)
         # Weekend closures do not age a bar: Friday's D1/H4 close is still the
         # current bar on Monday morning.
         closed_seconds = market_closed_seconds(last_close, snapshot.as_of_epoch, snapshot.asset_type, config)
@@ -352,8 +362,15 @@ def _shift_act(shift: Shift, raid: Raid, config: FableConfig, weight: float) -> 
     q_imbalance = 1.0 if has_fvg else (0.6 if shift.imbalances else 0.0)
     bars_to_break = shift.break_index - raid.reclaim_index
     q_speed = 1.0 if bars_to_break <= 6 else clamp(1.0 - (bars_to_break - 6) / 18.0 * 0.7, 0.3, 1.0)
+    recency_full = int(structure["shift_recency_full_bars"])
+    recency_decay = int(structure["shift_recency_decay_bars"])
+    q_age = (
+        1.0
+        if shift.bars_since_break <= recency_full
+        else clamp(1.0 - (shift.bars_since_break - recency_full) / max(1, recency_decay - recency_full) * 0.7, 0.3, 1.0)
+    )
     participation = 0.85 if shift.participation_z is None else 0.85 + 0.15 * clamp(shift.participation_z / 2.0)
-    quality = (0.35 * q_disp + 0.25 * q_body + 0.2 * q_imbalance + 0.2 * q_speed) * participation
+    quality = (0.30 * q_disp + 0.20 * q_body + 0.20 * q_imbalance + 0.15 * q_speed + 0.15 * q_age) * participation
     evidence = {
         **shift.to_dict(),
         "displacementQuality": round(q_disp, 3),
@@ -361,17 +378,27 @@ def _shift_act(shift: Shift, raid: Raid, config: FableConfig, weight: float) -> 
         "imbalanceQuality": round(q_imbalance, 3),
         "barsToBreak": bars_to_break,
         "speedQuality": round(q_speed, 3),
+        "ageQuality": round(q_age, 3),
         "participationMultiplier": round(participation, 3),
     }
     return _act("shift", quality, weight, state="told", evidence=evidence)
 
 
 def select_array(shift: Shift, config: FableConfig) -> Imbalance | None:
-    """The PD array to return into: the FVG nearest the OTE centre, else the order block."""
+    """The PD array to return into: the FVG whose near edge sits nearest the OTE centre, else the order block.
+
+    The near edge (gap high for LONG, gap low for SHORT) is the price the
+    return would touch first, so selection and the return act's potential
+    measure the same thing.
+    """
     ote_center = (float(config.structure["ote_low"]) + float(config.structure["ote_high"])) / 2.0
+
+    def near_edge(item: Imbalance) -> float:
+        return item.high if shift.direction == "LONG" else item.low
+
     gaps = [item for item in shift.imbalances if item.kind == "fvg"]
     if gaps:
-        return min(gaps, key=lambda item: abs(retracement(shift, item.mid) - ote_center))
+        return min(gaps, key=lambda item: abs(retracement(shift, near_edge(item)) - ote_center))
     blocks = [item for item in shift.imbalances if item.kind == "order_block"]
     return blocks[0] if blocks else None
 
@@ -410,9 +437,9 @@ def _return_act(
     quality = position_quality * array_quality * depth_quality if state == "inside" else 0.0
     potential = clamp(1.0 - abs(r_array_near - ote_center) / 0.5) * array_quality * depth_quality
     if shift.direction == "LONG":
-        distance_atr = (price - array.high) / atr
+        distance_atr = abs(price - array.high) / atr
     else:
-        distance_atr = (array.low - price) / atr
+        distance_atr = abs(price - array.low) / atr
     evidence = {
         "array": array.to_dict(),
         "retracement": round(r, 3),
@@ -763,6 +790,11 @@ def evaluate_snapshot(
             ),
             "returnState": return_state,
             "stageReason": stage_reason,
+            "narrativeAge": {
+                "barsSinceReclaim": None if raid is None else raid.bars_since,
+                "barsSinceBreak": None if shift is None else shift.bars_since_break,
+                "maxAgeBars": int(config.structure["max_narrative_age_bars"]),
+            },
             "session": session,
             "timeframes": dict(ROLE_TIMEFRAMES),
             "generatedAt": generated_at,
@@ -830,6 +862,7 @@ def evaluate_snapshot(
         min_depth_atr=float(structure["raid_min_depth_atr"]),
         max_depth_atr=float(structure["raid_max_depth_atr"]),
         participation_baseline=int(structure["participation_baseline_window"]),
+        atr_series=atr_values,
     )
     chosen_raid: Raid | None = None
     chosen_shift: Shift | None = None
@@ -843,6 +876,7 @@ def evaluate_snapshot(
             min_body_atr=float(structure["shift_min_body_atr"]),
             max_bars_after_raid=int(structure["shift_max_bars_after_raid"]),
             participation_baseline=int(structure["participation_baseline_window"]),
+            atr_series=atr_values,
         )
         if found is not None:
             chosen_raid, chosen_shift = candidate, found
@@ -908,6 +942,24 @@ def evaluate_snapshot(
 
     if return_state == "through":
         return finish("OBSERVE", "RETURN_FAILED")
+
+    # A story whose raid is older than the configured span is history, not a
+    # setup: the stamp travels to execution so a re-stamped payload cannot
+    # hide the age of the narrative it carries.
+    max_narrative_age_bars = int(config.structure["max_narrative_age_bars"])
+    narrative_too_old = raid.bars_since > max_narrative_age_bars
+    gates.append(
+        _gate(
+            "narrative_age",
+            not narrative_too_old,
+            "NARRATIVE_STALE",
+            barsSinceReclaim=raid.bars_since,
+            barsSinceBreak=shift.bars_since_break if shift is not None else None,
+            maxAgeBars=max_narrative_age_bars,
+        )
+    )
+    if narrative_too_old:
+        return finish("OBSERVE", "NARRATIVE_STALE")
 
     # Inside the imbalance the entry is the market; while the return is still
     # pending the plan is measured from the array edge price would enter at.

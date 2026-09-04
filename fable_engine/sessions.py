@@ -78,8 +78,9 @@ def session_state(epoch: float, config: FableConfig) -> dict[str, Any]:
             best_quality = float(sessions.get("fringe_quality") or 0.0)
         else:
             best_quality = float(sessions.get("off_window_quality") or 0.0)
-    weekday = local.weekday()
-    weekend = weekday == 5 or (weekday == 6 and local.hour < 17) or (weekday == 4 and local.hour >= 17)
+    # Weekend closure comes from the configured NY-clock window, not a
+    # hardcoded Friday 17:00 rule.
+    weekend = any(close_at <= float(epoch) < open_at for close_at, open_at in _weekend_windows(epoch, epoch, config))
     display = display_datetime(epoch, config)
     return {
         "nyClock": local.strftime("%a %H:%M"),
@@ -121,25 +122,70 @@ def _weekend_windows(start: float, end: float, config: FableConfig) -> list[tupl
     return windows
 
 
+def _holiday_keys(config: FableConfig) -> tuple[set[str], set[str]]:
+    """(recurring MM-DD keys, explicit ISO dates) of full-day NY-calendar closures."""
+    holidays = config.sessions.get("holidays") or {}
+    if not isinstance(holidays, dict):
+        return set(), set()
+    recurring = {str(item) for item in (holidays.get("recurring") or [])}
+    dates = {str(item) for item in (holidays.get("dates") or [])}
+    return recurring, dates
+
+
+def _closed_intervals(start: float, end: float, config: FableConfig) -> list[tuple[float, float]]:
+    """Weekend and holiday closures overlapping ``[start, end]`` (unmerged)."""
+    intervals = list(_weekend_windows(start, end, config))
+    recurring, dates = _holiday_keys(config)
+    if recurring or dates:
+        zone = _zone(config)
+        day = datetime.fromtimestamp(float(start), tz=timezone.utc).astimezone(zone).date() - timedelta(days=1)
+        last = datetime.fromtimestamp(float(end), tz=timezone.utc).astimezone(zone).date() + timedelta(days=1)
+        while day <= last:
+            if day.isoformat() in dates or day.strftime("%m-%d") in recurring:
+                day_start = datetime(day.year, day.month, day.day, tzinfo=zone)
+                intervals.append((day_start.timestamp(), (day_start + timedelta(days=1)).timestamp()))
+            day += timedelta(days=1)
+    return intervals
+
+
+def _merge_intervals(intervals: list[tuple[float, float]]) -> list[list[float]]:
+    merged: list[list[float]] = []
+    for low, high in sorted(intervals):
+        if merged and low <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], high)
+        else:
+            merged.append([low, high])
+    return merged
+
+
 def market_closed_seconds(start: float, end: float, asset_type: str, config: FableConfig) -> float:
-    """Seconds inside weekend closures between ``start`` and ``end`` for weekend-gated assets."""
+    """Seconds inside weekend/holiday closures between ``start`` and ``end`` for weekend-gated assets.
+
+    Weekend windows and holiday days are merged into one union first, so a
+    holiday that falls on a weekend (or spans one) is counted exactly once.
+    """
     if end <= start or not _weekend_gated(asset_type, config):
         return 0.0
     closed = 0.0
-    for close_at, open_at in _weekend_windows(start, end, config):
-        overlap = min(end, open_at) - max(start, close_at)
+    for low, high in _merge_intervals(_closed_intervals(start, end, config)):
+        overlap = min(end, high) - max(start, low)
         if overlap > 0:
             closed += overlap
     return closed
 
 
 def market_is_closed(epoch: float, asset_type: str, config: FableConfig) -> tuple[bool, str | None]:
-    """Weekend closure check for weekend-gated assets. Crypto and ungated types are always open."""
+    """Weekend/holiday closure check for weekend-gated assets. Crypto and ungated types are always open."""
     if not _weekend_gated(asset_type, config):
         return False, None
+    epoch = float(epoch)
     for close_at, open_at in _weekend_windows(epoch, epoch, config):
-        if close_at <= float(epoch) < open_at:
+        if close_at <= epoch < open_at:
             return True, "WEEKEND"
+    local_date = datetime.fromtimestamp(epoch, tz=timezone.utc).astimezone(_zone(config)).date()
+    recurring, dates = _holiday_keys(config)
+    if local_date.isoformat() in dates or local_date.strftime("%m-%d") in recurring:
+        return True, "HOLIDAY"
     return False, None
 
 

@@ -18,6 +18,15 @@ sessions:
   weekend_close_hour: 17
   weekend_open_weekday: 6
   weekend_open_hour: 17
+  # Full-day market closures on the New York calendar. ``recurring`` entries are
+  # MM-DD (every year, e.g. Christmas Day and New Year's Day); ``dates`` are
+  # explicit ISO days for one-off closures. Closed holiday time is excluded
+  # from closed-bar age like weekend time, so keep this list to days the venue
+  # is genuinely shut: removing entries makes the gates stricter, adding a
+  # wrong entry credits hours the market actually traded.
+  holidays:
+    recurring: ["01-01", "12-25"]
+    dates: []
   apply_weekend_gate_to:
     - forex
     - index
@@ -89,6 +98,14 @@ structure:
   shift_min_displacement_atr: 1.00
   shift_min_body_atr: 0.55
   shift_max_bars_after_raid: 24
+  # The shift act decays with the age of the structure break: full quality for
+  # the first ``shift_recency_full_bars`` bars, then decaying to a 0.30 floor
+  # by ``shift_recency_decay_bars``.
+  shift_recency_full_bars: 12
+  shift_recency_decay_bars: 36
+  # A story whose raid reclaim is older than this many closed bars cannot reach
+  # EXECUTE or STAGE (OBSERVE NARRATIVE_STALE); execution re-checks the stamp.
+  max_narrative_age_bars: 24
   ote_low: 0.62
   ote_high: 0.79
   return_tolerance_atr: 0.25

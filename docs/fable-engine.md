@@ -27,10 +27,18 @@ execution are available; live execution stays locked until the status is
 | V | **Chorus** | mixed | Session window, volatility regime, participation, carry, positioning, vol skew, funding: advisory voices that agree or dissent |
 
 Pools are built from H4 and H1 fractal swings (equal highs/lows merged into
-stronger pools), previous-day and previous-week highs/lows measured on the New
-York calendar, then de-duplicated. A raid may take up to three bars; a sweep
-deeper than 2.5 ATR is a breakout, not a raid. A shift is invalidated the moment
-a close returns beyond the raid extreme.
+stronger pools; a level exists from its first touch), previous-day and
+previous-week highs/lows measured on the New York calendar, then de-duplicated.
+One raid is kept per pool: the newest excursion inside the lookback, measured
+back to its true reclaim (the first close back on the pre-raid side). A raid
+may take up to three bars; a sweep deeper than 2.5 ATR (measured in the ATR at
+the raid bar) is a breakout, not a raid. A shift is invalidated the moment a
+close returns beyond the raid extreme after the reclaim; its displacement leg
+is bounded to `shift_max_bars_after_raid` bars after the break, and the shift
+act's quality decays with the age of the break. A story whose raid reclaim is
+older than `max_narrative_age_bars` (24) cannot reach EXECUTE or STAGE — it is
+reported as `OBSERVE / NARRATIVE_STALE`, and the narrative age travels in the
+payload (`narrativeAge`) so execution can re-check it against the same limit.
 
 ## Coherence
 
@@ -46,13 +54,15 @@ Tiers grade coherence for display only: `LEGEND >= 80`, `SAGA >= 64`,
 ## Decisions and gates
 
 Deterministic gates decide whether the story is tellable at all: closed-bar
-data and freshness per timeframe, ATR sanity, event blackout (when the shared
-event-risk feed is enabled), the institutional session window (forex, index and
-commodity only), stop geometry (0.35–3.5 ATR beyond the raid extreme, wider caps
-for crypto, commodities and indices) and reward geometry (RR >= 1.5 to the leg
-high, the next pool, or the external draw). While the return is still pending
-the plan is measured from the imbalance edge price would enter at, not from the
-current price.
+data and freshness per timeframe (weekend and holiday closure time on the New
+York calendar is excluded from closed-bar age; holidays are configured as
+recurring `MM-DD` days plus explicit ISO dates under `sessions.holidays`), ATR
+sanity, event blackout (when the shared event-risk feed is enabled), the
+institutional session window (forex, index and commodity only), stop geometry
+(0.35–3.5 ATR beyond the raid extreme, wider caps for crypto, commodities and
+indices) and reward geometry (RR >= 1.5 to the leg high, the next pool, or the
+external draw). While the return is still pending the plan is measured from
+the imbalance edge price would enter at, not from the current price.
 
 | Decision | Meaning |
 | --- | --- |
@@ -68,8 +78,9 @@ ledger allows one live reservation per narrative.
 ## Execution ("sealing")
 
 `POST /api/fable/signals/<id>/preview` attests the live quote: contract and
-decision, signal age, narrative-bar age (<= 2 M15 buckets), kill switch, venue
-and direction, quote integrity and age, spread in bps, drift against the scan
+decision, signal age, narrative-bar age (<= 2 M15 buckets), narrative age
+(`barsSinceReclaim` <= `max_narrative_age_bars`), kill switch, venue and
+direction, quote integrity and age, spread in bps, drift against the scan
 close in ATR, and live geometry. The stop is immutable; if the live entry no
 longer clears the minimum RR to the first target, the external draw (`target2`)
 is the only permitted fallback.
@@ -127,7 +138,10 @@ validated research, and so on).
 
 `POST /api/fable/chronicle` walks the narrative series one closed bar at a time,
 evaluates the same scorer on each prefix, fills every `EXECUTE` at the next
-bar's open and resolves a bar that touches both stop and target as a loss. A
+bar's open — but only when that open is still inside the imbalance (± the
+return tolerance), mirroring the live `PRICE_LEFT_IMBALANCE` gate; gapped
+narratives are counted in `summary.skippedFills` instead of being filled.
+A bar that touches both stop and target is resolved as a loss. A
 sample below `minimum_trades_for_evidence` (30) is reported as
 `INSUFFICIENT_SAMPLE`. The chronicle checks the implementation; it is not proof
 of edge.

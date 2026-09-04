@@ -193,6 +193,22 @@ class FableExecutionCoordinator:
         threshold = float(self.config.scoring["execute_threshold"])
         coherence_ok = _finite_positive(coherence) and float(coherence) >= threshold
         gates.append(_gate("coherence_threshold", coherence_ok, "SIGNAL_COHERENCE_INVALID", coherence=coherence, threshold=threshold))
+        # The generatedAt stamp resets on every re-scan; the narrative's own age
+        # does not. Fail closed when the story-age stamp is missing or stale.
+        narrative_age = signal.get("narrativeAge") if isinstance(signal.get("narrativeAge"), dict) else {}
+        bars_since_reclaim = narrative_age.get("barsSinceReclaim")
+        max_age_bars = float(self.config.structure["max_narrative_age_bars"])
+        age_valid = isinstance(bars_since_reclaim, (int, float)) and not isinstance(bars_since_reclaim, bool) and math.isfinite(float(bars_since_reclaim))
+        age_ok = age_valid and 0 <= float(bars_since_reclaim) <= max_age_bars
+        gates.append(
+            _gate(
+                "narrative_age",
+                age_ok,
+                "NARRATIVE_TOO_OLD" if age_valid else "SIGNAL_NARRATIVE_AGE_MISSING",
+                barsSinceReclaim=bars_since_reclaim if age_valid else None,
+                maxAgeBars=max_age_bars,
+            )
+        )
         deterministic = signal.get("gates")
         proof = (
             isinstance(deterministic, list)

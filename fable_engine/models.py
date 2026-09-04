@@ -279,6 +279,7 @@ class Shift:
     max_body_atr: float  # largest single-bar body in ATR inside the leg
     imbalances: tuple[Imbalance, ...]
     participation_z: float | None
+    bars_since_break: int = 0  # closed bars between the structure break and the evaluation bar
 
     @property
     def leg_range(self) -> float:
@@ -297,4 +298,5 @@ class Shift:
             "maxBodyAtr": round(self.max_body_atr, 4),
             "imbalances": [item.to_dict() for item in self.imbalances],
             "participationZ": None if self.participation_z is None else round(self.participation_z, 3),
+            "barsSinceBreak": self.bars_since_break,
         }

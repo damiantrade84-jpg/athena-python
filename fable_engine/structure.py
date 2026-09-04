@@ -185,8 +185,11 @@ def swing_pools(
             touches = len(cluster)
             label = f"{source}_swing" if touches == 1 else ("EQH" if kind == "high" else "EQL")
             strength_value = min(1.0, base_strength + 0.15 * (touches - 1))
-            newest = max(item.time for item in cluster)
-            pools.append(LiquidityPool(price, side, label, strength_value, newest, touches))
+            # The level exists from its FIRST touch: a raid of the older member
+            # of an equal-level cluster is a raid of a pool that already rested
+            # there, not of a level that did not exist yet.
+            oldest = min(item.time for item in cluster)
+            pools.append(LiquidityPool(price, side, label, strength_value, oldest, touches))
     return pools
 
 
@@ -213,11 +216,19 @@ def _participation_z(candles: Sequence[Candle], index: int, baseline: int) -> fl
     if current is None or len(history) < max(8, baseline // 4):
         return None
     mean = sum(history) / len(history)
-    variance = sum((value - mean) ** 2 for value in history) / len(history)
+    variance = sum((value - mean) ** 2 for value in history) / (len(history) - 1)
     deviation = math.sqrt(variance)
     if deviation <= 1e-12:
         return None
     return (current - mean) / deviation
+
+
+def _event_atr(atr: float, series: Sequence[float | None] | None, index: int) -> float:
+    """ATR that existed when the event happened, falling back to the current ATR."""
+    if series is None or index < 0 or index >= len(series):
+        return atr
+    value = series[index]
+    return float(value) if value is not None and value > 0 else atr
 
 
 def find_raids(
@@ -231,12 +242,16 @@ def find_raids(
     max_depth_atr: float,
     participation_baseline: int,
     end: int | None = None,
+    atr_series: Sequence[float | None] | None = None,
 ) -> list[Raid]:
     """Every pool sweep inside ``lookback`` bars that closed back through the pool.
 
     A raid may take up to ``max_excursion_bars`` to run through the pool and
     reclaim it; the reclaim bar's close must be back on the pre-raid side.
     Sweeps deeper than ``max_depth_atr`` are treated as breakouts, not raids.
+    Depth and reclaim are normalised by the ATR that existed at the reclaim
+    bar (falling back to the current ATR) so an old sweep is not measured in
+    today's volatility.
     """
     limit = len(m15) if end is None else min(end, len(m15))
     if limit < 3 or atr <= 0:
@@ -244,6 +259,7 @@ def find_raids(
     start = max(1, limit - lookback)
     raids: list[Raid] = []
     for pool in pools:
+        qualifying: list[tuple[int, float]] = []
         for reclaim_index in range(start, limit):
             bar = m15[reclaim_index]
             if pool.side == "buyside":
@@ -258,9 +274,6 @@ def find_raids(
                 pre_bar = m15[first_index - 1] if first_index - 1 >= 0 else None
                 if pre_bar is not None and pre_bar.close > pool.price:
                     continue
-                depth = (extreme - pool.price) / atr
-                reclaim = (pool.price - bar.close) / atr
-                direction = "SHORT"
             else:
                 if not (bar.close > pool.price):
                     continue
@@ -272,32 +285,48 @@ def find_raids(
                 pre_bar = m15[first_index - 1] if first_index - 1 >= 0 else None
                 if pre_bar is not None and pre_bar.close < pool.price:
                     continue
-                depth = (pool.price - extreme) / atr
-                reclaim = (bar.close - pool.price) / atr
-                direction = "LONG"
-            if depth < min_depth_atr or depth > max_depth_atr:
-                continue
-            if pool.time >= bar.time:
-                continue  # the pool must exist before it is raided
-            start_index = min(
-                (index for index in range(first_index, reclaim_index + 1)
-                 if (m15[index].high > pool.price if pool.side == "buyside" else m15[index].low < pool.price)),
-                default=reclaim_index,
+            qualifying.append((reclaim_index, extreme))
+        if not qualifying:
+            continue
+        # One raid per pool. Take the NEWEST excursion event (a fresh re-sweep
+        # must not be shadowed by an older one that merely scans first), and
+        # within that event the true reclaim: the first close back on the
+        # pre-raid side, not a later bar whose window still contains the sweep.
+        newest_reclaim = qualifying[-1][0]
+        event_start = max(qualifying[0][0], newest_reclaim - (max_excursion_bars - 1))
+        reclaim_index, extreme = next((index, value) for index, value in qualifying if index >= event_start)
+        if pool.time >= m15[reclaim_index].time:
+            continue  # the pool must exist before it is raided
+        event_atr = _event_atr(atr, atr_series, reclaim_index)
+        first_index = max(0, reclaim_index - max_excursion_bars + 1)
+        if pool.side == "buyside":
+            depth = (extreme - pool.price) / event_atr
+            reclaim = (pool.price - m15[reclaim_index].close) / event_atr
+            direction = "SHORT"
+        else:
+            depth = (pool.price - extreme) / event_atr
+            reclaim = (m15[reclaim_index].close - pool.price) / event_atr
+            direction = "LONG"
+        if depth < min_depth_atr or depth > max_depth_atr:
+            continue
+        start_index = min(
+            (index for index in range(first_index, reclaim_index + 1)
+             if (m15[index].high > pool.price if pool.side == "buyside" else m15[index].low < pool.price)),
+            default=reclaim_index,
+        )
+        raids.append(
+            Raid(
+                pool=pool,
+                direction=direction,
+                start_index=start_index,
+                reclaim_index=reclaim_index,
+                extreme=extreme,
+                depth_atr=depth,
+                reclaim_atr=reclaim,
+                bars_since=limit - 1 - reclaim_index,
+                participation_z=_participation_z(m15, start_index, participation_baseline),
             )
-            raids.append(
-                Raid(
-                    pool=pool,
-                    direction=direction,
-                    start_index=start_index,
-                    reclaim_index=reclaim_index,
-                    extreme=extreme,
-                    depth_atr=depth,
-                    reclaim_atr=reclaim,
-                    bars_since=limit - 1 - reclaim_index,
-                    participation_z=_participation_z(m15, start_index, participation_baseline),
-                )
-            )
-            break  # one raid per pool: the first reclaim inside the lookback
+        )
     raids.sort(key=lambda raid: (raid.reclaim_index, raid.pool.strength), reverse=True)
     return raids
 
@@ -339,14 +368,17 @@ def find_shift(
     max_bars_after_raid: int,
     participation_baseline: int,
     end: int | None = None,
+    atr_series: Sequence[float | None] | None = None,
 ) -> Shift | None:
     """Detect the structure shift that follows ``raid``.
 
     LONG narrative: after a sellside raid, price must close above the most
     recent swing high formed before the raid reclaim (the short-term high that
     defines the bearish leg). The displacement leg runs from the raid extreme
-    to the highest high after the break and must travel ``min_displacement_atr``
-    with at least one bar body of ``min_body_atr``. SHORT mirrors this.
+    to the highest high within ``max_bars_after_raid`` bars of the break and
+    must travel ``min_displacement_atr`` (measured in the ATR that existed at
+    the break bar) with at least one bar body of ``min_body_atr``. SHORT
+    mirrors this.
     """
     limit = len(m15) if end is None else min(end, len(m15))
     if atr <= 0 or raid.reclaim_index >= limit - 1:
@@ -382,20 +414,25 @@ def find_shift(
             break
     if break_index is None:
         return None
-    # Displacement extreme after the break, bounded by the causal prefix.
+    # The displacement leg cannot keep growing forever: its extreme is bounded
+    # to the same post-raid window, so an old shift is not inflated by drift
+    # that printed long after the story completed.
+    leg_last_index = min(limit - 1, break_index + max_bars_after_raid)
+    # A close back beyond the raid extreme at any point after the reclaim
+    # invalidates the shift, not only after the break.
     if direction == "LONG":
-        leg_end_index = max(range(break_index, limit), key=lambda idx: m15[idx].high)
+        if any(m15[idx].close < raid.extreme for idx in range(raid.reclaim_index, limit)):
+            return None
+        leg_end_index = max(range(break_index, leg_last_index + 1), key=lambda idx: m15[idx].high)
         leg_end = m15[leg_end_index].high
-        # Invalidate if price later closed back below the raid extreme.
-        if any(m15[idx].close < raid.extreme for idx in range(break_index, limit)):
-            return None
     else:
-        leg_end_index = min(range(break_index, limit), key=lambda idx: m15[idx].low)
-        leg_end = m15[leg_end_index].low
-        if any(m15[idx].close > raid.extreme for idx in range(break_index, limit)):
+        if any(m15[idx].close > raid.extreme for idx in range(raid.reclaim_index, limit)):
             return None
-    displacement = abs(leg_end - raid.extreme) / atr
-    bodies = [m15[idx].body / atr for idx in range(raid.start_index, leg_end_index + 1)]
+        leg_end_index = min(range(break_index, leg_last_index + 1), key=lambda idx: m15[idx].low)
+        leg_end = m15[leg_end_index].low
+    shift_atr = _event_atr(atr, atr_series, break_index)
+    displacement = abs(leg_end - raid.extreme) / shift_atr
+    bodies = [m15[idx].body / shift_atr for idx in range(raid.start_index, leg_end_index + 1)]
     max_body = max(bodies) if bodies else 0.0
     if displacement < min_displacement_atr or max_body < min_body_atr:
         return None
@@ -416,6 +453,7 @@ def find_shift(
         max_body_atr=max_body,
         imbalances=tuple(imbalances),
         participation_z=_participation_z(m15, break_index, participation_baseline),
+        bars_since_break=limit - 1 - break_index,
     )
 
 

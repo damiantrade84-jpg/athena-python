@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
@@ -141,6 +143,25 @@ def _validate(raw: dict[str, Any]) -> None:
             raise FableConfigError(f"sessions.{key} must be 0..23")
     if not isinstance(sessions.get("apply_weekend_gate_to"), list):
         raise FableConfigError("sessions.apply_weekend_gate_to must be a list")
+    holidays = sessions.get("holidays") or {}
+    if not isinstance(holidays, dict):
+        raise FableConfigError("sessions.holidays must be a mapping")
+    for item in holidays.get("recurring") or []:
+        text = str(item)
+        if not re.fullmatch(r"\d{2}-\d{2}", text):
+            raise FableConfigError(f"sessions.holidays.recurring entries must be MM-DD: {item!r}")
+        try:
+            datetime.strptime(f"2000-{text}", "%Y-%m-%d")
+        except ValueError as exc:
+            raise FableConfigError(f"sessions.holidays.recurring entries must be MM-DD: {item!r}") from exc
+    for item in holidays.get("dates") or []:
+        text = str(item)
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            raise FableConfigError(f"sessions.holidays.dates entries must be ISO dates: {item!r}")
+        try:
+            datetime.strptime(text, "%Y-%m-%d")
+        except ValueError as exc:
+            raise FableConfigError(f"sessions.holidays.dates entries must be ISO dates: {item!r}") from exc
     _number(sessions.get("fallback_utc_offset_hours"), "sessions.fallback_utc_offset_hours")
     _number(sessions.get("display_fallback_utc_offset_hours"), "sessions.display_fallback_utc_offset_hours")
     _number(sessions.get("minimum_window_quality"), "sessions.minimum_window_quality", minimum=0.0, maximum=1.0)
@@ -178,11 +199,18 @@ def _validate(raw: dict[str, Any]) -> None:
         "raid_lookback_bars",
         "raid_max_excursion_bars",
         "shift_max_bars_after_raid",
+        "shift_recency_full_bars",
+        "shift_recency_decay_bars",
+        "max_narrative_age_bars",
         "participation_baseline_window",
         "efficiency_window",
         "atr_percentile_window",
     ):
         _integer(structure.get(key), f"structure.{key}")
+    if int(structure["shift_recency_decay_bars"]) <= int(structure["shift_recency_full_bars"]):
+        raise FableConfigError("structure.shift_recency_decay_bars must exceed structure.shift_recency_full_bars")
+    if int(structure["max_narrative_age_bars"]) > int(structure["raid_lookback_bars"]):
+        raise FableConfigError("structure.max_narrative_age_bars cannot exceed structure.raid_lookback_bars")
     for key in (
         "equal_level_tolerance_atr",
         "raid_min_depth_atr",

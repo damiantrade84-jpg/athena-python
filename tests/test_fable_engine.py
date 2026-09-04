@@ -18,7 +18,7 @@ from fable_engine.chronicle import run_chronicle
 from fable_engine.config import FableConfigError, load_fable_config
 from fable_engine.execution import FableExecutionCoordinator, FableExecutionError
 from fable_engine.market_data import normalize_closed_candles
-from fable_engine.models import TIMEFRAME_SECONDS, Candle, LiquidityPool, MarketSnapshot, Quote, utc_iso
+from fable_engine.models import TIMEFRAME_SECONDS, Candle, LiquidityPool, MarketSnapshot, Quote, parse_iso, utc_iso
 from fable_engine.narrative import coherence_score, evaluate_snapshot, tier_for
 from fable_engine.persistence import FableRepository
 from fable_engine.sessions import session_state
@@ -55,15 +55,15 @@ def _series(timeframe: str, closes: list[float], *, volume: float = 100.0, wick:
     return rows
 
 
-def _resample(m15: list[Candle], seconds: int) -> list[Candle]:
-    """Aggregate M15 bars into a higher timeframe, keeping only bars closed by NOW."""
+def _resample(m15: list[Candle], seconds: int, *, as_of: float = NOW) -> list[Candle]:
+    """Aggregate M15 bars into a higher timeframe, keeping only bars closed by ``as_of``."""
     groups: dict[int, list[Candle]] = {}
     for candle in m15:
         groups.setdefault(int(candle.time // seconds), []).append(candle)
     out: list[Candle] = []
     for key in sorted(groups):
         start = key * seconds
-        if start + seconds > NOW:
+        if start + seconds > as_of:
             continue
         rows = groups[key]
         out.append(_bar(start, rows[0].open, max(r.high for r in rows), min(r.low for r in rows), rows[-1].close, sum(r.volume or 0 for r in rows)))
@@ -730,3 +730,210 @@ def test_step_decimals_handle_scientific_notation() -> None:
 def test_config_rejects_version_override() -> None:
     with pytest.raises(FableConfigError):
         load_fable_config({"FABLE_ENGINE": {"version": "fable.v2"}})
+
+
+# ── signal-quality fixes ────────────────────────────────────────────────
+
+
+def test_newest_sweep_of_a_pool_wins_over_an_older_one() -> None:
+    m15 = []
+    for i in range(40):
+        t = NOW - (40 - i) * 900
+        if i in (12, 33):
+            m15.append(_bar(t, 1.0001, 1.0002, 0.9990, 1.0001))
+        else:
+            m15.append(_bar(t, 1.0001, 1.0002, 1.0000, 1.0001))
+    pool = LiquidityPool(1.0000, "sellside", "H1_swing", 0.5, m15[0].time)
+    raids = find_raids(m15, [pool], atr=0.001, lookback=32, max_excursion_bars=3, min_depth_atr=0.05, max_depth_atr=2.5, participation_baseline=40)
+    assert raids and raids[0].reclaim_index == 33
+    assert raids[0].bars_since == 6
+
+
+def test_shift_leg_is_bounded_and_pre_break_invalidation_fires() -> None:
+    m15 = []
+    for i in range(40):
+        t = NOW - (40 - i) * 900
+        if i == 10:
+            m15.append(_bar(t, 1.0005, 1.0006, 0.9990, 1.0001))  # sweep and reclaim in one bar
+        elif i == 13:
+            m15.append(_bar(t, 1.0005, 1.0012, 1.0004, 1.0011))  # structure break
+        elif i == 19:
+            m15.append(_bar(t, 1.0030, 1.0040, 1.0029, 1.0035))  # in-window leg end
+        elif i == 30:
+            m15.append(_bar(t, 1.0036, 1.0200, 1.0004, 1.0036))  # far drift AFTER the window
+        else:
+            m15.append(_bar(t, 1.0005, 1.0006, 1.0004, 1.0005))
+    pool = LiquidityPool(1.0000, "sellside", "H1_swing", 0.5, m15[0].time)
+    raids = find_raids(m15, [pool], atr=0.001, lookback=32, max_excursion_bars=3, min_depth_atr=0.05, max_depth_atr=2.5, participation_baseline=40)
+    assert raids and raids[0].reclaim_index == 10
+    shift = find_shift(m15, raids[0], atr=0.001, swing_strength=2, min_displacement_atr=1.0, min_body_atr=0.55, max_bars_after_raid=6, participation_baseline=40)
+    assert shift is not None and shift.direction == "LONG"
+    assert shift.leg_end == 1.0040 and shift.leg_end_index == 19  # far drift at index 30 is excluded
+    assert shift.break_index == 13 and shift.bars_since_break == 26
+    # A close back beyond the raid extreme between the reclaim and the break
+    # invalidates the shift even though the break happens afterwards.
+    deeper = list(m15)
+    deeper[12] = _bar(deeper[12].time, 1.0005, 1.0006, 0.9985, 0.9985)
+    invalidated = find_shift(deeper, raids[0], atr=0.001, swing_strength=2, min_displacement_atr=1.0, min_body_atr=0.55, max_bars_after_raid=6, participation_baseline=40)
+    assert invalidated is None
+
+
+def test_swing_pool_stamps_the_oldest_touch_of_an_equal_level() -> None:
+    from fable_engine.structure import swing_pools
+
+    highs_lows = [
+        (1.001, 0.995), (0.996, 0.990), (0.991, 0.986), (0.987, 0.983), (0.984, 0.981),
+        (0.982, 0.980), (0.986, 0.982), (0.990, 0.986), (0.996, 0.990), (1.002, 0.996),
+        (1.010, 1.000), (1.006, 1.000), (1.000, 0.994), (0.995, 0.988), (0.989, 0.983),
+        (0.984, 0.9801), (0.986, 0.982), (0.990, 0.986), (0.994, 0.990), (1.000, 0.996),
+    ]
+    candles = [_bar(NOW - (20 - i) * 900, low, high, low, low) for i, (high, low) in enumerate(highs_lows)]
+    pools = swing_pools(candles, strength=2, lookback=40, source="H1", base_strength=0.5, atr=0.001, equal_tolerance_atr=0.12)
+    equal = [pool for pool in pools if pool.source == "EQL"]
+    assert equal and equal[0].touches == 2
+    assert equal[0].price == pytest.approx(0.9800)
+    assert equal[0].time == candles[5].time  # exists since the FIRST touch, not the newest
+
+
+def test_shift_act_decays_with_break_age() -> None:
+    from dataclasses import replace
+
+    from fable_engine.models import Raid, Shift
+    from fable_engine.narrative import _shift_act
+
+    config = load_fable_config({})
+    pool = LiquidityPool(1.0000, "sellside", "H1_swing", 0.5, NOW)
+    raid = Raid(pool, "LONG", 0, 2, 0.9990, 1.0, 0.5, 5, None)
+    fresh = Shift("LONG", 1.0010, 3, 6, 0.9990, 1.0040, 8, 5.0, 1.0, (), None, 2)
+    stale = replace(fresh, bars_since_break=60)
+    fresh_quality = _shift_act(fresh, raid, config, 22.0)["quality"]
+    stale_quality = _shift_act(stale, raid, config, 22.0)["quality"]
+    assert stale_quality < fresh_quality
+    assert stale_quality >= 0.30 * 0.85  # the recency floor keeps the act tellable
+
+
+def _aged_pending_snapshot(extra_bars: int) -> MarketSnapshot:
+    """The staged story fixture with ``extra_bars`` quiet bars appended, so the
+    raid ages past the narrative span while the evaluation bar stays fresh."""
+    base = _story_snapshot(return_to_array=False)
+    m15 = [Candle(c.time, c.open, c.high, c.low, c.close, c.volume, c.volume_source) for c in base.frames["M15"]]
+    first = m15[0]
+    history = []
+    for k in range(2700, 0, -1):
+        t = first.time - k * 900
+        close = 1.10 + 0.00002 * (2700 - k) + 0.0005 * math.sin(k / 20.0)
+        history.append(_bar(t, close, close + 0.0003, close - 0.0003, close))
+    m15 = history + m15
+    last = m15[-1]
+    anchor = last.close
+    for k in range(1, extra_bars + 1):
+        t = last.time + k * 900
+        close = anchor + (0.00001 if k % 2 else -0.00001)
+        m15.append(_bar(t, anchor, anchor + 0.0002, anchor - 0.0002, close))
+        anchor = close
+    as_of = m15[-1].time + 900
+    frames = {
+        "M15": m15[-320:],
+        "H1": _resample(m15, 3600, as_of=as_of)[-240:],
+        "H4": _resample(m15, 14400, as_of=as_of)[-180:],
+        "D1": _resample(m15, 86400, as_of=as_of)[-120:],
+    }
+    provenance = {tf: {"provider": "synthetic", "bars": len(series)} for tf, series in frames.items()}
+    return MarketSnapshot(base.pair, frames, provenance, as_of)
+
+
+def test_old_narrative_is_observed_not_executed() -> None:
+    config = load_fable_config({})
+    fresh = evaluate_snapshot(_aged_pending_snapshot(4), config, generated_at_epoch=NOW + 4 * 900)
+    assert fresh["decision"] in {"STAGE", "OBSERVE"}  # the story is still young
+    stale = evaluate_snapshot(_aged_pending_snapshot(14), config, generated_at_epoch=NOW + 14 * 900)
+    assert stale["decision"] == "OBSERVE", (stale["decisionReason"], stale["voidReasons"])
+    assert stale["decisionReason"] == "NARRATIVE_STALE"
+    assert stale["narrativeAge"]["barsSinceReclaim"] > stale["narrativeAge"]["maxAgeBars"]
+
+
+def test_execution_rejects_stale_or_missing_narrative_age(workdir) -> None:
+    signal = _execute_signal()
+    assert signal["narrativeAge"]["barsSinceReclaim"] <= signal["narrativeAge"]["maxAgeBars"]
+    coordinator = _coordinator(workdir, [signal], _Gateway(_passing_quote(signal)))
+    aged = dict(signal, narrativeAge=dict(signal["narrativeAge"], barsSinceReclaim=999))
+    assert _preview_error(coordinator, aged) == "NARRATIVE_TOO_OLD"
+    missing = dict(signal, narrativeAge=None)
+    assert _preview_error(coordinator, missing) == "SIGNAL_NARRATIVE_AGE_MISSING"
+
+
+def test_config_rejects_inconsistent_recency_and_age_keys() -> None:
+    with pytest.raises(FableConfigError):
+        load_fable_config({"FABLE_ENGINE": {"structure": {"shift_recency_decay_bars": 4, "shift_recency_full_bars": 12}}})
+    with pytest.raises(FableConfigError):
+        load_fable_config({"FABLE_ENGINE": {"structure": {"max_narrative_age_bars": 64}}})
+
+
+def test_chronicle_skips_fills_that_gap_through_the_array() -> None:
+    config = load_fable_config({"FABLE_ENGINE": {"chronicle": {"default_bars": 150, "maximum_bars": 400}}})
+    snapshot = _story_snapshot()
+    baseline = run_chronicle(pair=snapshot.pair, frames=snapshot.frames, provenance=snapshot.provenance, config=config, bars=150)
+    assert baseline["decisions"].get("EXECUTE", 0) >= 1
+    assert baseline["summary"]["skippedFills"] == 0
+
+    signal = evaluate_snapshot(snapshot, config, generated_at_epoch=NOW)
+    array = signal["annotations"]["array"]
+    atr = float(signal["atr"])
+    m15 = snapshot.frames["M15"]
+    # The fill bar opens exactly at the decision bar's close time (decisionAt).
+    entry_time = parse_iso(baseline["chapters"][0]["decisionAt"])
+    entry_index = next(i for i, candle in enumerate(m15) if candle.time == entry_time)
+    gap_open = float(array["high"]) + 0.6 * atr
+    m15[entry_index] = _bar(m15[entry_index].time, gap_open, gap_open + 0.0003, min(m15[entry_index].low, gap_open - 0.0001), gap_open + 0.0002)
+    gapped = run_chronicle(pair=snapshot.pair, frames=snapshot.frames, provenance=snapshot.provenance, config=config, bars=150)
+    assert gapped["summary"]["skippedFills"] >= 1
+    assert all(ch["entry"] != pytest.approx(gap_open) for ch in gapped["chapters"])
+
+
+def test_weekend_flag_follows_configured_close_hour() -> None:
+    friday_evening = datetime(2027, 1, 29, 23, 0, tzinfo=timezone.utc).timestamp()  # 18:00 New York
+    default = load_fable_config({})
+    assert session_state(friday_evening, default)["weekend"] is True
+    late_close = load_fable_config({"FABLE_ENGINE": {"sessions": {"weekend_close_hour": 20}}})
+    assert session_state(friday_evening, late_close)["weekend"] is False
+
+
+def test_holiday_closures_credit_freshness_without_double_counting() -> None:
+    from fable_engine.sessions import market_closed_seconds, market_is_closed
+
+    # Presidents' Day 2027-02-15 (a Monday) as an explicit one-off closure.
+    config = load_fable_config({"FABLE_ENGINE": {"sessions": {"holidays": {"dates": ["2027-02-15"]}}}})
+    friday_close = datetime(2027, 2, 12, 21, 0, tzinfo=timezone.utc).timestamp()  # 16:00 NY, before the weekend close
+    monday_noon = datetime(2027, 2, 15, 12, 0, tzinfo=timezone.utc).timestamp()
+    tuesday_noon = datetime(2027, 2, 16, 12, 0, tzinfo=timezone.utc).timestamp()
+    # Weekend (Fri 17:00 -> Sun 17:00 NY = 48h) plus the full Monday (24h), counted once.
+    closed = market_closed_seconds(friday_close, tuesday_noon, "forex", config)
+    assert closed == pytest.approx(72 * 3600.0)
+    assert market_is_closed(monday_noon, "forex", config) == (True, "HOLIDAY")
+    assert market_is_closed(monday_noon, "crypto", config) == (False, None)
+    # Without the holiday the Monday is a normal (stale-aging) trading day.
+    plain = load_fable_config({})
+    assert market_closed_seconds(friday_close, tuesday_noon, "forex", plain) == pytest.approx(48 * 3600.0)
+    assert market_is_closed(monday_noon, "forex", plain) == (False, None)
+
+
+def test_recurring_holidays_fire_every_year() -> None:
+    from fable_engine.sessions import market_is_closed
+
+    config = load_fable_config({})  # recurring: 01-01 and 12-25
+    christmas = datetime(2026, 12, 25, 18, 0, tzinfo=timezone.utc).timestamp()  # 13:00 NY, before the weekend close
+    christmas_eve = datetime(2026, 12, 24, 18, 0, tzinfo=timezone.utc).timestamp()
+    assert market_is_closed(christmas, "forex", config) == (True, "HOLIDAY")
+    assert market_is_closed(christmas_eve, "forex", config) == (False, None)
+    assert market_is_closed(christmas, "crypto", config) == (False, None)
+
+
+def test_config_rejects_bad_holiday_entries() -> None:
+    with pytest.raises(FableConfigError):
+        load_fable_config({"FABLE_ENGINE": {"sessions": {"holidays": {"recurring": ["13-01"]}}}})
+    with pytest.raises(FableConfigError):
+        load_fable_config({"FABLE_ENGINE": {"sessions": {"holidays": {"recurring": ["1-1"]}}}})
+    with pytest.raises(FableConfigError):
+        load_fable_config({"FABLE_ENGINE": {"sessions": {"holidays": {"dates": ["2027-02-30"]}}}})
+    with pytest.raises(FableConfigError):
+        load_fable_config({"FABLE_ENGINE": {"sessions": {"holidays": {"dates": ["not-a-date"]}}}})
